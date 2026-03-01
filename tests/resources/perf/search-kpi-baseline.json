@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-03-01T04:18:26.788Z",
+  "runtime": {
+    "node": "v24.13.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "samples": 30,
+  "kpis": {
+    "text": {
+      "indexedP50Ms": 0.796,
+      "indexedP95Ms": 1.186,
+      "scanP50Ms": 8.67,
+      "scanP95Ms": 10.717,
+      "indexedDbRoundtripsDelta": 60,
+      "indexedRowsScannedDelta": 4500,
+      "indexedHeapDeltaBytes": 11079632
+    },
+    "path": {
+      "indexedP50Ms": 0.838,
+      "indexedP95Ms": 1.331,
+      "scanP50Ms": 1.933,
+      "scanP95Ms": 2.809,
+      "indexedDbRoundtripsDelta": 60,
+      "indexedRowsScannedDelta": 4500,
+      "indexedHeapDeltaBytes": 7023864
+    },
+    "symbol": {
+      "indexedP50Ms": 1.174,
+      "indexedP95Ms": 1.893,
+      "scanP50Ms": 10.636,
+      "scanP95Ms": 15.377,
+      "indexedDbRoundtripsDelta": 60,
+      "indexedRowsScannedDelta": 60,
+      "indexedHeapDeltaBytes": 538536
+    }
+  }
+}

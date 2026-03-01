@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "description": "Representative search queries with expected top-5 results for relevance testing",
+  "queries": [
+    {
+      "query": "MinecraftServer",
+      "intent": "path",
+      "match": "contains",
+      "expectTopPaths": ["net/minecraft/server/MinecraftServer.java"]
+    },
+    {
+      "query": "net.minecraft.server",
+      "intent": "text",
+      "match": "contains",
+      "expectTopPaths": ["net/minecraft/server/MinecraftServer.java"]
+    },
+    {
+      "query": "tickServer",
+      "intent": "symbol",
+      "match": "exact",
+      "expectTopSymbolNames": ["tickServer"]
+    },
+    {
+      "query": "tick",
+      "intent": "symbol",
+      "match": "prefix",
+      "expectMinResults": 1
+    },
+    {
+      "query": "NeedlePath",
+      "intent": "path",
+      "match": "contains",
+      "expectMinResults": 5
+    },
+    {
+      "query": "SearchLatencyNeedleToken",
+      "intent": "text",
+      "match": "contains",
+      "expectMinResults": 5
+    },
+    {
+      "query": "PerfClass",
+      "intent": "path",
+      "match": "prefix",
+      "expectMinResults": 10
+    },
+    {
+      "query": "helper",
+      "intent": "symbol",
+      "match": "prefix",
+      "expectMinResults": 10
+    },
+    {
+      "query": "payload",
+      "intent": "text",
+      "match": "contains",
+      "expectMinResults": 10
+    },
+    {
+      "query": "generated",
+      "intent": "path",
+      "match": "contains",
+      "expectMinResults": 50
+    }
+  ]
+}

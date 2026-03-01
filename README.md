@@ -1,0 +1,765 @@
+# @adhisang/minecraft-modding-mcp
+
+[![npm](https://img.shields.io/npm/v/@adhisang/minecraft-modding-mcp)](https://www.npmjs.com/package/@adhisang/minecraft-modding-mcp)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
+[![CI](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml)
+
+**[日本語](docs/README-ja.md)** | English
+
+---
+
+`@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants deep access to Minecraft's source code, mappings, and mod tooling.
+
+It lets you explore decompiled Minecraft source, convert symbol names across four naming namespaces (`official`, `mojang`, `intermediary`, `yarn`), analyze and decompile Fabric/Forge/NeoForge mod JARs, validate Mixin and Access Widener files, read and patch NBT data, and query generated registry snapshots — all through a structured tool and resource interface designed for Claude Desktop, VS Code, and other MCP-capable clients.
+
+**28 tools** | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+
+## Features
+
+- **Source Exploration** — Browse and search decompiled Minecraft source code with line-level precision and cursor-paginated file listing
+- **Multi-Mapping Conversion** — Translate class, field, and method names between `official`, `mojang`, `intermediary`, and `yarn` namespaces
+- **Symbol Lifecycle Tracking** — Trace when a method or field first appeared, disappeared, or changed across Minecraft versions
+- **Mod JAR Analysis** — Extract metadata, dependencies, entrypoints, and Mixin configs from Fabric/Forge/NeoForge mod JARs
+- **Mixin & Access Widener Validation** — Parse and validate Mixin source and `.accesswidener` files against a target Minecraft version
+- **NBT Round-Trip** — Decode NBT binary to typed JSON, apply RFC 6902 patches, and re-encode back to NBT
+- **Registry Data** — Query generated registry snapshots (blocks, items, entities, etc.) for any Minecraft version
+- **Version Comparison** — Diff class signatures and registry entries between two Minecraft versions
+- **JAR Remapping** — Remap Fabric mod JARs from `intermediary` to `yarn` or `mojang` namespaces
+- **MCP Resources** — Access version lists, class source, artifact metadata, and mappings through URI-based resources
+
+## Quick Start
+
+### Prerequisites
+- Node.js 22+
+- pnpm
+
+### For Users (Installed Package)
+```bash
+npx @adhisang/minecraft-modding-mcp
+```
+
+### For Developers (Repository)
+```bash
+pnpm install
+```
+
+### Run (development)
+```bash
+pnpm dev
+```
+
+### Build + Run (distribution shape)
+```bash
+pnpm build
+pnpm start
+```
+
+### Validate
+```bash
+pnpm check
+pnpm test
+pnpm test:coverage
+```
+
+### Coverage
+```bash
+pnpm test:coverage
+```
+
+Coverage thresholds: `lines=80`, `branches=70`, `functions=80`.
+
+Generate LCOV output for Codecov upload:
+
+```bash
+pnpm test:coverage:lcov
+```
+
+GitHub Actions upload workflow: `.github/workflows/codecov.yml` (triggered on `v*` tags and manual dispatch).
+
+### MCP Client Configuration
+
+#### Claude Desktop
+
+Add the following to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "minecraft-modding": {
+      "command": "npx",
+      "args": ["-y", "@adhisang/minecraft-modding-mcp"]
+    }
+  }
+}
+```
+
+#### VS Code
+
+Add the following to `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "servers": {
+    "minecraft-modding": {
+      "command": "npx",
+      "args": ["-y", "@adhisang/minecraft-modding-mcp"]
+    }
+  }
+}
+```
+
+#### Custom Environment
+
+Pass environment variables to override defaults:
+
+```json
+{
+  "mcpServers": {
+    "minecraft-modding": {
+      "command": "npx",
+      "args": ["-y", "@adhisang/minecraft-modding-mcp"],
+      "env": {
+        "MCP_CACHE_DIR": "/path/to/custom/cache",
+        "MCP_MAPPING_SOURCE_PRIORITY": "maven-first"
+      }
+    }
+  }
+}
+```
+
+## Tool Surface
+
+### Source Exploration
+
+Tools for browsing Minecraft versions, resolving source artifacts, and reading/searching decompiled source code.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
+| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `warnings[]` |
+| `get-class-source` | Get class source by `artifactId` or resolve target on demand, with line filtering | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `startLine?`, `endLine?`, `maxLines?` | `sourceText`, `returnedRange`, `truncated`, `artifactId`, mapping/provenance metadata |
+| `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
+| `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
+| `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
+| `list-artifact-files` | List indexed source file paths with cursor pagination | `artifactId`, `prefix?`, `limit?`, `cursor?` | `items[]`, `nextCursor?`, `mappingApplied` |
+| `index-artifact` | Rebuild index metadata for an existing artifact | `artifactId`, `force?` | `reindexed`, `reason`, `counts`, `indexedAt`, `durationMs` |
+
+### Version Comparison & Symbol Tracking
+
+Tools for comparing class/registry changes across Minecraft versions and tracing symbol existence over time.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
+| `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `summary`, `warnings[]` |
+| `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classesDiff`, `registryDiff`, `summary`, `warnings[]` |
+
+### Mapping & Symbols
+
+Tools for converting symbol names between namespaces and checking symbol existence.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
+| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `kind` (`method`), `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
+| `get-class-api-matrix` | Show one class API as a mapping matrix (`official/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `meta.warnings[]` |
+| `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
+| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
+
+### NBT Utilities
+
+Tools for decoding, patching, and encoding Java Edition NBT binary data using a typed JSON representation.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `nbt-to-json` | Decode Java Edition NBT binary (`base64`) to typed JSON | `nbtBase64`, `compression?` (`none`, `gzip`, `auto`) | `typedJson`, `meta.compressionDetected`, `meta.inputBytes` |
+| `nbt-apply-json-patch` | Apply RFC 6902 patch (`add/remove/replace/test`) to typed NBT JSON | `typedJson`, `patch` | `typedJson`, `meta.appliedOps`, `meta.testOps`, `meta.changed` |
+| `json-to-nbt` | Encode typed JSON back to Java Edition NBT binary (`base64`) | `typedJson`, `compression?` (`none`, `gzip`) | `nbtBase64`, `meta.outputBytes`, `meta.compressionApplied` |
+
+### Mod Analysis
+
+Tools for extracting metadata from mod JARs, decompiling mod source, searching mod code, and remapping mod namespaces.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
+| `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?` | `outputDir`, `fileCount`, `files?`, `source?`, `warnings[]` |
+| `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className` | `className`, `content`, `totalLines`, `warnings[]` |
+| `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
+| `remap-mod-jar` | Remap a Fabric mod JAR from intermediary to yarn/mojang names | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
+
+### Validation
+
+Tools for validating Mixin source and Access Widener files against a target Minecraft version.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
+| `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
+
+### Registry & Diagnostics
+
+Tools for querying generated registry data and inspecting server runtime state.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `get-registry-data` | Get generated registry snapshots (blocks/items/entities etc.) | `version`, `registry?` | `registries` (all or selected), `warnings[]` |
+| `get-runtime-metrics` | Inspect runtime counters and latency snapshots | none | `result.*` runtime metrics, `meta` envelope |
+
+### Tool Constraints
+
+`get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
+`get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
+`search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
+`search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
+`resolve-artifact` with `targetKind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
+Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
+`search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
+`remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
+
+## Resources
+
+MCP resources provide URI-based access to Minecraft data, usable by any MCP client that supports the resource protocol.
+
+### Fixed Resources
+
+| Resource | URI | Description |
+| --- | --- | --- |
+| `versions-list` | `mc://versions/list` | List all available Minecraft versions with their metadata |
+| `runtime-metrics` | `mc://metrics` | Runtime metrics and performance counters for the MCP server |
+
+### Template Resources
+
+| Resource | URI Template | Description |
+| --- | --- | --- |
+| `class-source` | `mc://source/{artifactId}/{className}` | Java source code for a class within a resolved artifact |
+| `artifact-file` | `mc://artifact/{artifactId}/files/{filePath}` | Raw content of a file within a resolved artifact |
+| `find-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}` | Look up a mapping between two naming namespaces |
+| `class-members` | `mc://artifact/{artifactId}/members/{className}` | List constructors, methods, and fields for a class |
+| `artifact-metadata` | `mc://artifact/{artifactId}` | Metadata for a previously resolved artifact |
+
+## Response Envelope
+
+All tools return exactly one of:
+
+- Success: `{ result: { ... }, meta: { requestId, tool, durationMs, warnings[] } }`
+- Failure: `{ error: { type, title, detail, status, code, instance, fieldErrors?, hints? }, meta: { requestId, tool, durationMs, warnings[] } }`
+
+## Examples
+
+### Source Exploration
+
+#### Resolve from Minecraft version
+```json
+{
+  "tool": "resolve-artifact",
+  "arguments": {
+    "targetKind": "version",
+    "targetValue": "1.21.10",
+    "mapping": "official",
+    "allowDecompile": true
+  }
+}
+```
+
+#### Get class source with line window
+```json
+{
+  "tool": "get-class-source",
+  "arguments": {
+    "artifactId": "<artifact-id>",
+    "className": "net.minecraft.server.Main",
+    "startLine": 50,
+    "endLine": 180,
+    "maxLines": 80
+  }
+}
+```
+
+#### Search by method symbol
+```json
+{
+  "tool": "search-class-source",
+  "arguments": {
+    "artifactId": "<artifact-id>",
+    "query": "tickServer",
+    "intent": "symbol",
+    "match": "exact",
+    "includeOneHop": true
+  }
+}
+```
+
+#### Get class member list
+```json
+{
+  "tool": "get-class-members",
+  "arguments": {
+    "artifactId": "<artifact-id>",
+    "className": "net.minecraft.server.Main",
+    "mapping": "official",
+    "access": "all",
+    "includeInherited": true,
+    "maxMembers": 300
+  }
+}
+```
+
+#### List artifact files with prefix filter
+
+List source files under a specific package to understand project structure:
+
+```json
+{
+  "tool": "list-artifact-files",
+  "arguments": {
+    "artifactId": "<artifact-id>",
+    "prefix": "net/minecraft/world/level/",
+    "limit": 50
+  }
+}
+```
+
+### Version Comparison & Symbol Tracking
+
+#### Trace `Class.method` lifecycle
+```json
+{
+  "tool": "trace-symbol-lifecycle",
+  "arguments": {
+    "symbol": "net.minecraft.server.Main.tickServer",
+    "descriptor": "()V",
+    "fromVersion": "1.20.1",
+    "toVersion": "1.21.10",
+    "includeTimeline": true
+  }
+}
+```
+
+#### Diff one class across two versions
+```json
+{
+  "tool": "diff-class-signatures",
+  "arguments": {
+    "className": "net.minecraft.server.Main",
+    "fromVersion": "1.20.1",
+    "toVersion": "1.21.10",
+    "mapping": "official"
+  }
+}
+```
+
+#### Compare two Minecraft versions
+
+Get a high-level summary of what changed between two releases, including class additions/removals and registry diffs:
+
+```json
+{
+  "tool": "compare-versions",
+  "arguments": {
+    "fromVersion": "1.20.4",
+    "toVersion": "1.21.10",
+    "category": "all",
+    "packageFilter": "net.minecraft.world",
+    "maxClassResults": 100
+  }
+}
+```
+
+### Mapping & Symbols
+
+#### Lookup mapping candidates
+```json
+{
+  "tool": "find-mapping",
+  "arguments": {
+    "version": "1.21.10",
+    "kind": "class",
+    "name": "a.b.C",
+    "sourceMapping": "official",
+    "targetMapping": "mojang",
+    "sourcePriority": "loom-first"
+  }
+}
+```
+
+#### Lookup method mapping with descriptor
+```json
+{
+  "tool": "find-mapping",
+  "arguments": {
+    "version": "1.21.10",
+    "kind": "method",
+    "name": "tick",
+    "owner": "a.b.C",
+    "descriptor": "(I)V",
+    "sourceMapping": "official",
+    "targetMapping": "intermediary"
+  }
+}
+```
+
+#### Resolve exact method mapping
+```json
+{
+  "tool": "resolve-method-mapping-exact",
+  "arguments": {
+    "version": "1.21.10",
+    "kind": "method",
+    "name": "f",
+    "owner": "a.b.C",
+    "descriptor": "(Ljava/lang/String;)V",
+    "sourceMapping": "official",
+    "targetMapping": "mojang"
+  }
+}
+```
+
+#### Show class API mapping matrix
+```json
+{
+  "tool": "get-class-api-matrix",
+  "arguments": {
+    "version": "1.21.10",
+    "className": "a.b.C",
+    "classNameMapping": "official",
+    "includeKinds": "class,field,method"
+  }
+}
+```
+
+#### Resolve workspace compile-visible symbol
+```json
+{
+  "tool": "resolve-workspace-symbol",
+  "arguments": {
+    "projectPath": "/path/to/mod/workspace",
+    "version": "1.21.10",
+    "kind": "method",
+    "name": "f",
+    "owner": "a.b.C",
+    "descriptor": "(Ljava/lang/String;)V",
+    "sourceMapping": "official"
+  }
+}
+```
+
+#### Check symbol existence
+```json
+{
+  "tool": "check-symbol-exists",
+  "arguments": {
+    "version": "1.21.10",
+    "kind": "method",
+    "name": "f",
+    "owner": "a.b.C",
+    "descriptor": "(I)V",
+    "sourceMapping": "official"
+  }
+}
+```
+
+### NBT Utilities
+
+#### Decode Java NBT base64 to typed JSON
+```json
+{
+  "tool": "nbt-to-json",
+  "arguments": {
+    "nbtBase64": "<base64-nbt>",
+    "compression": "auto"
+  }
+}
+```
+
+#### Patch typed NBT JSON
+```json
+{
+  "tool": "nbt-apply-json-patch",
+  "arguments": {
+    "typedJson": {
+      "rootName": "Level",
+      "root": { "type": "compound", "value": {} }
+    },
+    "patch": [
+      { "op": "add", "path": "/root/value/name", "value": { "type": "string", "value": "Alex" } }
+    ]
+  }
+}
+```
+
+#### Encode typed JSON back to NBT base64
+```json
+{
+  "tool": "json-to-nbt",
+  "arguments": {
+    "typedJson": {
+      "rootName": "Level",
+      "root": { "type": "compound", "value": {} }
+    },
+    "compression": "gzip"
+  }
+}
+```
+
+### Mod Analysis Workflow
+
+A typical mod analysis workflow progresses through metadata extraction, decompilation, source reading, and search:
+
+#### 1. Analyze mod metadata
+
+Extract loader type, mod ID, dependencies, and Mixin configurations from a mod JAR:
+
+```json
+{
+  "tool": "analyze-mod-jar",
+  "arguments": {
+    "jarPath": "/path/to/mymod-1.0.0.jar",
+    "includeClasses": true
+  }
+}
+```
+
+#### 2. Decompile the mod JAR
+
+Decompile all classes and optionally retrieve a specific class inline:
+
+```json
+{
+  "tool": "decompile-mod-jar",
+  "arguments": {
+    "jarPath": "/path/to/mymod-1.0.0.jar",
+    "className": "com.example.mymod.MyMod"
+  }
+}
+```
+
+#### 3. Read a specific class from decompiled source
+
+After decompilation, read any class without re-decompiling:
+
+```json
+{
+  "tool": "get-mod-class-source",
+  "arguments": {
+    "jarPath": "/path/to/mymod-1.0.0.jar",
+    "className": "com.example.mymod.mixin.PlayerMixin"
+  }
+}
+```
+
+#### 4. Search across decompiled mod source
+
+Find method references, field usages, or text patterns across the entire decompiled mod:
+
+```json
+{
+  "tool": "search-mod-source",
+  "arguments": {
+    "jarPath": "/path/to/mymod-1.0.0.jar",
+    "query": "onPlayerTick",
+    "searchType": "method",
+    "limit": 50
+  }
+}
+```
+
+#### 5. Remap mod JAR to readable names
+
+Remap a Fabric mod from `intermediary` to `yarn` names for easier reading:
+
+```json
+{
+  "tool": "remap-mod-jar",
+  "arguments": {
+    "inputJar": "/path/to/mymod-1.0.0.jar",
+    "targetMapping": "yarn",
+    "mcVersion": "1.21.10"
+  }
+}
+```
+
+### Validation
+
+#### Validate Mixin source
+
+Check a Mixin class source for correctness against a target Minecraft version:
+
+```json
+{
+  "tool": "validate-mixin",
+  "arguments": {
+    "source": "@Mixin(PlayerEntity.class)\npublic abstract class PlayerMixin {\n  @Inject(method = \"tick\", at = @At(\"HEAD\"))\n  private void onTick(CallbackInfo ci) {}\n}",
+    "version": "1.21.10",
+    "mapping": "yarn"
+  }
+}
+```
+
+#### Validate Access Widener
+
+Check an Access Widener file for valid entries against the target version:
+
+```json
+{
+  "tool": "validate-access-widener",
+  "arguments": {
+    "content": "accessWidener v2 named\naccessible class net/minecraft/server/Main\naccessible method net/minecraft/server/Main tick ()V",
+    "version": "1.21.10",
+    "mapping": "yarn"
+  }
+}
+```
+
+### Registry & Diagnostics
+
+#### Get all registries for a version
+
+Retrieve the full set of generated registries (blocks, items, entities, etc.) for a Minecraft version:
+
+```json
+{
+  "tool": "get-registry-data",
+  "arguments": {
+    "version": "1.21.10"
+  }
+}
+```
+
+#### Get a single registry
+
+Fetch only a specific registry type:
+
+```json
+{
+  "tool": "get-registry-data",
+  "arguments": {
+    "version": "1.21.10",
+    "registry": "minecraft:block"
+  }
+}
+```
+
+#### Force reindex an artifact
+
+Rebuild the search index for an artifact after cache or tooling changes:
+
+```json
+{
+  "tool": "index-artifact",
+  "arguments": {
+    "artifactId": "<artifact-id>",
+    "force": true
+  }
+}
+```
+
+#### Inspect runtime metrics
+
+Check server performance counters, cache sizes, and latency snapshots:
+
+```json
+{
+  "tool": "get-runtime-metrics",
+  "arguments": {}
+}
+```
+
+## Mapping Policy
+
+### Namespace Definitions
+
+| Namespace | Description |
+| --- | --- |
+| `official` | Mojang obfuscated names (e.g. `a`, `b`, `c`) |
+| `mojang` | Mojang deobfuscated names from `client_mappings.txt` (e.g. `net.minecraft.server.Main`) |
+| `intermediary` | Fabric stable intermediary names (e.g. `net.minecraft.class_1234`, `method_5678`) |
+| `yarn` | Fabric community human-readable names (e.g. `net.minecraft.server.MinecraftServer`, `tick`) |
+
+### Lookup Rules
+
+`find-mapping` supports lookup across `official`, `mojang`, `intermediary`, and `yarn`.
+
+Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
+- class: `kind=class`, `name=a.b.C` (FQCN only)
+- field: `kind=field`, `owner=a.b.C`, `name=fieldName`
+- method: `kind=method`, `owner=a.b.C`, `name=methodName`, `descriptor=(I)V`
+
+`mapping: "mojang"` requires a source-backed artifact. If only decompile path is available, the server returns `ERR_MAPPING_NOT_APPLIED`.
+
+`resolve-artifact`, `get-class-members`, `trace-symbol-lifecycle`, and `diff-class-signatures` accept `official | mojang | intermediary | yarn` with constraints:
+- `intermediary` / `yarn` require a resolvable Minecraft version context (for example `targetKind=version` or a versioned coordinate).
+- for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `official` with a warning.
+- `mojang` requires source-backed artifacts; decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
+
+Method descriptor precision is best on Tiny-backed paths (`intermediary`/`yarn`). For `official <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fallback to name matching and emit a warning.
+
+Use `resolve-method-mapping-exact` when candidate ranking is not enough and the workflow needs strict `owner+name+descriptor` certainty.
+Use `resolve-workspace-symbol` when you need compile-visible names from actual Gradle Loom mappings in a workspace.
+
+## Environment Variables
+
+### Core
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_CACHE_DIR` | `.cache/minecraft-modding-mcp` | Cache root for downloads and SQLite |
+| `MCP_SQLITE_PATH` | `<cacheDir>/source-cache.db` | SQLite database path |
+| `MCP_SOURCE_REPOS` | Maven Central + Fabric + Forge + NeoForge | Comma-separated Maven repository URLs |
+| `MCP_LOCAL_M2` | `~/.m2/repository` | Local Maven repository path |
+| `MCP_ENABLE_INDEXED_SEARCH` | `true` | Enable indexed query path for `search-class-source` |
+| `MCP_MAPPING_SOURCE_PRIORITY` | `loom-first` | Mapping source priority (`loom-first` or `maven-first`) |
+| `MCP_VERSION_MANIFEST_URL` | Mojang manifest URL | Override manifest endpoint for testing/private mirrors |
+
+### Limits & Tuning
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_MAX_CONTENT_BYTES` | `1000000` | Maximum bytes for file read operations |
+| `MCP_MAX_SEARCH_HITS` | `200` | Maximum search result count |
+| `MCP_MAX_ARTIFACTS` | `200` | Maximum cached artifacts |
+| `MCP_MAX_CACHE_BYTES` | `2147483648` | Maximum total cache size in bytes |
+| `MCP_FETCH_TIMEOUT_MS` | `15000` | HTTP request timeout in milliseconds |
+| `MCP_FETCH_RETRIES` | `2` | HTTP request retry count |
+
+### Decompilation & Remapping
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_VINEFLOWER_JAR_PATH` | unset | External Vineflower JAR path (auto-downloaded if unset) |
+| `MCP_TINY_REMAPPER_JAR_PATH` | unset | External tiny-remapper JAR path (auto-downloaded if unset) |
+| `MCP_REMAP_TIMEOUT_MS` | `600000` | Remap operation timeout in milliseconds |
+| `MCP_REMAP_MAX_MEMORY_MB` | `4096` | Maximum JVM heap for remap operations |
+
+### NBT
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_MAX_NBT_INPUT_BYTES` | `4194304` | Maximum decoded NBT input bytes accepted by `nbt-to-json` |
+| `MCP_MAX_NBT_INFLATED_BYTES` | `16777216` | Maximum gzip-inflated bytes accepted by `nbt-to-json` |
+| `MCP_MAX_NBT_RESPONSE_BYTES` | `8388608` | Maximum response payload bytes for NBT tools |
+
+## Architecture
+
+| Component | Technology |
+| --- | --- |
+| Runtime | Node.js 22+ (native `node:sqlite`) |
+| Transport | stdio (MCP standard) |
+| Storage | SQLite — artifact metadata, source index, mapping cache |
+| Decompilation | [Vineflower](https://github.com/Vineflower/vineflower) (auto-downloaded) |
+| Remapping | [tiny-remapper](https://github.com/FabricMC/tiny-remapper) (requires Java) |
+| Mapping Sources | Mojang `client_mappings.txt`, Fabric Loom workspace, Maven Tiny v2 |
+
+The server runs as a single long-lived process communicating over stdio. Artifacts (source JARs, binary JARs, mapping files) are downloaded on demand and cached in SQLite. The search index is built lazily on first query and persisted for subsequent calls.
+
+## Development Notes
+
+- `SourceService` is the canonical implementation for artifact resolution, ingestion, and source querying.
+- `version` resolution downloads Mojang client JARs into cache and routes them through the same ingestion flow as `jar` and `coordinate` targets.
+- Tool responses are always wrapped as `{ result?, error?, meta }`.
+- `meta` includes `requestId`, `tool`, `durationMs`, and `warnings[]`.
+
+## License
+
+[MIT](LICENSE)

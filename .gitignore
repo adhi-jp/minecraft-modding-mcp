@@ -1,0 +1,47 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+*.tgz
+
+# Environment and secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test and coverage
+coverage/
+
+# Local data and cache
+*.sqlite
+*.db
+.npm-cache/
+.pnpm-store/
+.mcp-use/
+
+# Agent local settings
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+.cursor/
+.windsurf/
+.continue/
+.cline/
+.roo/
+.codeium/
+.copilot/
+.aider*
+
+# Codex/agents local assets
+.agents/*
+!.agents/skills/
+!.agents/skills/**
+
+# Development artifacts
+.plans/
