@@ -10,6 +10,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Changed
 - Migrate stdio transport from mcp-use to @modelcontextprotocol/sdk.
 
+### Fixed
+- Restore Codex startup handshake compatibility by accepting both newline-delimited and `Content-Length` stdio framing.
+
 ### Documentation
 - Add Quick Start setup for Claude Code, OpenAI Codex CLI, and Gemini CLI.
 

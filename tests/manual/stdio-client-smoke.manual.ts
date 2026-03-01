@@ -171,12 +171,145 @@ async function canUseStdioPipeReliably(): Promise<boolean> {
   });
 }
 
+function tryExtractContentLengthMessage(buffer: Buffer): { message: unknown; consumedBytes: number } | undefined {
+  const headersEnd = buffer.indexOf("\r\n\r\n");
+  if (headersEnd === -1) {
+    return undefined;
+  }
+
+  const headers = buffer.subarray(0, headersEnd).toString("utf8");
+  const lengthMatch = headers.match(/Content-Length:\s*(\d+)/i);
+  if (!lengthMatch) {
+    throw new Error("Content-Length response missing Content-Length header.");
+  }
+
+  const contentLength = Number.parseInt(lengthMatch[1], 10);
+  if (!Number.isFinite(contentLength) || contentLength < 0) {
+    throw new Error(`Invalid Content-Length value: ${lengthMatch[1]}`);
+  }
+
+  const bodyStart = headersEnd + 4;
+  const bodyEnd = bodyStart + contentLength;
+  if (buffer.length < bodyEnd) {
+    return undefined;
+  }
+
+  const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
+  return {
+    message: JSON.parse(body),
+    consumedBytes: bodyEnd
+  };
+}
+
+async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("node", ["--import", "tsx", "src/cli.ts"], {
+      env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stdoutBuffer = Buffer.alloc(0);
+    let stderrOutput = "";
+    let settled = false;
+
+    const finalize = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutHandle);
+      child.stdout.off("data", onStdoutData);
+      child.stderr.off("data", onStderrData);
+      child.off("error", onChildError);
+      child.off("exit", onChildExit);
+      if (child.exitCode === null) {
+        child.kill("SIGTERM");
+      }
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    const onStdoutData = (chunk: Buffer | string) => {
+      try {
+        const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+        stdoutBuffer = Buffer.concat([stdoutBuffer, chunkBuffer]);
+        const parsed = tryExtractContentLengthMessage(stdoutBuffer);
+        if (!parsed) {
+          return;
+        }
+
+        const payload = parsed.message as Record<string, unknown>;
+        assert.equal(payload.jsonrpc, "2.0");
+        assert.equal(payload.id, 1);
+        assert.ok(typeof payload.result === "object" && payload.result != null);
+
+        const result = payload.result as Record<string, unknown>;
+        assert.equal(result.protocolVersion, "2024-11-05");
+        finalize();
+      } catch (error) {
+        finalize(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
+
+    const onStderrData = (chunk: Buffer | string) => {
+      stderrOutput += chunk.toString();
+    };
+
+    const onChildError = (error: Error) => {
+      finalize(error);
+    };
+
+    const onChildExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (!settled) {
+        finalize(
+          new Error(
+            `Content-Length initialize handshake failed: child exited before response (code=${code ?? "null"}, signal=${signal ?? "null"}).\nstderr:\n${stderrOutput}`
+          )
+        );
+      }
+    };
+
+    const timeoutHandle = setTimeout(() => {
+      finalize(
+        new Error(
+          `Timed out waiting for Content-Length initialize response.\nstderr:\n${stderrOutput}`
+        )
+      );
+    }, 5_000);
+
+    child.stdout.on("data", onStdoutData);
+    child.stderr.on("data", onStderrData);
+    child.once("error", onChildError);
+    child.once("exit", onChildExit);
+
+    const request = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+          name: "manual-content-length-smoke",
+          version: "1.0.0"
+        }
+      }
+    };
+    const body = JSON.stringify(request);
+    child.stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`);
+  });
+}
+
 async function main(): Promise<void> {
   await ensureSqliteAvailable();
 
   const stdioReady = await canUseStdioPipeReliably();
   if (!stdioReady) {
-    throw new Error("stdio pipe is unreliable: stdin closes immediately in this runtime.");
+    console.log("Manual stdio smoke skipped: stdin pipe closes immediately in this runtime.");
+    return;
   }
 
   const root = await mkdtemp(join(tmpdir(), "stdio-smoke-v03-"));
@@ -186,6 +319,12 @@ async function main(): Promise<void> {
   const sourcesJarPath = join(root, "minecraft-client-sources.jar");
 
   await mkdir(cacheDir, { recursive: true });
+  await assertContentLengthInitializeHandshake({
+    ...process.env,
+    NODE_ENV: "production",
+    MCP_CACHE_DIR: cacheDir,
+    MCP_SQLITE_PATH: sqlitePath
+  });
 
   await createJar(binaryJarPath, {
     "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
@@ -311,7 +450,7 @@ async function main(): Promise<void> {
 
     console.log("Manual stdio client smoke passed: source tools validated.");
   } finally {
-    await client.close();
+    await client.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
 }

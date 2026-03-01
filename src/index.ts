@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError, z } from "zod";
+import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 
 import { objectResult } from "./mcp-helpers.js";
 
@@ -1442,7 +1442,7 @@ export async function startServer(): Promise<void> {
     sqlitePath: config.sqlitePath,
     sourceRepos: config.sourceRepos.length
   });
-  const transport = new StdioServerTransport();
+  const transport = new CompatStdioServerTransport();
   await server.connect(transport);
   // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
   process.stdin.resume();

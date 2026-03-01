@@ -200,3 +200,11 @@ test("startServer installs process-level error handlers", async () => {
   assert.match(source, /process\.on\("unhandledRejection"/);
   assert.match(source, /attachProcessErrorHandlers\(\)/);
 });
+
+test("index.ts uses compatibility stdio transport for newline and Content-Length clients", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /import\s+\{\s*CompatStdioServerTransport\s*\}\s+from\s+"\.\/compat-stdio-transport\.js"/);
+  assert.match(source, /new CompatStdioServerTransport\(\)/);
+  assert.doesNotMatch(source, /server\/stdio\.js/);
+});

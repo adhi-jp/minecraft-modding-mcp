@@ -55,6 +55,8 @@ codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
 codex mcp list
 ```
 
+The stdio transport auto-detects both newline-delimited and `Content-Length` framing, so Codex and newline-based MCP clients can use the same server command.
+
 #### Gemini CLI
 
 Add the following to `~/.gemini/settings.json`:
@@ -782,7 +784,7 @@ Use `resolve-workspace-symbol` when you need compile-visible names from actual G
 | Component | Technology |
 | --- | --- |
 | Runtime | Node.js 22+ (native `node:sqlite`) |
-| Transport | stdio (MCP standard) |
+| Transport | stdio (MCP standard, auto-detects newline + `Content-Length` framing) |
 | Storage | SQLite — artifact metadata, source index, mapping cache |
 | Decompilation | [Vineflower](https://github.com/Vineflower/vineflower) (auto-downloaded) |
 | Remapping | [tiny-remapper](https://github.com/FabricMC/tiny-remapper) (requires Java) |
