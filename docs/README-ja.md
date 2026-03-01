@@ -39,6 +39,43 @@
 npx @adhisang/minecraft-modding-mcp
 ```
 
+### CLI エージェントツール (CLI Agent Tools)
+
+#### Claude Code
+
+```bash
+claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+claude mcp list
+```
+
+#### OpenAI Codex CLI
+
+```bash
+codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+codex mcp list
+```
+
+#### Gemini CLI
+
+`~/.gemini/settings.json` に以下を追加します:
+
+```json
+{
+  "mcpServers": {
+    "minecraft-modding": {
+      "command": "npx",
+      "args": ["-y", "@adhisang/minecraft-modding-mcp"]
+    }
+  }
+}
+```
+
+その後、Gemini CLI 上で次のコマンドを実行します:
+
+```text
+/mcp list
+```
+
 ### 開発者向け（リポジトリ）
 ```bash
 pnpm install

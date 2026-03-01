@@ -39,6 +39,43 @@ It lets you explore decompiled Minecraft source, convert symbol names across fou
 npx @adhisang/minecraft-modding-mcp
 ```
 
+### CLI Agent Tools
+
+#### Claude Code
+
+```bash
+claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+claude mcp list
+```
+
+#### OpenAI Codex CLI
+
+```bash
+codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+codex mcp list
+```
+
+#### Gemini CLI
+
+Add the following to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "minecraft-modding": {
+      "command": "npx",
+      "args": ["-y", "@adhisang/minecraft-modding-mcp"]
+    }
+  }
+}
+```
+
+Then run this command in Gemini CLI:
+
+```text
+/mcp list
+```
+
 ### For Developers (Repository)
 ```bash
 pnpm install
