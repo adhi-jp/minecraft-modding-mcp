@@ -13,13 +13,5 @@ function serializeLog(level: LogLevel, event: string, details?: LogDetails): str
 
 export function log(level: LogLevel, event: string, details?: LogDetails): void {
   const line = serializeLog(level, event, details);
-  if (level === "error") {
-    console.error(line);
-    return;
-  }
-  if (level === "warn") {
-    console.warn(line);
-    return;
-  }
-  console.info(line);
+  process.stderr.write(line + "\n");
 }

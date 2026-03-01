@@ -37,7 +37,7 @@ test("index.ts registers the expected MCP tools without mc prefix", async () => 
   const source = await readFile("src/index.ts", "utf8");
 
   for (const toolName of EXPECTED_TOOLS) {
-    assert.match(source, new RegExp(`name:\\s*\"${toolName}\"`));
+    assert.match(source, new RegExp(`server\\.tool\\("${toolName}"`));
   }
 
   const registrations = source.match(/server\.tool\(/g) ?? [];
@@ -47,7 +47,7 @@ test("index.ts registers the expected MCP tools without mc prefix", async () => 
 test("index.ts does not include legacy compatibility handlers", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
-  assert.doesNotMatch(source, /name:\s*"mc-/);
+  assert.doesNotMatch(source, /server\.tool\("mc-/);
   assert.doesNotMatch(source, /mc-list-versions/);
   assert.doesNotMatch(source, /mc-resolve-source/);
   assert.doesNotMatch(source, /mc-get-source/);
@@ -67,21 +67,17 @@ test("index.ts accepts expanded mapping enum in tool inputs", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
   const mappingDescriptionMatches =
-    source.match(/description:\s*"official \| mojang \| intermediary \| yarn"/g) ?? [];
+    source.match(/\.describe\("official \| mojang \| intermediary \| yarn/g) ?? [];
   assert.ok(mappingDescriptionMatches.length >= 4);
   assert.match(source, /const SOURCE_MAPPINGS = \["official", "mojang", "intermediary", "yarn"\] as const;/);
-  assert.doesNotMatch(
-    source,
-    /name:\s*"mapping",\s*type:\s*"string",\s*required:\s*true,\s*description:\s*"official \| mojang \| intermediary \| yarn"/
-  );
-  assert.match(source, /name:\s*"sourceMapping",\s*type:\s*"string",\s*required:\s*true/);
+  assert.match(source, /sourceMapping:/);
 });
 
 test("index.ts accepts mapping source priority override inputs", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
   const priorityDescriptionMatches =
-    source.match(/description:\s*"loom-first \| maven-first"/g) ?? [];
+    source.match(/\.describe\("loom-first \| maven-first"\)/g) ?? [];
   assert.ok(priorityDescriptionMatches.length >= 4);
   assert.match(source, /const SOURCE_PRIORITIES = \["loom-first", "maven-first"\] as const;/);
 });
@@ -89,22 +85,21 @@ test("index.ts accepts mapping source priority override inputs", async () => {
 test("index.ts documents symbol-query grammar for mapping tools", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
-  assert.match(source, /name:\s*"kind",\s*type:\s*"string",\s*required:\s*true,\s*description:\s*"class \| field \| method"/);
-  assert.match(source, /name:\s*"name",\s*type:\s*"string",\s*required:\s*true/);
-  assert.match(source, /name:\s*"owner",\s*type:\s*"string"/);
-  assert.match(source, /name:\s*"descriptor",\s*type:\s*"string"/);
+  assert.match(source, /kind:\s*workspaceSymbolKindSchema\.describe\("class \| field \| method"\)/);
+  assert.match(source, /name:\s*nonEmptyString/);
+  assert.match(source, /owner:\s*optionalNonEmptyString/);
+  assert.match(source, /descriptor:\s*optionalNonEmptyString/);
 });
 
 test("index.ts documents exact method mapping and workspace symbol tools", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
-  assert.match(source, /name:\s*"resolve-method-mapping-exact"/);
-  assert.match(source, /name:\s*"get-class-api-matrix"/);
-  assert.match(source, /name:\s*"resolve-workspace-symbol"/);
-  assert.match(source, /name:\s*"check-symbol-exists"/);
-  assert.match(source, /description:\s*"class \| field \| method"/);
-  assert.doesNotMatch(source, /name:\s*"memberName"/);
-  assert.doesNotMatch(source, /name:\s*"method",\s*type:\s*"string"/);
+  assert.match(source, /server\.tool\("resolve-method-mapping-exact"/);
+  assert.match(source, /server\.tool\("get-class-api-matrix"/);
+  assert.match(source, /server\.tool\("resolve-workspace-symbol"/);
+  assert.match(source, /server\.tool\("check-symbol-exists"/);
+  assert.match(source, /\.describe\("class \| field \| method"\)/);
+  assert.doesNotMatch(source, /memberName:/);
 });
 
 test("index.ts formats tool responses with result/error/meta envelope", async () => {
@@ -113,7 +108,7 @@ test("index.ts formats tool responses with result/error/meta envelope", async ()
   assert.match(source, /result:/);
   assert.match(source, /error:/);
   assert.match(source, /meta:/);
-  assert.match(source, /name:\s*"patch",\s*type:\s*"array"/);
+  assert.match(source, /patch:\s*z\.array\(/);
 });
 
 test("index.ts validates includeKinds values instead of silently ignoring invalid kinds", async () => {
@@ -147,26 +142,24 @@ const EXPECTED_TEMPLATE_RESOURCES = [
   "artifact-metadata"
 ] as const;
 
-test("resources.ts registers the expected fixed resources", async () => {
+const ALL_RESOURCES = [...EXPECTED_FIXED_RESOURCES, ...EXPECTED_TEMPLATE_RESOURCES] as const;
+
+test("resources.ts registers the expected fixed and template resources", async () => {
   const source = await readFile("src/resources.ts", "utf8");
 
-  for (const name of EXPECTED_FIXED_RESOURCES) {
-    assert.match(source, new RegExp(`name:\\s*"${name}"`));
+  for (const name of ALL_RESOURCES) {
+    assert.match(source, new RegExp(`server\\.resource\\("${name}"`));
   }
 
   const registrations = source.match(/server\.resource\(/g) ?? [];
-  assert.equal(registrations.length, EXPECTED_FIXED_RESOURCES.length);
+  assert.equal(registrations.length, ALL_RESOURCES.length);
 });
 
-test("resources.ts registers the expected template resources", async () => {
+test("resources.ts uses ResourceTemplate for template resources", async () => {
   const source = await readFile("src/resources.ts", "utf8");
 
-  for (const name of EXPECTED_TEMPLATE_RESOURCES) {
-    assert.match(source, new RegExp(`name:\\s*"${name}"`));
-  }
-
-  const registrations = source.match(/server\.resourceTemplate\(/g) ?? [];
-  assert.equal(registrations.length, EXPECTED_TEMPLATE_RESOURCES.length);
+  const templateConstructors = source.match(/new ResourceTemplate\(/g) ?? [];
+  assert.equal(templateConstructors.length, EXPECTED_TEMPLATE_RESOURCES.length);
 });
 
 test("index.ts calls registerResources", async () => {
@@ -189,14 +182,15 @@ test("get-class-members contract preserves actual mappingApplied metadata", asyn
   );
 });
 
-test("CLI entrypoint delegates startup to startServer export", async () => {
+test("CLI entrypoint delegates startup to async startServer export", async () => {
   const indexSource = await readFile("src/index.ts", "utf8");
   const cliSource = await readFile("src/cli.ts", "utf8");
 
-  assert.match(indexSource, /export function startServer\(\): void/);
+  assert.match(indexSource, /export async function startServer\(\): Promise<void>/);
   assert.match(cliSource, /^#!\/usr\/bin\/env node/m);
   assert.match(cliSource, /import\s+\{\s*startServer\s*\}\s+from\s+"\.\/index\.js"/);
-  assert.match(cliSource, /startServer\(\);/);
+  assert.match(cliSource, /startServer\(\)\s*\.then/);
+  assert.match(cliSource, /\.catch\(\(err\)\s*=>/);
 });
 
 test("startServer installs process-level error handlers", async () => {

@@ -1,7 +1,8 @@
-import { text, object, error } from "mcp-use/server";
-import type { MCPServer } from "mcp-use/server";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
+import { textResource, objectResource, errorResource } from "./mcp-helpers.js";
 import type { SourceService } from "./source-service.js";
 
 function decodeTemplateParam(params: Record<string, string>, key: string): string {
@@ -26,42 +27,32 @@ function decodeTemplateParam(params: Record<string, string>, key: string): strin
 }
 
 export function registerResources(
-  server: InstanceType<typeof MCPServer>,
+  server: McpServer,
   sourceService: SourceService
 ): void {
   // ── Fixed resources ──────────────────────────────────────────────
 
-  server.resource(
-    {
-      name: "versions-list",
-      uri: "mc://versions/list",
-      description: "List all available Minecraft versions with their metadata.",
-      mimeType: "application/json"
-    },
-    async () => {
+  server.resource("versions-list", "mc://versions/list",
+    { description: "List all available Minecraft versions with their metadata.", mimeType: "application/json" },
+    async (uri) => {
       try {
         const result = await sourceService.listVersions();
-        return object(result as unknown as Record<string, unknown>);
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
   );
 
-  server.resource(
-    {
-      name: "runtime-metrics",
-      uri: "mc://metrics",
-      description: "Runtime metrics and performance counters for the MCP server.",
-      mimeType: "application/json"
-    },
-    async () => {
+  server.resource("runtime-metrics", "mc://metrics",
+    { description: "Runtime metrics and performance counters for the MCP server.", mimeType: "application/json" },
+    async (uri) => {
       try {
         const result = sourceService.getRuntimeMetrics();
-        return object(result as unknown as Record<string, unknown>);
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
@@ -69,112 +60,86 @@ export function registerResources(
 
   // ── Template resources ───────────────────────────────────────────
 
-  server.resourceTemplate(
-    {
-      name: "class-source",
-      uriTemplate: "mc://source/{artifactId}/{className}",
-      description:
-        "Java source code for a class within a resolved artifact. className may use dot or slash separators.",
-      mimeType: "text/x-java"
-    },
-    async (_uri: URL, params: Record<string, string>) => {
+  server.resource("class-source",
+    new ResourceTemplate("mc://source/{artifactId}/{className}", { list: undefined }),
+    { description: "Java source code for a class within a resolved artifact. className may use dot or slash separators.", mimeType: "text/x-java" },
+    async (uri, params) => {
       try {
         const result = await sourceService.getClassSource({
-          artifactId: params.artifactId,
-          className: decodeTemplateParam(params, "className")
+          artifactId: params.artifactId as string,
+          className: decodeTemplateParam(params as Record<string, string>, "className")
         });
-        return text(result.sourceText);
+        return textResource(uri.href, result.sourceText);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
   );
 
-  server.resourceTemplate(
-    {
-      name: "artifact-file",
-      uriTemplate: "mc://artifact/{artifactId}/files/{filePath}",
-      description:
-        "Raw content of a file within a resolved artifact. filePath is the archive-relative path.",
-      mimeType: "text/plain"
-    },
-    async (_uri: URL, params: Record<string, string>) => {
+  server.resource("artifact-file",
+    new ResourceTemplate("mc://artifact/{artifactId}/files/{filePath}", { list: undefined }),
+    { description: "Raw content of a file within a resolved artifact. filePath is the archive-relative path.", mimeType: "text/plain" },
+    async (uri, params) => {
       try {
         const result = await sourceService.getArtifactFile({
-          artifactId: params.artifactId,
-          filePath: decodeTemplateParam(params, "filePath")
+          artifactId: params.artifactId as string,
+          filePath: decodeTemplateParam(params as Record<string, string>, "filePath")
         });
-        return text(result.content);
+        return textResource(uri.href, result.content);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
   );
 
-  server.resourceTemplate(
-    {
-      name: "find-mapping",
-      uriTemplate:
-        "mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}",
-      description:
-        "Look up a mapping for a class, field, or method between two naming namespaces.",
-      mimeType: "application/json"
-    },
-    async (_uri: URL, params: Record<string, string>) => {
+  server.resource("find-mapping",
+    new ResourceTemplate("mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}", { list: undefined }),
+    { description: "Look up a mapping for a class, field, or method between two naming namespaces.", mimeType: "application/json" },
+    async (uri, params) => {
       try {
         const result = await sourceService.findMapping({
-          version: params.version,
+          version: params.version as string,
           kind: params.kind as "class" | "field" | "method",
-          name: decodeTemplateParam(params, "name"),
+          name: decodeTemplateParam(params as Record<string, string>, "name"),
           sourceMapping: params.sourceMapping as "official" | "mojang" | "intermediary" | "yarn",
           targetMapping: params.targetMapping as "official" | "mojang" | "intermediary" | "yarn"
         });
-        return object(result as unknown as Record<string, unknown>);
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
   );
 
-  server.resourceTemplate(
-    {
-      name: "class-members",
-      uriTemplate: "mc://artifact/{artifactId}/members/{className}",
-      description:
-        "List constructors, methods, and fields for a class within a resolved artifact.",
-      mimeType: "application/json"
-    },
-    async (_uri: URL, params: Record<string, string>) => {
+  server.resource("class-members",
+    new ResourceTemplate("mc://artifact/{artifactId}/members/{className}", { list: undefined }),
+    { description: "List constructors, methods, and fields for a class within a resolved artifact.", mimeType: "application/json" },
+    async (uri, params) => {
       try {
         const result = await sourceService.getClassMembers({
-          artifactId: params.artifactId,
-          className: decodeTemplateParam(params, "className")
+          artifactId: params.artifactId as string,
+          className: decodeTemplateParam(params as Record<string, string>, "className")
         });
-        return object(result as unknown as Record<string, unknown>);
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }
   );
 
-  server.resourceTemplate(
-    {
-      name: "artifact-metadata",
-      uriTemplate: "mc://artifact/{artifactId}",
-      description:
-        "Metadata for a previously resolved artifact (origin, coordinate, mapping, provenance).",
-      mimeType: "application/json"
-    },
-    async (_uri: URL, params: Record<string, string>) => {
+  server.resource("artifact-metadata",
+    new ResourceTemplate("mc://artifact/{artifactId}", { list: undefined }),
+    { description: "Metadata for a previously resolved artifact (origin, coordinate, mapping, provenance).", mimeType: "application/json" },
+    async (uri, params) => {
       try {
-        const artifact = sourceService.getArtifact(params.artifactId);
-        return object(artifact as unknown as Record<string, unknown>);
+        const artifact = sourceService.getArtifact(params.artifactId as string);
+        return objectResource(uri.href, artifact as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return error(e.message);
+        if (isAppError(e)) return errorResource(uri.href, e.message);
         throw e;
       }
     }

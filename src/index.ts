@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 
-import { MCPServer, object, type TypedCallToolResult } from "mcp-use/server";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError, z } from "zod";
+
+import { objectResult } from "./mcp-helpers.js";
 
 import { loadConfig } from "./config.js";
 import { ERROR_CODES, isAppError } from "./errors.js";
@@ -118,32 +122,35 @@ function validateTargetPair(
   }
 }
 
-const listVersionsSchema = z.object({
-  includeSnapshots: z.boolean().optional(),
-  limit: optionalPositiveInt
-});
+const listVersionsShape = {
+  includeSnapshots: z.boolean().optional().describe("default false"),
+  limit: optionalPositiveInt.describe("default 20, max 200")
+};
+const listVersionsSchema = z.object(listVersionsShape);
 
-const resolveArtifactSchema = z.object({
-  targetKind: targetKindSchema,
+const resolveArtifactShape = {
+  targetKind: targetKindSchema.describe("version | jar | coordinate"),
   targetValue: nonEmptyString,
-  mapping: sourceMappingSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional(),
-  allowDecompile: z.boolean().optional()
-});
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  allowDecompile: z.boolean().optional().describe("default true")
+};
+const resolveArtifactSchema = z.object(resolveArtifactShape);
 
+const getClassSourceShape = {
+  className: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
+  targetValue: optionalNonEmptyString,
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  allowDecompile: z.boolean().optional().describe("default true"),
+  startLine: optionalPositiveInt,
+  endLine: optionalPositiveInt,
+  maxLines: optionalPositiveInt
+};
 const getClassSourceSchema = z
-  .object({
-    className: nonEmptyString,
-    artifactId: optionalNonEmptyString,
-    targetKind: targetKindSchema.optional(),
-    targetValue: optionalNonEmptyString,
-    mapping: sourceMappingSchema.optional(),
-    sourcePriority: mappingSourcePrioritySchema.optional(),
-    allowDecompile: z.boolean().optional(),
-    startLine: optionalPositiveInt,
-    endLine: optionalPositiveInt,
-    maxLines: optionalPositiveInt
-  })
+  .object(getClassSourceShape)
   .superRefine((value, ctx) => {
     validateTargetPair(
       {
@@ -167,21 +174,22 @@ const getClassSourceSchema = z
     }
   });
 
+const getClassMembersShape = {
+  className: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
+  targetValue: optionalNonEmptyString,
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  allowDecompile: z.boolean().optional().describe("default true"),
+  access: memberAccessSchema.optional().describe("public | all (default public)"),
+  includeSynthetic: z.boolean().optional().describe("default false"),
+  includeInherited: z.boolean().optional().describe("default false"),
+  memberPattern: optionalNonEmptyString,
+  maxMembers: optionalPositiveInt.describe("default 500, max 5000")
+};
 const getClassMembersSchema = z
-  .object({
-    className: nonEmptyString,
-    artifactId: optionalNonEmptyString,
-    targetKind: targetKindSchema.optional(),
-    targetValue: optionalNonEmptyString,
-    mapping: sourceMappingSchema.optional(),
-    sourcePriority: mappingSourcePrioritySchema.optional(),
-    allowDecompile: z.boolean().optional(),
-    access: memberAccessSchema.optional(),
-    includeSynthetic: z.boolean().optional(),
-    includeInherited: z.boolean().optional(),
-    memberPattern: optionalNonEmptyString,
-    maxMembers: optionalPositiveInt
-  })
+  .object(getClassMembersShape)
   .superRefine((value, ctx) => {
     validateTargetPair(
       {
@@ -193,64 +201,70 @@ const getClassMembersSchema = z
     );
   });
 
-const searchClassSourceSchema = z.object({
+const searchClassSourceShape = {
   artifactId: nonEmptyString,
   query: nonEmptyString,
-  intent: searchIntentSchema.optional(),
-  match: searchMatchSchema.optional(),
+  intent: searchIntentSchema.optional().describe("symbol | text | path"),
+  match: searchMatchSchema.optional().describe("exact | prefix | contains | regex"),
   packagePrefix: optionalNonEmptyString,
   fileGlob: optionalNonEmptyString,
-  symbolKind: searchSymbolKindSchema.optional(),
-  snippetLines: optionalPositiveInt,
-  includeDefinition: z.boolean().optional(),
-  includeOneHop: z.boolean().optional(),
-  limit: optionalPositiveInt,
+  symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
+  snippetLines: optionalPositiveInt.describe("default 8, clamp 1..80"),
+  includeDefinition: z.boolean().optional().describe("default false"),
+  includeOneHop: z.boolean().optional().describe("default false"),
+  limit: optionalPositiveInt.describe("default 20"),
   cursor: optionalNonEmptyString
-});
+};
+const searchClassSourceSchema = z.object(searchClassSourceShape);
 
-const getArtifactFileSchema = z.object({
+const getArtifactFileShape = {
   artifactId: nonEmptyString,
   filePath: nonEmptyString,
   maxBytes: optionalPositiveInt
-});
+};
+const getArtifactFileSchema = z.object(getArtifactFileShape);
 
-const listArtifactFilesSchema = z.object({
+const listArtifactFilesShape = {
   artifactId: nonEmptyString,
   prefix: optionalNonEmptyString,
   limit: optionalPositiveInt,
   cursor: optionalNonEmptyString
-});
+};
+const listArtifactFilesSchema = z.object(listArtifactFilesShape);
 
-const traceSymbolLifecycleSchema = z.object({
-  symbol: nonEmptyString,
-  descriptor: optionalNonEmptyString,
+const traceSymbolLifecycleShape = {
+  symbol: nonEmptyString.describe("fully.qualified.Class.method"),
+  descriptor: optionalNonEmptyString.describe('optional JVM descriptor, e.g. "(I)V"'),
   fromVersion: optionalNonEmptyString,
   toVersion: optionalNonEmptyString,
-  mapping: sourceMappingSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional(),
-  includeSnapshots: z.boolean().optional(),
-  maxVersions: optionalPositiveInt,
-  includeTimeline: z.boolean().optional()
-});
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  includeSnapshots: z.boolean().optional().describe("default false"),
+  maxVersions: optionalPositiveInt.describe("default 120, max 400"),
+  includeTimeline: z.boolean().optional().describe("default false")
+};
+const traceSymbolLifecycleSchema = z.object(traceSymbolLifecycleShape);
 
-const diffClassSignaturesSchema = z.object({
+const diffClassSignaturesShape = {
   className: nonEmptyString,
   fromVersion: nonEmptyString,
   toVersion: nonEmptyString,
-  mapping: sourceMappingSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional()
-});
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
 
-const findMappingSchema = z.object({
+const findMappingShape = {
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema,
+  kind: workspaceSymbolKindSchema.describe("class | field | method"),
   name: nonEmptyString,
   owner: optionalNonEmptyString,
   descriptor: optionalNonEmptyString,
-  sourceMapping: sourceMappingSchema,
-  targetMapping: sourceMappingSchema,
-  sourcePriority: mappingSourcePrioritySchema.optional()
-}).superRefine((value, ctx) => {
+  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  targetMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
     if (value.owner) {
       ctx.addIssue({
@@ -311,17 +325,18 @@ const findMappingSchema = z.object({
   }
 });
 
+const resolveMethodMappingExactShape = {
+  version: nonEmptyString,
+  kind: workspaceSymbolKindSchema.describe("class | field | method"),
+  name: nonEmptyString,
+  owner: optionalNonEmptyString,
+  descriptor: optionalNonEmptyString.describe("required for kind=method"),
+  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  targetMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
 const resolveMethodMappingExactSchema = z
-  .object({
-    version: nonEmptyString,
-    kind: workspaceSymbolKindSchema,
-    name: nonEmptyString,
-    owner: optionalNonEmptyString,
-    descriptor: optionalNonEmptyString,
-    sourceMapping: sourceMappingSchema,
-    targetMapping: sourceMappingSchema,
-    sourcePriority: mappingSourcePrioritySchema.optional()
-  })
+  .object(resolveMethodMappingExactShape)
   .superRefine((value, ctx) => {
     if (value.kind !== "method") {
       ctx.addIssue({
@@ -378,25 +393,27 @@ const classApiKindsSchema = z.string().superRefine((value, ctx) => {
   }
 });
 
-const getClassApiMatrixSchema = z.object({
+const getClassApiMatrixShape = {
   version: nonEmptyString,
   className: nonEmptyString,
-  classNameMapping: sourceMappingSchema,
-  includeKinds: classApiKindsSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional()
-});
+  classNameMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  includeKinds: classApiKindsSchema.optional().describe("comma-separated: class,field,method"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const getClassApiMatrixSchema = z.object(getClassApiMatrixShape);
 
+const resolveWorkspaceSymbolShape = {
+  projectPath: nonEmptyString,
+  version: nonEmptyString,
+  kind: workspaceSymbolKindSchema.describe("class | field | method"),
+  name: nonEmptyString,
+  owner: optionalNonEmptyString,
+  descriptor: optionalNonEmptyString,
+  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
 const resolveWorkspaceSymbolSchema = z
-  .object({
-    projectPath: nonEmptyString,
-    version: nonEmptyString,
-    kind: workspaceSymbolKindSchema,
-    name: nonEmptyString,
-    owner: optionalNonEmptyString,
-    descriptor: optionalNonEmptyString,
-    sourceMapping: sourceMappingSchema,
-    sourcePriority: mappingSourcePrioritySchema.optional()
-  })
+  .object(resolveWorkspaceSymbolShape)
   .superRefine((value, ctx) => {
     if (value.kind === "class") {
       if (value.owner) {
@@ -455,15 +472,16 @@ const resolveWorkspaceSymbolSchema = z
     }
   });
 
-const checkSymbolExistsSchema = z.object({
+const checkSymbolExistsShape = {
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema,
+  kind: workspaceSymbolKindSchema.describe("class | field | method"),
   owner: optionalNonEmptyString,
   name: nonEmptyString,
-  descriptor: optionalNonEmptyString,
-  sourceMapping: sourceMappingSchema,
-  sourcePriority: mappingSourcePrioritySchema.optional()
-}).superRefine((value, ctx) => {
+  descriptor: optionalNonEmptyString.describe("required for kind=method"),
+  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
     if (value.owner) {
       ctx.addIssue({
@@ -522,10 +540,11 @@ const checkSymbolExistsSchema = z.object({
   }
 });
 
-const nbtToJsonSchema = z.object({
+const nbtToJsonShape = {
   nbtBase64: nonEmptyString,
-  compression: decodeCompressionSchema.optional()
-});
+  compression: decodeCompressionSchema.optional().describe("none | gzip | auto (default auto)")
+};
+const nbtToJsonSchema = z.object(nbtToJsonShape);
 
 const nbtPatchOperationSchema = z
   .object({
@@ -535,85 +554,97 @@ const nbtPatchOperationSchema = z
   })
   .passthrough();
 
-const nbtApplyJsonPatchSchema = z.object({
+const nbtApplyJsonPatchShape = {
   typedJson: z.unknown(),
-  patch: z.array(nbtPatchOperationSchema)
-});
+  patch: z.array(nbtPatchOperationSchema).describe("RFC6902 operation array (add/remove/replace/test)")
+};
+const nbtApplyJsonPatchSchema = z.object(nbtApplyJsonPatchShape);
 
-const jsonToNbtSchema = z.object({
+const jsonToNbtShape = {
   typedJson: z.unknown(),
-  compression: encodeCompressionSchema.optional()
-});
+  compression: encodeCompressionSchema.optional().describe("none | gzip (default none)")
+};
+const jsonToNbtSchema = z.object(jsonToNbtShape);
 
-const indexArtifactSchema = z.object({
+const indexArtifactShape = {
   artifactId: nonEmptyString,
-  force: z.boolean().optional()
-});
+  force: z.boolean().optional().describe("default false")
+};
+const indexArtifactSchema = z.object(indexArtifactShape);
 
-const validateMixinSchema = z.object({
-  source: nonEmptyString,
-  version: nonEmptyString,
-  mapping: sourceMappingSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional()
-});
+const validateMixinShape = {
+  source: nonEmptyString.describe("Mixin Java source text"),
+  version: nonEmptyString.describe("Minecraft version"),
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const validateMixinSchema = z.object(validateMixinShape);
 
-const validateAccessWidenerSchema = z.object({
-  content: nonEmptyString,
-  version: nonEmptyString,
-  mapping: sourceMappingSchema.optional(),
-  sourcePriority: mappingSourcePrioritySchema.optional()
-});
+const validateAccessWidenerShape = {
+  content: nonEmptyString.describe("Access Widener file content"),
+  version: nonEmptyString.describe("Minecraft version"),
+  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+};
+const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
 
-const analyzeModJarSchema = z.object({
-  jarPath: nonEmptyString,
-  includeClasses: z.boolean().optional()
-});
+const analyzeModJarShape = {
+  jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
+  includeClasses: z.boolean().optional().describe("Include full class listing (default false)")
+};
+const analyzeModJarSchema = z.object(analyzeModJarShape);
 
-const getRegistryDataSchema = z.object({
-  version: nonEmptyString,
-  registry: optionalNonEmptyString
-});
+const getRegistryDataShape = {
+  version: nonEmptyString.describe("Minecraft version (e.g. 1.21)"),
+  registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.')
+};
+const getRegistryDataSchema = z.object(getRegistryDataShape);
 
 const COMPARE_VERSIONS_CATEGORIES = ["classes", "registry", "all"] as const;
 const compareVersionsCategorySchema = z.enum(COMPARE_VERSIONS_CATEGORIES);
 
-const compareVersionsSchema = z.object({
-  fromVersion: nonEmptyString,
-  toVersion: nonEmptyString,
-  category: compareVersionsCategorySchema.optional(),
-  packageFilter: optionalNonEmptyString,
-  maxClassResults: optionalPositiveInt
-});
+const compareVersionsShape = {
+  fromVersion: nonEmptyString.describe("Older Minecraft version (e.g. 1.20.4)"),
+  toVersion: nonEmptyString.describe("Newer Minecraft version (e.g. 1.21)"),
+  category: compareVersionsCategorySchema.optional().describe("classes | registry | all (default all)"),
+  packageFilter: optionalNonEmptyString.describe("Filter classes to a package prefix (e.g. net.minecraft.world.item)"),
+  maxClassResults: optionalPositiveInt.describe("Max class results per direction (default 500, max 5000)")
+};
+const compareVersionsSchema = z.object(compareVersionsShape);
 
-const decompileModJarSchema = z.object({
-  jarPath: nonEmptyString,
-  className: optionalNonEmptyString
-});
+const decompileModJarShape = {
+  jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
+  className: optionalNonEmptyString.describe("Optional fully-qualified class name to view source. Omit to list all classes.")
+};
+const decompileModJarSchema = z.object(decompileModJarShape);
 
-const getModClassSourceSchema = z.object({
-  jarPath: nonEmptyString,
-  className: nonEmptyString
-});
+const getModClassSourceShape = {
+  jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
+  className: nonEmptyString.describe("Fully-qualified class name (e.g. com.example.MyMixin)")
+};
+const getModClassSourceSchema = z.object(getModClassSourceShape);
 
 const MOD_SEARCH_TYPES = ["class", "method", "field", "content", "all"] as const;
 const modSearchTypeSchema = z.enum(MOD_SEARCH_TYPES);
 
-const searchModSourceSchema = z.object({
-  jarPath: nonEmptyString,
-  query: nonEmptyString,
-  searchType: modSearchTypeSchema.optional(),
-  limit: optionalPositiveInt
-});
+const searchModSourceShape = {
+  jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
+  query: nonEmptyString.describe("Search pattern (regex or literal string)"),
+  searchType: modSearchTypeSchema.optional().describe("class | method | field | content | all (default all)"),
+  limit: optionalPositiveInt.describe("Max results (default 50, max 200)")
+};
+const searchModSourceSchema = z.object(searchModSourceShape);
 
 const REMAP_TARGETS = ["yarn", "mojang"] as const;
 const remapTargetSchema = z.enum(REMAP_TARGETS);
 
-const remapModJarSchema = z.object({
-  inputJar: nonEmptyString,
-  outputJar: optionalNonEmptyString,
-  mcVersion: optionalNonEmptyString,
-  targetMapping: remapTargetSchema
-});
+const remapModJarShape = {
+  inputJar: nonEmptyString.describe("Path to the mod JAR file"),
+  outputJar: optionalNonEmptyString.describe("Output path for remapped JAR (auto-generated if omitted)"),
+  mcVersion: optionalNonEmptyString.describe("Minecraft version (auto-detected from mod metadata if omitted)"),
+  targetMapping: remapTargetSchema.describe("yarn | mojang")
+};
+const remapModJarSchema = z.object(remapModJarShape);
 
 const emptySchema = z.object({}).passthrough();
 
@@ -632,7 +663,7 @@ function getServerVersionFromPackageJson(): string {
 
 const SERVER_VERSION = getServerVersionFromPackageJson();
 
-const server = new MCPServer({
+const server = new McpServer({
   name: "@adhisang/minecraft-modding-mcp",
   version: SERVER_VERSION
 });
@@ -898,7 +929,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   rawInput: unknown,
   schema: z.ZodType<TInput>,
   action: (input: TInput) => Promise<TResult>
-): Promise<TypedCallToolResult<Record<string, unknown>>> {
+): Promise<CallToolResult> {
   const requestId = buildRequestId();
   const startedAt = Date.now();
 
@@ -907,7 +938,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
     const payload = await action(parsedInput);
     const { result, warnings } = splitWarnings(payload);
 
-    return object({
+    return objectResult({
       result,
       meta: {
         requestId,
@@ -915,7 +946,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         durationMs: Date.now() - startedAt,
         warnings
       } satisfies ToolMeta
-    }) as TypedCallToolResult<Record<string, unknown>>;
+    });
   } catch (caughtError) {
     const problem = mapErrorToProblem(caughtError, requestId);
 
@@ -949,7 +980,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       });
     }
 
-    return object({
+    return objectResult({
       error: problem,
       meta: {
         requestId,
@@ -957,168 +988,84 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         durationMs: Date.now() - startedAt,
         warnings: []
       } satisfies ToolMeta
-    }) as TypedCallToolResult<Record<string, unknown>>;
+    });
   }
 }
 
-server.tool(
-  {
-    name: "list-versions",
-    description: "List available Minecraft versions from Mojang manifest and locally cached version jars.",
-    inputs: [
-      { name: "includeSnapshots", type: "boolean", description: "default false" },
-      { name: "limit", type: "number", description: "default 20, max 200" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("list-versions", rawInput, listVersionsSchema, async (input) =>
-      sourceService.listVersions({
-        includeSnapshots: input.includeSnapshots,
-        limit: input.limit
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("list-versions",
+  "List available Minecraft versions from Mojang manifest and locally cached version jars.",
+  listVersionsShape,
+  { readOnlyHint: true },
+  async (args) => runTool("list-versions", args, listVersionsSchema, async (input) =>
+    sourceService.listVersions({
+      includeSnapshots: input.includeSnapshots,
+      limit: input.limit
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "resolve-artifact",
-    description:
-      "Resolve source artifact from version, jar path, or Maven coordinate and return artifact metadata. For targetKind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
-    inputs: [
-      { name: "targetKind", type: "string", required: true, description: "version | jar | coordinate" },
-      { name: "targetValue", type: "string", required: true },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" },
-      { name: "allowDecompile", type: "boolean", description: "default true" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("resolve-artifact", rawInput, resolveArtifactSchema, async (input) =>
-      sourceService.resolveArtifact({
-        target: {
-          kind: input.targetKind,
-          value: input.targetValue
-        },
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority,
-        allowDecompile: input.allowDecompile
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("resolve-artifact",
+  "Resolve source artifact from version, jar path, or Maven coordinate and return artifact metadata. For targetKind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
+  resolveArtifactShape,
+  { readOnlyHint: true },
+  async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) =>
+    sourceService.resolveArtifact({
+      target: {
+        kind: input.targetKind,
+        value: input.targetValue
+      },
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      allowDecompile: input.allowDecompile
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "get-class-source",
-    description:
-      "Get Java source for a class by artifactId or by resolving target (version/jar/coordinate), with optional line-range filtering.",
-    inputs: [
-      { name: "className", type: "string", required: true },
-      { name: "artifactId", type: "string" },
-      { name: "targetKind", type: "string", description: "version | jar | coordinate" },
-      { name: "targetValue", type: "string" },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" },
-      { name: "allowDecompile", type: "boolean", description: "default true" },
-      { name: "startLine", type: "number" },
-      { name: "endLine", type: "number" },
-      { name: "maxLines", type: "number" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-class-source", rawInput, getClassSourceSchema, async (input) =>
-      sourceService.getClassSource({
-        className: input.className,
-        artifactId: input.artifactId,
-        target: buildTarget(input.targetKind, input.targetValue),
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority,
-        allowDecompile: input.allowDecompile,
-        startLine: input.startLine,
-        endLine: input.endLine,
-        maxLines: input.maxLines
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("get-class-source",
+  "Get Java source for a class by artifactId or by resolving target (version/jar/coordinate), with optional line-range filtering.",
+  getClassSourceShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) =>
+    sourceService.getClassSource({
+      className: input.className,
+      artifactId: input.artifactId,
+      target: buildTarget(input.targetKind, input.targetValue),
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      allowDecompile: input.allowDecompile,
+      startLine: input.startLine,
+      endLine: input.endLine,
+      maxLines: input.maxLines
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "get-class-members",
-    description:
-      "Get fields/methods/constructors for one class from binary bytecode by artifactId or by resolving target (version/jar/coordinate).",
-    inputs: [
-      { name: "className", type: "string", required: true },
-      { name: "artifactId", type: "string" },
-      { name: "targetKind", type: "string", description: "version | jar | coordinate" },
-      { name: "targetValue", type: "string" },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn (default official)" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" },
-      { name: "allowDecompile", type: "boolean", description: "default true" },
-      { name: "access", type: "string", description: "public | all (default public)" },
-      { name: "includeSynthetic", type: "boolean", description: "default false" },
-      { name: "includeInherited", type: "boolean", description: "default false" },
-      { name: "memberPattern", type: "string" },
-      { name: "maxMembers", type: "number", description: "default 500, max 5000" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-class-members", rawInput, getClassMembersSchema, async (input) =>
-      sourceService.getClassMembers({
-        className: input.className,
-        artifactId: input.artifactId,
-        target: buildTarget(input.targetKind, input.targetValue),
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority,
-        allowDecompile: input.allowDecompile,
-        access: input.access,
-        includeSynthetic: input.includeSynthetic,
-        includeInherited: input.includeInherited,
-        memberPattern: input.memberPattern,
-        maxMembers: input.maxMembers
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("get-class-members",
+  "Get fields/methods/constructors for one class from binary bytecode by artifactId or by resolving target (version/jar/coordinate).",
+  getClassMembersShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) =>
+    sourceService.getClassMembers({
+      className: input.className,
+      artifactId: input.artifactId,
+      target: buildTarget(input.targetKind, input.targetValue),
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      allowDecompile: input.allowDecompile,
+      access: input.access,
+      includeSynthetic: input.includeSynthetic,
+      includeInherited: input.includeInherited,
+      memberPattern: input.memberPattern,
+      maxMembers: input.maxMembers
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "search-class-source",
-    description:
-      "Search indexed class source files for one artifact with symbol/text/path intent and optional one-hop relation expansion.",
-    inputs: [
-      { name: "artifactId", type: "string", required: true },
-      { name: "query", type: "string", required: true },
-      { name: "intent", type: "string", description: "symbol | text | path" },
-      { name: "match", type: "string", description: "exact | prefix | contains | regex" },
-      { name: "packagePrefix", type: "string" },
-      { name: "fileGlob", type: "string" },
-      { name: "symbolKind", type: "string", description: "class | interface | enum | record | method | field" },
-      { name: "snippetLines", type: "number", description: "default 8, clamp 1..80" },
-      { name: "includeDefinition", type: "boolean", description: "default false" },
-      { name: "includeOneHop", type: "boolean", description: "default false" },
-      { name: "limit", type: "number", description: "default 20" },
-      { name: "cursor", type: "string" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("search-class-source", rawInput, searchClassSourceSchema, async (input) => {
+server.tool("search-class-source",
+  "Search indexed class source files for one artifact with symbol/text/path intent and optional one-hop relation expansion.",
+  searchClassSourceShape,
+  { readOnlyHint: true },
+  async (args) => runTool("search-class-source", args, searchClassSourceSchema, async (input) => {
       const scope =
         input.packagePrefix || input.fileGlob || input.symbolKind
           ? {
@@ -1155,652 +1102,336 @@ server.tool(
         limit: input.limit,
         cursor: input.cursor
       }) as Promise<Record<string, unknown>>;
+    })
+);
+
+server.tool("get-artifact-file",
+  "Get full source file content by artifactId and file path.",
+  getArtifactFileShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-artifact-file", args, getArtifactFileSchema, async (input) =>
+    sourceService.getArtifactFile({
+      artifactId: input.artifactId,
+      filePath: input.filePath,
+      maxBytes: input.maxBytes
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("list-artifact-files",
+  "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
+  listArtifactFilesShape,
+  { readOnlyHint: true },
+  async (args) => runTool("list-artifact-files", args, listArtifactFilesSchema, async (input) =>
+    sourceService.listArtifactFiles(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("trace-symbol-lifecycle",
+  "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
+  traceSymbolLifecycleShape,
+  { readOnlyHint: true },
+  async (args) => runTool("trace-symbol-lifecycle", args, traceSymbolLifecycleSchema, async (input) =>
+    sourceService.traceSymbolLifecycle({
+      symbol: input.symbol,
+      descriptor: input.descriptor,
+      fromVersion: input.fromVersion,
+      toVersion: input.toVersion,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      includeSnapshots: input.includeSnapshots,
+      maxVersions: input.maxVersions,
+      includeTimeline: input.includeTimeline
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("diff-class-signatures",
+  "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
+  diffClassSignaturesShape,
+  { readOnlyHint: true },
+  async (args) => runTool("diff-class-signatures", args, diffClassSignaturesSchema, async (input) =>
+    sourceService.diffClassSignatures({
+      className: input.className,
+      fromVersion: input.fromVersion,
+      toVersion: input.toVersion,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("find-mapping",
+  "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
+  findMappingShape,
+  { readOnlyHint: true },
+  async (args) => runTool("find-mapping", args, findMappingSchema, async (input) =>
+    sourceService.findMapping({
+      version: input.version,
+      kind: input.kind,
+      name: input.name,
+      owner: input.owner,
+      descriptor: input.descriptor,
+      sourceMapping: input.sourceMapping,
+      targetMapping: input.targetMapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("resolve-method-mapping-exact",
+  "Resolve one method mapping exactly by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous.",
+  resolveMethodMappingExactShape,
+  { readOnlyHint: true },
+  async (args) => runTool("resolve-method-mapping-exact", args, resolveMethodMappingExactSchema, async (input) =>
+    sourceService.resolveMethodMappingExact({
+      version: input.version,
+      kind: input.kind,
+      name: input.name,
+      owner: input.owner,
+      descriptor: input.descriptor,
+      sourceMapping: input.sourceMapping,
+      targetMapping: input.targetMapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("get-class-api-matrix",
+  "List class/member API rows across official/mojang/intermediary/yarn mappings for one class and Minecraft version.",
+  getClassApiMatrixShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-class-api-matrix", args, getClassApiMatrixSchema, async (input) =>
+    sourceService.getClassApiMatrix({
+      version: input.version,
+      className: input.className,
+      classNameMapping: input.classNameMapping,
+      includeKinds: parseClassApiKinds(input.includeKinds),
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("resolve-workspace-symbol",
+  "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
+  resolveWorkspaceSymbolShape,
+  { readOnlyHint: true },
+  async (args) => runTool("resolve-workspace-symbol", args, resolveWorkspaceSymbolSchema, async (input) =>
+    sourceService.resolveWorkspaceSymbol({
+      projectPath: input.projectPath,
+      version: input.version,
+      kind: input.kind,
+      name: input.name,
+      owner: input.owner,
+      descriptor: input.descriptor,
+      sourceMapping: input.sourceMapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("check-symbol-exists",
+  "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
+  checkSymbolExistsShape,
+  { readOnlyHint: true },
+  async (args) => runTool("check-symbol-exists", args, checkSymbolExistsSchema, async (input) =>
+    sourceService.checkSymbolExists({
+      version: input.version,
+      kind: input.kind,
+      owner: input.owner,
+      name: input.name,
+      descriptor: input.descriptor,
+      sourceMapping: input.sourceMapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("nbt-to-json",
+  "Decode Java Edition NBT binary payload (base64) into typed JSON.",
+  nbtToJsonShape,
+  { readOnlyHint: true },
+  async (args) => runTool("nbt-to-json", args, nbtToJsonSchema, async (input) =>
+    Promise.resolve(
+      nbtBase64ToTypedJson({
+        nbtBase64: input.nbtBase64,
+        compression: input.compression as DecodeCompression | undefined
+      }, nbtLimits) as unknown as Record<string, unknown>
+    )
+  )
+);
+
+server.tool("nbt-apply-json-patch",
+  "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
+  nbtApplyJsonPatchShape,
+  { readOnlyHint: true },
+  async (args) => runTool("nbt-apply-json-patch", args, nbtApplyJsonPatchSchema, async (input) =>
+    Promise.resolve(
+      applyNbtJsonPatch({
+        typedJson: input.typedJson,
+        patch: input.patch
+      }, nbtLimits) as unknown as Record<string, unknown>
+    )
+  )
+);
+
+server.tool("json-to-nbt",
+  "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
+  jsonToNbtShape,
+  { readOnlyHint: true },
+  async (args) => runTool("json-to-nbt", args, jsonToNbtSchema, async (input) =>
+    Promise.resolve(
+      typedJsonToNbtBase64({
+        typedJson: input.typedJson,
+        compression: input.compression as EncodeCompression | undefined
+      }, nbtLimits) as unknown as Record<string, unknown>
+    )
+  )
+);
+
+server.tool("index-artifact",
+  "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
+  indexArtifactShape,
+  async (args) => runTool("index-artifact", args, indexArtifactSchema, async (input) =>
+    sourceService.indexArtifact({
+      artifactId: input.artifactId,
+      force: input.force
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("get-runtime-metrics",
+  "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
+  { readOnlyHint: true },
+  async (args) => runTool("get-runtime-metrics", args, emptySchema, async () =>
+    Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
+  )
+);
+
+server.tool("validate-mixin",
+  "Validate Mixin source against Minecraft bytecode signatures for a given version.",
+  validateMixinShape,
+  { readOnlyHint: true },
+  async (args) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
+    sourceService.validateMixin({
+      source: input.source,
+      version: input.version,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("validate-access-widener",
+  "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
+  validateAccessWidenerShape,
+  { readOnlyHint: true },
+  async (args) => runTool("validate-access-widener", args, validateAccessWidenerSchema, async (input) =>
+    sourceService.validateAccessWidener({
+      content: input.content,
+      version: input.version,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("analyze-mod-jar",
+  "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
+  analyzeModJarShape,
+  { readOnlyHint: true },
+  async (args) => runTool("analyze-mod-jar", args, analyzeModJarSchema, async (input) => {
+    const result = await analyzeModJar(input.jarPath, {
+      includeClasses: input.includeClasses ?? false
     });
-  }
+    return result as unknown as Record<string, unknown>;
+  })
 );
 
-server.tool(
-  {
-    name: "get-artifact-file",
-    description: "Get full source file content by artifactId and file path.",
-    inputs: [
-      { name: "artifactId", type: "string", required: true },
-      { name: "filePath", type: "string", required: true },
-      { name: "maxBytes", type: "number" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-artifact-file", rawInput, getArtifactFileSchema, async (input) =>
-      sourceService.getArtifactFile({
-        artifactId: input.artifactId,
-        filePath: input.filePath,
-        maxBytes: input.maxBytes
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("get-registry-data",
+  "Get Minecraft registry data (blocks, items, biomes, etc.) for a specific version by running the server data generator.",
+  getRegistryDataShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-registry-data", args, getRegistryDataSchema, async (input) =>
+    sourceService.getRegistryData({
+      version: input.version,
+      registry: input.registry
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "list-artifact-files",
-    description: "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
-    inputs: [
-      { name: "artifactId", type: "string", required: true },
-      { name: "prefix", type: "string" },
-      { name: "limit", type: "number" },
-      { name: "cursor", type: "string" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("list-artifact-files", rawInput, listArtifactFilesSchema, async (input) =>
-      sourceService.listArtifactFiles(input) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("compare-versions",
+  "Compare two Minecraft versions to find added/removed classes and registry entry changes. Useful for understanding what changed between versions during mod migration.",
+  compareVersionsShape,
+  { readOnlyHint: true },
+  async (args) => runTool("compare-versions", args, compareVersionsSchema, async (input) =>
+    sourceService.compareVersions({
+      fromVersion: input.fromVersion,
+      toVersion: input.toVersion,
+      category: input.category,
+      packageFilter: input.packageFilter,
+      maxClassResults: input.maxClassResults
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "trace-symbol-lifecycle",
-    description:
-      "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
-    inputs: [
-      { name: "symbol", type: "string", required: true, description: "fully.qualified.Class.method" },
-      { name: "descriptor", type: "string", description: 'optional JVM descriptor, e.g. "(I)V"' },
-      { name: "fromVersion", type: "string" },
-      { name: "toVersion", type: "string" },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn (default official)" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" },
-      { name: "includeSnapshots", type: "boolean", description: "default false" },
-      { name: "maxVersions", type: "number", description: "default 120, max 400" },
-      { name: "includeTimeline", type: "boolean", description: "default false" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("trace-symbol-lifecycle", rawInput, traceSymbolLifecycleSchema, async (input) =>
-      sourceService.traceSymbolLifecycle({
-        symbol: input.symbol,
-        descriptor: input.descriptor,
-        fromVersion: input.fromVersion,
-        toVersion: input.toVersion,
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority,
-        includeSnapshots: input.includeSnapshots,
-        maxVersions: input.maxVersions,
-        includeTimeline: input.includeTimeline
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("decompile-mod-jar",
+  "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar by exposing the actual source code.",
+  decompileModJarShape,
+  { readOnlyHint: true },
+  async (args) => runTool("decompile-mod-jar", args, decompileModJarSchema, async (input) =>
+    sourceService.decompileModJar({
+      jarPath: input.jarPath,
+      className: input.className
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "diff-class-signatures",
-    description:
-      "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
-    inputs: [
-      { name: "className", type: "string", required: true },
-      { name: "fromVersion", type: "string", required: true },
-      { name: "toVersion", type: "string", required: true },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn (default official)" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("diff-class-signatures", rawInput, diffClassSignaturesSchema, async (input) =>
-      sourceService.diffClassSignatures({
-        className: input.className,
-        fromVersion: input.fromVersion,
-        toVersion: input.toVersion,
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("get-mod-class-source",
+  "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached.",
+  getModClassSourceShape,
+  { readOnlyHint: true },
+  async (args) => runTool("get-mod-class-source", args, getModClassSourceSchema, async (input) =>
+    sourceService.getModClassSource({
+      jarPath: input.jarPath,
+      className: input.className
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "find-mapping",
-    description:
-      "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
-    inputs: [
-      { name: "version", type: "string", required: true },
-      { name: "kind", type: "string", required: true, description: "class | field | method" },
-      { name: "name", type: "string", required: true },
-      { name: "owner", type: "string" },
-      { name: "descriptor", type: "string" },
-      { name: "sourceMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "targetMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("find-mapping", rawInput, findMappingSchema, async (input) =>
-      sourceService.findMapping({
-        version: input.version,
-        kind: input.kind,
-        name: input.name,
-        owner: input.owner,
-        descriptor: input.descriptor,
-        sourceMapping: input.sourceMapping,
-        targetMapping: input.targetMapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
+server.tool("search-mod-source",
+  "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
+  searchModSourceShape,
+  { readOnlyHint: true },
+  async (args) => runTool("search-mod-source", args, searchModSourceSchema, async (input) =>
+    sourceService.searchModSource({
+      jarPath: input.jarPath,
+      query: input.query,
+      searchType: input.searchType,
+      limit: input.limit
+    }) as Promise<Record<string, unknown>>
+  )
 );
 
-server.tool(
-  {
-    name: "resolve-method-mapping-exact",
-    description:
-      "Resolve one method mapping exactly by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous.",
-    inputs: [
-      { name: "version", type: "string", required: true },
-      { name: "kind", type: "string", required: true, description: "class | field | method" },
-      { name: "name", type: "string", required: true },
-      { name: "owner", type: "string" },
-      { name: "descriptor", type: "string", description: "required for kind=method" },
-      { name: "sourceMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "targetMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("resolve-method-mapping-exact", rawInput, resolveMethodMappingExactSchema, async (input) =>
-      sourceService.resolveMethodMappingExact({
-        version: input.version,
-        kind: input.kind,
-        name: input.name,
-        owner: input.owner,
-        descriptor: input.descriptor,
-        sourceMapping: input.sourceMapping,
-        targetMapping: input.targetMapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "get-class-api-matrix",
-    description:
-      "List class/member API rows across official/mojang/intermediary/yarn mappings for one class and Minecraft version.",
-    inputs: [
-      { name: "version", type: "string", required: true },
-      { name: "className", type: "string", required: true },
-      { name: "classNameMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "includeKinds", type: "string", description: "comma-separated: class,field,method" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-class-api-matrix", rawInput, getClassApiMatrixSchema, async (input) =>
-      sourceService.getClassApiMatrix({
-        version: input.version,
-        className: input.className,
-        classNameMapping: input.classNameMapping,
-        includeKinds: parseClassApiKinds(input.includeKinds),
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "resolve-workspace-symbol",
-    description:
-      "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
-    inputs: [
-      { name: "projectPath", type: "string", required: true },
-      { name: "version", type: "string", required: true },
-      { name: "kind", type: "string", required: true, description: "class | field | method" },
-      { name: "name", type: "string", required: true },
-      { name: "owner", type: "string" },
-      { name: "descriptor", type: "string" },
-      { name: "sourceMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("resolve-workspace-symbol", rawInput, resolveWorkspaceSymbolSchema, async (input) =>
-      sourceService.resolveWorkspaceSymbol({
-        projectPath: input.projectPath,
-        version: input.version,
-        kind: input.kind,
-        name: input.name,
-        owner: input.owner,
-        descriptor: input.descriptor,
-        sourceMapping: input.sourceMapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "check-symbol-exists",
-    description:
-      "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
-    inputs: [
-      { name: "version", type: "string", required: true },
-      { name: "kind", type: "string", required: true, description: "class | field | method" },
-      { name: "owner", type: "string" },
-      { name: "name", type: "string", required: true },
-      { name: "descriptor", type: "string", description: "required for kind=method" },
-      { name: "sourceMapping", type: "string", required: true, description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("check-symbol-exists", rawInput, checkSymbolExistsSchema, async (input) =>
-      sourceService.checkSymbolExists({
-        version: input.version,
-        kind: input.kind,
-        owner: input.owner,
-        name: input.name,
-        descriptor: input.descriptor,
-        sourceMapping: input.sourceMapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "nbt-to-json",
-    description: "Decode Java Edition NBT binary payload (base64) into typed JSON.",
-    inputs: [
-      { name: "nbtBase64", type: "string", required: true },
-      { name: "compression", type: "string", description: "none | gzip | auto (default auto)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("nbt-to-json", rawInput, nbtToJsonSchema, async (input) =>
-      Promise.resolve(
-        nbtBase64ToTypedJson({
-          nbtBase64: input.nbtBase64,
-          compression: input.compression as DecodeCompression | undefined
-        }, nbtLimits) as unknown as Record<string, unknown>
-      )
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "nbt-apply-json-patch",
-    description: "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
-    inputs: [
-      { name: "typedJson", type: "object", required: true },
+server.tool("remap-mod-jar",
+  "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
+  remapModJarShape,
+  { readOnlyHint: false },
+  async (args) => runTool("remap-mod-jar", args, remapModJarSchema, async (input) => {
+    const result = await remapModJar(
       {
-        name: "patch",
-        type: "array",
-        required: true,
-        description: "RFC6902 operation array (add/remove/replace/test)"
-      }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("nbt-apply-json-patch", rawInput, nbtApplyJsonPatchSchema, async (input) =>
-      Promise.resolve(
-        applyNbtJsonPatch({
-          typedJson: input.typedJson,
-          patch: input.patch
-        }, nbtLimits) as unknown as Record<string, unknown>
-      )
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "json-to-nbt",
-    description: "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
-    inputs: [
-      { name: "typedJson", type: "object", required: true },
-      { name: "compression", type: "string", description: "none | gzip (default none)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("json-to-nbt", rawInput, jsonToNbtSchema, async (input) =>
-      Promise.resolve(
-        typedJsonToNbtBase64({
-          typedJson: input.typedJson,
-          compression: input.compression as EncodeCompression | undefined
-        }, nbtLimits) as unknown as Record<string, unknown>
-      )
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "index-artifact",
-    description:
-      "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
-    inputs: [
-      { name: "artifactId", type: "string", required: true },
-      { name: "force", type: "boolean", description: "default false" }
-    ]
-  },
-  async (rawInput) => {
-    return runTool("index-artifact", rawInput, indexArtifactSchema, async (input) =>
-      sourceService.indexArtifact({
-        artifactId: input.artifactId,
-        force: input.force
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "get-runtime-metrics",
-    description: "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-runtime-metrics", rawInput, emptySchema, async () =>
-      Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "validate-mixin",
-    description: "Validate Mixin source against Minecraft bytecode signatures for a given version.",
-    inputs: [
-      { name: "source", type: "string", required: true, description: "Mixin Java source text" },
-      { name: "version", type: "string", required: true, description: "Minecraft version" },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("validate-mixin", rawInput, validateMixinSchema, async (input) =>
-      sourceService.validateMixin({
-        source: input.source,
-        version: input.version,
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "validate-access-widener",
-    description: "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
-    inputs: [
-      { name: "content", type: "string", required: true, description: "Access Widener file content" },
-      { name: "version", type: "string", required: true, description: "Minecraft version" },
-      { name: "mapping", type: "string", description: "official | mojang | intermediary | yarn" },
-      { name: "sourcePriority", type: "string", description: "loom-first | maven-first" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("validate-access-widener", rawInput, validateAccessWidenerSchema, async (input) =>
-      sourceService.validateAccessWidener({
-        content: input.content,
-        version: input.version,
-        mapping: input.mapping,
-        sourcePriority: input.sourcePriority
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "analyze-mod-jar",
-    description:
-      "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
-    inputs: [
-      { name: "jarPath", type: "string", required: true, description: "Local path to the mod JAR file" },
-      { name: "includeClasses", type: "boolean", description: "Include full class listing (default false)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("analyze-mod-jar", rawInput, analyzeModJarSchema, async (input) => {
-      const result = await analyzeModJar(input.jarPath, {
-        includeClasses: input.includeClasses ?? false
-      });
-      return result as unknown as Record<string, unknown>;
-    });
-  }
-);
-
-server.tool(
-  {
-    name: "get-registry-data",
-    description:
-      "Get Minecraft registry data (blocks, items, biomes, etc.) for a specific version by running the server data generator.",
-    inputs: [
-      { name: "version", type: "string", required: true, description: "Minecraft version (e.g. 1.21)" },
-      {
-        name: "registry",
-        type: "string",
-        description: 'Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.'
-      }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-registry-data", rawInput, getRegistryDataSchema, async (input) =>
-      sourceService.getRegistryData({
-        version: input.version,
-        registry: input.registry
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "compare-versions",
-    description:
-      "Compare two Minecraft versions to find added/removed classes and registry entry changes. Useful for understanding what changed between versions during mod migration.",
-    inputs: [
-      { name: "fromVersion", type: "string", required: true, description: "Older Minecraft version (e.g. 1.20.4)" },
-      { name: "toVersion", type: "string", required: true, description: "Newer Minecraft version (e.g. 1.21)" },
-      {
-        name: "category",
-        type: "string",
-        description: "classes | registry | all (default all)"
+        inputJar: input.inputJar,
+        outputJar: input.outputJar,
+        mcVersion: input.mcVersion,
+        targetMapping: input.targetMapping
       },
-      { name: "packageFilter", type: "string", description: "Filter classes to a package prefix (e.g. net.minecraft.world.item)" },
-      { name: "maxClassResults", type: "number", description: "Max class results per direction (default 500, max 5000)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("compare-versions", rawInput, compareVersionsSchema, async (input) =>
-      sourceService.compareVersions({
-        fromVersion: input.fromVersion,
-        toVersion: input.toVersion,
-        category: input.category,
-        packageFilter: input.packageFilter,
-        maxClassResults: input.maxClassResults
-      }) as Promise<Record<string, unknown>>
+      config
     );
-  }
+    return result as unknown as Record<string, unknown>;
+  })
 );
 
-server.tool(
-  {
-    name: "decompile-mod-jar",
-    description:
-      "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar by exposing the actual source code.",
-    inputs: [
-      { name: "jarPath", type: "string", required: true, description: "Local path to the mod JAR file" },
-      {
-        name: "className",
-        type: "string",
-        description: "Optional fully-qualified class name to view source. Omit to list all classes."
-      }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("decompile-mod-jar", rawInput, decompileModJarSchema, async (input) =>
-      sourceService.decompileModJar({
-        jarPath: input.jarPath,
-        className: input.className
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "get-mod-class-source",
-    description:
-      "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached.",
-    inputs: [
-      { name: "jarPath", type: "string", required: true, description: "Local path to the mod JAR file" },
-      { name: "className", type: "string", required: true, description: "Fully-qualified class name (e.g. com.example.MyMixin)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("get-mod-class-source", rawInput, getModClassSourceSchema, async (input) =>
-      sourceService.getModClassSource({
-        jarPath: input.jarPath,
-        className: input.className
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "search-mod-source",
-    description:
-      "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
-    inputs: [
-      { name: "jarPath", type: "string", required: true, description: "Local path to the mod JAR file" },
-      { name: "query", type: "string", required: true, description: "Search pattern (regex or literal string)" },
-      {
-        name: "searchType",
-        type: "string",
-        description: "class | method | field | content | all (default all)"
-      },
-      { name: "limit", type: "number", description: "Max results (default 50, max 200)" }
-    ],
-    annotations: {
-      readOnlyHint: true
-    }
-  },
-  async (rawInput) => {
-    return runTool("search-mod-source", rawInput, searchModSourceSchema, async (input) =>
-      sourceService.searchModSource({
-        jarPath: input.jarPath,
-        query: input.query,
-        searchType: input.searchType,
-        limit: input.limit
-      }) as Promise<Record<string, unknown>>
-    );
-  }
-);
-
-server.tool(
-  {
-    name: "remap-mod-jar",
-    description:
-      "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
-    inputs: [
-      { name: "inputJar", type: "string", required: true, description: "Path to the mod JAR file" },
-      { name: "outputJar", type: "string", description: "Output path for remapped JAR (auto-generated if omitted)" },
-      {
-        name: "mcVersion",
-        type: "string",
-        description: "Minecraft version (auto-detected from mod metadata if omitted)"
-      },
-      { name: "targetMapping", type: "string", required: true, description: "yarn | mojang" }
-    ],
-    annotations: {
-      readOnlyHint: false
-    }
-  },
-  async (rawInput) => {
-    return runTool("remap-mod-jar", rawInput, remapModJarSchema, async (input) => {
-      const result = await remapModJar(
-        {
-          inputJar: input.inputJar,
-          outputJar: input.outputJar,
-          mcVersion: input.mcVersion,
-          targetMapping: input.targetMapping
-        },
-        config
-      );
-      return result as unknown as Record<string, unknown>;
-    });
-  }
-);
-
-export function startServer(): void {
+export async function startServer(): Promise<void> {
   if (serverStarted) {
     return;
   }
@@ -1811,7 +1442,10 @@ export function startServer(): void {
     sqlitePath: config.sqlitePath,
     sourceRepos: config.sourceRepos.length
   });
-  server.listen();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
+  process.stdin.resume();
   serverStarted = true;
 }
 

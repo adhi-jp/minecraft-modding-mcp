@@ -28,7 +28,7 @@
     "test:perf": "node --test --test-concurrency=1 --import tsx tests/perf/*.perf.ts",
     "test:perf:update-baseline": "UPDATE_PERF_BASELINE=1 node --test --test-concurrency=1 --import tsx tests/perf/*.perf.ts",
     "test:perf:strict": "STRICT_PERF=1 node --test --test-concurrency=1 --import tsx tests/perf/*.perf.ts",
-    "test:manual:mcp-use-smoke": "node --import tsx tests/manual/mcp-use-client-smoke.manual.ts",
+    "test:manual:stdio-smoke": "node --import tsx tests/manual/stdio-client-smoke.manual.ts",
     "test:manual:package-smoke": "node --import tsx tests/manual/package-distribution-smoke.manual.ts",
     "validate": "npm run check && npm test && npm run test:coverage && npm run test:perf"
   },
@@ -46,7 +46,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "mcp-use": "^1.20.5",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "fast-glob": "^3.3.3",
     "smol-toml": "^1.3.0",
     "yauzl": "^3.2.0",
