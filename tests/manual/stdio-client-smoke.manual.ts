@@ -176,8 +176,7 @@ async function main(): Promise<void> {
 
   const stdioReady = await canUseStdioPipeReliably();
   if (!stdioReady) {
-    console.warn("Manual stdio smoke skipped: stdin pipe closes immediately in this runtime.");
-    return;
+    throw new Error("stdio pipe is unreliable: stdin closes immediately in this runtime.");
   }
 
   const root = await mkdtemp(join(tmpdir(), "stdio-smoke-v03-"));
