@@ -119,6 +119,7 @@ export type ResolveArtifactOutput = {
   qualityFlags: string[];
   repoUrl?: string;
   warnings: string[];
+  sampleEntries?: string[];
 };
 
 type SymbolKind = "class" | "interface" | "enum" | "record" | "method" | "field";
@@ -1411,6 +1412,20 @@ export class SourceService {
       resolved.qualityFlags = [...new Set(resolved.qualityFlags)];
       await this.ingestIfNeeded(resolved);
 
+      let sampleEntries: string[] | undefined;
+      if (resolved.sourceJarPath) {
+        try {
+          const javaEntries = await listJavaEntries(resolved.sourceJarPath);
+          const MAX_SAMPLE = 10;
+          sampleEntries = javaEntries.slice(0, MAX_SAMPLE);
+          if (javaEntries.length > MAX_SAMPLE) {
+            sampleEntries.push(`... and ${javaEntries.length - MAX_SAMPLE} more .java entries`);
+          }
+        } catch {
+          // non-fatal: sampleEntries remains undefined
+        }
+      }
+
       return {
         artifactId: resolved.artifactId,
         origin: resolved.origin,
@@ -1425,7 +1440,8 @@ export class SourceService {
         provenance,
         qualityFlags: resolved.qualityFlags,
         repoUrl: resolved.repoUrl,
-        warnings
+        warnings,
+        sampleEntries
       };
     } catch (caughtError) {
       if (isAppError(caughtError)) {

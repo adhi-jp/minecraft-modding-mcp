@@ -20,6 +20,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `resolve-artifact` mapping failures for version targets now include actionable diagnostics (`searchedPaths`, `candidateArtifacts`, `recommendedCommand`).
 - `check-symbol-exists` now returns `ERR_INVALID_INPUT` for invalid symbol combinations before evaluating mapping availability.
 
+### feat(mcp): add decompiler retry, sampleEntries, ambiguityReasons, and api-matrix diagnostics
+
+#### Added
+- `resolve-artifact` now returns optional `sampleEntries` when a source JAR is resolved.
+- `find-mapping` now returns optional `ambiguityReasons` for `status=ambiguous`.
+- `get-class-api-matrix` now returns optional `ambiguousRowCount` when ambiguity fallback is applied.
+
+#### Fixed
+- Vineflower decompilation now retries with fallback flag profiles and includes attempted profiles in terminal `ERR_DECOMPILER_FAILED` details.
+- `get-class-api-matrix.ambiguousRowCount` now counts ambiguous rows (not per-mapping ambiguity hits).
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

@@ -1,5 +1,5 @@
 import { access, constants } from "node:fs/promises";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
 
@@ -9,12 +9,19 @@ import { log } from "../logger.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+const VINEFLOWER_FLAG_PROFILES: ReadonlyArray<{ label: string; flags: string[] }> = [
+  { label: "default", flags: ["-din=1", "-rbr=1", "-dgs=1"] },
+  { label: "relaxed", flags: ["-din=1", "-rbr=0", "-dgs=0"] },
+  { label: "safe",    flags: ["-din=0", "-rbr=0", "-dgs=0"] },
+];
+
 export interface DecompileResult {
   outputDir: string;
   javaFiles: Array<{
     filePath: string;
     content: string;
   }>;
+  decompileProfile?: string;
 }
 
 interface DecompileBinaryOptions {
@@ -114,15 +121,21 @@ function decompileOutputDir(cacheDir: string, binaryJarPath: string, signature: 
   return join(cacheDir, "decompiled", digest);
 }
 
+function clearOutputDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+}
+
 async function runVineflower(
   vineflowerJarPath: string,
   binaryJarPath: string,
   outputDir: string,
-  timeoutMs: number
+  timeoutMs: number,
+  flags: string[] = VINEFLOWER_FLAG_PROFILES[0].flags
 ): Promise<void> {
   const result = await runJavaProcess({
     jarPath: vineflowerJarPath,
-    args: [binaryJarPath, outputDir, "-din=1", "-rbr=1", "-dgs=1"],
+    args: [binaryJarPath, outputDir, ...flags],
     timeoutMs,
     normalizePathArgs: true
   });
@@ -196,40 +209,78 @@ export async function decompileBinaryJar(
       }
     }
 
-    await runVineflower(options.vineflowerJarPath, normalizedBinaryJarPath, outputDir, timeoutMs);
-    const javaFileNames = await collectJavaFiles(outputDir);
-    if (javaFileNames.length === 0) {
-      throw createError({
-        code: ERROR_CODES.DECOMPILER_FAILED,
-        message: "No Java files were produced by decompilation.",
-        details: {
-          binaryJarPath: normalizedBinaryJarPath,
-          outputDir,
-          producedJavaCount: 0
+    const profilesAttempted: string[] = [];
+    let lastDecompileError: unknown;
+
+    for (const profile of VINEFLOWER_FLAG_PROFILES) {
+      profilesAttempted.push(profile.label);
+      try {
+        if (profilesAttempted.length > 1) {
+          clearOutputDir(outputDir);
+          emitDecompileLog("decompile.retry", {
+            binaryJarPath: normalizedBinaryJarPath,
+            profile: profile.label,
+            attempt: profilesAttempted.length
+          });
         }
-      });
+
+        await runVineflower(options.vineflowerJarPath, normalizedBinaryJarPath, outputDir, timeoutMs, profile.flags);
+        const javaFileNames = await collectJavaFiles(outputDir);
+        if (javaFileNames.length === 0) {
+          throw createError({
+            code: ERROR_CODES.DECOMPILER_FAILED,
+            message: "No Java files were produced by decompilation.",
+            details: {
+              binaryJarPath: normalizedBinaryJarPath,
+              outputDir,
+              producedJavaCount: 0,
+              profile: profile.label
+            }
+          });
+        }
+
+        const javaFiles = await Promise.all(
+          javaFileNames.map(async (candidate) => {
+            const abs = join(outputDir, candidate);
+            return {
+              filePath: normalizeOutputPath(outputDir, abs),
+              content: await readFileTreeText(abs)
+            };
+          })
+        );
+
+        emitDecompileLog("decompile.done", {
+          durationMs: Date.now() - startedAt,
+          artifactIdCandidate: options.artifactIdCandidate,
+          javaFileCount: javaFiles.length,
+          profile: profile.label
+        });
+
+        return {
+          outputDir,
+          javaFiles,
+          decompileProfile: profile.label
+        };
+      } catch (retryError) {
+        if (isAppError(retryError) && retryError.code !== ERROR_CODES.DECOMPILER_FAILED) {
+          throw retryError;
+        }
+        lastDecompileError = retryError;
+      }
     }
 
-    const javaFiles = await Promise.all(
-      javaFileNames.map(async (candidate) => {
-        const abs = join(outputDir, candidate);
-        return {
-          filePath: normalizeOutputPath(outputDir, abs),
-          content: await readFileTreeText(abs)
-        };
-      })
-    );
-
-    emitDecompileLog("decompile.done", {
-      durationMs: Date.now() - startedAt,
-      artifactIdCandidate: options.artifactIdCandidate,
-      javaFileCount: javaFiles.length
-    });
-
-    return {
-      outputDir,
-      javaFiles
-    };
+    throw isAppError(lastDecompileError)
+      ? createError({
+          code: ERROR_CODES.DECOMPILER_FAILED,
+          message: `Decompilation failed after trying all flag profiles.`,
+          details: {
+            binaryJarPath: normalizedBinaryJarPath,
+            outputDir,
+            profilesAttempted,
+            stderrTail: extractStderrTail(lastDecompileError)
+          }
+        })
+      : lastDecompileError;
   } catch (error) {
     emitDecompileLog("decompile.error", {
       durationMs: Date.now() - startedAt,

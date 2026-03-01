@@ -1255,3 +1255,134 @@ test("MappingService rejects class queries that include owner", async () => {
       (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
   );
 });
+
+test("MappingService findMapping includes ambiguityReasons when multiple owners match", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-ambiguity-reasons-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const tiny = [
+    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "c\ta/b/C\tinter/one/C\tyarn/one/C",
+    "c\ta/b/C\tinter/two/C\tyarn/two/C"
+  ].join("\n");
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+  const result = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "a.b.C",
+      sourceMapping: "official",
+      targetMapping: "intermediary"
+    })
+  );
+
+  assert.equal(result.status, "ambiguous");
+  assert.ok(result.ambiguityReasons);
+  assert.ok(result.ambiguityReasons.length > 0);
+});
+
+test("MappingService findMapping omits ambiguityReasons for single candidate", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-no-ambiguity-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+  const result = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "official",
+      targetMapping: "intermediary"
+    })
+  );
+
+  assert.equal(result.status, "resolved");
+  assert.equal(result.ambiguityReasons, undefined);
+});
+
+test("MappingService getClassApiMatrix includes competing candidates in ambiguity warnings", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+
+  // Create ambiguous tiny data: two intermediary mappings for the same official method
+  const ambiguousTiny = [
+    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "c\ta/b/C\tinter/pkg/C\tyarn/pkg/C",
+    "\tm\t(I)V\te\tinterMethod1\tnamedMethod",
+    "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
+  ].join("\n");
+
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+
+  const fetchStub = (async () => {
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+  const result = await withCwd(root, () =>
+    (
+      service as unknown as {
+        getClassApiMatrix: (input: {
+          version: string;
+          className: string;
+          classNameMapping: SourceMapping;
+        }) => Promise<{
+          warnings: string[];
+          ambiguousRowCount?: number;
+          rows: Array<{ kind: string }>;
+        }>;
+      }
+    ).getClassApiMatrix({
+      version: "1.21.10",
+      className: "a.b.C",
+      classNameMapping: "official"
+    })
+  );
+
+  const competingWarnings = result.warnings.filter((w: string) => w.includes("competing="));
+  assert.equal(result.ambiguousRowCount, 1);
+  assert.ok(competingWarnings.length >= 2);
+});

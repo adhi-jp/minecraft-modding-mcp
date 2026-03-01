@@ -4188,3 +4188,56 @@ test("SourceService getClassSource accepts canonical inner-class dot notation", 
   assert.match(source.sourceText, /class Outer/);
   assert.match(source.sourceText, /class Inner/);
 });
+
+test("SourceService resolveArtifact returns sampleEntries for source JAR", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-sample-entries-"));
+  const binaryJarPath = join(root, "server-1.0.0.jar");
+  const sourcesJarPath = join(root, "server-1.0.0-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}",
+    "net/minecraft/world/World.java": "package net.minecraft.world;\npublic class World {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  assert.ok(resolved.sampleEntries);
+  assert.ok(resolved.sampleEntries.length >= 2);
+  assert.ok(resolved.sampleEntries.some((entry: string) => entry.endsWith(".java")));
+});
+
+test("SourceService resolveArtifact returns undefined sampleEntries for decompile-only", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-sample-entries-none-"));
+  const binaryJarPath = join(root, "nosource.jar");
+
+  await createJar(binaryJarPath, {
+    "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: binaryJarPath },
+        allowDecompile: false
+      }),
+    (error: unknown) => {
+      return (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
+      );
+    }
+  );
+});

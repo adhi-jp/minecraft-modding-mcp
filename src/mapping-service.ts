@@ -120,6 +120,7 @@ export type SymbolResolutionOutput = {
   candidates: Array<SymbolReference & Pick<MappingLookupCandidate, "matchKind" | "confidence">>;
   warnings: string[];
   provenance?: MappingLookupProvenance;
+  ambiguityReasons?: string[];
 };
 
 export type FindMappingInput = {
@@ -199,6 +200,7 @@ export type ClassApiMatrixOutput = {
   classIdentity: Partial<Record<SourceMapping, string>>;
   rows: ClassApiMatrixRow[];
   warnings: string[];
+  ambiguousRowCount?: number;
 };
 
 export type SymbolExistenceInput = {
@@ -1086,6 +1088,49 @@ function normalizeIncludedKinds(inputKinds: ClassApiMatrixKind[] | undefined): S
   return normalized;
 }
 
+type ResolutionCandidate = SymbolReference & Pick<MappingLookupCandidate, "matchKind" | "confidence">;
+
+function inferAmbiguityReasons(
+  candidates: ResolutionCandidate[],
+  usedMojangClientMappings: boolean
+): string[] {
+  if (candidates.length <= 1) {
+    return [];
+  }
+  const reasons: string[] = [];
+
+  const owners = [...new Set(candidates.map((c) => c.owner).filter(Boolean))];
+  if (owners.length > 1) {
+    reasons.push(`Multiple owner classes matched: ${owners.join(", ")}`);
+  }
+
+  const matchKinds = [...new Set(candidates.map((c) => c.matchKind))];
+  if (matchKinds.length > 1) {
+    reasons.push(`Candidates matched at different precision levels: ${matchKinds.join(", ")}`);
+  }
+
+  if (usedMojangClientMappings) {
+    const hasDescriptor = candidates.some((c) => c.descriptor);
+    const missingDescriptor = candidates.some((c) => !c.descriptor);
+    if (hasDescriptor && missingDescriptor) {
+      reasons.push("Method descriptor was lost through mojang-client-mappings path, causing broader matching.");
+    }
+  }
+
+  if (owners.length <= 1) {
+    const descriptors = [...new Set(candidates.map((c) => c.descriptor).filter(Boolean))];
+    if (descriptors.length > 1) {
+      reasons.push(`Overloaded method: ${descriptors.length} variants`);
+    }
+  }
+
+  if (reasons.length === 0) {
+    reasons.push(`${candidates.length} candidates matched with similar confidence scores.`);
+  }
+
+  return reasons;
+}
+
 export class MappingService {
   private readonly config: Config;
   private readonly versionService: VersionMappingsResolver;
@@ -1199,6 +1244,11 @@ export class MappingService {
     const status: SymbolResolutionStatus =
       candidates.length === 0 ? "not_found" : candidates.length === 1 ? "resolved" : "ambiguous";
 
+    const ambiguityReasons =
+      candidates.length > 1
+        ? inferAmbiguityReasons(candidates, pathUsesSource(graph.pairs, path, "mojang-client-mappings"))
+        : undefined;
+
     return {
       querySymbol,
       mappingContext,
@@ -1207,7 +1257,8 @@ export class MappingService {
       resolvedSymbol: status === "resolved" ? candidates[0] : undefined,
       candidates,
       warnings,
-      provenance: this.provenanceForPath(graph, path)
+      provenance: this.provenanceForPath(graph, path),
+      ambiguityReasons
     };
   }
 
@@ -1460,7 +1511,8 @@ export class MappingService {
         classByMapping[classNameMapping] as MappingSymbolRecord
       );
       if (mapped.length > 1) {
-        warnings.push(`Class identity mapping to ${mapping} is ambiguous for "${className}".`);
+        const competing = mapped.slice(0, 5).map((c) => c.symbol);
+        warnings.push(`Class identity mapping to ${mapping} is ambiguous for "${className}": competing=[${competing.join(", ")}].`);
       }
       if (mapped.length > 0) {
         classByMapping[mapping] = mapped[0];
@@ -1499,6 +1551,7 @@ export class MappingService {
     });
 
     const rows: ClassApiMatrixRow[] = [];
+    let ambiguousRowCount = 0;
     const rowSeen = new Set<string>();
     const rowKindOrder: Record<ClassApiMatrixKind, number> = {
       class: 0,
@@ -1523,6 +1576,7 @@ export class MappingService {
         continue;
       }
       rowSeen.add(key);
+      let rowHadAmbiguity = false;
 
       const row: ClassApiMatrixRow = {
         kind: baseRecord.kind,
@@ -1550,9 +1604,11 @@ export class MappingService {
             }
           }
           if (filtered.length > 1) {
+            const competing = filtered.slice(0, 5).map((c) => c.symbol);
             warnings.push(
-              `Row mapping to ${mapping} is ambiguous for "${baseRecord.symbol}". Using highest-ranked candidate.`
+              `Row mapping to ${mapping} is ambiguous for "${baseRecord.symbol}": competing=[${competing.join(", ")}]. Using highest-ranked candidate.`
             );
+            rowHadAmbiguity = true;
           }
           resolved = filtered[0];
         }
@@ -1572,6 +1628,9 @@ export class MappingService {
 
       row.completeness = Boolean(row.official && row.mojang && row.intermediary && row.yarn);
       rows.push(row);
+      if (rowHadAmbiguity) {
+        ambiguousRowCount += 1;
+      }
     }
 
     return {
@@ -1585,7 +1644,8 @@ export class MappingService {
         yarn: classByMapping.yarn?.symbol
       },
       rows,
-      warnings
+      warnings,
+      ambiguousRowCount: ambiguousRowCount > 0 ? ambiguousRowCount : undefined
     };
   }
 
