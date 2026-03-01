@@ -3766,3 +3766,147 @@ test("SourceService rejects regex queries longer than guard limit", async () => 
     }
   );
 });
+
+test("SourceService searchClassSource with ** glob pattern does not crash", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-glob-doublestar-"));
+  const binaryJarPath = join(root, "glob-test.jar");
+  const sourcesJarPath = join(root, "glob-test-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "com/example/Other.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/world/level/block/Blocks.java": [
+      "package net.minecraft.world.level.block;",
+      "public class Blocks {",
+      "  public static final int STONE = 1;",
+      "}"
+    ].join("\n"),
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {",
+      "  void start() {}",
+      "}"
+    ].join("\n"),
+    "com/example/Other.java": [
+      "package com.example;",
+      "public class Other {",
+      "  void run() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  // ** glob should not throw (previously caused SyntaxError: Nothing to repeat)
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "class",
+    intent: "text",
+    match: "contains",
+    scope: {
+      fileGlob: "net/minecraft/**/*.java"
+    },
+    limit: 10
+  });
+
+  // Should only return files matching the glob (net/minecraft/...), not com/example/
+  assert.ok(result.hits.length >= 1);
+  for (const hit of result.hits) {
+    assert.ok(
+      hit.filePath.startsWith("net/minecraft/"),
+      `Expected hit in net/minecraft/ but got ${hit.filePath}`
+    );
+  }
+});
+
+test("SourceService getClassSource rejects package-incompatible fallback matches", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-pkg-compat-"));
+  const binaryJarPath = join(root, "pkg-compat.jar");
+  const sourcesJarPath = join(root, "pkg-compat-sources.jar");
+
+  // Tags.java contains an inner class named "Blocks", but lives in a different package.
+  // When requesting net.minecraft.world.level.block.Blocks, the service should NOT
+  // return Tags.java just because it contains a symbol named "Blocks".
+  await createJar(binaryJarPath, {
+    "net/neoforged/neoforge/common/Tags.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/neoforged/neoforge/common/Tags.java": [
+      "package net.neoforged.neoforge.common;",
+      "public class Tags {",
+      "  public static class Blocks {",
+      "    public static final String STONE = \"stone\";",
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  // Requesting a class from a completely different package should fail with
+  // CLASS_NOT_FOUND rather than returning the wrong file
+  await assert.rejects(
+    () =>
+      service.getClassSource({
+        artifactId: resolved.artifactId,
+        className: "net.minecraft.world.level.block.Blocks"
+      }),
+    (error: unknown) => {
+      return (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.CLASS_NOT_FOUND
+      );
+    }
+  );
+});
+
+test("SourceService getClassSource accepts canonical inner-class dot notation", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-inner-class-dot-"));
+  const binaryJarPath = join(root, "inner-class.jar");
+  const sourcesJarPath = join(root, "inner-class-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "com/example/Outer.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "com/example/Outer$Inner.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "com/example/Outer.java": [
+      "package com.example;",
+      "public class Outer {",
+      "  public static class Inner {",
+      "    public static final String VALUE = \"ok\";",
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "com.example.Outer.Inner"
+  });
+
+  assert.match(source.sourceText, /class Outer/);
+  assert.match(source.sourceText, /class Inner/);
+});

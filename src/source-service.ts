@@ -799,11 +799,30 @@ function canUseIndexedSearchPath(
 }
 
 function buildGlobRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[-/\\^$+?.()|[\]{}]/g, "\\$&")
-    .replace(/\\\*/g, ".*")
-    .replace(/\\\?/g, ".");
-  return new RegExp(`^${escaped}$`);
+  const REGEX_META = /[-/\\^$+.()|[\]{}]/;
+  let result = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i]!;
+    if (ch === "*" && pattern[i + 1] === "*") {
+      result += ".*";
+      i += 2;
+      if (pattern[i] === "/") {
+        result += "(?:/)?";
+        i += 1;
+      }
+    } else if (ch === "*") {
+      result += "[^/]*";
+      i += 1;
+    } else if (ch === "?") {
+      result += "[^/]";
+      i += 1;
+    } else {
+      result += REGEX_META.test(ch) ? `\\${ch}` : ch;
+      i += 1;
+    }
+  }
+  return new RegExp(`^${result}$`);
 }
 
 function globToSqlLike(pattern: string): string {
@@ -824,6 +843,30 @@ function globToSqlLike(pattern: string): string {
     result += char;
   }
   return result;
+}
+
+function isPackageCompatible(filePath: string, classPath: string): boolean {
+  const lastSlash = classPath.lastIndexOf("/");
+  if (lastSlash < 0) return true;
+  const expectedPrefix = classPath.slice(0, lastSlash + 1);
+  return filePath.startsWith(expectedPrefix);
+}
+
+function classNameToClassPath(className: string): string {
+  const normalized = normalizePathStyle(className.trim()).replace(/\//g, ".");
+  const segments = normalized.split(".").filter((segment) => segment.length > 0);
+  if (segments.length === 0) {
+    return "";
+  }
+
+  const firstTypeSegment = segments.findIndex((segment) => /^[A-Z_$]/.test(segment));
+  if (firstTypeSegment < 0) {
+    return segments.join("/");
+  }
+
+  const packagePath = segments.slice(0, firstTypeSegment).join("/");
+  const typePath = segments.slice(firstTypeSegment).join("$");
+  return packagePath ? `${packagePath}/${typePath}` : typePath;
 }
 
 function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
@@ -3290,7 +3333,10 @@ export class SourceService {
 
   private resolveClassFilePath(artifactId: string, className: string): string | undefined {
     const normalizedClassName = className.trim();
-    const classPath = normalizePathStyle(normalizedClassName.replace(/\./g, "/"));
+    const classPath = classNameToClassPath(normalizedClassName);
+    if (!classPath) {
+      return undefined;
+    }
     const candidates = new Set<string>([`${classPath}.java`]);
     const innerIndex = classPath.indexOf("$");
     if (innerIndex > 0) {
@@ -3313,11 +3359,15 @@ export class SourceService {
       normalizedClassName,
       simpleName
     );
-    if (classPathBySymbol) {
+    if (classPathBySymbol && isPackageCompatible(classPathBySymbol, classPath)) {
       return classPathBySymbol;
     }
 
-    return this.filesRepo.findFirstFilePathByName(artifactId, `${simpleName}.java`);
+    const byName = this.filesRepo.findFirstFilePathByName(artifactId, `${simpleName}.java`);
+    if (byName && isPackageCompatible(byName, classPath)) {
+      return byName;
+    }
+    return undefined;
   }
 
   private findNearestSymbolForLine(
