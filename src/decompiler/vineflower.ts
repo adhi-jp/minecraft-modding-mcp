@@ -134,8 +134,8 @@ async function runVineflower(
       details: {
         binaryJarPath,
         outputDir,
-        code: result.exitCode,
-        stdout: result.stdoutTail,
+        exitCode: result.exitCode,
+        stdoutTail: result.stdoutTail,
         stderrTail: result.stderrTail
       }
     });
@@ -202,7 +202,11 @@ export async function decompileBinaryJar(
       throw createError({
         code: ERROR_CODES.DECOMPILER_FAILED,
         message: "No Java files were produced by decompilation.",
-        details: { binaryJarPath: normalizedBinaryJarPath, outputDir }
+        details: {
+          binaryJarPath: normalizedBinaryJarPath,
+          outputDir,
+          producedJavaCount: 0
+        }
       });
     }
 

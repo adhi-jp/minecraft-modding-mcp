@@ -168,3 +168,46 @@ test("searchModSource clamps limit to strict upper bound", async () => {
   assert.equal(result.truncated, true);
   assert.ok(result.warnings.some((warning) => warning.includes("clamped to 200")));
 });
+
+test("searchModSource searches source jars directly without decompile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-source-jar-"));
+  const jarPath = join(root, "demo-sources.jar");
+  await createJar(jarPath, {
+    "com/example/Foo.java": [
+      "package com.example;",
+      "public class Foo {",
+      "  void run() {",
+      '    String value = "needle";',
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  let decompileCalls = 0;
+  const decompileStub = {
+    async decompileModJar(): Promise<DecompileModJarOutput> {
+      decompileCalls += 1;
+      return {
+        modId: "demo",
+        loader: "unknown",
+        outputDir: root,
+        fileCount: 0,
+        files: [],
+        warnings: []
+      };
+    }
+  };
+
+  const service = new ModSearchService(decompileStub as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "needle",
+    searchType: "content",
+    limit: 10
+  });
+
+  assert.equal(decompileCalls, 0);
+  assert.equal(result.totalHits, 1);
+  assert.equal(result.hits[0]?.file, "com/example/Foo.java");
+  assert.ok(result.warnings.some((warning) => warning.includes("source jar")));
+});

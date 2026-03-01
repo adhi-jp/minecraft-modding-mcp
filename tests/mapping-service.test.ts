@@ -842,6 +842,164 @@ test("MappingService checks symbol existence across class/field/method kinds", a
   assert.equal(methodExists.status, "resolved");
 });
 
+test("MappingService supports short class name checks when nameMode=auto", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+  const result = await withCwd(root, () =>
+    (
+      service as unknown as {
+        checkSymbolExists: (input: {
+          version: string;
+          kind: "class" | "field" | "method";
+          name: string;
+          sourceMapping: SourceMapping;
+          nameMode?: "fqcn" | "auto";
+        }) => Promise<{ resolved: boolean; status: string; resolvedSymbol?: { symbol: string } }>;
+      }
+    ).checkSymbolExists({
+      version: "1.21.10",
+      kind: "class",
+      name: "C",
+      sourceMapping: "official",
+      nameMode: "auto"
+    })
+  );
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.status, "resolved");
+  assert.equal(result.resolvedSymbol?.symbol, "a.b.C");
+});
+
+test("MappingService returns ambiguous for short class names when multiple FQCNs match nameMode=auto", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-ambiguous-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const tiny = [
+    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "c\ta/b/C\tinter/one/C\tyarn/one/C",
+    "c\tx/y/C\tinter/two/C\tyarn/two/C"
+  ].join("\n");
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+  const result = await withCwd(root, () =>
+    (
+      service as unknown as {
+        checkSymbolExists: (input: {
+          version: string;
+          kind: "class" | "field" | "method";
+          name: string;
+          sourceMapping: SourceMapping;
+          nameMode?: "fqcn" | "auto";
+        }) => Promise<{ resolved: boolean; status: string; candidates: Array<{ symbol: string }>; warnings: string[] }>;
+      }
+    ).checkSymbolExists({
+      version: "1.21.10",
+      kind: "class",
+      name: "C",
+      sourceMapping: "official",
+      nameMode: "auto"
+    })
+  );
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.status, "ambiguous");
+  assert.equal(result.candidates.length, 2);
+  assert.ok(result.warnings.some((warning) => warning.includes("fully-qualified class name")));
+});
+
+test("MappingService findMapping adds ambiguity reason and supports disambiguation hints", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-find-disambiguation-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const tiny = [
+    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "c\ta/b/C\tinter/one/C\tyarn/one/C",
+    "c\ta/b/C\tinter/two/C\tyarn/two/C"
+  ].join("\n");
+  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+  const ambiguous = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "a.b.C",
+      sourceMapping: "official",
+      targetMapping: "intermediary"
+    })
+  );
+  assert.equal(ambiguous.status, "ambiguous");
+  assert.ok(ambiguous.warnings.some((warning) => warning.includes("Ambiguous mapping")));
+
+  const disambiguated = await withCwd(root, () =>
+    (
+      service as unknown as {
+        findMapping: (input: {
+          version: string;
+          kind: "class" | "field" | "method";
+          name: string;
+          sourceMapping: SourceMapping;
+          targetMapping: SourceMapping;
+          disambiguation?: { ownerHint?: string; descriptorHint?: string };
+        }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
+      }
+    ).findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "a.b.C",
+      sourceMapping: "official",
+      targetMapping: "intermediary",
+      disambiguation: { ownerHint: "inter.two" }
+    })
+  );
+  assert.equal(disambiguated.status, "resolved");
+  assert.equal(disambiguated.resolvedSymbol?.symbol, "inter.two.C");
+});
+
 test("MappingService returns mapping_unavailable for symbol existence when mapping graph is absent", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-unavailable-"));
@@ -877,6 +1035,59 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
 
   assert.equal(result.resolved, false);
   assert.equal(result.status, "mapping_unavailable");
+
+  await assert.rejects(
+    () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            sourceMapping: SourceMapping;
+            descriptor?: string;
+          }) => Promise<{ resolved: boolean; status: string }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "f",
+        sourceMapping: "official"
+      }),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+  );
+
+  await assert.rejects(
+    () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            sourceMapping: SourceMapping;
+          }) => Promise<{ resolved: boolean; status: string }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "class",
+        owner: "a.b.C",
+        name: "a.b.C",
+        sourceMapping: "official"
+      }),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+  );
 });
 
 test("MappingService returns empty graph for unobfuscated version (26.1)", async () => {

@@ -65,6 +65,7 @@ const SEARCH_MATCHES = ["exact", "prefix", "contains", "regex"] as const;
 const SEARCH_SYMBOL_KINDS = ["class", "interface", "enum", "record", "method", "field"] as const;
 const MEMBER_ACCESS = ["public", "all"] as const;
 const WORKSPACE_SYMBOL_KINDS = ["class", "field", "method"] as const;
+const CLASS_NAME_MODES = ["fqcn", "auto"] as const;
 const DECODE_COMPRESSIONS = ["none", "gzip", "auto"] as const;
 const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
 
@@ -80,6 +81,7 @@ const searchMatchSchema = z.enum(SEARCH_MATCHES);
 const searchSymbolKindSchema = z.enum(SEARCH_SYMBOL_KINDS);
 const memberAccessSchema = z.enum(MEMBER_ACCESS);
 const workspaceSymbolKindSchema = z.enum(WORKSPACE_SYMBOL_KINDS);
+const classNameModeSchema = z.enum(CLASS_NAME_MODES);
 const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
 const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
 
@@ -133,7 +135,8 @@ const resolveArtifactShape = {
   targetValue: nonEmptyString,
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  allowDecompile: z.boolean().optional().describe("default true")
+  allowDecompile: z.boolean().optional().describe("default true"),
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution")
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
 
@@ -145,6 +148,7 @@ const getClassSourceShape = {
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   startLine: optionalPositiveInt,
   endLine: optionalPositiveInt,
   maxLines: optionalPositiveInt
@@ -262,7 +266,14 @@ const findMappingShape = {
   descriptor: optionalNonEmptyString,
   sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  disambiguation: z
+    .object({
+      ownerHint: optionalNonEmptyString,
+      descriptorHint: optionalNonEmptyString
+    })
+    .partial()
+    .optional()
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -479,7 +490,8 @@ const checkSymbolExistsShape = {
   name: nonEmptyString,
   descriptor: optionalNonEmptyString.describe("required for kind=method"),
   sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)")
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -497,7 +509,7 @@ const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((va
         path: ["descriptor"]
       });
     }
-    if (!value.name.includes(".")) {
+    if (value.nameMode !== "auto" && !value.name.includes(".")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "name must be fully-qualified class name when kind=class.",
@@ -1016,7 +1028,8 @@ server.tool("resolve-artifact",
       },
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
-      allowDecompile: input.allowDecompile
+      allowDecompile: input.allowDecompile,
+      projectPath: input.projectPath
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1033,6 +1046,7 @@ server.tool("get-class-source",
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
+      projectPath: input.projectPath,
       startLine: input.startLine,
       endLine: input.endLine,
       maxLines: input.maxLines
@@ -1174,7 +1188,8 @@ server.tool("find-mapping",
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      disambiguation: input.disambiguation
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1242,7 +1257,8 @@ server.tool("check-symbol-exists",
       name: input.name,
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      nameMode: input.nameMode
     }) as Promise<Record<string, unknown>>
   )
 );

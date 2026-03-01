@@ -5,6 +5,8 @@ import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
 import { ModDecompileService } from "./mod-decompile-service.js";
 import { validateAndNormalizeJarPath } from "./path-resolver.js";
+import { analyzeModJar } from "./mod-analyzer.js";
+import { iterateJavaEntriesAsUtf8 } from "./source-jar-reader.js";
 
 export type SearchModSourceSearchType = "class" | "method" | "field" | "content" | "all";
 
@@ -113,6 +115,34 @@ export class ModSearchService {
     }
     const startedAt = Date.now();
 
+    const jarAnalysis = await analyzeModJar(jarPath);
+    if (jarAnalysis.jarKind === "source") {
+      warnings.push("Detected source jar; searching Java entries directly without decompilation.");
+      const directResult = await this.searchSourceJarEntriesDirect({
+        jarPath,
+        query,
+        searchType,
+        limit,
+        regex
+      });
+      warnings.push(...directResult.warnings);
+      log("info", "mod-search.done", {
+        jarPath,
+        query,
+        searchType,
+        hitCount: directResult.hits.length,
+        durationMs: Date.now() - startedAt
+      });
+      return {
+        query,
+        searchType,
+        hits: directResult.hits,
+        totalHits: directResult.totalHits,
+        truncated: directResult.truncated,
+        warnings
+      };
+    }
+
     const decompileResult = await this.modDecompileService.decompileModJar({ jarPath });
     const outputDir = decompileResult.outputDir;
     warnings.push(...decompileResult.warnings);
@@ -198,6 +228,89 @@ export class ModSearchService {
     return {
       query,
       searchType,
+      hits,
+      totalHits,
+      truncated: reachedLimit,
+      warnings
+    };
+  }
+
+  private async searchSourceJarEntriesDirect(input: {
+    jarPath: string;
+    query: string;
+    searchType: SearchModSourceSearchType;
+    limit: number;
+    regex: RegExp;
+  }): Promise<{ hits: SearchModSourceHit[]; totalHits: number; truncated: boolean; warnings: string[] }> {
+    const warnings: string[] = [];
+    const hits: SearchModSourceHit[] = [];
+    let totalHits = 0;
+    let reachedLimit = false;
+
+    for await (const entry of iterateJavaEntriesAsUtf8(input.jarPath)) {
+      if (hits.length >= input.limit) {
+        reachedLimit = true;
+        break;
+      }
+
+      const filePath = entry.filePath;
+      const className = filePathToClassName(filePath);
+
+      if (input.searchType === "class" || input.searchType === "all") {
+        const simpleClassName = className.split(".").pop() ?? className;
+        input.regex.lastIndex = 0;
+        if (input.regex.test(simpleClassName)) {
+          totalHits += 1;
+          if (hits.length < input.limit) {
+            hits.push({
+              type: "class",
+              name: className,
+              file: filePath
+            });
+          }
+          if (input.searchType === "class") {
+            continue;
+          }
+        }
+      }
+
+      if (
+        input.searchType === "method" ||
+        input.searchType === "field" ||
+        input.searchType === "content" ||
+        input.searchType === "all"
+      ) {
+        const lines = entry.content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (hits.length >= input.limit) {
+            reachedLimit = true;
+            break;
+          }
+          input.regex.lastIndex = 0;
+          if (!input.regex.test(lines[i])) {
+            continue;
+          }
+
+          const lineType = classifyLine(lines[i]);
+          if (input.searchType !== "all" && input.searchType !== lineType) {
+            continue;
+          }
+
+          totalHits += 1;
+          if (hits.length < input.limit) {
+            hits.push({
+              type: lineType,
+              name: lineType === "content" ? className : extractSymbolName(lines[i], lineType),
+              file: filePath,
+              line: i + 1,
+              context: extractContext(lines, i)
+            });
+          }
+        }
+      }
+    }
+
+    return {
       hits,
       totalHits,
       truncated: reachedLimit,

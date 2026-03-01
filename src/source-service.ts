@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
+
+import fastGlob from "fast-glob";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { loadConfig } from "./config.js";
@@ -34,7 +38,7 @@ import {
   type SymbolExistenceOutput as MappingSymbolExistenceOutput
 } from "./mapping-service.js";
 import { extractSymbolsFromSource } from "./symbols/symbol-extractor.js";
-import { iterateJavaEntriesAsUtf8 } from "./source-jar-reader.js";
+import { iterateJavaEntriesAsUtf8, listJavaEntries } from "./source-jar-reader.js";
 import { openDatabase } from "./storage/db.js";
 import { ArtifactsRepo } from "./storage/artifacts-repo.js";
 import { FilesRepo } from "./storage/files-repo.js";
@@ -42,6 +46,7 @@ import { IndexMetaRepo, type ArtifactIndexMetaRow } from "./storage/index-meta-r
 import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
 import { log } from "./logger.js";
+import { normalizePathForHost } from "./path-converter.js";
 import {
   createSearchHitAccumulator,
   decodeSearchCursor,
@@ -96,6 +101,7 @@ export type ResolveArtifactInput = {
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
+  projectPath?: string;
 };
 
 export type ResolveArtifactOutput = {
@@ -244,6 +250,7 @@ export type GetClassSourceInput = {
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
+  projectPath?: string;
   startLine?: number;
   endLine?: number;
   maxLines?: number;
@@ -528,8 +535,47 @@ function clampLimit(limit: number | undefined, fallback: number, max: number): n
 const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
 
+type VersionSourceCandidate = {
+  jarPath: string;
+  javaEntryCount: number;
+  hasMinecraftNamespace: boolean;
+  score: number;
+};
+
+type VersionSourceDiscovery = {
+  searchedPaths: string[];
+  candidateArtifacts: string[];
+  selectedSourceJarPath?: string;
+};
+
 function normalizePathStyle(path: string): string {
   return path.replaceAll("\\", "/");
+}
+
+function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
+  if (!projectPath) {
+    return undefined;
+  }
+  const trimmed = projectPath.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = normalizePathForHost(trimmed, undefined, "projectPath");
+  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+}
+
+function buildVersionSourceSearchRoots(projectPath: string | undefined): string[] {
+  const roots = new Set<string>();
+  if (projectPath) {
+    roots.add(resolvePath(projectPath, ".gradle", "loom-cache"));
+    roots.add(resolvePath(projectPath, ".gradle-user", "caches", "fabric-loom"));
+    roots.add(resolvePath(projectPath, ".gradle", "caches", "fabric-loom"));
+    return [...roots];
+  }
+  const homeGradle = resolvePath(homedir(), ".gradle");
+  roots.add(resolvePath(homeGradle, "loom-cache"));
+  roots.add(resolvePath(homeGradle, "caches", "fabric-loom"));
+  return [...roots];
 }
 
 function parseQualifiedMethodSymbol(symbol: string): { className: string; methodName: string } {
@@ -1108,6 +1154,95 @@ export class SourceService {
     this.refreshCacheMetrics();
   }
 
+  private async discoverVersionSourceJar(input: {
+    version: string;
+    projectPath?: string;
+  }): Promise<VersionSourceDiscovery> {
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
+    const searchedPaths: string[] = [];
+    const candidates: VersionSourceCandidate[] = [];
+    const seen = new Set<string>();
+
+    for (const root of searchRoots) {
+      searchedPaths.push(root);
+      let discovered: string[] = [];
+      try {
+        discovered = fastGlob.sync("**/*sources.jar", {
+          cwd: root,
+          absolute: true,
+          onlyFiles: true
+        });
+      } catch {
+        continue;
+      }
+
+      for (const candidatePath of discovered) {
+        const normalizedPath = normalizePathStyle(candidatePath);
+        if (seen.has(normalizedPath)) {
+          continue;
+        }
+        seen.add(normalizedPath);
+        const lower = normalizedPath.toLowerCase();
+        if (!lower.includes(input.version.toLowerCase()) && !lower.includes("minecraft")) {
+          continue;
+        }
+
+        let javaEntries: string[] = [];
+        try {
+          javaEntries = await listJavaEntries(normalizedPath);
+        } catch {
+          continue;
+        }
+        if (javaEntries.length === 0) {
+          continue;
+        }
+
+        const hasMinecraftNamespace = javaEntries.some((entry) =>
+          normalizePathStyle(entry).startsWith("net/minecraft/")
+        );
+        const score =
+          (hasMinecraftNamespace ? 10_000 : 0) +
+          (lower.includes("minecraft-merged") ? 2_000 : 0) +
+          (lower.includes(input.version.toLowerCase()) ? 1_000 : 0) +
+          Math.min(javaEntries.length, 500);
+        candidates.push({
+          jarPath: normalizedPath,
+          javaEntryCount: javaEntries.length,
+          hasMinecraftNamespace,
+          score
+        });
+      }
+    }
+
+    candidates.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.jarPath.localeCompare(right.jarPath);
+    });
+
+    const selected =
+      candidates.find((candidate) => candidate.hasMinecraftNamespace) ?? candidates[0];
+    const candidateArtifacts = candidates
+      .slice(0, 20)
+      .map((candidate) => `${candidate.jarPath}#java=${candidate.javaEntryCount}`);
+
+    return {
+      searchedPaths,
+      candidateArtifacts,
+      selectedSourceJarPath: selected?.jarPath
+    };
+  }
+
+  private buildVersionSourceRecoveryCommand(projectPath?: string): string {
+    const normalizedProjectPath = normalizeOptionalProjectPath(projectPath);
+    const prefix = normalizedProjectPath
+      ? `cd ${JSON.stringify(normalizedProjectPath)} && `
+      : "";
+    return `${prefix}./gradlew genSources --no-daemon`;
+  }
+
   async resolveArtifact(input: ResolveArtifactInput): Promise<ResolveArtifactOutput> {
     const kind = input.target.kind;
     const value = input.target.value?.trim();
@@ -1139,6 +1274,7 @@ export class SourceService {
     try {
       let resolvedTarget: SourceTargetInput = { kind, value };
       let resolvedVersion: string | undefined;
+      let versionSourceDiscovery: VersionSourceDiscovery | undefined;
       if (kind === "version") {
         const versionJar = await this.versionService.resolveVersionJar(value);
         resolvedVersion = versionJar.version;
@@ -1169,6 +1305,22 @@ export class SourceService {
         effectiveMapping = "official";
       }
 
+      if (kind === "version" && resolvedVersion && effectiveMapping === "mojang") {
+        versionSourceDiscovery = await this.discoverVersionSourceJar({
+          version: resolvedVersion,
+          projectPath: input.projectPath
+        });
+        if (versionSourceDiscovery.selectedSourceJarPath) {
+          resolvedTarget = {
+            kind: "jar",
+            value: versionSourceDiscovery.selectedSourceJarPath
+          };
+          warnings.push(
+            `Resolved source-backed artifact from Loom cache candidate: ${versionSourceDiscovery.selectedSourceJarPath}.`
+          );
+        }
+      }
+
       const resolved = await resolveSourceTargetInternal(
         resolvedTarget,
         {
@@ -1191,11 +1343,29 @@ export class SourceService {
       );
       resolved.version = resolvedVersion;
 
-      const mappingDecision = applyMappingPipeline({
-        requestedMapping: effectiveMapping,
-        target: { kind, value },
-        resolved
-      });
+      let mappingDecision: ReturnType<typeof applyMappingPipeline>;
+      try {
+        mappingDecision = applyMappingPipeline({
+          requestedMapping: effectiveMapping,
+          target: { kind, value },
+          resolved
+        });
+      } catch (caughtError) {
+        if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
+          throw createError({
+            code: ERROR_CODES.MAPPING_NOT_APPLIED,
+            message: caughtError.message,
+            details: {
+              ...(caughtError.details ?? {}),
+              searchedPaths: versionSourceDiscovery?.searchedPaths ?? [],
+              candidateArtifacts:
+                versionSourceDiscovery?.candidateArtifacts ?? resolved.adjacentSourceCandidates ?? [],
+              recommendedCommand: this.buildVersionSourceRecoveryCommand(input.projectPath)
+            }
+          });
+        }
+        throw caughtError;
+      }
       const additionalTransformChain: string[] = [];
       if (effectiveMapping === "intermediary" || effectiveMapping === "yarn") {
         if (!resolved.version) {
@@ -1231,7 +1401,14 @@ export class SourceService {
       resolved.requestedMapping = effectiveMapping;
       resolved.mappingApplied = mappingDecision.mappingApplied;
       resolved.provenance = provenance;
-      resolved.qualityFlags = mappingDecision.qualityFlags;
+      resolved.qualityFlags = [...mappingDecision.qualityFlags];
+      if (versionSourceDiscovery?.candidateArtifacts.length) {
+        resolved.qualityFlags.push("source-jar-found");
+      }
+      if (versionSourceDiscovery?.selectedSourceJarPath) {
+        resolved.qualityFlags.push("source-jar-validated");
+      }
+      resolved.qualityFlags = [...new Set(resolved.qualityFlags)];
       await this.ingestIfNeeded(resolved);
 
       return {
@@ -1246,7 +1423,7 @@ export class SourceService {
         requestedMapping: effectiveMapping,
         mappingApplied: mappingDecision.mappingApplied,
         provenance,
-        qualityFlags: mappingDecision.qualityFlags,
+        qualityFlags: resolved.qualityFlags,
         repoUrl: resolved.repoUrl,
         warnings
       };
@@ -2339,7 +2516,8 @@ export class SourceService {
         target: input.target,
         mapping: input.mapping,
         sourcePriority: input.sourcePriority,
-        allowDecompile: input.allowDecompile
+        allowDecompile: input.allowDecompile,
+        projectPath: input.projectPath
       });
       artifactId = resolved.artifactId;
       origin = resolved.origin;
@@ -3894,6 +4072,26 @@ export class SourceService {
           contentBytes: Buffer.byteLength(entry.content, "utf8"),
           contentHash: createHash("sha256").update(entry.content).digest("hex")
         }));
+      } catch (caughtError) {
+        if (isAppError(caughtError) && caughtError.code === ERROR_CODES.DECOMPILER_FAILED) {
+          throw createError({
+            code: ERROR_CODES.DECOMPILER_FAILED,
+            message: caughtError.message,
+            details: {
+              ...(caughtError.details ?? {}),
+              artifactId: resolved.artifactId,
+              binaryJarPath: resolved.binaryJarPath,
+              producedJavaCount:
+                typeof (caughtError.details as Record<string, unknown> | undefined)?.producedJavaCount === "number"
+                  ? (caughtError.details as Record<string, unknown>).producedJavaCount
+                  : 0,
+              nextAction:
+                "Verify Java runtime and Vineflower availability, then retry. If available, prefer source-backed artifacts.",
+              recommendedCommand: "echo $MCP_VINEFLOWER_JAR_PATH"
+            }
+          });
+        }
+        throw caughtError;
       } finally {
         this.metrics.recordDuration("decompile_duration_ms", Date.now() - decompileStartedAt);
       }

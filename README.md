@@ -176,8 +176,8 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
-| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `warnings[]` |
-| `get-class-source` | Get class source by `artifactId` or resolve target on demand, with line filtering | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `startLine?`, `endLine?`, `maxLines?` | `sourceText`, `returnedRange`, `truncated`, `artifactId`, mapping/provenance metadata |
+| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `warnings[]` |
+| `get-class-source` | Get class source by `artifactId` or resolve target on demand, with line filtering | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `startLine?`, `endLine?`, `maxLines?` | `sourceText`, `returnedRange`, `truncated`, `artifactId`, mapping/provenance metadata |
 | `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
 | `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
@@ -200,11 +200,11 @@ Tools for converting symbol names between namespaces and checking symbol existen
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
+| `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
 | `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `kind` (`method`), `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
 | `get-class-api-matrix` | Show one class API as a mapping matrix (`official/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `meta.warnings[]` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
-| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
+| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
 
 ### NBT Utilities
 
@@ -222,7 +222,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
+| `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `jarKind`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
 | `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?` | `outputDir`, `fileCount`, `files?`, `source?`, `warnings[]` |
 | `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className` | `className`, `content`, `totalLines`, `warnings[]` |
 | `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
@@ -250,6 +250,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
+`resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
@@ -257,6 +258,9 @@ Tools for querying generated registry data and inspecting server runtime state.
 `resolve-artifact` with `targetKind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
+`search-mod-source` detects source-only jars and searches `.java` entries directly without decompilation.
+`check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).
+`check-symbol-exists` always validates input shape first and returns `ERR_INVALID_INPUT` for invalid symbol combinations, even when mapping data is unavailable.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
 
 ## Resources
@@ -299,7 +303,8 @@ All tools return exactly one of:
     "targetKind": "version",
     "targetValue": "1.21.10",
     "mapping": "official",
-    "allowDecompile": true
+    "allowDecompile": true,
+    "projectPath": "/path/to/mod/workspace"
   }
 }
 ```
@@ -420,7 +425,10 @@ Get a high-level summary of what changed between two releases, including class a
     "name": "a.b.C",
     "sourceMapping": "official",
     "targetMapping": "mojang",
-    "sourcePriority": "loom-first"
+    "sourcePriority": "loom-first",
+    "disambiguation": {
+      "ownerHint": "net.minecraft"
+    }
   }
 }
 ```
@@ -497,6 +505,20 @@ Get a high-level summary of what changed between two releases, including class a
     "owner": "a.b.C",
     "descriptor": "(I)V",
     "sourceMapping": "official"
+  }
+}
+```
+
+#### Check class existence by short name (`nameMode=auto`)
+```json
+{
+  "tool": "check-symbol-exists",
+  "arguments": {
+    "version": "1.21.10",
+    "kind": "class",
+    "name": "Blocks",
+    "nameMode": "auto",
+    "sourceMapping": "mojang"
   }
 }
 ```
@@ -723,7 +745,7 @@ Check server performance counters, cache sizes, and latency snapshots:
 `find-mapping` supports lookup across `official`, `mojang`, `intermediary`, and `yarn`.
 
 Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
-- class: `kind=class`, `name=a.b.C` (FQCN only)
+- class: `kind=class`, `name=a.b.C` (default FQCN). For existence checks only, `nameMode=auto` allows short names like `C`.
 - field: `kind=field`, `owner=a.b.C`, `name=fieldName`
 - method: `kind=method`, `owner=a.b.C`, `name=methodName`, `descriptor=(I)V`
 
@@ -737,6 +759,7 @@ Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 Method descriptor precision is best on Tiny-backed paths (`intermediary`/`yarn`). For `official <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fallback to name matching and emit a warning.
 
 Use `resolve-method-mapping-exact` when candidate ranking is not enough and the workflow needs strict `owner+name+descriptor` certainty.
+Use `find-mapping` `disambiguation.ownerHint` / `disambiguation.descriptorHint` to narrow ambiguous candidate sets.
 Use `resolve-workspace-symbol` when you need compile-visible names from actual Gradle Loom mappings in a workspace.
 
 ## Environment Variables

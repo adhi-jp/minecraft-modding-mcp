@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1478,6 +1478,284 @@ test("SourceService resolves version target through manifest and downloads clien
       className: "net.minecraft.server.Main"
     });
     assert.match(source.sourceText, /class Main/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+test("SourceService resolves mojang mapping for version target using workspace Loom source cache", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-mojang-workspace-"));
+  const projectPath = join(root, "workspace");
+  await mkdir(join(projectPath, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+  const loomSourceJarPath = join(
+    projectPath,
+    ".gradle",
+    "loom-cache",
+    "1.21.10",
+    "minecraft-merged-1.21.10-sources.jar"
+  );
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java": [
+      "package net.minecraft.world.level.block;",
+      "public class Blocks {}"
+    ].join("\n")
+  });
+
+  const remoteJarPath = join(root, "remote-1.21.10.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.10" },
+          versions: [
+            {
+              id: "1.21.10",
+              type: "release",
+              url: "https://example.test/versions/1.21.10.json"
+            }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.10.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.10",
+          downloads: {
+            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.10.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    const resolved = await service.resolveArtifact({
+      target: {
+        kind: "version",
+        value: "1.21.10"
+      },
+      mapping: "mojang",
+      projectPath
+    } as any);
+
+    assert.equal(resolved.requestedMapping, "mojang");
+    assert.equal(resolved.mappingApplied, "mojang");
+    assert.ok(resolved.qualityFlags.includes("source-backed"));
+    assert.ok(resolved.qualityFlags.includes("source-jar-validated"));
+
+    const source = await service.getClassSource({
+      artifactId: resolved.artifactId,
+      className: "net.minecraft.world.level.block.Blocks"
+    });
+    assert.match(source.sourceText, /class Blocks/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+test("SourceService ignores projectPath Loom source discovery for official mapping", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-official-project-path-"));
+  const projectPath = join(root, "workspace");
+  await mkdir(projectPath, { recursive: true });
+
+  const remoteJarPath = join(root, "remote-1.21.10.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {}"
+    ].join("\n")
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.10" },
+          versions: [
+            {
+              id: "1.21.10",
+              type: "release",
+              url: "https://example.test/versions/1.21.10.json"
+            }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.10.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.10",
+          downloads: {
+            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.10.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    const discoverCalls: Array<{ version: string; projectPath?: string }> = [];
+    (
+      service as unknown as {
+        discoverVersionSourceJar: (input: {
+          version: string;
+          projectPath?: string;
+        }) => Promise<unknown>;
+      }
+    ).discoverVersionSourceJar = async (input) => {
+      discoverCalls.push(input);
+      return {
+        selectedSourceJarPath: undefined,
+        searchedPaths: [],
+        candidateArtifacts: []
+      };
+    };
+
+    const resolved = await service.resolveArtifact({
+      target: {
+        kind: "version",
+        value: "1.21.10"
+      },
+      mapping: "official",
+      projectPath
+    } as any);
+
+    assert.equal(resolved.mappingApplied, "official");
+    assert.equal(discoverCalls.length, 0);
+    assert.equal(
+      resolved.warnings.some((warning) => warning.includes("Loom cache candidate")),
+      false
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot be applied for version target", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-mojang-diagnostics-"));
+  const projectPath = join(root, "workspace");
+  await mkdir(projectPath, { recursive: true });
+
+  const remoteJarPath = join(root, "remote-1.21.10.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.10" },
+          versions: [
+            {
+              id: "1.21.10",
+              type: "release",
+              url: "https://example.test/versions/1.21.10.json"
+            }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.10.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.10",
+          downloads: {
+            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
+          }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.10.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    await assert.rejects(
+      () =>
+        service.resolveArtifact({
+          target: {
+            kind: "version",
+            value: "1.21.10"
+          },
+          mapping: "mojang",
+          projectPath
+        } as any),
+      (error: unknown) => {
+        if (typeof error !== "object" || error === null || !("code" in error)) {
+          return false;
+        }
+        if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) {
+          return false;
+        }
+        const details = (error as { details?: Record<string, unknown> }).details ?? {};
+        return (
+          Array.isArray(details.searchedPaths) &&
+          Array.isArray(details.candidateArtifacts) &&
+          typeof details.recommendedCommand === "string"
+        );
+      }
+    );
   } finally {
     globalThis.fetch = originalFetch;
     if (originalManifestUrl === undefined) {

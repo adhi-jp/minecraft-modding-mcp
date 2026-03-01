@@ -10,6 +10,15 @@ test("README documents analyze-mod-jar inputs that match implementation", async 
   assert.doesNotMatch(readme, /includeRawMetadata\?/);
 });
 
+test("README documents workspace-assisted source resolution and symbol name modes", async () => {
+  const readme = await readFile("README.md", "utf8");
+
+  assert.match(readme, /\| `resolve-artifact` \|.*`projectPath\?`/);
+  assert.match(readme, /\| `get-class-source` \|.*`projectPath\?`/);
+  assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
+  assert.match(readme, /nameMode=auto/);
+});
+
 test("README documents CLI agent MCP quick start commands", async () => {
   const readme = await readFile("README.md", "utf8");
 

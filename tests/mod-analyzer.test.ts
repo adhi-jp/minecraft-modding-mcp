@@ -265,6 +265,38 @@ test("analyzeModJar returns unknown loader when no metadata present", async () =
   assert.equal(result.loader, "unknown");
   assert.equal(result.modId, undefined);
   assert.equal(result.classCount, 1);
+  assert.equal((result as { jarKind?: string }).jarKind, "binary");
+});
+
+test("analyzeModJar marks source-only jars with jarKind=source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-source-jar-"));
+  const jarPath = join(root, "source-only.jar");
+  await createJar(jarPath, {
+    "com/example/OnlySource.java": [
+      "package com.example;",
+      "public class OnlySource {}"
+    ].join("\n")
+  });
+
+  const result = await analyzeModJar(jarPath);
+  assert.equal(result.classCount, 0);
+  assert.equal((result as { jarKind?: string }).jarKind, "source");
+});
+
+test("analyzeModJar marks jars with both .class and .java entries as jarKind=mixed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-mixed-jar-"));
+  const jarPath = join(root, "mixed.jar");
+  await createJar(jarPath, {
+    "com/example/Mixed.class": Buffer.alloc(4),
+    "com/example/Mixed.java": [
+      "package com.example;",
+      "public class Mixed {}"
+    ].join("\n")
+  });
+
+  const result = await analyzeModJar(jarPath);
+  assert.equal(result.classCount, 1);
+  assert.equal((result as { jarKind?: string }).jarKind, "mixed");
 });
 
 // ---------------------------------------------------------------------------

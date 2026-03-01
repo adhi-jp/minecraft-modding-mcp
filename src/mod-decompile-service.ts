@@ -163,6 +163,7 @@ export class ModDecompileService {
     } catch {
       analysis = {
         loader: "unknown",
+        jarKind: "binary",
         classCount: 0
       };
       warnings.push("Could not extract mod metadata from JAR.");

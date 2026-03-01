@@ -131,6 +131,10 @@ export type FindMappingInput = {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  disambiguation?: {
+    ownerHint?: string;
+    descriptorHint?: string;
+  };
 };
 
 export type FindMappingOutput = SymbolResolutionOutput;
@@ -205,6 +209,7 @@ export type SymbolExistenceInput = {
   descriptor?: string;
   sourceMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  nameMode?: "fqcn" | "auto";
 };
 
 export type SymbolExistenceOutput = SymbolResolutionOutput;
@@ -1004,6 +1009,53 @@ function normalizeQuerySymbol(
   };
 }
 
+function normalizeOwnerHint(ownerHint: string | undefined): string | undefined {
+  const normalized = ownerHint?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalizeMappedSymbolOutput(normalized);
+}
+
+function normalizeDescriptorHint(descriptorHint: string | undefined): string | undefined {
+  const normalized = descriptorHint?.trim();
+  return normalized || undefined;
+}
+
+function applyDisambiguationHints(
+  candidates: MappingLookupCandidate[],
+  disambiguation: { ownerHint?: string; descriptorHint?: string } | undefined
+): MappingLookupCandidate[] {
+  if (!disambiguation || candidates.length <= 1) {
+    return candidates;
+  }
+
+  let filtered = [...candidates];
+  const ownerHint = normalizeOwnerHint(disambiguation.ownerHint);
+  if (ownerHint) {
+    const ownerMatched = filtered.filter((candidate) => {
+      if (candidate.owner) {
+        return normalizeMappedSymbolOutput(candidate.owner) === ownerHint;
+      }
+      const normalizedSymbol = normalizeMappedSymbolOutput(candidate.symbol);
+      return normalizedSymbol.startsWith(`${ownerHint}.`);
+    });
+    if (ownerMatched.length > 0) {
+      filtered = ownerMatched;
+    }
+  }
+
+  const descriptorHint = normalizeDescriptorHint(disambiguation.descriptorHint);
+  if (descriptorHint) {
+    const descriptorMatched = filtered.filter((candidate) => candidate.descriptor === descriptorHint);
+    if (descriptorMatched.length > 0) {
+      filtered = descriptorMatched;
+    }
+  }
+
+  return filtered;
+}
+
 function collectTargetRecords(graph: LoadedGraph, targetMapping: SourceMapping): MappingSymbolRecord[] {
   const merged = new Map<string, MappingSymbolRecord>();
   for (const [key, pair] of graph.pairs.entries()) {
@@ -1119,8 +1171,14 @@ export class MappingService {
     }
 
     const rawCandidates = this.mapCandidatesAlongPath(graph, path, queryRecord);
-    const candidates = rawCandidates.map(toResolutionCandidate);
     const warnings: string[] = [];
+    const disambiguatedCandidates = applyDisambiguationHints(rawCandidates, input.disambiguation);
+    if (rawCandidates.length > disambiguatedCandidates.length) {
+      warnings.push(
+        `Disambiguation hints narrowed candidates from ${rawCandidates.length} to ${disambiguatedCandidates.length}.`
+      );
+    }
+    const candidates = disambiguatedCandidates.map(toResolutionCandidate);
     if (
       queryRecord.kind === "method" &&
       queryRecord.descriptor &&
@@ -1132,6 +1190,10 @@ export class MappingService {
     }
     if (candidates.length === 0) {
       warnings.push("No mapping candidate matched the input symbol.");
+    } else if (candidates.length > 1) {
+      warnings.push(
+        `Ambiguous mapping: ${candidates.length} candidates matched. Provide a stricter symbol input or disambiguation hints.`
+      );
     }
 
     const status: SymbolResolutionStatus =
@@ -1538,8 +1600,6 @@ export class MappingService {
         }
       });
     }
-    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input);
-
     const sourceMapping = input.sourceMapping;
     if (!SUPPORTED_MAPPINGS.has(sourceMapping)) {
       throw createError({
@@ -1558,12 +1618,63 @@ export class MappingService {
       sourcePriorityApplied: priority
     } satisfies SymbolExistenceOutput["mappingContext"];
 
+    const classNameMode = input.nameMode === "auto" ? "auto" : "fqcn";
+    const normalizedQuery:
+      | {
+          mode: "auto-class";
+          className: string;
+          querySymbol: SymbolReference;
+        }
+      | {
+          mode: "strict";
+          queryRecord: MappingSymbolRecord;
+          querySymbol: SymbolReference;
+        } =
+      input.kind === "class" && classNameMode === "auto"
+        ? (() => {
+            const owner = input.owner?.trim();
+            if (owner) {
+              throw invalidInputError("owner is not allowed when kind=class. Use name as FQCN.", {
+                owner: input.owner,
+                nextAction: 'Provide class as name, e.g. "net.minecraft.server.Main".'
+              });
+            }
+            if (input.descriptor?.trim()) {
+              throw invalidInputError("descriptor is not allowed when kind=class.", {
+                descriptor: input.descriptor
+              });
+            }
+            const autoClassName = normalizeMappedSymbolOutput(input.name.trim());
+            if (!autoClassName) {
+              throw invalidInputError("name must be a non-empty string.", {
+                name: input.name
+              });
+            }
+            return {
+              mode: "auto-class",
+              className: autoClassName,
+              querySymbol: {
+                kind: "class",
+                name: autoClassName,
+                symbol: autoClassName
+              }
+            };
+          })()
+        : (() => {
+            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input);
+            return {
+              mode: "strict",
+              queryRecord,
+              querySymbol
+            };
+          })();
+
     const graph = await this.loadGraph(version, priority);
     const warnings = [...graph.warnings];
     const records = collectTargetRecords(graph, sourceMapping);
     if (records.length === 0) {
       return {
-        querySymbol,
+        querySymbol: normalizedQuery.querySymbol,
         mappingContext,
         resolved: false,
         status: "mapping_unavailable",
@@ -1573,6 +1684,7 @@ export class MappingService {
     }
 
     const buildOutput = (
+      querySymbol: SymbolReference,
       matched: MappingSymbolRecord[],
       status: SymbolResolutionStatus
     ): SymbolExistenceOutput => {
@@ -1588,13 +1700,39 @@ export class MappingService {
       };
     };
 
+    if (normalizedQuery.mode === "auto-class") {
+      const autoClassName = normalizedQuery.className;
+      if (autoClassName.includes(".")) {
+        const matched = records.filter(
+          (record) => record.kind === "class" && record.symbol === autoClassName
+        );
+        const status: SymbolResolutionStatus =
+          matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
+        return buildOutput(normalizedQuery.querySymbol, matched, status);
+      }
+
+      const matched = records.filter(
+        (record) => record.kind === "class" && record.name === autoClassName
+      );
+      const status: SymbolResolutionStatus =
+        matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
+      if (status === "ambiguous") {
+        warnings.push(
+          `Multiple class symbols matched short name "${autoClassName}". Provide fully-qualified class name.`
+        );
+      }
+      return buildOutput(normalizedQuery.querySymbol, matched, status);
+    }
+
+    const { queryRecord, querySymbol } = normalizedQuery;
+
     if (queryRecord.kind === "class") {
       const matched = records.filter(
         (record) => record.kind === "class" && record.symbol === queryRecord.symbol
       );
       const status: SymbolResolutionStatus =
         matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
-      return buildOutput(matched, status);
+      return buildOutput(querySymbol, matched, status);
     }
 
     if (queryRecord.kind === "field") {
@@ -1604,7 +1742,7 @@ export class MappingService {
       );
       const status: SymbolResolutionStatus =
         matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
-      return buildOutput(matched, status);
+      return buildOutput(querySymbol, matched, status);
     }
 
     const methodCandidates = records.filter(
@@ -1615,18 +1753,18 @@ export class MappingService {
       (record) => record.descriptor === queryRecord.descriptor
     );
     if (descriptorMatched.length === 1) {
-      return buildOutput(descriptorMatched, "resolved");
+      return buildOutput(querySymbol, descriptorMatched, "resolved");
     }
     if (descriptorMatched.length > 1) {
-      return buildOutput(descriptorMatched, "ambiguous");
+      return buildOutput(querySymbol, descriptorMatched, "ambiguous");
     }
 
     if (methodCandidates.some((candidate) => candidate.descriptor == null)) {
       warnings.push("Descriptor-level existence checks are unavailable for descriptorless mapping entries.");
-      return buildOutput(methodCandidates, "mapping_unavailable");
+      return buildOutput(querySymbol, methodCandidates, "mapping_unavailable");
     }
 
-    return buildOutput([], "not_found");
+    return buildOutput(querySymbol, [], "not_found");
   }
 
   private mapRecordBetweenMappings(

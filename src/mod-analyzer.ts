@@ -10,6 +10,7 @@ import { listJarEntries, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 // ---------------------------------------------------------------------------
 
 export type ModLoader = "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
+export type ModJarKind = "binary" | "source" | "mixed";
 
 export interface ModDependency {
   modId: string;
@@ -19,6 +20,7 @@ export interface ModDependency {
 
 export interface ModAnalysisResult {
   loader: ModLoader;
+  jarKind: ModJarKind;
   modId?: string;
   modName?: string;
   modVersion?: string;
@@ -358,8 +360,15 @@ export async function analyzeModJar(
 
   // Class counting
   const classEntries = entries.filter((e) => e.endsWith(".class"));
+  const javaEntries = entries.filter((e) => e.endsWith(".java"));
   const classCount = classEntries.length;
   const classes = options?.includeClasses ? classEntries : undefined;
+  const jarKind: ModJarKind =
+    classEntries.length > 0 && javaEntries.length > 0
+      ? "mixed"
+      : javaEntries.length > 0
+        ? "source"
+        : "binary";
 
   // Detect loader and parse metadata
   let loader: ModLoader = "unknown";
@@ -413,6 +422,7 @@ export async function analyzeModJar(
 
   return {
     loader,
+    jarKind,
     ...metadata,
     classCount,
     ...(classes !== undefined ? { classes } : {})
