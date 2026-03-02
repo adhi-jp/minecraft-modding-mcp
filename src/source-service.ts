@@ -485,6 +485,7 @@ export type IndexArtifactOutput = {
 export type ValidateMixinInput = {
   source?: string;
   sourcePath?: string;
+  sourcePaths?: string[];
   version: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -493,7 +494,18 @@ export type ValidateMixinInput = {
   preferProjectVersion?: boolean;
 };
 
-export type ValidateMixinOutput = MixinValidationResult;
+export type ValidateMixinBatchResult = {
+  sourcePath: string;
+  result?: MixinValidationResult;
+  error?: string;
+};
+
+export type ValidateMixinBatchOutput = {
+  results: ValidateMixinBatchResult[];
+  summary: { total: number; valid: number; invalid: number; errors: number };
+};
+
+export type ValidateMixinOutput = MixinValidationResult | ValidateMixinBatchOutput;
 
 export type ValidateAccessWidenerInput = {
   content: string;
@@ -3096,6 +3108,11 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
+    // Batch mode: delegate to validateMixinBatch when sourcePaths is provided
+    if (input.sourcePaths && input.sourcePaths.length > 0) {
+      return this.validateMixinBatch(input);
+    }
+
     let version = input.version.trim();
     if (!version) {
       throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
@@ -3223,14 +3240,63 @@ export class SourceService {
       }
     }
 
+    const resolutionNotes: string[] = [];
+    if (requestedMapping !== mappingApplied) {
+      resolutionNotes.push(
+        `Mapping fallback: requested "${requestedMapping}" but applied "${mappingApplied}" due to remapping failure.`
+      );
+    }
+
     const provenance: MixinValidationProvenance = {
       version,
       jarPath,
       requestedMapping,
-      mappingApplied
+      mappingApplied,
+      resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined
     };
 
     return validateParsedMixin(parsed, targetMembers, warnings, provenance);
+  }
+
+  private async validateMixinBatch(input: ValidateMixinInput): Promise<ValidateMixinBatchOutput> {
+    const paths = input.sourcePaths!;
+    const results: ValidateMixinBatchResult[] = [];
+    let validCount = 0;
+    let invalidCount = 0;
+    let errorCount = 0;
+
+    for (const sp of paths) {
+      try {
+        const singleResult = await this.validateMixin({
+          ...input,
+          sourcePaths: undefined,
+          source: undefined,
+          sourcePath: sp
+        }) as MixinValidationResult;
+        results.push({ sourcePath: sp, result: singleResult });
+        if (singleResult.valid) {
+          validCount++;
+        } else {
+          invalidCount++;
+        }
+      } catch (err) {
+        results.push({
+          sourcePath: sp,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        errorCount++;
+      }
+    }
+
+    return {
+      results,
+      summary: {
+        total: paths.length,
+        valid: validCount,
+        invalid: invalidCount,
+        errors: errorCount
+      }
+    };
   }
 
   async validateAccessWidener(input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {

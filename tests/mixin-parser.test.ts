@@ -327,3 +327,88 @@ public interface PlayerAccessor {
   const result = parseMixinSource(source);
   assert.equal(result.className, "PlayerAccessor");
 });
+
+/* ------------------------------------------------------------------ */
+/*  Phase 2: array-form method targets                                 */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Inject with array method attribute", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Inject(method = {"tick", "attack"}, at = @At("HEAD"))
+  private void onTickOrAttack(CallbackInfo ci) {}
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 2);
+  assert.equal(result.injections[0].method, "tick");
+  assert.equal(result.injections[1].method, "attack");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses multi-line array method attribute", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Inject(
+    method = {
+      "tick",
+      "attack"
+    },
+    at = @At("HEAD")
+  )
+  private void onTickOrAttack(CallbackInfo ci) {}
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 2);
+  assert.equal(result.injections[0].method, "tick");
+  assert.equal(result.injections[1].method, "attack");
+});
+
+test("parseMixinSource parses array method with descriptors", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Inject(method = {"playerTouch(Lnet/minecraft/world/entity/player/Player;)V", "tick()V"}, at = @At("HEAD"))
+  private void hook(CallbackInfo ci) {}
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 2);
+  assert.equal(result.injections[0].method, "playerTouch(Lnet/minecraft/world/entity/player/Player;)V");
+  assert.equal(result.injections[1].method, "tick()V");
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 3: @Accessor with value= attribute                           */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Accessor with value= attribute", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor(value = "health")
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Invoker with value= attribute", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerInvoker {
+  @Invoker(value = "damage")
+  void invokeDamage();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].annotation, "Invoker");
+  assert.equal(result.accessors[0].targetName, "damage");
+});

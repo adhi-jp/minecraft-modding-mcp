@@ -602,8 +602,9 @@ const indexArtifactShape = {
 const indexArtifactSchema = z.object(indexArtifactShape);
 
 const validateMixinShape = {
-  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath)"),
-  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source)"),
+  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath/sourcePaths)"),
+  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source/sourcePaths)"),
+  sourcePaths: z.array(z.string().min(1)).optional().describe("Array of Mixin .java file paths for batch validation"),
   version: nonEmptyString.describe("Minecraft version"),
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
@@ -612,8 +613,14 @@ const validateMixinShape = {
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
-  (d) => (d.source != null) !== (d.sourcePath != null),
-  { message: "Exactly one of 'source' or 'sourcePath' must be provided." }
+  (d) => {
+    const hasSource = d.source != null;
+    const hasSourcePath = d.sourcePath != null;
+    const hasSourcePaths = d.sourcePaths != null && d.sourcePaths.length > 0;
+    // Exactly one of the three must be provided
+    return [hasSource, hasSourcePath, hasSourcePaths].filter(Boolean).length === 1;
+  },
+  { message: "Exactly one of 'source', 'sourcePath', or 'sourcePaths' must be provided." }
 );
 
 const validateAccessWidenerShape = {
@@ -1400,6 +1407,7 @@ server.tool("validate-mixin",
     sourceService.validateMixin({
       source: input.source,
       sourcePath: input.sourcePath,
+      sourcePaths: input.sourcePaths,
       version: input.version,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,

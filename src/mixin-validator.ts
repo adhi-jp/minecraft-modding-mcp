@@ -42,6 +42,12 @@ export type MixinValidationProvenance = {
   jarPath: string;
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
+  resolutionNotes?: string[];
+};
+
+export type StructuredWarning = {
+  severity: "info" | "warning";
+  message: string;
 };
 
 export type MixinValidationResult = {
@@ -53,6 +59,7 @@ export type MixinValidationResult = {
   summary: ValidationSummary;
   provenance?: MixinValidationProvenance;
   warnings: string[];
+  structuredWarnings?: StructuredWarning[];
 };
 
 export type ResolvedTargetMembers = {
@@ -120,6 +127,59 @@ export function suggestSimilar(name: string, candidates: string[], maxDistance =
 }
 
 /* ------------------------------------------------------------------ */
+/*  Method reference helpers                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Strip owner prefix (`Lowner;`) and JVM descriptor (`(...)V`) from a
+ * Mixin method reference, returning just the method name.
+ *
+ * Examples:
+ *   "playerTouch(Lnet/minecraft/world/entity/player/Player;)V" → "playerTouch"
+ *   "Lnet/minecraft/SomeClass;tick(I)V"                        → "tick"
+ *   "<init>"                                                    → "<init>"
+ *   "<init>()V"                                                 → "<init>"
+ *   "tick"                                                      → "tick"
+ */
+function stripOwnerPrefix(ref: string): string {
+  if (!ref.startsWith("L")) return ref;
+  const ownerEnd = ref.indexOf(";");
+  if (ownerEnd === -1) return ref;
+  const parenIdx = ref.indexOf("(");
+  // Owner prefixes appear before the descriptor, e.g. Lpkg/Class;method(I)V.
+  // If ';' appears inside the descriptor, this is not an owner prefix.
+  if (parenIdx !== -1 && ownerEnd > parenIdx) return ref;
+  return ref.substring(ownerEnd + 1);
+}
+
+export function extractMethodName(ref: string): string {
+  let s = stripOwnerPrefix(ref);
+  // Remove descriptor: everything from '(' onwards
+  const parenIdx = s.indexOf("(");
+  if (parenIdx !== -1) {
+    s = s.substring(0, parenIdx);
+  }
+  return s;
+}
+
+/**
+ * Extract the JVM descriptor portion from a method reference, if present.
+ *
+ * Examples:
+ *   "playerTouch(Lnet/minecraft/world/entity/player/Player;)V" → "(Lnet/minecraft/world/entity/player/Player;)V"
+ *   "tick"                                                      → undefined
+ */
+export function extractMethodDescriptor(ref: string): string | undefined {
+  // After stripping optional owner prefix, find '('
+  const s = stripOwnerPrefix(ref);
+  const parenIdx = s.indexOf("(");
+  if (parenIdx !== -1) {
+    return s.substring(parenIdx);
+  }
+  return undefined;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Mixin validation                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -149,16 +209,18 @@ function validateInjection(
     if (!members) continue;
 
     const methodNames = allMethodNames(members);
-    // Support method references like "<init>" and simple names
-    const methodRef = inj.method.replace(/<init>/g, "<init>");
-    if (!methodNames.includes(methodRef)) {
-      const suggestions = suggestSimilar(methodRef, methodNames);
+    // Strip owner prefix and JVM descriptor from the method reference
+    const methodName = extractMethodName(inj.method);
+    if (!methodNames.includes(methodName)) {
+      const suggestions = suggestSimilar(methodName, methodNames);
+      const descriptor = extractMethodDescriptor(inj.method);
+      const descriptorHint = descriptor ? ` (descriptor: ${descriptor})` : "";
       issues.push({
         severity: "error",
         kind: "method-not-found",
         annotation: `@${inj.annotation}`,
         target: `${targetName}#${inj.method}`,
-        message: `Method "${inj.method}" not found in target class "${targetName}".`,
+        message: `Method "${methodName}" not found in target class "${targetName}".${descriptorHint}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: inj.line
       });
@@ -271,11 +333,30 @@ export function validateParsedMixin(
     validateAccessor(accessor, targetMembers, resolvedTargetNames, issues);
   }
 
-  // Add parse warnings
-  warnings.push(...parsed.parseWarnings);
+  // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
+  for (const pw of parsed.parseWarnings) {
+    if (/@Accessor\b/.test(pw) || /@Invoker\b/.test(pw)) {
+      issues.push({
+        severity: "warning",
+        kind: "unknown-annotation",
+        annotation: pw.includes("@Accessor") ? "@Accessor" : "@Invoker",
+        target: parsed.className,
+        message: pw
+      });
+    } else {
+      warnings.push(pw);
+    }
+  }
 
   const errorCount = issues.filter((i) => i.severity === "error").length;
   const warningCount = issues.filter((i) => i.severity === "warning").length;
+
+  // Build structuredWarnings — classify by severity
+  const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
+  const structuredWarnings: StructuredWarning[] = warnings.map((msg) => ({
+    severity: MAPPING_WARNING_RE.test(msg) ? "warning" as const : "info" as const,
+    message: msg
+  }));
 
   return {
     className: parsed.className,
@@ -292,7 +373,8 @@ export function validateParsedMixin(
       warnings: warningCount
     },
     provenance,
-    warnings
+    warnings,
+    structuredWarnings: structuredWarnings.length > 0 ? structuredWarnings : undefined
   };
 }
 

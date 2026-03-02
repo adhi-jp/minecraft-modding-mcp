@@ -7,6 +7,20 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### fix(mixin): resolve false-positive bugs and improve validate-mixin
+
+#### Fixed
+- `validate-mixin`: method references with JVM descriptors (e.g. `playerTouch(Lnet/minecraft/world/entity/player/Player;)V`) are now correctly stripped before comparison, eliminating false-positive `method-not-found` errors.
+- `validate-mixin`: array-form `method = {"m1", "m2"}` attributes are now parsed correctly (previously only single-value `method = "m"` was supported).
+- `validate-mixin`: `@Accessor(value = "name")` syntax is now recognized alongside `@Accessor("name")`.
+- `validate-mixin`: `@Accessor`/`@Invoker` parse failures are escalated to `issues[]` with `severity: "warning"` instead of being silently added to `warnings[]`.
+
+#### Added
+- `validate-mixin`: `sourcePaths` parameter for batch validation of multiple Mixin files in a single call.
+- `validate-mixin`: `structuredWarnings` field in results classifies warnings by severity (`"info"` or `"warning"`).
+- `validate-mixin`: `resolutionNotes` in provenance records mapping fallback reasons.
+- `extractMethodName()` and `extractMethodDescriptor()` utility functions for JVM method reference parsing.
+
 ### feat(mcp): strengthen mapping and source resolution workflows
 
 #### Added

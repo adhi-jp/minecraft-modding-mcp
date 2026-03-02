@@ -57,6 +57,8 @@ const MIXIN_PRIORITY_RE = /priority\s*=\s*(\d+)/;
 const INJECTION_ANNOTATION_RE =
   /^\s*@(Inject|Redirect|ModifyArg|ModifyVariable|ModifyConstant|ModifyExpressionValue)\s*\(/;
 const METHOD_ATTR_RE = /method\s*=\s*"([^"]+)"/;
+const METHOD_ATTR_ARRAY_RE = /method\s*=\s*\{([^}]+)\}/;
+const METHOD_ATTR_ITEM_RE = /"([^"]+)"/g;
 
 // @Shadow field / method
 const SHADOW_ANNOTATION_RE = /^\s*@Shadow\b/;
@@ -66,7 +68,7 @@ const METHOD_DECL_RE =
   /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
 
 // @Accessor / @Invoker
-const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*"([^"]+)"\s*\))?\s*$/;
+const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\))?\s*$/;
 const ACCESSOR_ANNOTATION_START_RE = /^\s*@(Accessor|Invoker)\s*\(/;
 const ACCESSOR_EXPLICIT_RE = /"([^"]+)"/;
 
@@ -184,7 +186,23 @@ export function parseMixinSource(source: string): ParsedMixin {
       if (methodMatch) {
         injections.push({ annotation, method: methodMatch[1], line: lineNum });
       } else {
-        parseWarnings.push(`Line ${lineNum}: @${annotation} missing method attribute.`);
+        // Try array form: method = {"m1", "m2"}
+        const arrayMatch = METHOD_ATTR_ARRAY_RE.exec(fullAnnotation);
+        if (arrayMatch) {
+          const inner = arrayMatch[1];
+          METHOD_ATTR_ITEM_RE.lastIndex = 0;
+          let itemMatch: RegExpExecArray | null;
+          let found = false;
+          while ((itemMatch = METHOD_ATTR_ITEM_RE.exec(inner)) !== null) {
+            injections.push({ annotation, method: itemMatch[1], line: lineNum });
+            found = true;
+          }
+          if (!found) {
+            parseWarnings.push(`Line ${lineNum}: @${annotation} method array is empty.`);
+          }
+        } else {
+          parseWarnings.push(`Line ${lineNum}: @${annotation} missing method attribute.`);
+        }
       }
       i = endIndex + 1;
       continue;

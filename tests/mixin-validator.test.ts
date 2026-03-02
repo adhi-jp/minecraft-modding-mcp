@@ -6,6 +6,8 @@ import type { ParsedMixin } from "../src/mixin-parser.ts";
 import {
   levenshteinDistance,
   suggestSimilar,
+  extractMethodName,
+  extractMethodDescriptor,
   validateParsedMixin,
   validateParsedAccessWidener,
   type ResolvedTargetMembers,
@@ -426,4 +428,214 @@ test("validateParsedAccessWidener summary counts", () => {
   assert.equal(result.summary.total, 2);
   assert.equal(result.summary.valid, 1);
   assert.equal(result.summary.invalid, 1);
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 1: extractMethodName / extractMethodDescriptor tests         */
+/* ------------------------------------------------------------------ */
+
+test("extractMethodName strips JVM descriptor from method reference", () => {
+  assert.equal(extractMethodName("playerTouch(Lnet/minecraft/world/entity/player/Player;)V"), "playerTouch");
+});
+
+test("extractMethodName strips owner prefix and descriptor", () => {
+  assert.equal(extractMethodName("Lnet/minecraft/SomeClass;tick(I)V"), "tick");
+});
+
+test("extractMethodName keeps method names that start with L", () => {
+  assert.equal(extractMethodName("Load(Lfoo/Bar;)V"), "Load");
+});
+
+test("extractMethodName returns plain method name as-is", () => {
+  assert.equal(extractMethodName("tick"), "tick");
+});
+
+test("extractMethodName handles <init> with descriptor", () => {
+  assert.equal(extractMethodName("<init>()V"), "<init>");
+});
+
+test("extractMethodName handles <init> without descriptor", () => {
+  assert.equal(extractMethodName("<init>"), "<init>");
+});
+
+test("extractMethodDescriptor extracts descriptor portion", () => {
+  assert.equal(
+    extractMethodDescriptor("playerTouch(Lnet/minecraft/world/entity/player/Player;)V"),
+    "(Lnet/minecraft/world/entity/player/Player;)V"
+  );
+});
+
+test("extractMethodDescriptor returns undefined for plain name", () => {
+  assert.equal(extractMethodDescriptor("tick"), undefined);
+});
+
+test("extractMethodDescriptor extracts descriptor after owner prefix", () => {
+  assert.equal(extractMethodDescriptor("Lnet/minecraft/SomeClass;tick(I)V"), "(I)V");
+});
+
+test("extractMethodDescriptor keeps descriptor for method names that start with L", () => {
+  assert.equal(extractMethodDescriptor("Load(Lfoo/Bar;)V"), "(Lfoo/Bar;)V");
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 1: validateInjection with descriptor-bearing references       */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin passes injection with descriptor-bearing method reference", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V", line: 10 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["playerTouch", "tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 0);
+});
+
+test("validateParsedMixin passes injection with owner-prefixed method reference", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Redirect", method: "Lnet/minecraft/SomeClass;tick(I)V", line: 10 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, true);
+});
+
+test("validateParsedMixin passes injection when method name starts with L", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "Load(Lfoo/Bar;)V", line: 10 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["Load"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 0);
+});
+
+test("validateParsedMixin error message includes descriptor hint", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missingMethod(I)V", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, false);
+  assert.ok(result.issues[0].message.includes("(descriptor: (I)V)"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 3: @Accessor/@Invoker parse warning escalation               */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin escalates @Accessor parse warning to issue", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: ["Line 5: Could not parse @Accessor method declaration."]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].annotation, "@Accessor");
+  assert.equal(warnings.length, 0);
+});
+
+test("validateParsedMixin escalates @Invoker parse warning to issue", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: ["Line 8: Could not parse @Invoker method declaration."]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].annotation, "@Invoker");
+});
+
+test("validateParsedMixin keeps non-accessor parse warnings in warnings[]", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: ["Line 3: @Inject missing method attribute."]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", {})]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues.length, 0);
+  assert.ok(warnings.some((w) => w.includes("@Inject")));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 4: provenance resolutionNotes                                */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin provenance includes resolutionNotes when present", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "yarn",
+    mappingApplied: "official",
+    resolutionNotes: ["Mapping fallback: requested \"yarn\" but applied \"official\" due to remapping failure."]
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
+  assert.ok(result.provenance?.resolutionNotes);
+  assert.equal(result.provenance!.resolutionNotes!.length, 1);
+  assert.ok(result.provenance!.resolutionNotes![0].includes("fallback"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 5: structuredWarnings                                        */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin includes structuredWarnings classified by severity", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [
+    "Could not map class \"Foo\" from yarn to official.",
+    "Some info message."
+  ];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.structuredWarnings);
+  assert.equal(result.structuredWarnings!.length, 2);
+  assert.equal(result.structuredWarnings![0].severity, "warning");
+  assert.equal(result.structuredWarnings![1].severity, "info");
+});
+
+test("validateParsedMixin omits structuredWarnings when no warnings", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.structuredWarnings, undefined);
 });
