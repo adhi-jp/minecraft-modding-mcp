@@ -114,7 +114,7 @@ Codecov へアップロードする LCOV 出力を生成:
 pnpm test:coverage:lcov
 ```
 
-GitHub Actions のアップロードワークフロー: `.github/workflows/codecov.yml`（`v*` タグ時および手動実行でトリガー）。
+GitHub Actions のアップロードワークフロー: `.github/workflows/codecov.yml`（現在は一時的に無効化中。再有効化時は `v*` タグ時および手動実行でトリガー）。
 
 ### MCP クライアント設定 (MCP Client Configuration)
 

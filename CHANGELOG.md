@@ -7,6 +7,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### chore(ci): temporarily disable Codecov workflow
+
+#### Changed
+- `.github/workflows/codecov.yml` now gates the `test-and-coverage` job with `if: ${{ false }}` to pause uploads temporarily.
+- README coverage notes (English/Japanese) now document that the Codecov upload workflow is currently disabled.
+
 ### fix(mixin): resolve false-positive bugs and improve validate-mixin
 
 #### Fixed

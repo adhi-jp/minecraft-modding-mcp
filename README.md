@@ -114,7 +114,7 @@ Generate LCOV output for Codecov upload:
 pnpm test:coverage:lcov
 ```
 
-GitHub Actions upload workflow: `.github/workflows/codecov.yml` (triggered on `v*` tags and manual dispatch).
+GitHub Actions upload workflow: `.github/workflows/codecov.yml` (temporarily disabled; when enabled, it runs on `v*` tags and manual dispatch).
 
 ### MCP Client Configuration
 
