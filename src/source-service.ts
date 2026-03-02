@@ -586,6 +586,24 @@ function normalizePathStyle(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasExactVersionToken(path: string, version: string): boolean {
+  const normalizedPath = normalizePathStyle(path).toLowerCase();
+  const normalizedVersion = version.trim().toLowerCase();
+  if (!normalizedVersion) {
+    return false;
+  }
+  // Avoid prefix false-positives like "1.21.1" matching "1.21.10".
+  const pattern = new RegExp(
+    `(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`,
+    "i"
+  );
+  return pattern.test(normalizedPath);
+}
+
 function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
   if (!projectPath) {
     return undefined;
@@ -1400,6 +1418,32 @@ export class SourceService {
         });
       } catch (caughtError) {
         if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
+          const isVanillaMojang = scope === "vanilla" && effectiveMapping === "mojang";
+          let suggestedCall: { tool: string; params: Record<string, unknown> };
+          let nextAction: string;
+          if (isVanillaMojang && input.projectPath) {
+            suggestedCall = {
+              tool: "resolve-artifact",
+              params: { targetKind: kind, targetValue: value, mapping: "mojang", scope: "merged", projectPath: input.projectPath }
+            };
+            nextAction =
+              "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
+              "Retry with scope=merged to allow source-jar resolution from the project cache.";
+          } else if (isVanillaMojang) {
+            suggestedCall = {
+              tool: "resolve-artifact",
+              params: { targetKind: kind, targetValue: value, mapping: "official", scope: "vanilla" }
+            };
+            nextAction =
+              "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
+              "Without a projectPath, use mapping=official to read vanilla obfuscated names.";
+          } else {
+            suggestedCall = {
+              tool: "resolve-artifact",
+              params: { targetKind: kind, targetValue: value, mapping: "official", ...(scope ? { scope } : {}) }
+            };
+            nextAction = "Retry with mapping=official to use obfuscated names.";
+          }
           throw createError({
             code: ERROR_CODES.MAPPING_NOT_APPLIED,
             message: caughtError.message,
@@ -1409,7 +1453,8 @@ export class SourceService {
               candidateArtifacts:
                 versionSourceDiscovery?.candidateArtifacts ?? resolved.adjacentSourceCandidates ?? [],
               recommendedCommand: this.buildVersionSourceRecoveryCommand(input.projectPath),
-              suggestedCall: { tool: "resolve-artifact", params: { targetKind: kind, targetValue: value, mapping: "official" } }
+              nextAction,
+              suggestedCall
             }
           });
         }
@@ -1426,7 +1471,7 @@ export class SourceService {
               target: { kind, value },
               nextAction:
                 "Use targetKind=version or a versioned Maven coordinate so mapping artifacts can be resolved.",
-              suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value } }
+              suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value, ...(scope ? { scope } : {}) } }
             }
           });
         }
@@ -1457,6 +1502,12 @@ export class SourceService {
       }
       if (versionSourceDiscovery?.selectedSourceJarPath) {
         resolved.qualityFlags.push("source-jar-validated");
+        if (kind === "version" && !hasExactVersionToken(versionSourceDiscovery.selectedSourceJarPath, value)) {
+          resolved.qualityFlags.push("version-approximated");
+          warnings.push(
+            `Requested version "${value}" but resolved source jar does not contain exact version string: ${versionSourceDiscovery.selectedSourceJarPath}`
+          );
+        }
       }
       resolved.qualityFlags = [...new Set(resolved.qualityFlags)];
       await this.ingestIfNeeded(resolved);
@@ -1735,11 +1786,15 @@ export class SourceService {
         Buffer.byteLength(JSON.stringify({ hits: page, relations }), "utf8")
       );
 
+      // B5: If post-filtering eliminated all hits on the first page, the SQL-based
+      // totalApprox is misleading — correct it to 0.
+      const totalApprox = page.length === 0 && !cursor ? 0 : finalizedHits.totalApprox;
+
       return {
         hits: page,
         relations: relations && relations.length > 0 ? relations : undefined,
         nextCursor,
-        totalApprox: finalizedHits.totalApprox,
+        totalApprox,
         mappingApplied: artifact.mappingApplied ?? "official"
       };
     } finally {
@@ -2712,13 +2767,28 @@ export class SourceService {
     const filePath = this.resolveClassFilePath(artifactId, className);
     if (!filePath) {
       const simpleName = className.split(/[.$]/).at(-1) ?? className;
+      const targetKind = input.target?.kind;
+      const targetValue = input.target?.value;
+      const scope = input.scope;
+      let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
+      if (targetKind === "version" && scope && scope !== "merged" && !input.projectPath) {
+        nextAction +=
+          ` If the class exists in a modded environment, retry with scope: "merged" and projectPath pointing to your mod project.`;
+      } else if (targetKind === "version" && scope && scope !== "merged" && input.projectPath) {
+        nextAction +=
+          ` The class may exist in merged sources; retry with scope: "merged".`;
+      }
       throw createError({
         code: ERROR_CODES.CLASS_NOT_FOUND,
         message: `Source for class "${className}" was not found.`,
         details: {
           artifactId,
           className,
-          nextAction: `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`,
+          ...(scope ? { scope } : {}),
+          ...(targetKind ? { targetKind } : {}),
+          ...(targetValue ? { targetValue } : {}),
+          mapping: mappingApplied,
+          nextAction,
           suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
         }
       });
@@ -2734,6 +2804,9 @@ export class SourceService {
           artifactId,
           className,
           filePath,
+          ...(input.scope ? { scope: input.scope } : {}),
+          ...(input.target?.kind ? { targetKind: input.target.kind } : {}),
+          ...(input.target?.value ? { targetValue: input.target.value } : {}),
           nextAction: `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`,
           suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
         }

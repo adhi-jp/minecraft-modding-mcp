@@ -4290,3 +4290,425 @@ test("SourceService resolveArtifact returns undefined sampleEntries for decompil
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// B2: suggestedCall preserves scope in MAPPING_NOT_APPLIED errors
+// ---------------------------------------------------------------------------
+test("B2: resolveArtifact preserves scope in suggestedCall when mapping fails", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b2-scope-"));
+  const binaryJarPath = join(root, "server-b2.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: binaryJarPath },
+        mapping: "mojang",
+        scope: "vanilla",
+        allowDecompile: false
+      } as any),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
+      return (
+        suggested != null &&
+        suggested.params.scope === "vanilla"
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B2: suggestedCall preserves scope in intermediary/yarn no-version error
+// ---------------------------------------------------------------------------
+test("B2: resolveArtifact preserves scope in intermediary no-version suggestedCall", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b2-intermediary-"));
+  const sourceJarPath = join(root, "demo-sources.jar");
+
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: sourceJarPath },
+        mapping: "intermediary",
+        scope: "merged"
+      } as any),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
+      return (
+        suggested != null &&
+        suggested.params.scope === "merged"
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B3: vanilla + mojang error suggests scope=merged when projectPath present
+// ---------------------------------------------------------------------------
+test("B3: resolveArtifact vanilla+mojang with projectPath suggests scope=merged", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b3-vanilla-mojang-"));
+  const binaryJarPath = join(root, "server-b3.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: binaryJarPath },
+        mapping: "mojang",
+        scope: "vanilla",
+        projectPath: root,
+        allowDecompile: false
+      } as any),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
+      return (
+        suggested != null &&
+        suggested.params.scope === "merged" &&
+        suggested.params.mapping === "mojang" &&
+        typeof suggested.params.projectPath === "string" &&
+        typeof details.nextAction === "string" &&
+        (details.nextAction as string).includes("scope=vanilla blocks Loom")
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B3: vanilla + mojang without projectPath suggests mapping=official
+// ---------------------------------------------------------------------------
+test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=official", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b3-no-project-"));
+  const binaryJarPath = join(root, "server-b3np.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: binaryJarPath },
+        mapping: "mojang",
+        scope: "vanilla",
+        allowDecompile: false
+      } as any),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
+      return (
+        suggested != null &&
+        suggested.params.mapping === "official" &&
+        suggested.params.scope === "vanilla" &&
+        typeof details.nextAction === "string" &&
+        (details.nextAction as string).includes("mapping=official")
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B1: CLASS_NOT_FOUND includes scope, target context, and retry hints
+// ---------------------------------------------------------------------------
+test("B1: getClassSource CLASS_NOT_FOUND includes scope and target context", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b1-class-"));
+  const binaryJarPath = join(root, "server-b1.jar");
+  const sourcesJarPath = join(root, "server-b1-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  await assert.rejects(
+    () =>
+      service.getClassSource({
+        artifactId: resolved.artifactId,
+        className: "net.minecraft.world.level.block.Blocks",
+        mode: "full"
+      }),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.CLASS_NOT_FOUND) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.artifactId === resolved.artifactId &&
+        details.mapping === "official" &&
+        typeof details.nextAction === "string" &&
+        details.suggestedCall != null
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B1: CLASS_NOT_FOUND with target includes scope and targetKind
+// ---------------------------------------------------------------------------
+test("B1: getClassSource CLASS_NOT_FOUND with target includes scope/targetKind/targetValue", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b1-target-"));
+  const binaryJarPath = join(root, "server-b1t.jar");
+  const sourcesJarPath = join(root, "server-b1t-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "com/example/Existing.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "com/example/Existing.java": "package com.example;\npublic class Existing {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () =>
+      service.getClassSource({
+        target: { kind: "jar", value: binaryJarPath },
+        className: "com.example.Missing",
+        scope: "vanilla",
+        mode: "full"
+      } as any),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.CLASS_NOT_FOUND) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.scope === "vanilla" &&
+        details.targetKind === "jar" &&
+        details.targetValue === binaryJarPath
+      );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// B4: version-approximated flag when source jar doesn't contain exact version
+// ---------------------------------------------------------------------------
+test("B4: resolveArtifact flags version-approximated when source jar version mismatches", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b4-approx-"));
+  const projectPath = join(root, "workspace");
+
+  // Create Loom cache with a jar named for version 1.21.10 (not 1.21.11)
+  const loomCache = join(projectPath, ".gradle", "loom-cache");
+  await mkdir(loomCache, { recursive: true });
+  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java":
+      "package net.minecraft.world.level.block;\npublic class Blocks {}"
+  });
+
+  // Create a remote binary jar for the version manifest to return
+  const remoteJarPath = join(root, "remote-1.21.11.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.11" },
+          versions: [
+            { id: "1.21.11", type: "release", url: "https://example.test/versions/1.21.11.json" }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.11.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.11",
+          downloads: { client: { url: "https://example.test/downloads/client-1.21.11.jar" } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.11.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    const resolved = await service.resolveArtifact({
+      target: { kind: "version", value: "1.21.11" },
+      mapping: "mojang",
+      projectPath
+    } as any);
+    assert.ok(
+      resolved.qualityFlags.includes("version-approximated"),
+      `Expected version-approximated flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+    );
+    assert.ok(
+      resolved.warnings.some((w: string) => w.includes("1.21.11") && w.includes("does not contain exact version")),
+      `Expected version approximation warning, got: ${JSON.stringify(resolved.warnings)}`
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// B4: version-approximated uses exact version token match (not substring)
+// ---------------------------------------------------------------------------
+test("B4: resolveArtifact flags version-approximated for prefix-substring version mismatch", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b4-prefix-"));
+  const projectPath = join(root, "workspace");
+
+  // Requested version will be 1.21.1, but only 1.21.10 source jar exists in Loom cache.
+  const loomCache = join(projectPath, ".gradle", "loom-cache");
+  await mkdir(loomCache, { recursive: true });
+  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java":
+      "package net.minecraft.world.level.block;\npublic class Blocks {}"
+  });
+
+  const remoteJarPath = join(root, "remote-1.21.1.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.1" },
+          versions: [{ id: "1.21.1", type: "release", url: "https://example.test/versions/1.21.1.json" }]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.1.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.1",
+          downloads: { client: { url: "https://example.test/downloads/client-1.21.1.jar" } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.1.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    const resolved = await service.resolveArtifact({
+      target: { kind: "version", value: "1.21.1" },
+      mapping: "mojang",
+      projectPath
+    } as any);
+    assert.ok(
+      resolved.qualityFlags.includes("version-approximated"),
+      `Expected version-approximated flag for prefix mismatch, got: ${JSON.stringify(resolved.qualityFlags)}`
+    );
+    assert.ok(
+      resolved.warnings.some((w: string) => w.includes("Requested version \"1.21.1\"")),
+      `Expected version approximation warning, got: ${JSON.stringify(resolved.warnings)}`
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// B5: totalApprox is 0 when post-filtering eliminates all hits on first page
+// ---------------------------------------------------------------------------
+test("B5: searchClassSource returns totalApprox=0 when no hits survive post-filtering", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-b5-totalapprox-"));
+  const binaryJarPath = join(root, "server-b5.jar");
+  const sourcesJarPath = join(root, "server-b5-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main { int x = 1; }"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  // Query that won't match anything in the content
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "zzz_completely_nonexistent_needle_zzz",
+    intent: "text",
+    match: "contains",
+    limit: 10
+  });
+  assert.equal(result.hits.length, 0);
+  assert.equal(result.totalApprox, 0);
+});

@@ -52,6 +52,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 #### Fixed
 - Decompile fallback now passes Vineflower flags before positional `<input-jar> <output-dir>` arguments, fixing false `ERR_DECOMPILER_FAILED` errors on valid Minecraft client jars.
 
+### fix(mcp): improve error recovery context and fix version-approximation detection
+
+#### Fixed
+- `CLASS_NOT_FOUND` errors now include `scope`, `targetKind`, `targetValue`, `mapping`, and improved retry guidance.
+- `MAPPING_NOT_APPLIED` recovery `suggestedCall` now preserves `scope`, and vanilla+mojang failures now provide context-aware next actions.
+- Version approximation detection now avoids prefix false positives (for example, `1.21.1` vs `1.21.10`) and reports mismatched source-jar versions more reliably.
+- Post-filtered empty first pages now return `totalApprox=0` instead of stale approximated totals.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed
