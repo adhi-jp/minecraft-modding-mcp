@@ -79,6 +79,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `MAPPING_NOT_APPLIED` recovery `suggestedCall` now preserves `scope`, and vanilla+mojang failures now provide context-aware next actions.
 - Version approximation detection now avoids prefix false positives (for example, `1.21.1` vs `1.21.10`) and reports mismatched source-jar versions more reliably.
 - Post-filtered empty first pages now return `totalApprox=0` instead of stale approximated totals.
+- `get-artifact-file` now truncates by UTF-8 boundary-safe byte slices, preventing malformed replacement characters when `maxBytes` cuts multibyte text.
 
 ### fix(mixin): resolve false-positive bugs and add sourcePath/provenance to validate-mixin
 

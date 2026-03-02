@@ -259,6 +259,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
+`get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.
 `get-class-source` mode defaults to `metadata` (symbol outline only); `mode=snippet` auto-sets `maxLines=200` when no line range/max is provided; `mode=full` returns the entire source. `outputFile` writes the selected text and returns the file path in `outputFile`.
