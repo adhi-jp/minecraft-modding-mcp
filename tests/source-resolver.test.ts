@@ -94,3 +94,26 @@ test("resolveSourceTarget(targetKind=jar) adopts exact <basename>-sources.jar wh
   assert.equal(resolved.sourceJarPath, exactSourcesJarPath);
   assert.deepEqual(resolved.adjacentSourceCandidates, [unrelatedSourcesJarPath]);
 });
+
+test("resolveSourceTarget(targetKind=coordinate) resolves local classifier source jars without invalid fallback names", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-classifier-"));
+  const versionDir = join(root, "m2", "net", "fabricmc", "fabric-loader", "0.16.10");
+  const classifierSourcesJarPath = join(versionDir, "fabric-loader-0.16.10-client-sources.jar");
+
+  await createJar(classifierSourcesJarPath, {
+    "net/fabricmc/loader/impl/LoaderImpl.java": [
+      "package net.fabricmc.loader.impl;",
+      "public class LoaderImpl {}"
+    ].join("\n")
+  });
+
+  const resolved = await resolveSourceTarget(
+    { kind: "coordinate", value: "net.fabricmc:fabric-loader:0.16.10:client" },
+    { allowDecompile: true },
+    buildTestConfig(root)
+  );
+
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.isDecompiled, false);
+  assert.equal(resolved.sourceJarPath, classifierSourcesJarPath);
+});

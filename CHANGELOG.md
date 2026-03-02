@@ -99,6 +99,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `src/index.ts` now defers `SourceService` construction until the first tool/resource access via a lazy proxy, reducing cold-start overhead during MCP handshake and tool discovery.
 - Added integration coverage to ensure lazy initialization wiring remains in place.
 
+### fix(source): stabilize classifier source-jar resolution
+
+#### Fixed
+- `resolve-artifact` / source resolution for Maven coordinates with a classifier (for example `group:artifact:version:client`) now correctly picks local Maven paths like `<artifact>-<version>-<classifier>-sources.jar` and no longer attempts an impossible duplicated-name fallback.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

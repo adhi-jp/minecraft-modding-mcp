@@ -65,11 +65,6 @@ function resolveLocalCoordinateCandidates(localM2Path: string, coordinate: strin
   const fallback = resolvePath(baseDir, `${base}-sources.jar`);
   const candidates = [direct, fallback];
 
-  if (parsed.classifier) {
-    const prefix = `${parsed.artifactId}-${parsed.version}-${parsed.classifier}`;
-    candidates.push(resolvePath(baseDir, `${base}-${prefix}-sources.jar`));
-  }
-
   const existing = new Set<string>();
   for (const candidate of candidates) {
     if (hasExistingJar(candidate)) {
