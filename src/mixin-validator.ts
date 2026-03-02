@@ -6,6 +6,7 @@
 import type { SignatureMember } from "./minecraft-explorer-service.js";
 import type { ParsedMixin, ParsedInjection, ParsedShadow, ParsedAccessor } from "./mixin-parser.js";
 import type { ParsedAccessWidener, AccessWidenerEntry } from "./access-widener-parser.js";
+import type { SourceMapping } from "./types.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -36,6 +37,13 @@ export type ValidationSummary = {
   warnings: number;
 };
 
+export type MixinValidationProvenance = {
+  version: string;
+  jarPath: string;
+  requestedMapping: SourceMapping;
+  mappingApplied: SourceMapping;
+};
+
 export type MixinValidationResult = {
   className: string;
   targets: string[];
@@ -43,6 +51,7 @@ export type MixinValidationResult = {
   valid: boolean;
   issues: ValidationIssue[];
   summary: ValidationSummary;
+  provenance?: MixinValidationProvenance;
   warnings: string[];
 };
 
@@ -228,7 +237,8 @@ function validateAccessor(
 export function validateParsedMixin(
   parsed: ParsedMixin,
   targetMembers: Map<string, ResolvedTargetMembers>,
-  warnings: string[]
+  warnings: string[],
+  provenance?: MixinValidationProvenance
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -281,6 +291,7 @@ export function validateParsedMixin(
       errors: errorCount,
       warnings: warningCount
     },
+    provenance,
     warnings
   };
 }

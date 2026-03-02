@@ -602,12 +602,19 @@ const indexArtifactShape = {
 const indexArtifactSchema = z.object(indexArtifactShape);
 
 const validateMixinShape = {
-  source: nonEmptyString.describe("Mixin Java source text"),
+  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath)"),
+  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source)"),
   version: nonEmptyString.describe("Minecraft version"),
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version")
 };
-const validateMixinSchema = z.object(validateMixinShape);
+const validateMixinSchema = z.object(validateMixinShape).refine(
+  (d) => (d.source != null) !== (d.sourcePath != null),
+  { message: "Exactly one of 'source' or 'sourcePath' must be provided." }
+);
 
 const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),
@@ -1392,9 +1399,13 @@ server.tool("validate-mixin",
   async (args) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
     sourceService.validateMixin({
       source: input.source,
+      sourcePath: input.sourcePath,
       version: input.version,
       mapping: input.mapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      scope: input.scope as ArtifactScope | undefined,
+      projectPath: input.projectPath,
+      preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>
   )
 );

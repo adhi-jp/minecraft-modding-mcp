@@ -8,7 +8,8 @@ import {
   suggestSimilar,
   validateParsedMixin,
   validateParsedAccessWidener,
-  type ResolvedTargetMembers
+  type ResolvedTargetMembers,
+  type MixinValidationProvenance
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
 
@@ -46,6 +47,7 @@ function makeParsedMixin(overrides: Partial<ParsedMixin> = {}): ParsedMixin {
   return {
     className: "TestMixin",
     targets: [{ className: "PlayerEntity" }],
+    imports: new Map(),
     injections: [],
     shadows: [],
     accessors: [],
@@ -224,6 +226,56 @@ test("validateParsedMixin includes parse warnings in output", () => {
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.ok(result.warnings.some((w) => w.includes("missing method attribute")));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Provenance tests                                                   */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin includes provenance when provided", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
+  assert.deepEqual(result.provenance, provenance);
+});
+
+test("validateParsedMixin omits provenance when not provided", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.provenance, undefined);
+});
+
+test("validateParsedMixin provenance reflects mapping fallback", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "yarn",
+    mappingApplied: "official"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
+  assert.equal(result.provenance?.requestedMapping, "yarn");
+  assert.equal(result.provenance?.mappingApplied, "official");
 });
 
 /* ------------------------------------------------------------------ */

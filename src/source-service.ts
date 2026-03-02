@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
@@ -22,6 +22,7 @@ import {
   validateParsedAccessWidener,
   type ResolvedTargetMembers,
   type MixinValidationResult,
+  type MixinValidationProvenance,
   type AccessWidenerValidationResult
 } from "./mixin-validator.js";
 import { resolveSourceTarget as resolveSourceTargetInternal } from "./source-resolver.js";
@@ -482,10 +483,14 @@ export type IndexArtifactOutput = {
 };
 
 export type ValidateMixinInput = {
-  source: string;
+  source?: string;
+  sourcePath?: string;
   version: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  scope?: ArtifactScope;
+  projectPath?: string;
+  preferProjectVersion?: boolean;
 };
 
 export type ValidateMixinOutput = MixinValidationResult;
@@ -3091,11 +3096,31 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
-    const version = input.version.trim();
+    let version = input.version.trim();
     if (!version) {
       throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
     }
-    const source = input.source;
+
+    // Resolve source from source or sourcePath
+    let source: string;
+    if (input.sourcePath) {
+      const normalizedSourcePath = normalizePathForHost(input.sourcePath, undefined, "sourcePath");
+      const resolvedSourcePath = isAbsolute(normalizedSourcePath)
+        ? normalizedSourcePath
+        : resolvePath(process.cwd(), normalizedSourcePath);
+      try {
+        source = await readFile(resolvedSourcePath, "utf-8");
+      } catch (err) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message:
+            `Could not read sourcePath "${input.sourcePath}" (resolved to "${resolvedSourcePath}"):` +
+            ` ${err instanceof Error ? err.message : String(err)}`
+        });
+      }
+    } else {
+      source = input.source ?? "";
+    }
     if (!source.trim()) {
       throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "source must be non-empty." });
     }
@@ -3103,19 +3128,50 @@ export class SourceService {
     const warnings: string[] = [];
     const requestedMapping = normalizeMapping(input.mapping);
 
+    // preferProjectVersion: detect MC version from gradle.properties
+    if (input.preferProjectVersion && input.projectPath) {
+      const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+      if (detected) {
+        warnings.push(`Overriding version "${version}" with project version "${detected}" from gradle.properties.`);
+        version = detected;
+      }
+    }
+
     const { jarPath } = await this.versionService.resolveVersionJar(version);
     const parsed = parseMixinSource(source);
 
     const targetMembers = new Map<string, ResolvedTargetMembers>();
+    let mappingApplied: SourceMapping = requestedMapping;
+
     for (const target of parsed.targets) {
-      let officialName = target.className;
+      // Bug 1 fix: resolve simple names via imports
+      let resolvedClassName = target.className;
+      if (!resolvedClassName.includes(".")) {
+        // Simple name — look up in imports
+        const fqcn = parsed.imports.get(resolvedClassName);
+        if (fqcn) {
+          resolvedClassName = fqcn;
+        }
+      } else {
+        // Might be inner class like Foo.Bar where Foo is imported
+        const segments = resolvedClassName.split(".");
+        const firstSegment = segments[0];
+        if (firstSegment && /^[A-Z]/.test(firstSegment)) {
+          const outerFqcn = parsed.imports.get(firstSegment);
+          if (outerFqcn) {
+            resolvedClassName = outerFqcn + "$" + segments.slice(1).join("$");
+          }
+        }
+      }
+
+      let officialName = resolvedClassName;
 
       if (requestedMapping !== "official") {
         try {
           const mapped = await this.mappingService.findMapping({
             version,
             kind: "class",
-            name: target.className,
+            name: resolvedClassName,
             sourceMapping: requestedMapping,
             targetMapping: "official",
             sourcePriority: input.sourcePriority
@@ -3123,10 +3179,10 @@ export class SourceService {
           if (mapped.resolved && mapped.resolvedSymbol) {
             officialName = mapped.resolvedSymbol.name;
           } else {
-            warnings.push(`Could not map class "${target.className}" from ${requestedMapping} to official.`);
+            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official.`);
           }
         } catch {
-          warnings.push(`Mapping lookup failed for class "${target.className}".`);
+          warnings.push(`Mapping lookup failed for class "${resolvedClassName}".`);
         }
       }
 
@@ -3137,18 +3193,44 @@ export class SourceService {
           access: "all"
         });
         warnings.push(...sig.warnings);
+
+        // Bug 2 fix: remap signature members to requested mapping
+        let constructors = sig.constructors;
+        let methods = sig.methods;
+        let fields = sig.fields;
+
+        if (requestedMapping !== "official") {
+          try {
+            [constructors, methods, fields] = await Promise.all([
+              this.remapSignatureMembers(sig.constructors, "method", version, requestedMapping, input.sourcePriority, warnings),
+              this.remapSignatureMembers(sig.methods, "method", version, requestedMapping, input.sourcePriority, warnings),
+              this.remapSignatureMembers(sig.fields, "field", version, requestedMapping, input.sourcePriority, warnings)
+            ]);
+          } catch {
+            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names.`);
+            mappingApplied = "official";
+          }
+        }
+
         targetMembers.set(target.className, {
           className: target.className,
-          constructors: sig.constructors,
-          methods: sig.methods,
-          fields: sig.fields
+          constructors,
+          methods,
+          fields
         });
       } catch {
         warnings.push(`Could not load signature for class "${officialName}".`);
       }
     }
 
-    return validateParsedMixin(parsed, targetMembers, warnings);
+    const provenance: MixinValidationProvenance = {
+      version,
+      jarPath,
+      requestedMapping,
+      mappingApplied
+    };
+
+    return validateParsedMixin(parsed, targetMembers, warnings, provenance);
   }
 
   async validateAccessWidener(input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {

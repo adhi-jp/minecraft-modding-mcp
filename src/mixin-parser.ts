@@ -31,6 +31,7 @@ export type ParsedMixin = {
   className: string;
   targets: ParsedMixinTarget[];
   priority?: number;
+  imports: Map<string, string>;
   injections: ParsedInjection[];
   shadows: ParsedShadow[];
   accessors: ParsedAccessor[];
@@ -41,7 +42,10 @@ export type ParsedMixin = {
 /*  Regex patterns                                                     */
 /* ------------------------------------------------------------------ */
 
-const CLASS_DECL_RE = /(?:public\s+)?(?:abstract\s+)?class\s+(\w+)/;
+const CLASS_DECL_RE = /(?:public\s+)?(?:abstract\s+)?(?:class|interface)\s+(\w+)/;
+
+// import statements for FQCN resolution
+const IMPORT_RE = /^\s*import\s+([\w.]+)\s*;/;
 
 // @Mixin(Foo.class)  or  @Mixin({Foo.class, Bar.class})  or  @Mixin(value = Foo.class)
 // Also handles  @Mixin(value = {Foo.class, Bar.class}, priority = 900)
@@ -57,9 +61,9 @@ const METHOD_ATTR_RE = /method\s*=\s*"([^"]+)"/;
 // @Shadow field / method
 const SHADOW_ANNOTATION_RE = /^\s*@Shadow\b/;
 const FIELD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*[;=]/;
+  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*[;=]/;
 const METHOD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:static\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
+  /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
 
 // @Accessor / @Invoker
 const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*"([^"]+)"\s*\))?\s*$/;
@@ -119,8 +123,22 @@ export function parseMixinSource(source: string): ParsedMixin {
   const injections: ParsedInjection[] = [];
   const shadows: ParsedShadow[] = [];
   const accessors: ParsedAccessor[] = [];
+  const imports = new Map<string, string>();
   let className = "";
   let priority: number | undefined;
+
+  // --- Pass 0: extract imports ---
+  for (const line of lines) {
+    const importMatch = IMPORT_RE.exec(line);
+    if (importMatch) {
+      const fqcn = importMatch[1];
+      // Skip wildcard imports (e.g. import java.util.*)
+      if (!fqcn.endsWith("*")) {
+        const simpleName = fqcn.substring(fqcn.lastIndexOf(".") + 1);
+        imports.set(simpleName, fqcn);
+      }
+    }
+  }
 
   // --- Pass 1: find @Mixin annotation and class name ---
   let i = 0;
@@ -239,6 +257,7 @@ export function parseMixinSource(source: string): ParsedMixin {
     className,
     targets,
     priority,
+    imports,
     injections,
     shadows,
     accessors,

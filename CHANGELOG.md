@@ -60,6 +60,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Version approximation detection now avoids prefix false positives (for example, `1.21.1` vs `1.21.10`) and reports mismatched source-jar versions more reliably.
 - Post-filtered empty first pages now return `totalApprox=0` instead of stale approximated totals.
 
+### fix(mixin): resolve false-positive bugs and add sourcePath/provenance to validate-mixin
+
+#### Added
+- `validate-mixin` now accepts `sourcePath` as an alternative to inline `source`, plus optional `projectPath`/`scope`/`preferProjectVersion`, and returns `provenance` (`version`, `jarPath`, `requestedMapping`, `mappingApplied`).
+
+#### Fixed
+- `validate-mixin` now normalizes `sourcePath` with host/WSL path conversion before reading source files.
+- `validate-mixin` now resolves simple `@Mixin` class names via imports so validation targets the correct FQCN.
+- `validate-mixin` now remaps bytecode signature members to the requested mapping before member validation.
+- `validate-mixin` parsing now supports `default`/`synchronized` modifiers and `interface` declarations in accessor workflows.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

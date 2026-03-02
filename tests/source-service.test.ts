@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -4711,4 +4711,73 @@ test("B5: searchClassSource returns totalApprox=0 when no hits survive post-filt
   });
   assert.equal(result.hits.length, 0);
   assert.equal(result.totalApprox, 0);
+});
+
+test("SourceService validateMixin normalizes WSL UNC sourcePath inputs", async () => {
+  if (process.platform !== "linux") {
+    return;
+  }
+
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-sourcepath-"));
+  const sourcePath = join(root, "MainMixin.java");
+  const jarPath = join(root, "client.jar");
+  await writeFile(
+    sourcePath,
+    [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class MainMixin {}"
+    ].join("\n"),
+    "utf8"
+  );
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const previousDistro = process.env.WSL_DISTRO_NAME;
+  const previousInterop = process.env.WSL_INTEROP;
+  process.env.WSL_DISTRO_NAME = "UnitTestDistro";
+  process.env.WSL_INTEROP = "/tmp/unit-test-interop";
+  try {
+    const uncSourcePath = `\\\\wsl$\\UnitTestDistro${sourcePath.replace(/\//g, "\\")}`;
+    const result = await service.validateMixin({
+      sourcePath: uncSourcePath,
+      version: "1.21",
+      mapping: "official"
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.provenance?.version, "1.21");
+    assert.equal(result.provenance?.jarPath, jarPath);
+  } finally {
+    if (previousDistro == null) {
+      delete process.env.WSL_DISTRO_NAME;
+    } else {
+      process.env.WSL_DISTRO_NAME = previousDistro;
+    }
+    if (previousInterop == null) {
+      delete process.env.WSL_INTEROP;
+    } else {
+      process.env.WSL_INTEROP = previousInterop;
+    }
+  }
 });

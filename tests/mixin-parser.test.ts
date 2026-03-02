@@ -218,3 +218,112 @@ public abstract class MultiMixin {
   assert.equal(result.targets.length, 2);
   assert.equal(result.priority, 1100);
 });
+
+/* ------------------------------------------------------------------ */
+/*  Import parsing tests                                               */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource extracts single import", () => {
+  const source = `
+import net.minecraft.world.entity.item.ItemEntity;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.imports.size, 1);
+  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
+});
+
+test("parseMixinSource extracts multiple imports", () => {
+  const source = `
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import org.spongepowered.asm.mixin.Mixin;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.imports.size, 3);
+  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
+  assert.equal(result.imports.get("Player"), "net.minecraft.world.entity.player.Player");
+  assert.equal(result.imports.get("Mixin"), "org.spongepowered.asm.mixin.Mixin");
+});
+
+test("parseMixinSource ignores wildcard imports", () => {
+  const source = `
+import java.util.*;
+import net.minecraft.world.entity.item.ItemEntity;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.imports.size, 1);
+  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
+});
+
+test("parseMixinSource returns empty imports map when no imports", () => {
+  const source = `
+@Mixin(net.minecraft.world.entity.item.ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.imports.size, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  default/synchronized modifier tests                                */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Accessor with default method modifier", () => {
+  const source = `
+import net.minecraft.world.entity.player.Player;
+
+@Mixin(Player.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  default int getHealth() { throw new AssertionError(); }
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "getHealth");
+  assert.equal(result.accessors[0].targetName, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow with synchronized method", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  public synchronized void doWork() {}
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "method");
+  assert.equal(result.shadows[0].name, "doWork");
+});
+
+/* ------------------------------------------------------------------ */
+/*  interface class name capture test                                   */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource captures class name from interface declaration", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.className, "PlayerAccessor");
+});
