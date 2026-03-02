@@ -47,6 +47,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 #### Fixed
 - `find-class` fully-qualified lookups now avoid early-limit false negatives when many packages share the same simple class name.
 
+### fix(decompiler): pass Vineflower flags before positional args
+
+#### Fixed
+- Decompile fallback now passes Vineflower flags before positional `<input-jar> <output-dir>` arguments, fixing false `ERR_DECOMPILER_FAILED` errors on valid Minecraft client jars.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

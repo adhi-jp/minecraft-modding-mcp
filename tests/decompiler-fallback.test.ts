@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES, isAppError } from "../src/errors.ts";
@@ -86,4 +86,77 @@ test("decompileBinaryJar includes profilesAttempted in error details on full fai
       );
     }
   );
+});
+
+test("decompileBinaryJar passes Vineflower flags before input/output args", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "decompile-arg-order-"));
+  const cacheDir = join(root, "cache");
+  const binaryJarPath = join(root, "test.jar");
+  const vineflowerJarPath = join(root, "vineflower.jar");
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+  const argsLogPath = join(root, "java-args.log");
+
+  mkdirSync(cacheDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(binaryJarPath, Buffer.from([0xca, 0xfe]));
+  writeFileSync(vineflowerJarPath, Buffer.from([0x50, 0x4b]));
+
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+const { appendFileSync, mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const args = process.argv.slice(2);
+
+if (args[0] === "-version") {
+  process.exit(0);
+}
+
+appendFileSync(${JSON.stringify(argsLogPath)}, args.join("\\n") + "\\n--\\n");
+const jarIndex = args.indexOf("-jar");
+if (jarIndex < 0) {
+  process.exit(2);
+}
+
+const toolArgs = args.slice(jarIndex + 2);
+const outputDir = toolArgs.at(-1);
+if (!outputDir || outputDir.startsWith("-")) {
+  process.exit(0);
+}
+
+mkdirSync(outputDir, { recursive: true });
+writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  try {
+    const result = await decompileBinaryJar(binaryJarPath, cacheDir, {
+      vineflowerJarPath,
+      signature: "arg-order-test",
+      timeoutMs: 10_000
+    });
+
+    assert.equal(result.javaFiles.length, 1);
+
+    const firstInvocation = readFileSync(argsLogPath, "utf8")
+      .split("\n--\n")[0]
+      .trim()
+      .split("\n");
+    const vineflowerArgs = firstInvocation.slice(2);
+
+    assert.deepEqual(vineflowerArgs.slice(0, 3), ["-din=1", "-rbr=1", "-dgs=1"]);
+    assert.equal(vineflowerArgs[3], binaryJarPath);
+  } finally {
+    process.env.PATH = originalPath;
+  }
 });

@@ -135,7 +135,7 @@ async function runVineflower(
 ): Promise<void> {
   const result = await runJavaProcess({
     jarPath: vineflowerJarPath,
-    args: [binaryJarPath, outputDir, ...flags],
+    args: [...flags, binaryJarPath, outputDir],
     timeoutMs,
     normalizePathArgs: true
   });
