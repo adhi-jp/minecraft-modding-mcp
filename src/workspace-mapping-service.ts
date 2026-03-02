@@ -118,4 +118,29 @@ export class WorkspaceMappingService {
       warnings: []
     };
   }
+
+  async detectProjectMinecraftVersion(projectPath: string): Promise<string | undefined> {
+    const root = resolve(projectPath);
+    const propsPath = resolve(root, "gradle.properties");
+    let content: string;
+    try {
+      content = await readFile(propsPath, "utf8");
+    } catch {
+      return undefined;
+    }
+
+    // Search for common MC version property patterns
+    const patterns = [
+      /^minecraft_version\s*=\s*(.+)$/m,
+      /^mc_version\s*=\s*(.+)$/m,
+      /^minecraftVersion\s*=\s*(.+)$/m
+    ];
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match?.[1]?.trim()) {
+        return match[1].trim();
+      }
+    }
+    return undefined;
+  }
 }

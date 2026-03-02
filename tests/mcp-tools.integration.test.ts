@@ -5,6 +5,7 @@ import test from "node:test";
 const EXPECTED_TOOLS = [
   "list-versions",
   "resolve-artifact",
+  "find-class",
   "get-class-source",
   "get-class-members",
   "search-class-source",

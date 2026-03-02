@@ -1306,7 +1306,9 @@ export class MappingService {
           version,
           sourceMapping,
           targetMapping,
-          sourcePriority: priority
+          sourcePriority: priority,
+          nextAction: "Try mapping=official which is always available.",
+          suggestedCall: { tool: "resolve-artifact", params: { mapping: "official" } }
         }
       });
     }

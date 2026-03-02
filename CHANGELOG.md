@@ -36,6 +36,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 #### Fixed
 - Server startup no longer depends on the current working directory for default cache paths; when `MCP_CACHE_DIR` is unset, cache/SQLite now default to `~/.cache/minecraft-modding-mcp`.
 
+### feat(mcp): add source mode, find-class tool, scope/version overrides, and structured error recovery
+
+#### Added
+- New `find-class` tool to resolve simple or fully-qualified class names to concrete source paths inside an indexed artifact.
+- `resolve-artifact` and `get-class-source` now accept optional `scope` (`vanilla`/`merged`/`loader`) and `preferProjectVersion` for workspace-driven version resolution.
+- `get-class-source` now accepts `mode` (`full`/`snippet`/`metadata`), `maxChars`, and `outputFile`.
+- `get-class-source` and `resolve-artifact` errors now include structured `suggestedCall` recovery details.
+
+#### Fixed
+- `find-class` fully-qualified lookups now avoid early-limit false negatives when many packages share the same simple class name.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

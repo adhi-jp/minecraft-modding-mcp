@@ -21,7 +21,7 @@ import { analyzeModJar } from "./mod-analyzer.js";
 import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
-import type { MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
+import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
@@ -39,6 +39,11 @@ type ProblemFieldError = {
   code?: string;
 };
 
+type SuggestedCall = {
+  tool: string;
+  params: Record<string, unknown>;
+};
+
 type ProblemDetails = {
   type: string;
   title: string;
@@ -48,6 +53,7 @@ type ProblemDetails = {
   instance: string;
   fieldErrors?: ProblemFieldError[];
   hints?: string[];
+  suggestedCall?: SuggestedCall;
 };
 
 type ToolMeta = {
@@ -66,6 +72,8 @@ const SEARCH_SYMBOL_KINDS = ["class", "interface", "enum", "record", "method", "
 const MEMBER_ACCESS = ["public", "all"] as const;
 const WORKSPACE_SYMBOL_KINDS = ["class", "field", "method"] as const;
 const CLASS_NAME_MODES = ["fqcn", "auto"] as const;
+const SOURCE_MODES = ["metadata", "snippet", "full"] as const;
+const ARTIFACT_SCOPES = ["vanilla", "merged", "loader"] as const;
 const DECODE_COMPRESSIONS = ["none", "gzip", "auto"] as const;
 const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
 
@@ -82,6 +90,8 @@ const searchSymbolKindSchema = z.enum(SEARCH_SYMBOL_KINDS);
 const memberAccessSchema = z.enum(MEMBER_ACCESS);
 const workspaceSymbolKindSchema = z.enum(WORKSPACE_SYMBOL_KINDS);
 const classNameModeSchema = z.enum(CLASS_NAME_MODES);
+const sourceModeSchema = z.enum(SOURCE_MODES);
+const artifactScopeSchema = z.enum(ARTIFACT_SCOPES);
 const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
 const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
 
@@ -136,12 +146,15 @@ const resolveArtifactShape = {
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
-  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution")
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue")
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
 
 const getClassSourceShape = {
   className: nonEmptyString,
+  mode: sourceModeSchema.optional().describe("metadata (default) = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
   artifactId: optionalNonEmptyString,
   targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
   targetValue: optionalNonEmptyString,
@@ -149,9 +162,13 @@ const getClassSourceShape = {
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue"),
   startLine: optionalPositiveInt,
   endLine: optionalPositiveInt,
-  maxLines: optionalPositiveInt
+  maxLines: optionalPositiveInt,
+  maxChars: optionalPositiveInt.describe("Hard character limit on sourceText; truncates if exceeded"),
+  outputFile: optionalNonEmptyString.describe("Write source to this file path and return metadata-only response")
 };
 const getClassSourceSchema = z
   .object(getClassSourceShape)
@@ -776,6 +793,21 @@ function toHints(details: unknown): string[] | undefined {
   return hints;
 }
 
+function toSuggestedCall(details: unknown): SuggestedCall | undefined {
+  if (typeof details !== "object" || details == null) {
+    return undefined;
+  }
+  const maybe = (details as Record<string, unknown>).suggestedCall;
+  if (typeof maybe !== "object" || maybe == null) {
+    return undefined;
+  }
+  const call = maybe as Record<string, unknown>;
+  if (typeof call.tool !== "string" || typeof call.params !== "object" || call.params == null) {
+    return undefined;
+  }
+  return { tool: call.tool, params: call.params as Record<string, unknown> };
+}
+
 function statusForErrorCode(code: string): number {
   if (
     code === ERROR_CODES.INVALID_INPUT ||
@@ -892,6 +924,7 @@ function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDeta
   }
 
   if (isAppError(caughtError)) {
+    const suggestedCall = toSuggestedCall(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -900,7 +933,8 @@ function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDeta
       code: caughtError.code,
       instance: requestId,
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
-      hints: toHints(caughtError.details)
+      hints: toHints(caughtError.details),
+      ...(suggestedCall ? { suggestedCall } : {})
     };
   }
 
@@ -1029,27 +1063,54 @@ server.tool("resolve-artifact",
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
-      projectPath: input.projectPath
+      projectPath: input.projectPath,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>
   )
 );
 
+const findClassShape = {
+  className: nonEmptyString.describe("Simple name (e.g. Blocks) or fully-qualified name (e.g. net.minecraft.world.level.block.Blocks)"),
+  artifactId: nonEmptyString,
+  limit: optionalPositiveInt.describe("default 20, max 200")
+};
+const findClassSchema = z.object(findClassShape);
+
+server.tool("find-class",
+  "Resolve a simple or qualified class name to fully-qualified class names within an artifact. Use this before get-class-source when you only have a simple name.",
+  findClassShape,
+  { readOnlyHint: true },
+  async (args) => runTool("find-class", args, findClassSchema, async (input) =>
+    sourceService.findClass({
+      className: input.className,
+      artifactId: input.artifactId,
+      limit: input.limit
+    }) as unknown as Record<string, unknown>
+  )
+);
+
 server.tool("get-class-source",
-  "Get Java source for a class by artifactId or by resolving target (version/jar/coordinate), with optional line-range filtering.",
+  "Get Java source for a class by artifactId or by resolving target (version/jar/coordinate). Default mode=metadata returns symbol outline only; use mode=snippet for bounded excerpts or mode=full for entire source.",
   getClassSourceShape,
   { readOnlyHint: true },
   async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) =>
     sourceService.getClassSource({
       className: input.className,
+      mode: input.mode,
       artifactId: input.artifactId,
       target: buildTarget(input.targetKind, input.targetValue),
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion,
       startLine: input.startLine,
       endLine: input.endLine,
-      maxLines: input.maxLines
+      maxLines: input.maxLines,
+      maxChars: input.maxChars,
+      outputFile: input.outputFile
     }) as Promise<Record<string, unknown>>
   )
 );

@@ -13,7 +13,7 @@
 
 It lets you explore decompiled Minecraft source, convert symbol names across four naming namespaces (`official`, `mojang`, `intermediary`, `yarn`), analyze and decompile Fabric/Forge/NeoForge mod JARs, validate Mixin and Access Widener files, read and patch NBT data, and query generated registry snapshots — all through a structured tool and resource interface designed for Claude Desktop, VS Code, and other MCP-capable clients.
 
-**28 tools** | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+**29 tools** | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 
@@ -176,8 +176,9 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
-| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
-| `get-class-source` | Get class source by `artifactId` or resolve target on demand, with line filtering | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `startLine?`, `endLine?`, `maxLines?` | `sourceText`, `returnedRange`, `truncated`, `artifactId`, mapping/provenance metadata |
+| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?`, `scope?`, `preferProjectVersion?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
+| `find-class` | Resolve simple or fully-qualified class names inside an artifact | `className`, `artifactId`, `limit?` | `matches[]`, `total`, `warnings[]` |
+| `get-class-source` | Get class source by `artifactId` or resolve target on demand (`mode=metadata` by default) | `className`, `mode?`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
 | `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
 | `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
@@ -251,11 +252,14 @@ Tools for querying generated registry data and inspecting server runtime state.
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
 `resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
+`resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `targetValue` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `targetKind=version`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
+`find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.
+`get-class-source` mode defaults to `metadata` (symbol outline only); `mode=snippet` auto-sets `maxLines=200` when no line range/max is provided; `mode=full` returns the entire source. `outputFile` writes the selected text and returns the file path in `outputFile`.
 `resolve-artifact` with `targetKind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.

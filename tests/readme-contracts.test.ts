@@ -10,11 +10,13 @@ test("README documents analyze-mod-jar inputs that match implementation", async 
   assert.doesNotMatch(readme, /includeRawMetadata\?/);
 });
 
-test("README documents workspace-assisted source resolution and symbol name modes", async () => {
+test("README documents source resolution options and source-mode behavior", async () => {
   const readme = await readFile("README.md", "utf8");
 
-  assert.match(readme, /\| `resolve-artifact` \|.*`projectPath\?`/);
-  assert.match(readme, /\| `get-class-source` \|.*`projectPath\?`/);
+  assert.match(readme, /\| `resolve-artifact` \|.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
+  assert.match(readme, /\| `find-class` \|/);
+  assert.match(readme, /\| `get-class-source` \|.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
+  assert.match(readme, /`get-class-source` mode defaults to `metadata`/);
   assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
   assert.match(readme, /nameMode=auto/);
 });

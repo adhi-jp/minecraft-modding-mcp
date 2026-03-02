@@ -3,6 +3,7 @@ export type SourceMapping = "official" | "mojang" | "intermediary" | "yarn";
 export type MappingSourcePriority = "loom-first" | "maven-first";
 
 export type ArtifactTargetKind = "version" | "jar" | "coordinate";
+export type ArtifactScope = "vanilla" | "merged" | "loader";
 
 export interface SourceTargetInput {
   kind: ArtifactTargetKind;

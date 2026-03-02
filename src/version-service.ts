@@ -118,7 +118,11 @@ function ensureVersionDetail(value: unknown, version: string): VersionDetails {
     throw createError({
       code: ERROR_CODES.VERSION_NOT_FOUND,
       message: `Version metadata for "${version}" is invalid.`,
-      details: { version }
+      details: {
+        version,
+        nextAction: "Use list-versions to see available Minecraft versions.",
+        suggestedCall: { tool: "list-versions", params: {} }
+      }
     });
   }
   return value as VersionDetails;
@@ -222,7 +226,11 @@ export class VersionService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: { version: normalizedVersion }
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -253,7 +261,11 @@ export class VersionService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: { version: normalizedVersion }
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -263,7 +275,11 @@ export class VersionService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" does not expose a server download URL.`,
-        details: { version: normalizedVersion }
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -361,7 +377,11 @@ export class VersionService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: { version: normalizedVersion }
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -371,7 +391,11 @@ export class VersionService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" does not expose a client download URL.`,
-        details: { version: normalizedVersion }
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 

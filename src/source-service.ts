@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
@@ -59,6 +60,7 @@ import {
 import type {
   ArtifactProvenance,
   ArtifactRow,
+  ArtifactScope,
   Config,
   FileRow,
   MappingSourcePriority,
@@ -102,6 +104,8 @@ export type ResolveArtifactInput = {
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
 };
 
 export type ResolveArtifactOutput = {
@@ -244,21 +248,29 @@ export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
   workspaceDetection: WorkspaceCompileMappingOutput;
 };
 
+export type SourceMode = "metadata" | "snippet" | "full";
+
 export type GetClassSourceInput = {
   artifactId?: string;
   target?: SourceTargetInput;
   className: string;
+  mode?: SourceMode;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
   startLine?: number;
   endLine?: number;
   maxLines?: number;
+  maxChars?: number;
+  outputFile?: string;
 };
 
 export type GetClassSourceOutput = {
   className: string;
+  mode: SourceMode;
   sourceText: string;
   totalLines: number;
   returnedRange: {
@@ -266,12 +278,33 @@ export type GetClassSourceOutput = {
     end: number;
   };
   truncated: boolean;
+  charsTruncated?: boolean;
   origin: ResolvedSourceArtifact["origin"];
   artifactId: string;
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
   provenance: ArtifactProvenance;
   qualityFlags: string[];
+  outputFile?: string;
+  warnings: string[];
+};
+
+export type FindClassInput = {
+  className: string;
+  artifactId: string;
+  limit?: number;
+};
+
+export type FindClassMatch = {
+  qualifiedName: string;
+  filePath: string;
+  line: number;
+  symbolKind: string;
+};
+
+export type FindClassOutput = {
+  matches: FindClassMatch[];
+  total: number;
   warnings: string[];
 };
 
@@ -652,7 +685,11 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   throw createError({
     code: ERROR_CODES.MAPPING_UNAVAILABLE,
     message: `Unsupported mapping "${mapping}".`,
-    details: { mapping }
+    details: {
+      mapping,
+      nextAction: "Try mapping=official which is always available.",
+      suggestedCall: { tool: "resolve-artifact", params: { mapping: "official" } }
+    }
   });
 }
 
@@ -1246,9 +1283,19 @@ export class SourceService {
 
   async resolveArtifact(input: ResolveArtifactInput): Promise<ResolveArtifactOutput> {
     const kind = input.target.kind;
-    const value = input.target.value?.trim();
+    let value = input.target.value?.trim();
     const mapping = normalizeMapping(input.mapping);
+    const scope = input.scope;
     const warnings: string[] = [];
+
+    // P5: preferProjectVersion - detect MC version from gradle.properties
+    if (input.preferProjectVersion && input.projectPath && kind === "version") {
+      const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+      if (detected) {
+        warnings.push(`Overriding version "${value}" with project version "${detected}" from gradle.properties.`);
+        value = detected;
+      }
+    }
     if (!value) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -1306,7 +1353,7 @@ export class SourceService {
         effectiveMapping = "official";
       }
 
-      if (kind === "version" && resolvedVersion && effectiveMapping === "mojang") {
+      if (kind === "version" && resolvedVersion && effectiveMapping === "mojang" && scope !== "vanilla") {
         versionSourceDiscovery = await this.discoverVersionSourceJar({
           version: resolvedVersion,
           projectPath: input.projectPath
@@ -1361,7 +1408,8 @@ export class SourceService {
               searchedPaths: versionSourceDiscovery?.searchedPaths ?? [],
               candidateArtifacts:
                 versionSourceDiscovery?.candidateArtifacts ?? resolved.adjacentSourceCandidates ?? [],
-              recommendedCommand: this.buildVersionSourceRecoveryCommand(input.projectPath)
+              recommendedCommand: this.buildVersionSourceRecoveryCommand(input.projectPath),
+              suggestedCall: { tool: "resolve-artifact", params: { targetKind: kind, targetValue: value, mapping: "official" } }
             }
           });
         }
@@ -1377,7 +1425,8 @@ export class SourceService {
               mapping: effectiveMapping,
               target: { kind, value },
               nextAction:
-                "Use targetKind=version or a versioned Maven coordinate so mapping artifacts can be resolved."
+                "Use targetKind=version or a versioned Maven coordinate so mapping artifacts can be resolved.",
+              suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value } }
             }
           });
         }
@@ -2038,7 +2087,11 @@ export class SourceService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: "No Minecraft versions were returned by manifest.",
-        details: { includeSnapshots }
+        details: {
+          includeSnapshots,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -2052,14 +2105,22 @@ export class SourceService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `fromVersion "${requestedFrom}" was not found in manifest.`,
-        details: { fromVersion: requestedFrom }
+        details: {
+          fromVersion: requestedFrom,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
     if (toIndex < 0) {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `toVersion "${requestedTo}" was not found in manifest.`,
-        details: { toVersion: requestedTo }
+        details: {
+          toVersion: requestedTo,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
     if (fromIndex > toIndex) {
@@ -2235,7 +2296,11 @@ export class SourceService {
     if (manifestOrder.length === 0) {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
-        message: "No Minecraft versions were returned by manifest."
+        message: "No Minecraft versions were returned by manifest.",
+        details: {
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
 
@@ -2247,14 +2312,22 @@ export class SourceService {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `fromVersion "${fromVersion}" was not found in manifest.`,
-        details: { fromVersion }
+        details: {
+          fromVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
     if (toIndex < 0) {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `toVersion "${toVersion}" was not found in manifest.`,
-        details: { toVersion }
+        details: {
+          toVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          suggestedCall: { tool: "list-versions", params: {} }
+        }
       });
     }
     if (fromIndex > toIndex) {
@@ -2478,6 +2551,79 @@ export class SourceService {
     };
   }
 
+  findClass(input: FindClassInput): FindClassOutput {
+    const className = input.className.trim();
+    if (!className) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "className must be non-empty."
+      });
+    }
+    const artifactId = input.artifactId.trim();
+    if (!artifactId) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "artifactId must be non-empty."
+      });
+    }
+    // Verify artifact exists
+    this.getArtifact(artifactId);
+
+    const limit = Math.max(1, Math.min(input.limit ?? 20, 200));
+    const warnings: string[] = [];
+    const isQualified = className.includes(".");
+
+    if (isQualified) {
+      // Qualified name: fetch a broad candidate set first, then filter to exact class path/FQCN.
+      // Limiting before filtering can miss the target when many packages share the same simple name.
+      const classPath = className.replace(/\./g, "/");
+      const result = this.symbolsRepo.findScopedSymbols({
+        artifactId,
+        query: className.split(".").at(-1) ?? className,
+        match: "exact",
+        limit: 5000
+      });
+      const matches = result.items
+        .filter((row) => {
+          const isTypeSymbol = row.symbolKind === "class" || row.symbolKind === "interface" ||
+            row.symbolKind === "enum" || row.symbolKind === "record";
+          if (!isTypeSymbol) return false;
+          const rowQualified = row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+          return rowQualified === className || row.filePath === `${classPath}.java`;
+        })
+        .map((row) => ({
+          qualifiedName: row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", "."),
+          filePath: row.filePath,
+          line: row.line,
+          symbolKind: row.symbolKind
+        }))
+        .slice(0, limit);
+      return { matches, total: matches.length, warnings };
+    }
+
+    // Simple name: search for exact symbol name match among type symbols
+    const result = this.symbolsRepo.findScopedSymbols({
+      artifactId,
+      query: className,
+      match: "exact",
+      limit: limit * 5 // over-fetch to filter by kind
+    });
+    const matches: FindClassMatch[] = [];
+    for (const row of result.items) {
+      if (matches.length >= limit) break;
+      const isTypeSymbol = row.symbolKind === "class" || row.symbolKind === "interface" ||
+        row.symbolKind === "enum" || row.symbolKind === "record";
+      if (!isTypeSymbol) continue;
+      matches.push({
+        qualifiedName: row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", "."),
+        filePath: row.filePath,
+        line: row.line,
+        symbolKind: row.symbolKind
+      });
+    }
+    return { matches, total: matches.length, warnings };
+  }
+
   async getClassSource(input: GetClassSourceInput): Promise<GetClassSourceOutput> {
     const className = input.className.trim();
     if (!className) {
@@ -2487,9 +2633,19 @@ export class SourceService {
       });
     }
 
+    const mode: SourceMode = input.mode ?? "metadata";
+
     const startLine = normalizeStrictPositiveInt(input.startLine, "startLine");
     const endLine = normalizeStrictPositiveInt(input.endLine, "endLine");
-    const maxLines = normalizeStrictPositiveInt(input.maxLines, "maxLines");
+    let maxLines = normalizeStrictPositiveInt(input.maxLines, "maxLines");
+    const maxChars = normalizeStrictPositiveInt(input.maxChars, "maxChars");
+    const outputFile = normalizeOptionalString(input.outputFile);
+
+    // In snippet mode, default maxLines to 200 when no range or maxLines is specified
+    if (mode === "snippet" && startLine == null && endLine == null && maxLines == null) {
+      maxLines = 200;
+    }
+
     if (startLine != null && endLine != null && startLine > endLine) {
       throw createError({
         code: ERROR_CODES.INVALID_LINE_RANGE,
@@ -2533,7 +2689,9 @@ export class SourceService {
         mapping: input.mapping,
         sourcePriority: input.sourcePriority,
         allowDecompile: input.allowDecompile,
-        projectPath: input.projectPath
+        projectPath: input.projectPath,
+        scope: input.scope,
+        preferProjectVersion: input.preferProjectVersion
       });
       artifactId = resolved.artifactId;
       origin = resolved.origin;
@@ -2553,45 +2711,89 @@ export class SourceService {
 
     const filePath = this.resolveClassFilePath(artifactId, className);
     if (!filePath) {
-      throw createError({
-        code: ERROR_CODES.CLASS_NOT_FOUND,
-        message: `Source for class "${className}" was not found.`,
-        details: {
-          artifactId,
-          className
-        }
-      });
-    }
-
-    const row = this.filesRepo.getFileContent(artifactId, filePath);
-    if (!row) {
+      const simpleName = className.split(/[.$]/).at(-1) ?? className;
       throw createError({
         code: ERROR_CODES.CLASS_NOT_FOUND,
         message: `Source for class "${className}" was not found.`,
         details: {
           artifactId,
           className,
-          filePath
+          nextAction: `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`,
+          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
+        }
+      });
+    }
+
+    const row = this.filesRepo.getFileContent(artifactId, filePath);
+    if (!row) {
+      const simpleName = className.split(/[.$]/).at(-1) ?? className;
+      throw createError({
+        code: ERROR_CODES.CLASS_NOT_FOUND,
+        message: `Source for class "${className}" was not found.`,
+        details: {
+          artifactId,
+          className,
+          filePath,
+          nextAction: `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`,
+          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
         }
       });
     }
 
     const lines = row.content.split(/\r?\n/);
     const totalLines = lines.length;
-    const requestedStart = startLine ?? 1;
-    const requestedEnd = endLine ?? totalLines;
-    const normalizedStart = Math.min(Math.max(1, requestedStart), Math.max(totalLines, 1));
-    const normalizedEnd = Math.min(Math.max(normalizedStart, requestedEnd), Math.max(totalLines, 1));
-    let selectedLines = lines.slice(normalizedStart - 1, normalizedEnd);
-    const clippedByRange = normalizedStart !== requestedStart || normalizedEnd !== requestedEnd;
 
-    let clippedByMax = false;
-    if (maxLines != null && selectedLines.length > maxLines) {
-      selectedLines = selectedLines.slice(0, maxLines);
-      clippedByMax = true;
+    let sourceText: string;
+    let returnedStart: number;
+    let returnedEnd: number;
+    let truncated = false;
+    let charsTruncated = false;
+
+    if (mode === "metadata") {
+      const metadataText = this.extractClassMetadata(filePath, row.content);
+      sourceText = metadataText;
+      returnedStart = 1;
+      returnedEnd = totalLines;
+      truncated = false;
+    } else {
+      // snippet and full modes use the existing line-range logic
+      const requestedStart = startLine ?? 1;
+      const requestedEnd = endLine ?? totalLines;
+      const normalizedStart = Math.min(Math.max(1, requestedStart), Math.max(totalLines, 1));
+      const normalizedEnd = Math.min(Math.max(normalizedStart, requestedEnd), Math.max(totalLines, 1));
+      let selectedLines = lines.slice(normalizedStart - 1, normalizedEnd);
+      const clippedByRange = normalizedStart !== requestedStart || normalizedEnd !== requestedEnd;
+
+      let clippedByMax = false;
+      if (maxLines != null && selectedLines.length > maxLines) {
+        selectedLines = selectedLines.slice(0, maxLines);
+        clippedByMax = true;
+      }
+
+      sourceText = selectedLines.join("\n");
+      returnedStart = normalizedStart;
+      returnedEnd = normalizedStart + Math.max(0, selectedLines.length - 1);
+      truncated = clippedByRange || clippedByMax;
     }
 
-    const returnedEnd = normalizedStart + Math.max(0, selectedLines.length - 1);
+    // Apply maxChars truncation
+    if (maxChars != null && sourceText.length > maxChars) {
+      sourceText = sourceText.slice(0, maxChars);
+      charsTruncated = true;
+      truncated = true;
+    }
+
+    // Write to file if outputFile is specified
+    let resolvedOutputFile: string | undefined;
+    if (outputFile) {
+      const outputPath = isAbsolute(outputFile)
+        ? outputFile
+        : resolvePath(outputFile);
+      await writeFile(outputPath, sourceText, "utf8");
+      resolvedOutputFile = outputPath;
+      sourceText = `[Written to ${outputPath}]`;
+    }
+
     const normalizedProvenance =
       provenance ??
       this.buildFallbackProvenance({
@@ -2603,19 +2805,22 @@ export class SourceService {
 
     return {
       className,
-      sourceText: selectedLines.join("\n"),
+      mode,
+      sourceText,
       totalLines,
       returnedRange: {
-        start: normalizedStart,
+        start: returnedStart,
         end: returnedEnd
       },
-      truncated: clippedByRange || clippedByMax,
+      truncated,
+      ...(charsTruncated ? { charsTruncated } : {}),
       origin,
       artifactId,
       requestedMapping,
       mappingApplied,
       provenance: normalizedProvenance,
       qualityFlags,
+      ...(resolvedOutputFile ? { outputFile: resolvedOutputFile } : {}),
       warnings
     };
   }
@@ -2702,7 +2907,8 @@ export class SourceService {
         message: `Non-official mapping "${requestedMapping}" requires a version, but none was resolved.`,
         details: {
           mapping: requestedMapping,
-          nextAction: "Resolve with targetKind=version or specify a versioned coordinate."
+          nextAction: "Resolve with targetKind=version or specify a versioned coordinate.",
+          suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: "latest" } }
         }
       });
     }
@@ -3525,6 +3731,37 @@ export class SourceService {
     return base;
   }
 
+  private extractClassMetadata(filePath: string, content: string): string {
+    const lines = content.split(/\r?\n/);
+    const symbols = extractSymbolsFromSource(filePath, content);
+    const outputParts: string[] = [];
+
+    // Include package + import header (lines before first symbol declaration)
+    const firstSymbolLine = symbols.length > 0 ? symbols[0]!.line : lines.length + 1;
+    for (let i = 0; i < Math.min(firstSymbolLine - 1, lines.length); i++) {
+      const line = lines[i]!;
+      const trimmed = line.trim();
+      if (trimmed.startsWith("package ") || trimmed.startsWith("import ") || trimmed === "") {
+        outputParts.push(line);
+      }
+    }
+
+    // Add each symbol's declaration line
+    for (const symbol of symbols) {
+      const lineIndex = symbol.line - 1;
+      if (lineIndex >= 0 && lineIndex < lines.length) {
+        const prefix = symbol.symbolKind === "class" || symbol.symbolKind === "interface" ||
+          symbol.symbolKind === "enum" || symbol.symbolKind === "record"
+          ? `\n// [${symbol.symbolKind}] line ${symbol.line}`
+          : `// [${symbol.symbolKind}] line ${symbol.line}`;
+        outputParts.push(prefix);
+        outputParts.push(lines[lineIndex]!);
+      }
+    }
+
+    return outputParts.join("\n");
+  }
+
   private resolveClassFilePath(artifactId: string, className: string): string | undefined {
     const normalizedClassName = className.trim();
     const classPath = classNameToClassPath(normalizedClassName);
@@ -4115,7 +4352,11 @@ export class SourceService {
       throw createError({
         code: ERROR_CODES.SOURCE_NOT_FOUND,
         message: "No source artifact available.",
-        details: { artifactId: resolved.artifactId }
+        details: {
+          artifactId: resolved.artifactId,
+          nextAction: "Use list-artifact-files to inspect the artifact's contents.",
+          suggestedCall: { tool: "list-artifact-files", params: { artifactId: resolved.artifactId } }
+        }
       });
     }
 
@@ -4152,7 +4393,11 @@ export class SourceService {
       throw createError({
         code: ERROR_CODES.SOURCE_NOT_FOUND,
         message: "Artifact not found. Resolve context first.",
-        details: { artifactId }
+        details: {
+          artifactId,
+          nextAction: "Use resolve-artifact to resolve a source artifact first.",
+          suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: "latest" } }
+        }
       });
     }
 

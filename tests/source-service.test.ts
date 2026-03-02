@@ -213,6 +213,7 @@ test("SourceService resolves/searches/reads class source through artifactId flow
     artifactId: resolved.artifactId,
     className: "net.minecraft.server.Main"
   });
+  assert.equal(classSource.mode, "metadata");
   assert.equal(classSource.mappingApplied, "official");
   assert.match(classSource.sourceText, /tickServer/);
   assert.equal(classSource.provenance.target.kind, "jar");
@@ -1068,6 +1069,7 @@ test("SourceService returns class source with line range filtering", async () =>
   const source = await service.getClassSource({
     artifactId: resolved.artifactId,
     className: "net.minecraft.server.Main",
+    mode: "full",
     startLine: 3,
     endLine: 7,
     maxLines: 3
@@ -1081,6 +1083,53 @@ test("SourceService returns class source with line range filtering", async () =>
   assert.match(source.sourceText, /void tickServer\(\)/);
   assert.match(source.sourceText, /int b = 2/);
   assert.doesNotMatch(source.sourceText, /int c = a \+ b/);
+});
+
+test("SourceService findClass resolves qualified names even with many same-name symbols", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-find-class-qualified-"));
+  const binaryJarPath = join(root, "many-main.jar");
+  const sourcesJarPath = join(root, "many-main-sources.jar");
+
+  const binaryEntries: Record<string, Buffer> = {};
+  const sourceEntries: Record<string, string> = {};
+
+  for (let i = 0; i < 30; i++) {
+    const packageName = `a${String(i).padStart(2, "0")}`;
+    const basePath = `${packageName}/Main`;
+    binaryEntries[`${basePath}.class`] = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
+    sourceEntries[`${basePath}.java`] = [
+      `package ${packageName};`,
+      "public class Main {}"
+    ].join("\n");
+  }
+
+  binaryEntries["z/desired/Main.class"] = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
+  sourceEntries["z/desired/Main.java"] = [
+    "package z.desired;",
+    "public class Main {",
+    "  void marker() {}",
+    "}"
+  ].join("\n");
+
+  await createJar(binaryJarPath, binaryEntries);
+  await createJar(sourcesJarPath, sourceEntries);
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  const found = service.findClass({
+    className: "z.desired.Main",
+    artifactId: resolved.artifactId,
+    limit: 20
+  });
+
+  assert.equal(found.total, 1);
+  assert.equal(found.matches[0]?.qualifiedName, "z.desired.Main");
+  assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
 test("SourceService rejects invalid class source line range", async () => {
