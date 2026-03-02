@@ -250,7 +250,7 @@ export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
   workspaceDetection: WorkspaceCompileMappingOutput;
 };
 
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
   const encoded = Buffer.from(content, "utf8");
@@ -261,8 +261,8 @@ function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
   let end = Math.max(0, Math.min(maxBytes, encoded.length));
   while (end > 0) {
     try {
-      utf8Decoder.decode(encoded.subarray(0, end));
-      return encoded.subarray(0, end).toString("utf8");
+      const decoded = utf8Decoder.decode(encoded.subarray(0, end));
+      return decoded;
     } catch {
       end -= 1;
     }
