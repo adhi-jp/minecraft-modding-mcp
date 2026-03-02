@@ -4781,3 +4781,77 @@ test("SourceService validateMixin normalizes WSL UNC sourcePath inputs", async (
     }
   }
 });
+
+test("SourceService validateMixin applies resolveArtifact mapping fallback metadata for non-vanilla scope", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-fallback-"));
+  const mergedJarPath = join(root, "merged.jar");
+  await createJar(mergedJarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).resolveArtifact = async () => ({
+    artifactId: "artifact:test",
+    origin: "loom-cache",
+    warnings: ["Resolve artifact warning from Loom cache."],
+    mappingApplied: "official",
+    provenance: {
+      target: { kind: "version", value: "1.21" },
+      requestedMapping: "mojang",
+      mappingApplied: "official"
+    },
+    qualityFlags: [],
+    binaryJarPath: mergedJarPath,
+    version: "1.21"
+  });
+
+  (service as any).mappingService = {
+    async findMapping() {
+      return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" } };
+    },
+    async resolveMethodMappingExact() {
+      return { resolved: false };
+    },
+    async findCandidatesByName() {
+      return [];
+    }
+  };
+
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    source: [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "import org.spongepowered.asm.mixin.injection.Inject;",
+      "import org.spongepowered.asm.mixin.injection.At;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class MainMixin {",
+      "  @Inject(method = \"missing\", at = @At(\"HEAD\"))",
+      "  private void onMissing() {}",
+      "}"
+    ].join("\n"),
+    version: "1.21",
+    mapping: "mojang",
+    scope: "merged",
+    projectPath: root
+  });
+
+  assert.equal(result.provenance?.mappingApplied, "official");
+  assert.equal(result.summary.definiteErrors, 0);
+  assert.equal(result.summary.uncertainErrors, 1);
+  assert.equal(result.valid, true);
+  assert.equal(result.issues[0]?.confidence, "uncertain");
+  assert.ok(result.warnings.some((w) => w.includes("Resolve artifact warning from Loom cache.")));
+});

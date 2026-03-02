@@ -207,7 +207,10 @@ const getClassMembersShape = {
   includeSynthetic: z.boolean().optional().describe("default false"),
   includeInherited: z.boolean().optional().describe("default false"),
   memberPattern: optionalNonEmptyString,
-  maxMembers: optionalPositiveInt.describe("default 500, max 5000")
+  maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
+  projectPath: optionalNonEmptyString,
+  scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version")
 };
 const getClassMembersSchema = z
   .object(getClassMembersShape)
@@ -610,7 +613,11 @@ const validateMixinShape = {
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version")
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
+  minSeverity: z.enum(["error", "warning", "all"]).optional()
+    .describe("'error'=errors only, 'warning'=errors+warnings, 'all'=everything (default 'all')"),
+  hideUncertain: z.boolean().optional()
+    .describe("Omit issues with confidence='uncertain' (default false)")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
   (d) => {
@@ -1145,7 +1152,10 @@ server.tool("get-class-members",
       includeSynthetic: input.includeSynthetic,
       includeInherited: input.includeInherited,
       memberPattern: input.memberPattern,
-      maxMembers: input.maxMembers
+      maxMembers: input.maxMembers,
+      projectPath: input.projectPath,
+      scope: input.scope as ArtifactScope | undefined,
+      preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1413,7 +1423,9 @@ server.tool("validate-mixin",
       sourcePriority: input.sourcePriority,
       scope: input.scope as ArtifactScope | undefined,
       projectPath: input.projectPath,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: input.preferProjectVersion,
+      minSeverity: input.minSeverity,
+      hideUncertain: input.hideUncertain
     }) as Promise<Record<string, unknown>>
   )
 );

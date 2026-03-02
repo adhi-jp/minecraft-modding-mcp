@@ -54,8 +54,9 @@ const MIXIN_TARGET_RE = /(\w[\w.]*?)\.class/g;
 const MIXIN_PRIORITY_RE = /priority\s*=\s*(\d+)/;
 
 // Injection annotations: @Inject, @Redirect, @ModifyArg, @ModifyVariable, @ModifyConstant, @ModifyExpressionValue
+// Also MixinExtras: @WrapOperation, @WrapWithCondition, @ModifyReturnValue
 const INJECTION_ANNOTATION_RE =
-  /^\s*@(Inject|Redirect|ModifyArg|ModifyVariable|ModifyConstant|ModifyExpressionValue)\s*\(/;
+  /^\s*@(Inject|Redirect|ModifyArg|ModifyVariable|ModifyConstant|ModifyExpressionValue|WrapOperation|WrapWithCondition|ModifyReturnValue)\s*\(/;
 const METHOD_ATTR_RE = /method\s*=\s*"([^"]+)"/;
 const METHOD_ATTR_ARRAY_RE = /method\s*=\s*\{([^}]+)\}/;
 const METHOD_ATTR_ITEM_RE = /"([^"]+)"/g;
@@ -68,7 +69,7 @@ const METHOD_DECL_RE =
   /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
 
 // @Accessor / @Invoker
-const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*(?:value\s*=\s*)?"([^"]+)"\s*\))?\s*$/;
+const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*(?:value\s*=\s*)?"([^"]+)"\s*(?:,\s*\w+\s*=\s*(?:\w+|"[^"]*")\s*)*\))?(?:\s|$)/;
 const ACCESSOR_ANNOTATION_START_RE = /^\s*@(Accessor|Invoker)\s*\(/;
 const ACCESSOR_EXPLICIT_RE = /"([^"]+)"/;
 

@@ -12,6 +12,8 @@ import type { SourceMapping } from "./types.js";
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
+export type IssueConfidence = "definite" | "likely" | "uncertain";
+
 export type ValidationIssue = {
   severity: "error" | "warning";
   kind:
@@ -26,6 +28,8 @@ export type ValidationIssue = {
   message: string;
   suggestions?: string[];
   line?: number;
+  confidence?: IssueConfidence;
+  confidenceReason?: string;
 };
 
 export type ValidationSummary = {
@@ -35,6 +39,8 @@ export type ValidationSummary = {
   total: number;
   errors: number;
   warnings: number;
+  definiteErrors: number;
+  uncertainErrors: number;
 };
 
 export type MixinValidationProvenance = {
@@ -43,6 +49,9 @@ export type MixinValidationProvenance = {
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
   resolutionNotes?: string[];
+  jarType?: "vanilla-client" | "merged" | "unknown";
+  mappingChain?: string[];
+  remapFailures?: number;
 };
 
 export type StructuredWarning = {
@@ -57,6 +66,7 @@ export type MixinValidationResult = {
   valid: boolean;
   issues: ValidationIssue[];
   summary: ValidationSummary;
+  unfilteredSummary?: ValidationSummary;
   provenance?: MixinValidationProvenance;
   warnings: string[];
   structuredWarnings?: StructuredWarning[];
@@ -202,7 +212,9 @@ function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  confidence?: IssueConfidence,
+  confidenceReason?: string
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -222,7 +234,9 @@ function validateInjection(
         target: `${targetName}#${inj.method}`,
         message: `Method "${methodName}" not found in target class "${targetName}".${descriptorHint}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
-        line: inj.line
+        line: inj.line,
+        confidence,
+        confidenceReason
       });
     }
   }
@@ -232,7 +246,9 @@ function validateShadow(
   shadow: ParsedShadow,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  confidence?: IssueConfidence,
+  confidenceReason?: string
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -249,7 +265,9 @@ function validateShadow(
           target: `${targetName}#${shadow.name}`,
           message: `Field "${shadow.name}" not found in target class "${targetName}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
-          line: shadow.line
+          line: shadow.line,
+          confidence,
+          confidenceReason
         });
       }
     } else {
@@ -263,7 +281,9 @@ function validateShadow(
           target: `${targetName}#${shadow.name}`,
           message: `Method "${shadow.name}" not found in target class "${targetName}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
-          line: shadow.line
+          line: shadow.line,
+          confidence,
+          confidenceReason
         });
       }
     }
@@ -274,7 +294,9 @@ function validateAccessor(
   accessor: ParsedAccessor,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  confidence?: IssueConfidence,
+  confidenceReason?: string
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -290,7 +312,9 @@ function validateAccessor(
         target: `${targetName}#${accessor.targetName}`,
         message: `Target "${accessor.targetName}" (inferred from "${accessor.name}") not found in class "${targetName}".`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
-        line: accessor.line
+        line: accessor.line,
+        confidence,
+        confidenceReason
       });
     }
   }
@@ -300,10 +324,17 @@ export function validateParsedMixin(
   parsed: ParsedMixin,
   targetMembers: Map<string, ResolvedTargetMembers>,
   warnings: string[],
-  provenance?: MixinValidationProvenance
+  provenance?: MixinValidationProvenance,
+  confidence?: IssueConfidence
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
+
+  const confidenceReason = confidence === "uncertain"
+    ? `Mapping fallback: requested "${provenance?.requestedMapping}" but applied "${provenance?.mappingApplied}".`
+    : confidence === "likely"
+      ? "Some members could not be remapped."
+      : undefined;
 
   // Check target classes exist
   for (const target of parsed.targets) {
@@ -313,7 +344,9 @@ export function validateParsedMixin(
         kind: "target-not-found",
         annotation: "@Mixin",
         target: target.className,
-        message: `Target class "${target.className}" not found in game jar.`
+        message: `Target class "${target.className}" not found in game jar.`,
+        confidence,
+        confidenceReason
       });
     }
   }
@@ -322,15 +355,15 @@ export function validateParsedMixin(
   const resolvedTargetNames = targetNames.filter((t) => targetMembers.has(t));
 
   for (const inj of parsed.injections) {
-    validateInjection(inj, targetMembers, resolvedTargetNames, issues);
+    validateInjection(inj, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
   }
 
   for (const shadow of parsed.shadows) {
-    validateShadow(shadow, targetMembers, resolvedTargetNames, issues);
+    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
   }
 
   for (const accessor of parsed.accessors) {
-    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues);
+    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
   }
 
   // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
@@ -341,7 +374,9 @@ export function validateParsedMixin(
         kind: "unknown-annotation",
         annotation: pw.includes("@Accessor") ? "@Accessor" : "@Invoker",
         target: parsed.className,
-        message: pw
+        message: pw,
+        confidence,
+        confidenceReason
       });
     } else {
       warnings.push(pw);
@@ -350,6 +385,8 @@ export function validateParsedMixin(
 
   const errorCount = issues.filter((i) => i.severity === "error").length;
   const warningCount = issues.filter((i) => i.severity === "warning").length;
+  const definiteErrors = issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
+  const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
 
   // Build structuredWarnings — classify by severity
   const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
@@ -362,7 +399,7 @@ export function validateParsedMixin(
     className: parsed.className,
     targets: targetNames,
     priority: parsed.priority,
-    valid: errorCount === 0,
+    valid: definiteErrors === 0,
     issues,
     summary: {
       injections: parsed.injections.length,
@@ -370,7 +407,9 @@ export function validateParsedMixin(
       accessors: parsed.accessors.length,
       total: parsed.injections.length + parsed.shadows.length + parsed.accessors.length,
       errors: errorCount,
-      warnings: warningCount
+      warnings: warningCount,
+      definiteErrors,
+      uncertainErrors
     },
     provenance,
     warnings,

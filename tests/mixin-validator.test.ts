@@ -639,3 +639,123 @@ test("validateParsedMixin omits structuredWarnings when no warnings", () => {
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.equal(result.structuredWarnings, undefined);
 });
+
+/* ------------------------------------------------------------------ */
+/*  Confidence classification tests                                    */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin with definite confidence marks issues as definite", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, "definite");
+  assert.equal(result.valid, false);
+  assert.equal(result.issues[0].confidence, "definite");
+  assert.equal(result.summary.definiteErrors, 1);
+  assert.equal(result.summary.uncertainErrors, 0);
+});
+
+test("validateParsedMixin with uncertain confidence marks issues as uncertain", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "yarn",
+    mappingApplied: "official"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, "uncertain");
+  assert.equal(result.valid, true); // uncertain errors only => valid
+  assert.equal(result.issues[0].confidence, "uncertain");
+  assert.ok(result.issues[0].confidenceReason?.includes("fallback"));
+  assert.equal(result.summary.definiteErrors, 0);
+  assert.equal(result.summary.uncertainErrors, 1);
+});
+
+test("validateParsedMixin with likely confidence", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "field", name: "noSuchField", line: 8 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "likely");
+  assert.equal(result.valid, false); // likely is not uncertain, so definiteError
+  assert.equal(result.issues[0].confidence, "likely");
+  assert.equal(result.summary.definiteErrors, 1);
+});
+
+test("validateParsedMixin provenance supports enriched fields", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    jarType: "vanilla-client",
+    mappingChain: ["mojang → official"],
+    remapFailures: 3
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
+  assert.equal(result.provenance?.jarType, "vanilla-client");
+  assert.deepEqual(result.provenance?.mappingChain, ["mojang → official"]);
+  assert.equal(result.provenance?.remapFailures, 3);
+});
+
+test("validateParsedMixin without confidence arg defaults to no confidence on issues", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].confidence, undefined);
+  assert.equal(result.summary.definiteErrors, 1); // undefined confidence counts as definite
+  assert.equal(result.summary.uncertainErrors, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  unfilteredSummary type support                                     */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin result supports unfilteredSummary field", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  // unfilteredSummary is not set by validateParsedMixin itself (set by source-service filtering)
+  assert.equal(result.unfilteredSummary, undefined);
+  // Verify it can be assigned (type compatibility)
+  result.unfilteredSummary = { ...result.summary };
+  assert.deepEqual(result.unfilteredSummary, result.summary);
+});

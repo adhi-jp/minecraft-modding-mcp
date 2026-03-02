@@ -20,6 +20,7 @@ import { parseAccessWidener } from "./access-widener-parser.js";
 import {
   validateParsedMixin,
   validateParsedAccessWidener,
+  type IssueConfidence,
   type ResolvedTargetMembers,
   type MixinValidationResult,
   type MixinValidationProvenance,
@@ -323,6 +324,9 @@ export type GetClassMembersInput = {
   includeInherited?: boolean;
   memberPattern?: string;
   maxMembers?: number;
+  projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
 };
 
 export type GetClassMembersOutput = {
@@ -492,6 +496,8 @@ export type ValidateMixinInput = {
   scope?: ArtifactScope;
   projectPath?: string;
   preferProjectVersion?: boolean;
+  minSeverity?: "error" | "warning" | "all";
+  hideUncertain?: boolean;
 };
 
 export type ValidateMixinBatchResult = {
@@ -500,9 +506,17 @@ export type ValidateMixinBatchResult = {
   error?: string;
 };
 
+export type ValidateMixinBatchIssueSummaryItem = {
+  kind: string;
+  confidence: string;
+  count: number;
+  sampleTargets: string[];
+};
+
 export type ValidateMixinBatchOutput = {
   results: ValidateMixinBatchResult[];
   summary: { total: number; valid: number; invalid: number; errors: number };
+  issueSummary?: ValidateMixinBatchIssueSummaryItem[];
 };
 
 export type ValidateMixinOutput = MixinValidationResult | ValidateMixinBatchOutput;
@@ -2971,7 +2985,10 @@ export class SourceService {
         target: input.target,
         mapping: requestedMapping,
         sourcePriority: input.sourcePriority,
-        allowDecompile: input.allowDecompile
+        allowDecompile: input.allowDecompile,
+        projectPath: input.projectPath,
+        scope: input.scope,
+        preferProjectVersion: input.preferProjectVersion
       });
       artifactId = resolved.artifactId;
       origin = resolved.origin;
@@ -3144,6 +3161,7 @@ export class SourceService {
 
     const warnings: string[] = [];
     const requestedMapping = normalizeMapping(input.mapping);
+    let mappingApplied: SourceMapping = requestedMapping;
 
     // preferProjectVersion: detect MC version from gradle.properties
     if (input.preferProjectVersion && input.projectPath) {
@@ -3154,11 +3172,29 @@ export class SourceService {
       }
     }
 
-    const { jarPath } = await this.versionService.resolveVersionJar(version);
+    // Resolve jar: use Loom cache for non-vanilla scope with projectPath
+    let jarPath: string;
+    if (input.scope && input.scope !== "vanilla" && input.projectPath) {
+      const resolved = await this.resolveArtifact({
+        target: { kind: "version", value: version },
+        mapping: requestedMapping,
+        sourcePriority: input.sourcePriority,
+        projectPath: input.projectPath,
+        scope: input.scope,
+        preferProjectVersion: false
+      });
+      jarPath = resolved.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
+      warnings.push(...resolved.warnings);
+      mappingApplied = resolved.mappingApplied;
+      if (resolved.version) {
+        version = resolved.version;
+      }
+    } else {
+      jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
+    }
     const parsed = parseMixinSource(source);
 
     const targetMembers = new Map<string, ResolvedTargetMembers>();
-    let mappingApplied: SourceMapping = requestedMapping;
 
     for (const target of parsed.targets) {
       // Bug 1 fix: resolve simple names via imports
@@ -3247,15 +3283,76 @@ export class SourceService {
       );
     }
 
+    // Count remap failures from warnings
+    const REMAP_WARNING_RE = /^(?:Could not remap|Remap failed for)\b/;
+    const remapFailures = warnings.filter((w) => REMAP_WARNING_RE.test(w)).length;
+
+    // Determine confidence level
+    let confidence: IssueConfidence = "definite";
+    if (requestedMapping !== mappingApplied) {
+      confidence = "uncertain";
+    } else if (remapFailures > 0) {
+      confidence = "likely";
+    }
+
+    // Build mapping chain description
+    const mappingChain: string[] = [];
+    if (requestedMapping !== "official") {
+      mappingChain.push(`${requestedMapping} → official`);
+      if (mappingApplied !== requestedMapping) {
+        mappingChain.push(`fallback to ${mappingApplied}`);
+      }
+    }
+
     const provenance: MixinValidationProvenance = {
       version,
       jarPath,
       requestedMapping,
       mappingApplied,
-      resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined
+      resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined,
+      jarType: (input.scope && input.scope !== "vanilla" && input.projectPath) ? "merged" : "vanilla-client",
+      mappingChain: mappingChain.length > 0 ? mappingChain : undefined,
+      remapFailures: remapFailures > 0 ? remapFailures : undefined
     };
 
-    return validateParsedMixin(parsed, targetMembers, warnings, provenance);
+    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence);
+
+    // Apply minSeverity / hideUncertain filters
+    const minSeverity = input.minSeverity ?? "all";
+    const hideUncertain = input.hideUncertain ?? false;
+
+    if (minSeverity !== "all" || hideUncertain) {
+      const unfilteredSummary = { ...result.summary };
+      let filtered = result.issues;
+
+      if (minSeverity === "error") {
+        filtered = filtered.filter((i) => i.severity === "error");
+      } else if (minSeverity === "warning") {
+        filtered = filtered.filter((i) => i.severity === "error" || i.severity === "warning");
+      }
+
+      if (hideUncertain) {
+        filtered = filtered.filter((i) => i.confidence !== "uncertain");
+      }
+
+      const filteredErrors = filtered.filter((i) => i.severity === "error").length;
+      const filteredWarnings = filtered.filter((i) => i.severity === "warning").length;
+      const filteredDefiniteErrors = filtered.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
+      const filteredUncertainErrors = filtered.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
+
+      result.issues = filtered;
+      result.summary = {
+        ...result.summary,
+        errors: filteredErrors,
+        warnings: filteredWarnings,
+        definiteErrors: filteredDefiniteErrors,
+        uncertainErrors: filteredUncertainErrors
+      };
+      result.unfilteredSummary = unfilteredSummary;
+      result.valid = filteredDefiniteErrors === 0;
+    }
+
+    return result;
   }
 
   private async validateMixinBatch(input: ValidateMixinInput): Promise<ValidateMixinBatchOutput> {
@@ -3288,6 +3385,33 @@ export class SourceService {
       }
     }
 
+    // Build issueSummary: aggregate issues across all results by (kind, confidence)
+    const issueGroupMap = new Map<string, { kind: string; confidence: string; count: number; sampleTargets: string[] }>();
+    for (const r of results) {
+      if (!r.result) continue;
+      for (const issue of r.result.issues) {
+        const key = `${issue.kind}\0${issue.confidence ?? "unknown"}`;
+        const existing = issueGroupMap.get(key);
+        if (existing) {
+          existing.count++;
+          if (existing.sampleTargets.length < 3) {
+            existing.sampleTargets.push(issue.target);
+          }
+        } else {
+          issueGroupMap.set(key, {
+            kind: issue.kind,
+            confidence: issue.confidence ?? "unknown",
+            count: 1,
+            sampleTargets: [issue.target]
+          });
+        }
+      }
+    }
+
+    const issueSummary = issueGroupMap.size > 0
+      ? [...issueGroupMap.values()]
+      : undefined;
+
     return {
       results,
       summary: {
@@ -3295,7 +3419,8 @@ export class SourceService {
         valid: validCount,
         invalid: invalidCount,
         errors: errorCount
-      }
+      },
+      issueSummary
     };
   }
 

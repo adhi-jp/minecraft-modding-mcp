@@ -412,3 +412,81 @@ public interface PlayerInvoker {
   assert.equal(result.accessors[0].annotation, "Invoker");
   assert.equal(result.accessors[0].targetName, "damage");
 });
+
+/* ------------------------------------------------------------------ */
+/*  @Accessor with remap=false and trailing comments                   */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Accessor with remap=false", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor(value = "health", remap = false)
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Accessor with trailing comment", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health") // access health field
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  MixinExtras annotations                                            */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @WrapOperation as injection", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lfoo;bar()V"))
+  private void wrapTick(Operation<Void> op) {}
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 1);
+  assert.equal(result.injections[0].annotation, "WrapOperation");
+  assert.equal(result.injections[0].method, "tick");
+});
+
+test("parseMixinSource parses @ModifyReturnValue as injection", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @ModifyReturnValue(method = "getValue", at = @At("RETURN"))
+  private int modifyGetValue(int original) { return original; }
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 1);
+  assert.equal(result.injections[0].annotation, "ModifyReturnValue");
+  assert.equal(result.injections[0].method, "getValue");
+});
+
+test("parseMixinSource parses @WrapWithCondition as injection", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @WrapWithCondition(method = "attack", at = @At(value = "INVOKE", target = "Lfoo;bar()V"))
+  private boolean shouldAttack() { return true; }
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.injections.length, 1);
+  assert.equal(result.injections[0].annotation, "WrapWithCondition");
+  assert.equal(result.injections[0].method, "attack");
+});
