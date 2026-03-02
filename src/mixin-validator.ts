@@ -204,10 +204,6 @@ function allFieldNames(members: ResolvedTargetMembers): string[] {
   return members.fields.map((m) => m.name);
 }
 
-function allMemberNames(members: ResolvedTargetMembers): string[] {
-  return [...allMethodNames(members), ...allFieldNames(members)];
-}
-
 function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
@@ -302,9 +298,12 @@ function validateAccessor(
     const members = targetMembers.get(targetName);
     if (!members) continue;
 
-    const allNames = allMemberNames(members);
-    if (!allNames.includes(accessor.targetName)) {
-      const suggestions = suggestSimilar(accessor.targetName, allNames);
+    const candidateNames = accessor.annotation === "Invoker"
+      ? allMethodNames(members)
+      : allFieldNames(members);
+
+    if (!candidateNames.includes(accessor.targetName)) {
+      const suggestions = suggestSimilar(accessor.targetName, candidateNames);
       issues.push({
         severity: "error",
         kind: accessor.annotation === "Invoker" ? "method-not-found" : "field-not-found",

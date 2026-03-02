@@ -29,8 +29,10 @@ test("computeFileSha1 returns correct hash for empty file", async () => {
 });
 
 test("computeFileSha1 rejects for non-existent file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hash-test-missing-"));
+  const missingPath = join(dir, "does-not-exist.bin");
   await assert.rejects(
-    () => computeFileSha1("/tmp/does-not-exist-" + Date.now() + ".bin"),
+    () => computeFileSha1(missingPath),
     { code: "ENOENT" }
   );
 });

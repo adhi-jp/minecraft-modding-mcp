@@ -20,6 +20,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin`: array-form `method = {"m1", "m2"}` attributes are now parsed correctly (previously only single-value `method = "m"` was supported).
 - `validate-mixin`: `@Accessor(value = "name")` syntax is now recognized alongside `@Accessor("name")`.
 - `validate-mixin`: `@Accessor`/`@Invoker` parse failures are escalated to `issues[]` with `severity: "warning"` instead of being silently added to `warnings[]`.
+- `validate-mixin`: `@Invoker` validation now checks method members only (not fields), preventing false negatives when a same-named field exists without a matching method.
 
 #### Added
 - `validate-mixin`: `sourcePaths` parameter for batch validation of multiple Mixin files in a single call.
