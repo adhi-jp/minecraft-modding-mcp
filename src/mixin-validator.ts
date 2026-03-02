@@ -204,10 +204,6 @@ function allFieldNames(members: ResolvedTargetMembers): string[] {
   return members.fields.map((m) => m.name);
 }
 
-function allMemberNames(members: ResolvedTargetMembers): string[] {
-  return [...allMethodNames(members), ...allFieldNames(members)];
-}
-
 function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
