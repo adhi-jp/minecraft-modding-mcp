@@ -242,7 +242,8 @@ test("SourceService getArtifactFile truncation preserves UTF-8 boundaries", asyn
     artifactId: resolved.artifactId,
     filePath: "com/example/Utf8.java"
   });
-  const targetBytes = Buffer.byteLength("public class Utf8 { String s = \"é漢", "utf8");
+  const cleanBoundaryBytes = Buffer.byteLength("public class Utf8 { String s = \"é漢", "utf8");
+  const targetBytes = cleanBoundaryBytes + 2;
   assert.ok(targetBytes < full.contentBytes);
 
   const truncated = await service.getArtifactFile({
@@ -252,7 +253,8 @@ test("SourceService getArtifactFile truncation preserves UTF-8 boundaries", asyn
   });
 
   assert.equal(truncated.truncated, true);
-  assert.equal(Buffer.byteLength(truncated.content, "utf8"), targetBytes);
+  assert.equal(Buffer.byteLength(truncated.content, "utf8"), cleanBoundaryBytes);
+  assert.ok(Buffer.byteLength(truncated.content, "utf8") < targetBytes);
   assert.doesNotMatch(truncated.content, /�/);
   assert.equal(Buffer.from(truncated.content, "utf8").toString("utf8"), truncated.content);
 });
