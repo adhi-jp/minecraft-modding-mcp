@@ -373,8 +373,11 @@ modId = "forge-loses"
 // ---------------------------------------------------------------------------
 
 test("analyzeModJar throws AppError for non-existent path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-missing-"));
+  const missingJarPath = join(root, "does-not-exist-at-all.jar");
+
   await assert.rejects(
-    () => analyzeModJar("/tmp/does-not-exist-at-all.jar"),
+    () => analyzeModJar(missingJarPath),
     (error: Error) => {
       assert.equal(error.name, "AppError");
       assert.equal((error as { code: string }).code, "ERR_INVALID_INPUT");
