@@ -31,6 +31,13 @@
 - `package.json` release-facing contracts (`files`, `engines`, `bin`, and release scripts) MUST match implemented behavior and tests.
 - Baseline runtime/tooling for this repository is Node.js 22+ and `pnpm`.
 
+## Changelog and Tag Safety (MUST)
+- Treat `origin` release tags (`vX.Y.Z`) as the source of truth for published versions.
+- Do not record new changes under any CHANGELOG version heading whose tag already exists on `origin`.
+- For all commits after the latest `origin` release tag, record changes only under `## [Unreleased]` until the next release is cut.
+- Before editing CHANGELOG release sections, verify commit/tag boundaries (`git log --oneline --decorate` and `git tag` with remote-tracking tags) so entries map to the correct release window.
+- Editing an already-tagged release section is allowed only with explicit user instruction and a documented history-rewrite/release-correction plan.
+
 ## Platform and Path Safety (MUST)
 - Preserve WSL/Windows path normalization behavior for filesystem and JAR paths.
 - Any path-normalization fix MUST include regression tests for boundary cases.
