@@ -91,6 +91,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` now remaps bytecode signature members to the requested mapping before member validation.
 - `validate-mixin` parsing now supports `default`/`synchronized` modifiers and `interface` declarations in accessor workflows.
 
+### perf(mcp): reduce startup latency with lazy SourceService initialization
+
+#### Changed
+- `src/index.ts` now defers `SourceService` construction until the first tool/resource access via a lazy proxy, reducing cold-start overhead during MCP handshake and tool discovery.
+- Added integration coverage to ensure lazy initialization wiring remains in place.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed
