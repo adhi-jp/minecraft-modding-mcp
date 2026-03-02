@@ -191,6 +191,23 @@ test("validateParsedMixin reports error for @Invoker with missing target", () =>
   assert.equal(result.issues[0].annotation, "@Invoker");
 });
 
+test("validateParsedMixin reports method-not-found for @Invoker when only matching field exists", () => {
+  const parsed = makeParsedMixin({
+    accessors: [{ annotation: "Invoker", name: "invokeDamage", targetName: "damage", line: 16 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["damage"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, false);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].kind, "method-not-found");
+  assert.equal(result.issues[0].annotation, "@Invoker");
+});
+
+
 test("validateParsedMixin passes when all members are valid", () => {
   const parsed = makeParsedMixin({
     injections: [{ annotation: "Inject", method: "tick", line: 5 }],

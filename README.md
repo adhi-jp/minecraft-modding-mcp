@@ -253,6 +253,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
 `validate-mixin` requires exactly one of `source`, `sourcePath`, or `sourcePaths`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads.
 `validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
+`validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `targetValue` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `targetKind=version`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
