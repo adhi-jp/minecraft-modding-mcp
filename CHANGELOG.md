@@ -31,6 +31,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Vineflower decompilation now retries with fallback flag profiles and includes attempted profiles in terminal `ERR_DECOMPILER_FAILED` details.
 - `get-class-api-matrix.ambiguousRowCount` now counts ambiguous rows (not per-mapping ambiguity hits).
 
+### fix(config): default cache dir to home when unset
+
+#### Fixed
+- Server startup no longer depends on the current working directory for default cache paths; when `MCP_CACHE_DIR` is unset, cache/SQLite now default to `~/.cache/minecraft-modding-mcp`.
+
 ## [1.1.1] - 2026-03-02
 
 ### Fixed

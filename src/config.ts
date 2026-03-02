@@ -5,7 +5,7 @@ import type { Config } from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
 
 const DEFAULTS = {
-  cacheDir: ".cache/minecraft-modding-mcp",
+  cacheDir: "~/.cache/minecraft-modding-mcp",
   sourceRepos: [
     "https://repo1.maven.org/maven2",
     "https://maven.fabricmc.net",

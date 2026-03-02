@@ -771,7 +771,7 @@ Use `resolve-workspace-symbol` when you need compile-visible names from actual G
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_CACHE_DIR` | `.cache/minecraft-modding-mcp` | Cache root for downloads and SQLite |
+| `MCP_CACHE_DIR` | `~/.cache/minecraft-modding-mcp` | Cache root for downloads and SQLite |
 | `MCP_SQLITE_PATH` | `<cacheDir>/source-cache.db` | SQLite database path |
 | `MCP_SOURCE_REPOS` | Maven Central + Fabric + Forge + NeoForge | Comma-separated Maven repository URLs |
 | `MCP_LOCAL_M2` | `~/.m2/repository` | Local Maven repository path |

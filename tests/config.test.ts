@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { mkdtemp } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { DEFAULTS, loadConfig } from "../src/config.ts";
@@ -40,10 +41,11 @@ function withEnv(overrides: Record<string, string | undefined>, fn: () => void |
 test("loadConfig applies defaults for missing environment variables", async () => {
   await withEnv({}, () => {
     const config = loadConfig();
-    const cwd = process.cwd();
+    const expectedCacheDir = resolve(homedir(), ".cache/minecraft-modding-mcp");
+    const expectedSqlitePath = resolve(expectedCacheDir, "source-cache.db");
 
-    assert.equal(config.cacheDir, resolve(cwd, DEFAULTS.cacheDir));
-    assert.equal(config.sqlitePath, resolve(cwd, `${DEFAULTS.cacheDir}/source-cache.db`));
+    assert.equal(config.cacheDir, expectedCacheDir);
+    assert.equal(config.sqlitePath, expectedSqlitePath);
     assert.equal(config.localM2Path, resolve(homedir(), ".m2/repository"));
     assert.deepEqual(config.sourceRepos, DEFAULTS.sourceRepos);
     assert.equal(config.maxContentBytes, DEFAULTS.maxContentBytes);
@@ -64,6 +66,28 @@ test("loadConfig applies defaults for missing environment variables", async () =
     assert.equal(config.indexedSearchEnabled, true);
     assert.equal(config.mappingSourcePriority, "loom-first");
   });
+});
+
+test("loadConfig defaults are independent from cwd for cache paths", async () => {
+  const tempCwd = await mkdtemp(join(tmpdir(), "mcp-config-cwd-"));
+  const originalCwd = process.cwd();
+  process.chdir(tempCwd);
+  try {
+    await withEnv({}, () => {
+      const config = loadConfig();
+      const expectedCacheDir = resolve(homedir(), ".cache/minecraft-modding-mcp");
+      const expectedSqlitePath = resolve(expectedCacheDir, "source-cache.db");
+      const cwdDerivedCacheDir = resolve(tempCwd, ".cache/minecraft-modding-mcp");
+      const cwdDerivedSqlitePath = resolve(cwdDerivedCacheDir, "source-cache.db");
+
+      assert.equal(config.cacheDir, expectedCacheDir);
+      assert.equal(config.sqlitePath, expectedSqlitePath);
+      assert.notEqual(config.cacheDir, cwdDerivedCacheDir);
+      assert.notEqual(config.sqlitePath, cwdDerivedSqlitePath);
+    });
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test("loadConfig normalizes and expands paths", async () => {
