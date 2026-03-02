@@ -219,6 +219,46 @@ test("SourceService resolves/searches/reads class source through artifactId flow
   assert.equal(classSource.provenance.target.kind, "jar");
 });
 
+
+test("SourceService getArtifactFile truncation preserves UTF-8 boundaries", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-get-file-utf8-"));
+  const binaryJarPath = join(root, "utf8.jar");
+  const sourcesJarPath = join(root, "utf8-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "com/example/Utf8.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "com/example/Utf8.java": "public class Utf8 { String s = \"é漢😀\"; }"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  const full = await service.getArtifactFile({
+    artifactId: resolved.artifactId,
+    filePath: "com/example/Utf8.java"
+  });
+  const cleanBoundaryBytes = Buffer.byteLength("public class Utf8 { String s = \"é漢", "utf8");
+  const targetBytes = cleanBoundaryBytes + 2;
+  assert.ok(targetBytes < full.contentBytes);
+
+  const truncated = await service.getArtifactFile({
+    artifactId: resolved.artifactId,
+    filePath: "com/example/Utf8.java",
+    maxBytes: targetBytes
+  });
+
+  assert.equal(truncated.truncated, true);
+  assert.equal(Buffer.byteLength(truncated.content, "utf8"), cleanBoundaryBytes);
+  assert.ok(Buffer.byteLength(truncated.content, "utf8") < targetBytes);
+  assert.doesNotMatch(truncated.content, /�/);
+  assert.equal(Buffer.from(truncated.content, "utf8").toString("utf8"), truncated.content);
+});
+
 test("SourceService targetKind=jar does not adopt unrelated *-sources.jar files", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-jar-unrelated-sources-"));

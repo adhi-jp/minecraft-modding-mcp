@@ -250,6 +250,27 @@ export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
   workspaceDetection: WorkspaceCompileMappingOutput;
 };
 
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
+  const encoded = Buffer.from(content, "utf8");
+  if (encoded.length <= maxBytes) {
+    return content;
+  }
+
+  let end = Math.max(0, Math.min(maxBytes, encoded.length));
+  while (end > 0) {
+    try {
+      const decoded = utf8Decoder.decode(encoded.subarray(0, end));
+      return decoded;
+    } catch {
+      end -= 1;
+    }
+  }
+
+  return "";
+}
+
 export type SourceMode = "metadata" | "snippet" | "full";
 
 export type GetClassSourceInput = {
@@ -1849,9 +1870,7 @@ export class SourceService {
       const maxBytes = clampLimit(input.maxBytes, this.config.maxContentBytes, Number.MAX_SAFE_INTEGER);
       const fullBytes = Buffer.byteLength(row.content, "utf8");
       const truncated = fullBytes > maxBytes;
-      const content = truncated
-        ? Buffer.from(row.content, "utf8").slice(0, maxBytes).toString("utf8")
-        : row.content;
+      const content = truncated ? truncateUtf8ToMaxBytes(row.content, maxBytes) : row.content;
 
       if (truncated) {
         log("warn", "source.get_file.truncated", {
