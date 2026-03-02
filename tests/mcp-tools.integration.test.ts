@@ -170,6 +170,16 @@ test("index.ts calls registerResources", async () => {
   assert.match(source, /import\s*\{[^}]*registerResources[^}]*\}\s*from\s*"\.\/resources\.js"/);
 });
 
+
+test("index.ts lazily initializes SourceService to reduce startup overhead", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /let\s+sourceServiceInstance:\s*SourceService\s*\|\s*undefined/);
+  assert.match(source, /function\s+getSourceService\(\):\s*SourceService/);
+  assert.match(source, /sourceServiceInstance\s*\?\?=\s*new\s+SourceService\(config\)/);
+  assert.match(source, /const\s+sourceService\s*=\s*new\s+Proxy\(/);
+});
+
 test("get-class-members contract preserves actual mappingApplied metadata", async () => {
   const serviceSource = await readFile("src/source-service.ts", "utf8");
 

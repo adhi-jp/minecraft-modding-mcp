@@ -724,7 +724,22 @@ const nbtLimits = {
   maxInflatedBytes: config.maxNbtInflatedBytes,
   maxResponseBytes: config.maxNbtResponseBytes
 };
-const sourceService = new SourceService(config);
+
+let sourceServiceInstance: SourceService | undefined;
+
+function getSourceService(): SourceService {
+  sourceServiceInstance ??= new SourceService(config);
+  return sourceServiceInstance;
+}
+
+const sourceService = new Proxy({} as SourceService, {
+  get(_target, property, _receiver) {
+    const service = getSourceService();
+    const value = Reflect.get(service, property, service);
+    return typeof value === "function" ? value.bind(service) : value;
+  }
+});
+
 registerResources(server, sourceService);
 
 let processHandlersAttached = false;
