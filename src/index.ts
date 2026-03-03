@@ -508,10 +508,12 @@ const checkSymbolExistsShape = {
   kind: workspaceSymbolKindSchema.describe("class | field | method"),
   owner: optionalNonEmptyString,
   name: nonEmptyString,
-  descriptor: optionalNonEmptyString.describe("required for kind=method"),
+  descriptor: optionalNonEmptyString.describe("required for kind=method unless signatureMode=name-only"),
   sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)")
+  nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)"),
+  signatureMode: z.enum(["exact", "name-only"]).optional()
+    .describe("exact (default): require descriptor for methods; name-only: match by owner+name only")
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -563,10 +565,10 @@ const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((va
     }
     return;
   }
-  if (!value.descriptor) {
+  if (!value.descriptor && value.signatureMode !== "name-only") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "descriptor is required when kind=method.",
+      message: "descriptor is required when kind=method (use signatureMode='name-only' to match by name only).",
       path: ["descriptor"]
     });
   }
@@ -1358,7 +1360,8 @@ server.tool("check-symbol-exists",
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
       sourcePriority: input.sourcePriority,
-      nameMode: input.nameMode
+      nameMode: input.nameMode,
+      signatureMode: input.signatureMode
     }) as Promise<Record<string, unknown>>
   )
 );

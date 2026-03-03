@@ -212,6 +212,7 @@ export type SymbolExistenceInput = {
   sourceMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   nameMode?: "fqcn" | "auto";
+  signatureMode?: "exact" | "name-only";
 };
 
 export type SymbolExistenceOutput = SymbolResolutionOutput;
@@ -1811,6 +1812,19 @@ export class MappingService {
       (record) =>
         record.kind === "method" && record.owner === queryRecord.owner && record.name === queryRecord.name
     );
+
+    // name-only mode: skip descriptor matching, resolve by owner+name
+    if (input.signatureMode === "name-only") {
+      const status: SymbolResolutionStatus =
+        methodCandidates.length === 1 ? "resolved" : methodCandidates.length > 1 ? "ambiguous" : "not_found";
+      if (status === "ambiguous") {
+        warnings.push(
+          `Multiple method overloads matched name "${queryRecord.name}" in owner "${queryRecord.owner}". Provide descriptor for exact match.`
+        );
+      }
+      return buildOutput(querySymbol, methodCandidates, status);
+    }
+
     const descriptorMatched = methodCandidates.filter(
       (record) => record.descriptor === queryRecord.descriptor
     );
