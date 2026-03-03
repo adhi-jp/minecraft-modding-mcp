@@ -5162,6 +5162,173 @@ test("SourceService validateMixin mixinConfigPath auto-detect finds multiple mod
   assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
 });
 
+test("SourceService validateMixin mixinConfigPath auto-detect finds client source root (split source sets)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-client-root-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
+  const mixinConfigPath = join(root, "src", "client", "resources", "modid.client.mixins.json");
+
+  await mkdir(clientJavaRoot, { recursive: true });
+  await mkdir(join(root, "src", "client", "resources"), { recursive: true });
+
+  await writeFile(
+    join(clientJavaRoot, "ExampleClientMixin.java"),
+    [
+      "package com.example.mixin.client;",
+      "",
+      "import net.minecraft.client.Minecraft;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "",
+      "@Mixin(Minecraft.class)",
+      "public class ExampleClientMixin {}"
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({
+      required: true,
+      package: "com.example.mixin.client",
+      client: ["ExampleClientMixin"]
+    }, null, 2),
+    "utf8"
+  );
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.client.Minecraft",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    mixinConfigPath,
+    projectPath: root,
+    version: "1.21",
+    mapping: "official"
+  });
+
+  assert.ok("results" in result);
+  assert.equal(result.summary.total, 1);
+  assert.equal(result.summary.errors, 0);
+  assert.equal(result.summary.processingErrors, 0);
+  assert.equal(result.summary.valid, 1);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].result?.valid, true);
+});
+
+test("SourceService validateMixin mixinConfigPath finds mixins in both main and client source roots", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-mixed-roots-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const mainJavaRoot = join(root, "src", "main", "java", "com", "example", "mixin");
+  const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
+  const mixinConfigDir = join(root, "src", "main", "resources");
+
+  await mkdir(mainJavaRoot, { recursive: true });
+  await mkdir(clientJavaRoot, { recursive: true });
+  await mkdir(mixinConfigDir, { recursive: true });
+
+  const mixinSource = [
+    "import net.minecraft.server.Main;",
+    "import org.spongepowered.asm.mixin.Mixin;",
+    "",
+    "@Mixin(Main.class)",
+    "public abstract class __CLASS__ {}"
+  ].join("\n");
+
+  await writeFile(
+    join(mainJavaRoot, "ServerMixin.java"),
+    mixinSource.replace("__CLASS__", "ServerMixin"),
+    "utf8"
+  );
+  await writeFile(
+    join(clientJavaRoot, "ClientMixin.java"),
+    mixinSource.replace("__CLASS__", "ClientMixin"),
+    "utf8"
+  );
+
+  const mixinConfigPath = join(mixinConfigDir, "modid.mixins.json");
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({
+      package: "com.example.mixin",
+      mixins: ["ServerMixin"],
+      client: ["client.ClientMixin"]
+    }, null, 2),
+    "utf8"
+  );
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    mixinConfigPath,
+    projectPath: root,
+    version: "1.21",
+    mapping: "official"
+  });
+
+  assert.ok("results" in result);
+  assert.equal(result.summary.total, 2);
+  assert.equal(result.summary.errors, 0);
+  assert.equal(result.summary.processingErrors, 0);
+  assert.equal(result.summary.valid, 2);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
+});
+
 // ---------------------------------------------------------------------------
 // F-01: strictVersion rejects version-approximated results
 // ---------------------------------------------------------------------------

@@ -767,11 +767,17 @@ function normalizeStrictPositiveInt(
 
 const COMMON_SOURCE_ROOTS = [
   "src/main/java",
+  "src/client/java",
   "common/src/main/java",
+  "common/src/client/java",
   "fabric/src/main/java",
+  "fabric/src/client/java",
   "neoforge/src/main/java",
+  "neoforge/src/client/java",
   "forge/src/main/java",
-  "quilt/src/main/java"
+  "forge/src/client/java",
+  "quilt/src/main/java",
+  "quilt/src/client/java"
 ] as const;
 
 function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {

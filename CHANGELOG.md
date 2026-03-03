@@ -34,7 +34,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin`: `category` field on `ValidationIssue` and `StructuredWarning` classifies entries as `mapping`, `configuration`, or `validation`.
 - `validate-mixin`: `explain=true` parameter enriches each issue with `explanation` (human-readable cause) and `suggestedCall` (`{ tool, params }`) for agent-driven recovery.
 - `validate-mixin`: `mixinConfigPath` parameter reads a mixin config JSON (e.g. `modid.mixins.json`) and auto-discovers source files from `package` + class names for batch validation. `sourceRoot` (default `src/main/java`) and `sourceRoots[]` control source lookup.
-- `validate-mixin`: mixin-config auto-discovery now scans all configured mixin classes across common module roots, avoiding false processing errors when mixins are split between `common`/`fabric`/`neoforge` source sets.
+- `validate-mixin`: mixin-config auto-discovery now scans all configured mixin classes across common module roots (including `src/client/java` and `<loader>/src/client/java`), avoiding false processing errors when mixins are split between `common`/`fabric`/`neoforge`/`forge`/`quilt` main+client source sets.
 - `check-symbol-exists`: `signatureMode` parameter (`exact` default, `name-only` for descriptor-less matching).
 
 ### chore(ci): temporarily disable Codecov workflow
