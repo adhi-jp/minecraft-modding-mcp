@@ -13,7 +13,8 @@ import {
   type ResolvedTargetMembers,
   type MixinValidationProvenance,
   type ResolvedMember,
-  type IssueCategory
+  type IssueCategory,
+  type ResolutionPath
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
 
@@ -1023,4 +1024,286 @@ test("validateParsedMixin result supports unfilteredSummary field", () => {
   // Verify it can be assigned (type compatibility)
   result.unfilteredSummary = { ...result.summary };
   assert.deepEqual(result.unfilteredSummary, result.summary);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P2: remap-failed false positive fix                                */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin downgrades confidence to uncertain for remap-failed members", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "obfuscatedName", line: 5 }],
+    shadows: [{ kind: "field", name: "obfField", line: 10 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"], fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+  const remapFailedMembers = new Map<string, Set<string>>([
+    ["PlayerEntity", new Set(["obfuscatedName", "obfField"])]
+  ]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
+
+  // Both issues should be downgraded to uncertain due to remap failure
+  assert.equal(result.issues.length, 2);
+  for (const issue of result.issues) {
+    assert.equal(issue.confidence, "uncertain");
+    assert.ok(issue.confidenceReason?.includes("remap artifact"));
+    assert.equal(issue.resolutionPath, "member-remap-failed");
+  }
+  assert.equal(result.summary.uncertainErrors, 2);
+  assert.equal(result.summary.definiteErrors, 0);
+});
+
+test("validateParsedMixin keeps definite confidence for non-remap-failed members", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "trulyMissing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  // remapFailedMembers has a different name — not the one in the injection
+  const remapFailedMembers = new Map<string, Set<string>>([
+    ["PlayerEntity", new Set(["otherMethod"])]
+  ]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].confidence, "definite");
+  assert.equal(result.issues[0].resolutionPath, undefined);
+});
+
+test("validateParsedMixin applies remap-failed downgrade per target only", () => {
+  const parsed = makeParsedMixin({
+    targets: [{ className: "PlayerEntity" }, { className: "MobEntity" }],
+    injections: [{ annotation: "Inject", method: "missingMethod", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })],
+    ["MobEntity", makeTargetMembers("MobEntity", { methods: ["move"] })]
+  ]);
+  const warnings: string[] = [];
+  const remapFailedMembers = new Map<string, Set<string>>([
+    ["PlayerEntity", new Set(["missingMethod"])]
+  ]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
+  assert.equal(result.issues.length, 2);
+
+  const playerIssue = result.issues.find((i) => i.target.startsWith("PlayerEntity#"));
+  const mobIssue = result.issues.find((i) => i.target.startsWith("MobEntity#"));
+
+  assert.equal(playerIssue?.confidence, "uncertain");
+  assert.equal(playerIssue?.resolutionPath, "member-remap-failed");
+  assert.equal(mobIssue?.confidence, "definite");
+  assert.equal(mobIssue?.resolutionPath, undefined);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P3: resolutionPath values                                          */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin sets resolutionPath=target-class-missing for true not-found", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].resolutionPath, "target-class-missing");
+});
+
+test("validateParsedMixin sets resolutionPath=target-mapping-failed for mapping failures", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MappedClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const mappingFailedTargets = new Set(["MappedClass"]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
+  assert.equal(result.issues[0].resolutionPath, "target-mapping-failed");
+});
+
+test("validateParsedMixin sets resolutionPath=source-signature-unavailable for sig-failed targets", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "SigFailClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const signatureFailedTargets = new Set(["SigFailClass"]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, undefined, false, undefined, signatureFailedTargets);
+  assert.equal(result.issues[0].resolutionPath, "source-signature-unavailable");
+  assert.equal(result.issues[0].category, "resolution");
+});
+
+test("validateParsedMixin sets resolutionPath=member-remap-failed for remap-failed member issues", () => {
+  const parsed = makeParsedMixin({
+    accessors: [{ annotation: "Invoker", name: "invokeObf", targetName: "obfMethod", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const remapFailedMembers = new Map<string, Set<string>>([
+    ["PlayerEntity", new Set(["obfMethod"])]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
+  assert.equal(result.issues[0].resolutionPath, "member-remap-failed");
+  assert.equal(result.issues[0].confidence, "uncertain");
+});
+
+/* ------------------------------------------------------------------ */
+/*  P4: two-layer classification                                       */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin assigns category=resolution when resolutionPath is set", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "obfName", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const remapFailedMembers = new Map<string, Set<string>>([
+    ["PlayerEntity", new Set(["obfName"])]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
+  assert.equal(result.issues[0].category, "resolution");
+  assert.equal(result.summary.resolutionErrors, 1);
+});
+
+test("validateParsedMixin keeps category=validation for true validation errors", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].category, "validation");
+  assert.equal(result.issues[0].resolutionPath, undefined);
+  assert.equal(result.summary.resolutionErrors, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P5: suggestedCall context propagation                              */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin explain=true includes suggestedCallContext fields", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, true,
+    undefined, undefined,
+    { scope: "merged", sourcePriority: "loom-first", projectPath: "/my/project", mapping: "mojang" }
+  );
+  const params = result.issues[0].suggestedCall!.params;
+  assert.equal(params.scope, "merged");
+  assert.equal(params.sourcePriority, "loom-first");
+  assert.equal(params.projectPath, "/my/project");
+  assert.equal(params.mapping, "mojang");
+});
+
+test("validateParsedMixin explain=true omits undefined context fields", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  // Pass partial context — only scope
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, true,
+    undefined, undefined,
+    { scope: "vanilla" }
+  );
+  const params = result.issues[0].suggestedCall!.params;
+  assert.equal(params.scope, "vanilla");
+  assert.equal(params.sourcePriority, undefined);
+  assert.equal(params.projectPath, undefined);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P6: warning aggregation mode                                       */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin warningMode=aggregated groups warnings by category", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [
+    "Could not remap method \"a\" to mojang.",
+    "Could not remap method \"b\" to mojang.",
+    "Could not remap method \"c\" to mojang.",
+    "Could not remap field \"d\" to mojang.",
+    "Could not remap field \"e\" to mojang.",
+    "Could not remap field \"f\" to mojang.",
+    "Could not remap field \"g\" to mojang.",
+    "Could not remap field \"h\" to mojang.",
+    "Could not remap field \"i\" to mojang.",
+    "Could not remap field \"j\" to mojang.",
+    "Overriding version with project version from gradle.properties."
+  ];
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, "aggregated"
+  );
+
+  // warnings and structuredWarnings should be omitted in aggregated mode
+  assert.equal(result.warnings.length, 0);
+  assert.equal(result.structuredWarnings, undefined);
+
+  // aggregatedWarnings should be present
+  assert.ok(result.aggregatedWarnings);
+  assert.ok(result.aggregatedWarnings!.length >= 1);
+
+  const mappingGroup = result.aggregatedWarnings!.find((g) => g.category === "mapping");
+  assert.ok(mappingGroup);
+  assert.equal(mappingGroup!.count, 10);
+  assert.ok(mappingGroup!.samples.length <= 2);
+
+  const configGroup = result.aggregatedWarnings!.find((g) => g.category === "configuration");
+  assert.ok(configGroup);
+  assert.equal(configGroup!.count, 1);
+});
+
+test("validateParsedMixin warningMode=full preserves all warnings (default)", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [
+    "Could not remap method \"a\" to mojang.",
+    "Some info message."
+  ];
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, "full"
+  );
+
+  assert.equal(result.warnings.length, 2);
+  assert.ok(result.structuredWarnings);
+  assert.equal(result.aggregatedWarnings, undefined);
 });

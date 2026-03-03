@@ -14,6 +14,12 @@ import type { SourceMapping } from "./types.js";
 
 export type IssueConfidence = "definite" | "likely" | "uncertain";
 
+export type ResolutionPath =
+  | "member-remap-failed"
+  | "target-mapping-failed"
+  | "target-class-missing"
+  | "source-signature-unavailable";
+
 export type ValidationIssue = {
   severity: "error" | "warning";
   kind:
@@ -32,6 +38,7 @@ export type ValidationIssue = {
   confidence?: IssueConfidence;
   confidenceReason?: string;
   category?: IssueCategory;
+  resolutionPath?: ResolutionPath;
   explanation?: string;
   suggestedCall?: { tool: string; params: Record<string, unknown> };
 };
@@ -45,6 +52,7 @@ export type ValidationSummary = {
   warnings: number;
   definiteErrors: number;
   uncertainErrors: number;
+  resolutionErrors: number;
 };
 
 export type MixinValidationProvenance = {
@@ -56,9 +64,11 @@ export type MixinValidationProvenance = {
   jarType?: "vanilla-client" | "merged" | "unknown";
   mappingChain?: string[];
   remapFailures?: number;
+  mappingAutoDetected?: boolean;
+  scopeFallback?: { requested: string; applied: string; reason: string };
 };
 
-export type IssueCategory = "mapping" | "configuration" | "validation";
+export type IssueCategory = "mapping" | "configuration" | "validation" | "resolution";
 
 export type StructuredWarning = {
   severity: "info" | "warning";
@@ -74,6 +84,12 @@ export type ResolvedMember = {
   status: "resolved" | "not-found";
 };
 
+export type AggregatedWarningGroup = {
+  category: IssueCategory;
+  count: number;
+  samples: string[];
+};
+
 export type MixinValidationResult = {
   className: string;
   targets: string[];
@@ -85,6 +101,7 @@ export type MixinValidationResult = {
   provenance?: MixinValidationProvenance;
   warnings: string[];
   structuredWarnings?: StructuredWarning[];
+  aggregatedWarnings?: AggregatedWarningGroup[];
   resolvedMembers?: ResolvedMember[];
 };
 
@@ -227,7 +244,9 @@ function validateInjection(
   issues: ValidationIssue[],
   resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
-  confidenceReason?: string
+  confidenceReason?: string,
+  remapFailedMembers?: Map<string, Set<string>>,
+  signatureFailedTargets?: Set<string>
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -240,6 +259,18 @@ function validateInjection(
       const suggestions = suggestSimilar(methodName, methodNames);
       const descriptor = extractMethodDescriptor(inj.method);
       const descriptorHint = descriptor ? ` (descriptor: ${descriptor})` : "";
+
+      // Determine if this is a remap artifact or signature unavailability
+      const isRemapFailed = remapFailedMembers?.get(targetName)?.has(methodName);
+      const isSigFailed = signatureFailedTargets?.has(targetName);
+      const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
+      const issueConfidenceReason = isRemapFailed
+        ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+        : confidenceReason;
+      const resolutionPath: ResolutionPath | undefined = isRemapFailed
+        ? "member-remap-failed"
+        : isSigFailed ? "source-signature-unavailable" : undefined;
+
       issues.push({
         severity: "error",
         kind: "method-not-found",
@@ -248,8 +279,9 @@ function validateInjection(
         message: `Method "${methodName}" not found in target class "${targetName}".${descriptorHint}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: inj.line,
-        confidence,
-        confidenceReason
+        confidence: issueConfidence,
+        confidenceReason: issueConfidenceReason,
+        resolutionPath
       });
       resolvedMembers.push({
         annotation: `@${inj.annotation}`,
@@ -276,11 +308,23 @@ function validateShadow(
   issues: ValidationIssue[],
   resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
-  confidenceReason?: string
+  confidenceReason?: string,
+  remapFailedMembers?: Map<string, Set<string>>,
+  signatureFailedTargets?: Set<string>
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
     if (!members) continue;
+
+    const isRemapFailed = remapFailedMembers?.get(targetName)?.has(shadow.name);
+    const isSigFailed = signatureFailedTargets?.has(targetName);
+    const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
+    const issueConfidenceReason = isRemapFailed
+      ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+      : confidenceReason;
+    const resolutionPath: ResolutionPath | undefined = isRemapFailed
+      ? "member-remap-failed"
+      : isSigFailed ? "source-signature-unavailable" : undefined;
 
     if (shadow.kind === "field") {
       const fieldNames = allFieldNames(members);
@@ -294,8 +338,9 @@ function validateShadow(
           message: `Field "${shadow.name}" not found in target class "${targetName}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
-          confidence,
-          confidenceReason
+          confidence: issueConfidence,
+          confidenceReason: issueConfidenceReason,
+          resolutionPath
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
@@ -313,8 +358,9 @@ function validateShadow(
           message: `Method "${shadow.name}" not found in target class "${targetName}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
-          confidence,
-          confidenceReason
+          confidence: issueConfidence,
+          confidenceReason: issueConfidenceReason,
+          resolutionPath
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
@@ -331,7 +377,9 @@ function validateAccessor(
   issues: ValidationIssue[],
   resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
-  confidenceReason?: string
+  confidenceReason?: string,
+  remapFailedMembers?: Map<string, Set<string>>,
+  signatureFailedTargets?: Set<string>
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -342,6 +390,16 @@ function validateAccessor(
       : allFieldNames(members);
 
     if (!candidateNames.includes(accessor.targetName)) {
+      const isRemapFailed = remapFailedMembers?.get(targetName)?.has(accessor.targetName);
+      const isSigFailed = signatureFailedTargets?.has(targetName);
+      const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
+      const issueConfidenceReason = isRemapFailed
+        ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+        : confidenceReason;
+      const resolutionPath: ResolutionPath | undefined = isRemapFailed
+        ? "member-remap-failed"
+        : isSigFailed ? "source-signature-unavailable" : undefined;
+
       const suggestions = suggestSimilar(accessor.targetName, candidateNames);
       issues.push({
         severity: "error",
@@ -351,8 +409,9 @@ function validateAccessor(
         message: `Target "${accessor.targetName}" (inferred from "${accessor.name}") not found in class "${targetName}".`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: accessor.line,
-        confidence,
-        confidenceReason
+        confidence: issueConfidence,
+        confidenceReason: issueConfidenceReason,
+        resolutionPath
       });
       resolvedMembers.push({ annotation: `@${accessor.annotation}`, name: accessor.targetName, line: accessor.line, status: "not-found" });
     } else {
@@ -368,7 +427,11 @@ export function validateParsedMixin(
   provenance?: MixinValidationProvenance,
   confidence?: IssueConfidence,
   mappingFailedTargets?: Set<string>,
-  explain?: boolean
+  explain?: boolean,
+  remapFailedMembers?: Map<string, Set<string>>,
+  signatureFailedTargets?: Set<string>,
+  suggestedCallContext?: { scope?: string; sourcePriority?: string; projectPath?: string; mapping?: string },
+  warningMode?: "full" | "aggregated"
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -392,7 +455,20 @@ export function validateParsedMixin(
           message: `Could not map target class "${target.className}" to official namespace; class may still exist under a different mapping.`,
           confidence: "uncertain",
           confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`,
-          category: "mapping"
+          category: "mapping",
+          resolutionPath: "target-mapping-failed"
+        });
+      } else if (signatureFailedTargets?.has(target.className)) {
+        issues.push({
+          severity: "error",
+          kind: "target-not-found",
+          annotation: "@Mixin",
+          target: target.className,
+          message: `Target class "${target.className}" not found in game jar.`,
+          confidence,
+          confidenceReason,
+          category: "resolution",
+          resolutionPath: "source-signature-unavailable"
         });
       } else {
         issues.push({
@@ -403,7 +479,8 @@ export function validateParsedMixin(
           message: `Target class "${target.className}" not found in game jar.`,
           confidence,
           confidenceReason,
-          category: "validation"
+          category: "validation",
+          resolutionPath: "target-class-missing"
         });
       }
     }
@@ -414,15 +491,15 @@ export function validateParsedMixin(
   const resolvedMembers: ResolvedMember[] = [];
 
   for (const inj of parsed.injections) {
-    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
+    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
   }
 
   for (const shadow of parsed.shadows) {
-    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
+    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
   }
 
   for (const accessor of parsed.accessors) {
-    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
+    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
   }
 
   // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
@@ -446,11 +523,12 @@ export function validateParsedMixin(
   const warningCount = issues.filter((i) => i.severity === "warning").length;
   const definiteErrors = issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
   const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
+  const resolutionErrors = issues.filter((i) => i.resolutionPath != null).length;
 
   // Assign category to member validation issues that don't have one yet
   for (const issue of issues) {
     if (!issue.category) {
-      issue.category = "validation";
+      issue.category = issue.resolutionPath ? "resolution" : "validation";
     }
   }
 
@@ -458,6 +536,13 @@ export function validateParsedMixin(
   if (explain) {
     const version = provenance?.version;
     const mapping = provenance?.requestedMapping;
+    // Build context fields to spread into suggestedCall params
+    const ctx: Record<string, unknown> = {};
+    if (suggestedCallContext?.scope) ctx.scope = suggestedCallContext.scope;
+    if (suggestedCallContext?.sourcePriority) ctx.sourcePriority = suggestedCallContext.sourcePriority;
+    if (suggestedCallContext?.projectPath) ctx.projectPath = suggestedCallContext.projectPath;
+    if (suggestedCallContext?.mapping) ctx.mapping = suggestedCallContext.mapping;
+
     for (const issue of issues) {
       switch (issue.kind) {
         case "target-not-found":
@@ -465,7 +550,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto" }
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...ctx }
             };
           }
           break;
@@ -474,7 +559,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto" }
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...ctx }
             };
           }
           break;
@@ -485,7 +570,7 @@ export function validateParsedMixin(
           if (version) {
             issue.suggestedCall = {
               tool: "get-class-source",
-              params: { className, targetKind: "version" as const, targetValue: version, ...(mapping ? { mapping } : {}), mode: "metadata" }
+              params: { className, targetKind: "version" as const, targetValue: version, ...(mapping ? { mapping } : {}), mode: "metadata", ...ctx }
             };
           }
           break;
@@ -498,7 +583,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping }
+              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping, ...ctx }
             };
           }
           break;
@@ -516,6 +601,34 @@ export function validateParsedMixin(
     category: MAPPING_WARNING_RE.test(msg) ? "mapping" as IssueCategory : CONFIG_WARNING_RE.test(msg) ? "configuration" as IssueCategory : "validation" as IssueCategory
   }));
 
+  // Warning aggregation mode
+  let aggregatedWarnings: AggregatedWarningGroup[] | undefined;
+  let outputWarnings = warnings;
+  let outputStructuredWarnings = structuredWarnings.length > 0 ? structuredWarnings : undefined;
+
+  if (warningMode === "aggregated" && structuredWarnings.length > 0) {
+    const groupMap = new Map<IssueCategory, { count: number; samples: string[] }>();
+    for (const sw of structuredWarnings) {
+      const cat = sw.category ?? "validation";
+      const existing = groupMap.get(cat);
+      if (existing) {
+        existing.count++;
+        if (existing.samples.length < 2) {
+          existing.samples.push(sw.message);
+        }
+      } else {
+        groupMap.set(cat, { count: 1, samples: [sw.message] });
+      }
+    }
+    aggregatedWarnings = [...groupMap.entries()].map(([category, { count, samples }]) => ({
+      category,
+      count,
+      samples
+    }));
+    outputWarnings = [];
+    outputStructuredWarnings = undefined;
+  }
+
   return {
     className: parsed.className,
     targets: targetNames,
@@ -530,11 +643,13 @@ export function validateParsedMixin(
       errors: errorCount,
       warnings: warningCount,
       definiteErrors,
-      uncertainErrors
+      uncertainErrors,
+      resolutionErrors
     },
     provenance,
-    warnings,
-    structuredWarnings: structuredWarnings.length > 0 ? structuredWarnings : undefined,
+    warnings: outputWarnings,
+    structuredWarnings: outputStructuredWarnings,
+    aggregatedWarnings,
     resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined
   };
 }

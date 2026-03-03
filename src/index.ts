@@ -623,7 +623,9 @@ const validateMixinShape = {
   hideUncertain: z.boolean().optional()
     .describe("Omit issues with confidence='uncertain' (default false)"),
   explain: z.boolean().optional()
-    .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery (default false)")
+    .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery (default false)"),
+  warningMode: z.enum(["full", "aggregated"]).optional()
+    .describe("'full'=all warnings (default), 'aggregated'=group warnings by category with counts and samples")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
   (d) => {
@@ -1451,7 +1453,8 @@ server.tool("validate-mixin",
       preferProjectVersion: input.preferProjectVersion,
       minSeverity: input.minSeverity,
       hideUncertain: input.hideUncertain,
-      explain: input.explain
+      explain: input.explain,
+      warningMode: input.warningMode
     }) as Promise<Record<string, unknown>>
   )
 );

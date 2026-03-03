@@ -4895,3 +4895,120 @@ test("SourceService validateMixin applies resolveArtifact mapping fallback metad
   assert.equal(result.issues[0]?.confidence, "uncertain");
   assert.ok(result.warnings.some((w) => w.includes("Resolve artifact warning from Loom cache.")));
 });
+
+test("SourceService validateMixin auto-detects mapping from project when mapping param omitted", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-autodetect-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [{ ownerFqn: "net.minecraft.server.Main", name: "tick", javaSignature: "void tick()", jvmDescriptor: "()V", accessFlags: 1, isSynthetic: false }],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).workspaceMappingService = {
+    async detectCompileMapping() {
+      return {
+        resolved: true,
+        mappingApplied: "mojang",
+        evidence: [],
+        warnings: ["Found officialMojangMappings() in build.gradle."]
+      };
+    },
+    async detectProjectMinecraftVersion() { return undefined; }
+  };
+  (service as any).mappingService = {
+    async findMapping() {
+      return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" }, status: "resolved", warnings: [] };
+    }
+  };
+
+  const result = await service.validateMixin({
+    source: [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class MainMixin {}"
+    ].join("\n"),
+    version: "1.21",
+    // mapping intentionally omitted — should auto-detect
+    projectPath: root
+  });
+
+  assert.equal(result.provenance?.mappingAutoDetected, true);
+  assert.equal(result.provenance?.requestedMapping, "mojang");
+  assert.ok(result.warnings.some((w) => w.includes("Auto-detected mapping")));
+});
+
+test("SourceService validateMixin falls back to vanilla when scope=merged resolution fails", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-scope-fallback-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [{ ownerFqn: "net.minecraft.server.Main", name: "tick", javaSignature: "void tick()", jvmDescriptor: "()V", accessFlags: 1, isSynthetic: false }],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  // resolveArtifact throws to simulate Loom cache miss
+  (service as any).resolveArtifact = async () => {
+    throw new Error("Loom cache not found for version 1.21");
+  };
+  (service as any).workspaceMappingService = {
+    async detectCompileMapping() {
+      return { resolved: false, evidence: [], warnings: [] };
+    },
+    async detectProjectMinecraftVersion() { return undefined; }
+  };
+
+  const result = await service.validateMixin({
+    source: [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class MainMixin {}"
+    ].join("\n"),
+    version: "1.21",
+    mapping: "official",
+    scope: "merged",
+    projectPath: root
+  });
+
+  // Should have fallen back to vanilla scope
+  assert.ok(result.provenance?.scopeFallback);
+  assert.equal(result.provenance!.scopeFallback!.requested, "merged");
+  assert.equal(result.provenance!.scopeFallback!.applied, "vanilla");
+  assert.ok(result.provenance!.scopeFallback!.reason.includes("Loom cache"));
+  assert.equal(result.provenance?.jarType, "vanilla-client");
+  assert.ok(result.warnings.some((w) => w.includes("falling back to vanilla")));
+});

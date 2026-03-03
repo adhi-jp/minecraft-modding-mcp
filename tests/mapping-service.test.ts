@@ -840,6 +840,58 @@ test("MappingService checks symbol existence across class/field/method kinds", a
   );
   assert.equal(methodExists.resolved, true);
   assert.equal(methodExists.status, "resolved");
+
+  // signatureMode=name-only should NOT throw when descriptor is omitted
+  const nameOnlyResult = await withCwd(root, () =>
+    (
+      service as unknown as {
+        checkSymbolExists: (input: {
+          version: string;
+          kind: "class" | "field" | "method";
+          owner?: string;
+          name: string;
+          sourceMapping: SourceMapping;
+          signatureMode?: "exact" | "name-only";
+        }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
+      }
+    ).checkSymbolExists({
+      version: "1.21.10",
+      kind: "method",
+      owner: "a.b.C",
+      name: "f",
+      sourceMapping: "official",
+      signatureMode: "name-only"
+    })
+  );
+  // Two overloads of "f" exist, so name-only resolves as ambiguous
+  assert.equal(nameOnlyResult.status, "ambiguous");
+  assert.ok(nameOnlyResult.candidates.length >= 2);
+
+  // signatureMode=name-only with unique method "e" should resolve
+  const nameOnlyUnique = await withCwd(root, () =>
+    (
+      service as unknown as {
+        checkSymbolExists: (input: {
+          version: string;
+          kind: "class" | "field" | "method";
+          owner?: string;
+          name: string;
+          sourceMapping: SourceMapping;
+          signatureMode?: "exact" | "name-only";
+        }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
+      }
+    ).checkSymbolExists({
+      version: "1.21.10",
+      kind: "method",
+      owner: "a.b.C",
+      name: "e",
+      sourceMapping: "official",
+      signatureMode: "name-only"
+    })
+  );
+  assert.equal(nameOnlyUnique.resolved, true);
+  assert.equal(nameOnlyUnique.status, "resolved");
+  assert.equal(nameOnlyUnique.candidates.length, 1);
 });
 
 test("MappingService supports short class name checks when nameMode=auto", async () => {

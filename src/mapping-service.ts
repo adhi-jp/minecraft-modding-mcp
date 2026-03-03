@@ -935,7 +935,8 @@ function normalizeMethodDescriptor(descriptor: string | undefined): string {
 }
 
 function normalizeQuerySymbol(
-  input: SymbolQueryInput
+  input: SymbolQueryInput,
+  signatureMode?: "exact" | "name-only"
 ): {
   record: MappingSymbolRecord;
   querySymbol: SymbolReference;
@@ -1001,10 +1002,13 @@ function normalizeQuerySymbol(
     };
   }
 
+  const descriptor = signatureMode === "name-only"
+    ? (input.descriptor?.trim() || "")
+    : normalizeMethodDescriptor(input.descriptor);
   const record = createMethodSymbolRecord(
     owner,
     normalizeMemberName(normalizedName),
-    normalizeMethodDescriptor(input.descriptor)
+    descriptor
   );
   return {
     record,
@@ -1724,7 +1728,7 @@ export class MappingService {
             };
           })()
         : (() => {
-            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input);
+            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode);
             return {
               mode: "strict",
               queryRecord,

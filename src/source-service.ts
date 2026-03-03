@@ -522,6 +522,7 @@ export type ValidateMixinInput = {
   minSeverity?: "error" | "warning" | "all";
   hideUncertain?: boolean;
   explain?: boolean;
+  warningMode?: "full" | "aggregated";
 };
 
 export type ValidateMixinBatchResult = {
@@ -533,6 +534,7 @@ export type ValidateMixinBatchResult = {
 export type ValidateMixinBatchIssueSummaryItem = {
   kind: string;
   confidence: string;
+  category: string;
   count: number;
   sampleTargets: string[];
 };
@@ -2603,20 +2605,20 @@ export class SourceService {
       delta: DiffClassMemberDelta,
       kind: "field" | "method"
     ): Promise<DiffClassMemberDelta> => {
-      const [remappedAdded, remappedRemoved] = await Promise.all([
+      const [addedResult, removedResult] = await Promise.all([
         this.remapSignatureMembers(delta.added, kind, toVersion, mapping, input.sourcePriority, warnings),
         this.remapSignatureMembers(delta.removed, kind, fromVersion, mapping, input.sourcePriority, warnings)
       ]);
       const remappedModified = await Promise.all(
         delta.modified.map(async (change) => {
-          const [fromArr, toArr] = await Promise.all([
+          const [fromResult, toResult] = await Promise.all([
             this.remapSignatureMembers([change.from], kind, fromVersion, mapping, input.sourcePriority, warnings),
             this.remapSignatureMembers([change.to], kind, toVersion, mapping, input.sourcePriority, warnings)
           ]);
-          return { ...change, from: fromArr[0], to: toArr[0] };
+          return { ...change, from: fromResult.members[0], to: toResult.members[0] };
         })
       );
-      return { added: remappedAdded, removed: remappedRemoved, modified: remappedModified };
+      return { added: addedResult.members, removed: removedResult.members, modified: remappedModified };
     };
 
     const [remappedConstructors, remappedMethods, remappedFields] = await Promise.all([
@@ -3081,15 +3083,15 @@ export class SourceService {
 
     let remappedConstructors =
       version != null
-        ? await this.remapSignatureMembers(signature.constructors, "method", version, requestedMapping, input.sourcePriority, warnings)
+        ? (await this.remapSignatureMembers(signature.constructors, "method", version, requestedMapping, input.sourcePriority, warnings)).members
         : signature.constructors;
     let remappedFields =
       version != null
-        ? await this.remapSignatureMembers(signature.fields, "field", version, requestedMapping, input.sourcePriority, warnings)
+        ? (await this.remapSignatureMembers(signature.fields, "field", version, requestedMapping, input.sourcePriority, warnings)).members
         : signature.fields;
     let remappedMethods =
       version != null
-        ? await this.remapSignatureMembers(signature.methods, "method", version, requestedMapping, input.sourcePriority, warnings)
+        ? (await this.remapSignatureMembers(signature.methods, "method", version, requestedMapping, input.sourcePriority, warnings)).members
         : signature.methods;
 
     // Apply memberPattern post-remap for non-official mappings
@@ -3232,7 +3234,27 @@ export class SourceService {
     }
 
     const warnings: string[] = [];
-    const requestedMapping = normalizeMapping(input.mapping);
+    let mappingAutoDetected = false;
+
+    // Auto-detect mapping from project config when not explicitly provided
+    let detectedMapping: SourceMapping | undefined;
+    if (!input.mapping && input.projectPath) {
+      try {
+        const detection = await this.workspaceMappingService.detectCompileMapping({ projectPath: input.projectPath });
+        if (detection.resolved && detection.mappingApplied) {
+          detectedMapping = detection.mappingApplied;
+          mappingAutoDetected = true;
+          warnings.push(`Auto-detected mapping '${detectedMapping}' from project configuration.`);
+          warnings.push(...detection.warnings);
+        } else {
+          warnings.push(...detection.warnings);
+        }
+      } catch {
+        // Detection failed — fall through to default
+      }
+    }
+
+    const requestedMapping = normalizeMapping(detectedMapping ?? input.mapping);
     let mappingApplied: SourceMapping = requestedMapping;
 
     // preferProjectVersion: detect MC version from gradle.properties
@@ -3246,20 +3268,32 @@ export class SourceService {
 
     // Resolve jar: use Loom cache for non-vanilla scope with projectPath
     let jarPath: string;
+    let scopeFallback: { requested: string; applied: string; reason: string } | undefined;
     if (input.scope && input.scope !== "vanilla" && input.projectPath) {
-      const resolved = await this.resolveArtifact({
-        target: { kind: "version", value: version },
-        mapping: requestedMapping,
-        sourcePriority: input.sourcePriority,
-        projectPath: input.projectPath,
-        scope: input.scope,
-        preferProjectVersion: false
-      });
-      jarPath = resolved.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
-      warnings.push(...resolved.warnings);
-      mappingApplied = resolved.mappingApplied;
-      if (resolved.version) {
-        version = resolved.version;
+      try {
+        const resolved = await this.resolveArtifact({
+          target: { kind: "version", value: version },
+          mapping: requestedMapping,
+          sourcePriority: input.sourcePriority,
+          projectPath: input.projectPath,
+          scope: input.scope,
+          preferProjectVersion: false
+        });
+        jarPath = resolved.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
+        warnings.push(...resolved.warnings);
+        mappingApplied = resolved.mappingApplied;
+        if (resolved.version) {
+          version = resolved.version;
+        }
+      } catch (scopeErr) {
+        // Scope preflight failed — fall back to vanilla
+        scopeFallback = {
+          requested: input.scope,
+          applied: "vanilla",
+          reason: `Loom cache unavailable: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`
+        };
+        warnings.push(`Scope "${input.scope}" resolution failed; falling back to vanilla. ${scopeFallback.reason}`);
+        jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
       }
     } else {
       jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
@@ -3268,6 +3302,8 @@ export class SourceService {
 
     const targetMembers = new Map<string, ResolvedTargetMembers>();
     const mappingFailedTargets = new Set<string>();
+    const remapFailedMembers = new Map<string, Set<string>>();
+    const signatureFailedTargets = new Set<string>();
 
     for (const target of parsed.targets) {
       // Bug 1 fix: resolve simple names via imports
@@ -3329,11 +3365,23 @@ export class SourceService {
 
         if (requestedMapping !== "official") {
           try {
-            [constructors, methods, fields] = await Promise.all([
+            const [ctorResult, methodResult, fieldResult] = await Promise.all([
               this.remapSignatureMembers(sig.constructors, "method", version, requestedMapping, input.sourcePriority, warnings),
               this.remapSignatureMembers(sig.methods, "method", version, requestedMapping, input.sourcePriority, warnings),
               this.remapSignatureMembers(sig.fields, "field", version, requestedMapping, input.sourcePriority, warnings)
             ]);
+            constructors = ctorResult.members;
+            methods = methodResult.members;
+            fields = fieldResult.members;
+
+            // Collect remap-failed member names for this target
+            const targetFailed = new Set<string>();
+            for (const n of ctorResult.failedNames) targetFailed.add(n);
+            for (const n of methodResult.failedNames) targetFailed.add(n);
+            for (const n of fieldResult.failedNames) targetFailed.add(n);
+            if (targetFailed.size > 0) {
+              remapFailedMembers.set(target.className, targetFailed);
+            }
           } catch {
             warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names. Member names shown may be in official (obfuscated) namespace.`);
             mappingApplied = "official";
@@ -3348,6 +3396,7 @@ export class SourceService {
         });
       } catch {
         warnings.push(`Could not load signature for class "${resolvedClassName}" (official: "${officialName}").`);
+        signatureFailedTargets.add(target.className);
       }
     }
 
@@ -3385,12 +3434,19 @@ export class SourceService {
       requestedMapping,
       mappingApplied,
       resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined,
-      jarType: (input.scope && input.scope !== "vanilla" && input.projectPath) ? "merged" : "vanilla-client",
+      jarType: scopeFallback ? "vanilla-client" : (input.scope && input.scope !== "vanilla" && input.projectPath) ? "merged" : "vanilla-client",
       mappingChain: mappingChain.length > 0 ? mappingChain : undefined,
-      remapFailures: remapFailures > 0 ? remapFailures : undefined
+      remapFailures: remapFailures > 0 ? remapFailures : undefined,
+      mappingAutoDetected: mappingAutoDetected || undefined,
+      scopeFallback
     };
 
-    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain);
+    const result = validateParsedMixin(
+      parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain,
+      remapFailedMembers, signatureFailedTargets,
+      input.explain ? { scope: input.scope, sourcePriority: input.sourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
+      input.warningMode
+    );
 
     // Apply minSeverity / hideUncertain filters
     const minSeverity = input.minSeverity ?? "all";
@@ -3414,6 +3470,7 @@ export class SourceService {
       const filteredWarnings = filtered.filter((i) => i.severity === "warning").length;
       const filteredDefiniteErrors = filtered.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
       const filteredUncertainErrors = filtered.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
+      const filteredResolutionErrors = filtered.filter((i) => i.resolutionPath != null).length;
 
       result.issues = filtered;
       result.summary = {
@@ -3421,7 +3478,8 @@ export class SourceService {
         errors: filteredErrors,
         warnings: filteredWarnings,
         definiteErrors: filteredDefiniteErrors,
-        uncertainErrors: filteredUncertainErrors
+        uncertainErrors: filteredUncertainErrors,
+        resolutionErrors: filteredResolutionErrors
       };
       result.unfilteredSummary = unfilteredSummary;
       result.valid = filteredDefiniteErrors === 0;
@@ -3460,12 +3518,12 @@ export class SourceService {
       }
     }
 
-    // Build issueSummary: aggregate issues across all results by (kind, confidence)
-    const issueGroupMap = new Map<string, { kind: string; confidence: string; count: number; sampleTargets: string[] }>();
+    // Build issueSummary: aggregate issues across all results by (kind, confidence, category)
+    const issueGroupMap = new Map<string, { kind: string; confidence: string; category: string; count: number; sampleTargets: string[] }>();
     for (const r of results) {
       if (!r.result) continue;
       for (const issue of r.result.issues) {
-        const key = `${issue.kind}\0${issue.confidence ?? "unknown"}`;
+        const key = `${issue.kind}\0${issue.confidence ?? "unknown"}\0${issue.category ?? "validation"}`;
         const existing = issueGroupMap.get(key);
         if (existing) {
           existing.count++;
@@ -3476,6 +3534,7 @@ export class SourceService {
           issueGroupMap.set(key, {
             kind: issue.kind,
             confidence: issue.confidence ?? "unknown",
+            category: issue.category ?? "validation",
             count: 1,
             sampleTargets: [issue.target]
           });
@@ -4556,9 +4615,10 @@ export class SourceService {
     mapping: SourceMapping,
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[]
-  ): Promise<SignatureMember[]> {
+  ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
+    const failedNames = new Set<string>();
     if (mapping === "official") {
-      return members;
+      return { members, failedNames };
     }
 
     // Build deduplicated lookup tables for member names and owner FQNs
@@ -4595,9 +4655,11 @@ export class SourceService {
             memberKeyToRemapped.set(key, mapped.resolvedSymbol.name);
           } else {
             warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
+            failedNames.add(name!);
           }
         } catch {
           warnings.push(`Remap failed for ${kind} "${name}".`);
+          failedNames.add(name!);
         }
       })
     );
@@ -4624,14 +4686,17 @@ export class SourceService {
       })
     );
 
-    return members.map((member) => {
-      const memberKey = `${member.ownerFqn}\0${member.name}\0${member.jvmDescriptor}`;
-      return {
-        ...member,
-        name: memberKeyToRemapped.get(memberKey) ?? member.name,
-        ownerFqn: ownerToRemapped.get(member.ownerFqn) ?? member.ownerFqn
-      };
-    });
+    return {
+      members: members.map((member) => {
+        const memberKey = `${member.ownerFqn}\0${member.name}\0${member.jvmDescriptor}`;
+        return {
+          ...member,
+          name: memberKeyToRemapped.get(memberKey) ?? member.name,
+          ownerFqn: ownerToRemapped.get(member.ownerFqn) ?? member.ownerFqn
+        };
+      }),
+      failedNames
+    };
   }
 
   private fallbackArtifactSignature(artifactId: string): string {
