@@ -18,6 +18,7 @@ export type ValidationIssue = {
   severity: "error" | "warning";
   kind:
     | "target-not-found"
+    | "target-mapping-failed"
     | "method-not-found"
     | "field-not-found"
     | "descriptor-mismatch"
@@ -324,7 +325,8 @@ export function validateParsedMixin(
   targetMembers: Map<string, ResolvedTargetMembers>,
   warnings: string[],
   provenance?: MixinValidationProvenance,
-  confidence?: IssueConfidence
+  confidence?: IssueConfidence,
+  mappingFailedTargets?: Set<string>
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -338,15 +340,28 @@ export function validateParsedMixin(
   // Check target classes exist
   for (const target of parsed.targets) {
     if (!targetMembers.has(target.className)) {
-      issues.push({
-        severity: "error",
-        kind: "target-not-found",
-        annotation: "@Mixin",
-        target: target.className,
-        message: `Target class "${target.className}" not found in game jar.`,
-        confidence,
-        confidenceReason
-      });
+      if (mappingFailedTargets?.has(target.className)) {
+        // Mapping failure — report as warning with distinct kind
+        issues.push({
+          severity: "warning",
+          kind: "target-mapping-failed",
+          annotation: "@Mixin",
+          target: target.className,
+          message: `Could not map target class "${target.className}" to official namespace; class may still exist under a different mapping.`,
+          confidence: "uncertain",
+          confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`
+        });
+      } else {
+        issues.push({
+          severity: "error",
+          kind: "target-not-found",
+          annotation: "@Mixin",
+          target: target.className,
+          message: `Target class "${target.className}" not found in game jar.`,
+          confidence,
+          confidenceReason
+        });
+      }
     }
   }
 

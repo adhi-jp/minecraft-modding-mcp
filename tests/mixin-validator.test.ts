@@ -448,6 +448,49 @@ test("validateParsedAccessWidener summary counts", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/*  target-mapping-failed: mapping failure ≠ target-not-found          */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin reports target-mapping-failed when target is in mappingFailedTargets", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const mappingFailedTargets = new Set(["SomeClass"]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].kind, "target-mapping-failed");
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].confidence, "uncertain");
+  assert.equal(result.valid, true); // warning, not error
+});
+
+test("validateParsedMixin reports target-not-found for non-mapping failures", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const mappingFailedTargets = new Set(["OtherClass"]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].kind, "target-not-found");
+  assert.equal(result.issues[0].severity, "error");
+});
+
+test("validateParsedMixin distinguishes mapping-failed and not-found in same batch", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MappedClass" }, { className: "GoneClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const mappingFailedTargets = new Set(["MappedClass"]);
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
+  assert.equal(result.issues.length, 2);
+  const kinds = result.issues.map((i) => i.kind);
+  assert.ok(kinds.includes("target-mapping-failed"));
+  assert.ok(kinds.includes("target-not-found"));
+});
+
+/* ------------------------------------------------------------------ */
 /*  Phase 1: extractMethodName / extractMethodDescriptor tests         */
 /* ------------------------------------------------------------------ */
 

@@ -3214,6 +3214,7 @@ export class SourceService {
     const parsed = parseMixinSource(source);
 
     const targetMembers = new Map<string, ResolvedTargetMembers>();
+    const mappingFailedTargets = new Set<string>();
 
     for (const target of parsed.targets) {
       // Bug 1 fix: resolve simple names via imports
@@ -3252,9 +3253,11 @@ export class SourceService {
             officialName = mapped.resolvedSymbol.name;
           } else {
             warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official.`);
+            mappingFailedTargets.add(target.className);
           }
         } catch {
           warnings.push(`Mapping lookup failed for class "${resolvedClassName}".`);
+          mappingFailedTargets.add(target.className);
         }
       }
 
@@ -3334,7 +3337,7 @@ export class SourceService {
       remapFailures: remapFailures > 0 ? remapFailures : undefined
     };
 
-    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence);
+    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets);
 
     // Apply minSeverity / hideUncertain filters
     const minSeverity = input.minSeverity ?? "all";
