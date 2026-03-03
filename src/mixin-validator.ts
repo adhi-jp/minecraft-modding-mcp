@@ -12,6 +12,16 @@ import type { SourceMapping } from "./types.js";
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
+export type MappingHealthReport = {
+  jarAvailable: boolean;
+  jarPath: string;
+  mojangMappingsAvailable: boolean;
+  tinyMappingsAvailable: boolean;
+  memberRemapAvailable: boolean;
+  overallHealthy: boolean;
+  degradations: string[];
+};
+
 export type IssueConfidence = "definite" | "likely" | "uncertain";
 
 export type ResolutionPath =
@@ -41,6 +51,7 @@ export type ValidationIssue = {
   resolutionPath?: ResolutionPath;
   explanation?: string;
   suggestedCall?: { tool: string; params: Record<string, unknown> };
+  falsePositiveRisk?: "high" | "medium" | "low";
 };
 
 export type ValidationSummary = {
@@ -103,6 +114,8 @@ export type MixinValidationResult = {
   structuredWarnings?: StructuredWarning[];
   aggregatedWarnings?: AggregatedWarningGroup[];
   resolvedMembers?: ResolvedMember[];
+  toolHealth?: MappingHealthReport;
+  confidenceScore?: number;
 };
 
 export type ResolvedTargetMembers = {
@@ -237,6 +250,48 @@ function allFieldNames(members: ResolvedTargetMembers): string[] {
   return members.fields.map((m) => m.name);
 }
 
+function computeFalsePositiveRisk(
+  healthReport: MappingHealthReport | undefined,
+  resolutionPath: ResolutionPath | undefined,
+  issueConfidence: IssueConfidence | undefined
+): "high" | "medium" | "low" | undefined {
+  if (!healthReport) return undefined;
+
+  if (healthReport.overallHealthy === false) {
+    if (
+      resolutionPath === "source-signature-unavailable" ||
+      resolutionPath === "target-mapping-failed" ||
+      resolutionPath === "member-remap-failed"
+    ) return "high";
+    if (issueConfidence === "uncertain") return "medium";
+    return "medium";
+  }
+
+  if (healthReport.memberRemapAvailable === false) {
+    if (resolutionPath === "member-remap-failed") return "high";
+    if (issueConfidence === "uncertain") return "medium";
+  }
+
+  return undefined;
+}
+
+function computeConfidenceScore(
+  healthReport: MappingHealthReport | undefined,
+  provenance: MixinValidationProvenance | undefined,
+  remapFailureCount: number
+): number {
+  let score = 100;
+  if (healthReport) {
+    if (!healthReport.overallHealthy) score -= 30;
+    if (!healthReport.tinyMappingsAvailable) score -= 20;
+    if (!healthReport.memberRemapAvailable) score -= 15;
+  }
+  if (provenance?.scopeFallback) score -= 10;
+  if (provenance && provenance.requestedMapping !== provenance.mappingApplied) score -= 15;
+  score -= Math.min(remapFailureCount * 2, 20);
+  return Math.max(score, 0);
+}
+
 function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
@@ -246,7 +301,8 @@ function validateInjection(
   confidence?: IssueConfidence,
   confidenceReason?: string,
   remapFailedMembers?: Map<string, Set<string>>,
-  signatureFailedTargets?: Set<string>
+  signatureFailedTargets?: Set<string>,
+  healthReport?: MappingHealthReport
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -270,18 +326,20 @@ function validateInjection(
       const resolutionPath: ResolutionPath | undefined = isRemapFailed
         ? "member-remap-failed"
         : isSigFailed ? "source-signature-unavailable" : undefined;
+      const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
 
       issues.push({
-        severity: "error",
+        severity: memberDegraded ? "warning" : "error",
         kind: "method-not-found",
         annotation: `@${inj.annotation}`,
         target: `${targetName}#${inj.method}`,
-        message: `Method "${methodName}" not found in target class "${targetName}".${descriptorHint}`,
+        message: `Method "${methodName}" not found in target class "${targetName}".${descriptorHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: inj.line,
         confidence: issueConfidence,
         confidenceReason: issueConfidenceReason,
-        resolutionPath
+        resolutionPath,
+        falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
       });
       resolvedMembers.push({
         annotation: `@${inj.annotation}`,
@@ -310,7 +368,8 @@ function validateShadow(
   confidence?: IssueConfidence,
   confidenceReason?: string,
   remapFailedMembers?: Map<string, Set<string>>,
-  signatureFailedTargets?: Set<string>
+  signatureFailedTargets?: Set<string>,
+  healthReport?: MappingHealthReport
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -325,22 +384,24 @@ function validateShadow(
     const resolutionPath: ResolutionPath | undefined = isRemapFailed
       ? "member-remap-failed"
       : isSigFailed ? "source-signature-unavailable" : undefined;
+    const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
 
     if (shadow.kind === "field") {
       const fieldNames = allFieldNames(members);
       if (!fieldNames.includes(shadow.name)) {
         const suggestions = suggestSimilar(shadow.name, fieldNames);
         issues.push({
-          severity: "error",
+          severity: memberDegraded ? "warning" : "error",
           kind: "field-not-found",
           annotation: "@Shadow",
           target: `${targetName}#${shadow.name}`,
-          message: `Field "${shadow.name}" not found in target class "${targetName}".`,
+          message: `Field "${shadow.name}" not found in target class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
           confidenceReason: issueConfidenceReason,
-          resolutionPath
+          resolutionPath,
+          falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
@@ -351,16 +412,17 @@ function validateShadow(
       if (!methodNames.includes(shadow.name)) {
         const suggestions = suggestSimilar(shadow.name, methodNames);
         issues.push({
-          severity: "error",
+          severity: memberDegraded ? "warning" : "error",
           kind: "method-not-found",
           annotation: "@Shadow",
           target: `${targetName}#${shadow.name}`,
-          message: `Method "${shadow.name}" not found in target class "${targetName}".`,
+          message: `Method "${shadow.name}" not found in target class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
           confidenceReason: issueConfidenceReason,
-          resolutionPath
+          resolutionPath,
+          falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
@@ -379,7 +441,8 @@ function validateAccessor(
   confidence?: IssueConfidence,
   confidenceReason?: string,
   remapFailedMembers?: Map<string, Set<string>>,
-  signatureFailedTargets?: Set<string>
+  signatureFailedTargets?: Set<string>,
+  healthReport?: MappingHealthReport
 ): void {
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
@@ -399,19 +462,21 @@ function validateAccessor(
       const resolutionPath: ResolutionPath | undefined = isRemapFailed
         ? "member-remap-failed"
         : isSigFailed ? "source-signature-unavailable" : undefined;
+      const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
 
       const suggestions = suggestSimilar(accessor.targetName, candidateNames);
       issues.push({
-        severity: "error",
+        severity: memberDegraded ? "warning" : "error",
         kind: accessor.annotation === "Invoker" ? "method-not-found" : "field-not-found",
         annotation: `@${accessor.annotation}`,
         target: `${targetName}#${accessor.targetName}`,
-        message: `Target "${accessor.targetName}" (inferred from "${accessor.name}") not found in class "${targetName}".`,
+        message: `Target "${accessor.targetName}" (inferred from "${accessor.name}") not found in class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: accessor.line,
         confidence: issueConfidence,
         confidenceReason: issueConfidenceReason,
-        resolutionPath
+        resolutionPath,
+        falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
       });
       resolvedMembers.push({ annotation: `@${accessor.annotation}`, name: accessor.targetName, line: accessor.line, status: "not-found" });
     } else {
@@ -431,7 +496,8 @@ export function validateParsedMixin(
   remapFailedMembers?: Map<string, Set<string>>,
   signatureFailedTargets?: Set<string>,
   suggestedCallContext?: { scope?: string; sourcePriority?: string; projectPath?: string; mapping?: string },
-  warningMode?: "full" | "aggregated"
+  warningMode?: "full" | "aggregated",
+  healthReport?: MappingHealthReport
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -456,19 +522,24 @@ export function validateParsedMixin(
           confidence: "uncertain",
           confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`,
           category: "mapping",
-          resolutionPath: "target-mapping-failed"
+          resolutionPath: "target-mapping-failed",
+          falsePositiveRisk: healthReport?.overallHealthy === false ? "high" : "medium"
         });
       } else if (signatureFailedTargets?.has(target.className)) {
+        const degraded = healthReport?.overallHealthy === false;
         issues.push({
-          severity: "error",
+          severity: degraded ? "warning" : "error",
           kind: "target-not-found",
           annotation: "@Mixin",
           target: target.className,
-          message: `Target class "${target.className}" not found in game jar.`,
-          confidence,
-          confidenceReason,
+          message: `Target class "${target.className}" not found in game jar.${degraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+          confidence: degraded ? "uncertain" : confidence,
+          confidenceReason: degraded
+            ? "Mapping infrastructure is degraded; result may be inaccurate."
+            : confidenceReason,
           category: "resolution",
-          resolutionPath: "source-signature-unavailable"
+          resolutionPath: "source-signature-unavailable",
+          falsePositiveRisk: degraded ? "high" : undefined
         });
       } else {
         issues.push({
@@ -491,15 +562,15 @@ export function validateParsedMixin(
   const resolvedMembers: ResolvedMember[] = [];
 
   for (const inj of parsed.injections) {
-    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
+    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   for (const shadow of parsed.shadows) {
-    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
+    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   for (const accessor of parsed.accessors) {
-    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets);
+    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
@@ -629,6 +700,12 @@ export function validateParsedMixin(
     outputStructuredWarnings = undefined;
   }
 
+  // Compute confidence score
+  const remapFailureCount = provenance?.remapFailures ?? 0;
+  const confidenceScore = healthReport
+    ? computeConfidenceScore(healthReport, provenance, remapFailureCount)
+    : undefined;
+
   return {
     className: parsed.className,
     targets: targetNames,
@@ -650,7 +727,9 @@ export function validateParsedMixin(
     warnings: outputWarnings,
     structuredWarnings: outputStructuredWarnings,
     aggregatedWarnings,
-    resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined
+    resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined,
+    toolHealth: healthReport,
+    confidenceScore
   };
 }
 

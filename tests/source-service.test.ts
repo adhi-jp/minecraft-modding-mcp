@@ -5078,6 +5078,90 @@ test("SourceService validateMixin falls back to vanilla when scope=merged resolu
   assert.ok(result.warnings.some((w) => w.includes("falling back to vanilla")));
 });
 
+test("SourceService validateMixin mixinConfigPath auto-detect finds multiple module source roots", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-config-roots-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
+  const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
+  const mixinConfigPath = join(root, "neoforge", "src", "main", "resources", "example.mixins.json");
+
+  await mkdir(commonJavaRoot, { recursive: true });
+  await mkdir(neoJavaRoot, { recursive: true });
+  await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
+
+  const mixinSource = [
+    "import net.minecraft.server.Main;",
+    "import org.spongepowered.asm.mixin.Mixin;",
+    "",
+    "@Mixin(Main.class)",
+    "public abstract class __CLASS__ {}"
+  ].join("\n");
+
+  await writeFile(
+    join(commonJavaRoot, "CommonMixin.java"),
+    mixinSource.replace("__CLASS__", "CommonMixin"),
+    "utf8"
+  );
+  await writeFile(
+    join(neoJavaRoot, "NeoMixin.java"),
+    mixinSource.replace("__CLASS__", "NeoMixin"),
+    "utf8"
+  );
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({ package: "com.example", mixins: ["CommonMixin", "NeoMixin"] }, null, 2),
+    "utf8"
+  );
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    mixinConfigPath,
+    projectPath: root,
+    version: "1.21",
+    mapping: "official"
+  });
+
+  assert.ok("results" in result);
+  assert.equal(result.summary.total, 2);
+  assert.equal(result.summary.errors, 0);
+  assert.equal(result.summary.processingErrors, 0);
+  assert.equal(result.summary.valid, 2);
+  assert.equal(result.summary.invalid, 0);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results.filter((r) => r.error != null).length, 0);
+  assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
+});
+
 // ---------------------------------------------------------------------------
 // F-01: strictVersion rejects version-approximated results
 // ---------------------------------------------------------------------------

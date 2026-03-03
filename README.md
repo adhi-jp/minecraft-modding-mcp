@@ -237,7 +237,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `summary`, `provenance?`, `resolvedMembers?`; batch: `results[]`, `summary` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `summary`, `provenance?`, `resolvedMembers?`, `toolHealth?`, `confidenceScore?`; batch: `results[]`, `summary`, `toolHealth?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -253,7 +253,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
-`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation (`sourceRoot` defaults to `src/main/java`).
+`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation (`sourceRoots[]` or `sourceRoot` override lookup roots; otherwise common roots like `src/main/java`, `common/src/main/java`, `fabric/src/main/java`, and `neoforge/src/main/java` are auto-detected from configured mixin classes).
 `validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.

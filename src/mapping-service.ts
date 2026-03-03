@@ -1991,6 +1991,70 @@ export class MappingService {
     };
   }
 
+  /**
+   * Probe the mapping graph health for a given version.
+   * Returns availability of mojang mappings, tiny mappings, and member remap paths.
+   */
+  async checkMappingHealth(input: {
+    version: string;
+    requestedMapping: SourceMapping;
+    sourcePriority?: MappingSourcePriority;
+  }): Promise<{
+    mojangMappingsAvailable: boolean;
+    tinyMappingsAvailable: boolean;
+    memberRemapAvailable: boolean;
+    degradations: string[];
+  }> {
+    const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
+    const degradations: string[] = [];
+
+    let graph: LoadedGraph;
+    try {
+      graph = await this.loadGraph(input.version, priority);
+    } catch {
+      return {
+        mojangMappingsAvailable: false,
+        tinyMappingsAvailable: false,
+        memberRemapAvailable: false,
+        degradations: ["Mapping graph could not be loaded."]
+      };
+    }
+
+    // Check for mojang-client-mappings pairs
+    let mojangAvailable = false;
+    let tinyAvailable = false;
+    for (const [, record] of graph.pairs) {
+      if (record.source === "mojang-client-mappings") mojangAvailable = true;
+      if (record.source === "loom-cache" || record.source === "maven") tinyAvailable = true;
+    }
+
+    if (!mojangAvailable) {
+      degradations.push("Mojang client mappings are not available for this version.");
+    }
+    if (!tinyAvailable) {
+      degradations.push("No intermediary/yarn tiny mappings were found for this version.");
+    }
+
+    // Check if member remap path exists (requestedMapping → official)
+    let memberRemapAvailable = false;
+    if (input.requestedMapping === "official") {
+      memberRemapAvailable = true;
+    } else {
+      const path = namespacePath(graph.pairs, input.requestedMapping, "official");
+      memberRemapAvailable = path != null && path.length > 1;
+      if (!memberRemapAvailable) {
+        degradations.push(`No mapping path from ${input.requestedMapping} to official; member remap will fail.`);
+      }
+    }
+
+    return {
+      mojangMappingsAvailable: mojangAvailable,
+      tinyMappingsAvailable: tinyAvailable,
+      memberRemapAvailable,
+      degradations
+    };
+  }
+
   private async loadGraph(version: string, priority: MappingSourcePriority): Promise<LoadedGraph> {
     const cacheKey = `${version}|${priority}`;
     const cached = this.graphCache.get(cacheKey);

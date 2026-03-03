@@ -12,6 +12,7 @@ import {
   validateParsedAccessWidener,
   type ResolvedTargetMembers,
   type MixinValidationProvenance,
+  type MappingHealthReport,
   type ResolvedMember,
   type IssueCategory,
   type ResolutionPath
@@ -1306,4 +1307,371 @@ test("validateParsedMixin warningMode=full preserves all warnings (default)", ()
   assert.equal(result.warnings.length, 2);
   assert.ok(result.structuredWarnings);
   assert.equal(result.aggregatedWarnings, undefined);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P1: toolHealth report                                              */
+/* ------------------------------------------------------------------ */
+
+function makeHealthReport(overrides: Partial<MappingHealthReport> = {}): MappingHealthReport {
+  return {
+    jarAvailable: true,
+    jarPath: "/fake/jar.jar",
+    mojangMappingsAvailable: true,
+    tinyMappingsAvailable: true,
+    memberRemapAvailable: true,
+    overallHealthy: true,
+    degradations: [],
+    ...overrides
+  };
+}
+
+test("P1: toolHealth is included in result when healthReport provided", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.ok(result.toolHealth);
+  assert.equal(result.toolHealth!.jarAvailable, true);
+  assert.equal(result.toolHealth!.overallHealthy, true);
+  assert.deepEqual(result.toolHealth!.degradations, []);
+});
+
+test("P1: toolHealth absent when healthReport not provided", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+
+  assert.equal(result.toolHealth, undefined);
+  assert.equal(result.confidenceScore, undefined);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P2: severity downgrade when infrastructure degraded                */
+/* ------------------------------------------------------------------ */
+
+test("P2: target-not-found via signatureFailedTargets downgrades to warning when unhealthy", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const signatureFailedTargets = new Set(["PlayerEntity"]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ overallHealthy: false, degradations: ["Mojang mappings unavailable"] });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, signatureFailedTargets, undefined, undefined, health
+  );
+
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].confidence, "uncertain");
+  assert.ok(result.issues[0].message.includes("infrastructure degraded"));
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
+  assert.equal(result.valid, true); // No definite errors
+});
+
+test("P2: target-not-found stays error when healthy", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const signatureFailedTargets = new Set(["PlayerEntity"]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ overallHealthy: true });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, "definite", undefined, false,
+    undefined, signatureFailedTargets, undefined, undefined, health
+  );
+
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "error");
+  assert.equal(result.issues[0].confidence, "definite");
+});
+
+test("P2: method-not-found downgrades to warning when memberRemapAvailable=false and remap failed", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "unknownMethod", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "hurt"] })]
+  ]);
+  const remapFailedMembers = new Map([["PlayerEntity", new Set(["unknownMethod"])]]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ memberRemapAvailable: false, overallHealthy: true });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, "definite", undefined, false,
+    remapFailedMembers, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.ok(result.issues[0].message.includes("infrastructure degraded"));
+  assert.equal(result.valid, true);
+});
+
+test("P2: field-not-found shadow downgrades to warning when memberRemapAvailable=false", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ name: "missingShadow", kind: "field", line: 20 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "level"] })]
+  ]);
+  const remapFailedMembers = new Map([["PlayerEntity", new Set(["missingShadow"])]]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ memberRemapAvailable: false, overallHealthy: true });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, "definite", undefined, false,
+    remapFailedMembers, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].kind, "field-not-found");
+  assert.ok(result.issues[0].message.includes("infrastructure degraded"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  P6: confidenceScore                                                */
+/* ------------------------------------------------------------------ */
+
+test("P6: confidenceScore is 100 when fully healthy", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.confidenceScore, 100);
+});
+
+test("P6: confidenceScore decreases when overallHealthy=false", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({
+    overallHealthy: false,
+    tinyMappingsAvailable: false,
+    memberRemapAvailable: false
+  });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  // base=100 -30 (unhealthy) -20 (no tiny) -15 (no member remap) = 35
+  assert.equal(result.confidenceScore, 35);
+});
+
+test("P6: confidenceScore accounts for scopeFallback and mapping mismatch", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "official",
+    scopeFallback: { requested: "merged", applied: "vanilla", reason: "test" }
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  // base=100 -10 (scopeFallback) -15 (mapping mismatch) = 75
+  assert.equal(result.confidenceScore, 75);
+});
+
+test("P6: confidenceScore accounts for remapFailures in provenance", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    remapFailures: 5
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  // base=100 -10 (5 remap failures * 2) = 90
+  assert.equal(result.confidenceScore, 90);
+});
+
+test("P6: confidenceScore clamps at 0", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "official",
+    remapFailures: 20,
+    scopeFallback: { requested: "merged", applied: "vanilla", reason: "test" }
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport({
+    overallHealthy: false,
+    tinyMappingsAvailable: false,
+    memberRemapAvailable: false
+  });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  // base=100 -30 -20 -15 -10 -15 -20(capped) = -10 → clamped to 0
+  assert.equal(result.confidenceScore, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  P7: falsePositiveRisk per issue                                    */
+/* ------------------------------------------------------------------ */
+
+test("P7: falsePositiveRisk is high for member-remap-failed when unhealthy", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "unknownMethod", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const remapFailedMembers = new Map([["PlayerEntity", new Set(["unknownMethod"])]]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ overallHealthy: false });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, "definite", undefined, false,
+    remapFailedMembers, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
+});
+
+test("P7: falsePositiveRisk is medium for target-mapping-failed", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const mappingFailedTargets = new Set(["PlayerEntity"]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, mappingFailedTargets, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues[0].kind, "target-mapping-failed");
+  assert.equal(result.issues[0].falsePositiveRisk, "medium");
+});
+
+test("P7: falsePositiveRisk is high for target-mapping-failed when unhealthy", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const mappingFailedTargets = new Set(["PlayerEntity"]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport({ overallHealthy: false });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, mappingFailedTargets, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues[0].kind, "target-mapping-failed");
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
+});
+
+test("P7: falsePositiveRisk is undefined when healthy and no remap issues", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missingMethod", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues[0].falsePositiveRisk, undefined);
+});
+
+test("P7: accessor falsePositiveRisk high when memberRemapAvailable=false and remap failed", () => {
+  const parsed = makeParsedMixin({
+    accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 15 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["level"] })]
+  ]);
+  const remapFailedMembers = new Map([["PlayerEntity", new Set(["health"])]]);
+  const warnings: string[] = [];
+  const health = makeHealthReport({ memberRemapAvailable: false });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, "definite", undefined, false,
+    remapFailedMembers, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.issues[0].kind, "field-not-found");
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
 });

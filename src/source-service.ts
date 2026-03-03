@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
@@ -24,6 +25,7 @@ import {
   type ResolvedTargetMembers,
   type MixinValidationResult,
   type MixinValidationProvenance,
+  type MappingHealthReport,
   type AccessWidenerValidationResult
 } from "./mixin-validator.js";
 import { resolveSourceTarget as resolveSourceTargetInternal } from "./source-resolver.js";
@@ -519,6 +521,7 @@ export type ValidateMixinInput = {
   sourcePaths?: string[];
   mixinConfigPath?: string;
   sourceRoot?: string;
+  sourceRoots?: string[];
   version: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -556,8 +559,10 @@ export type ValidateMixinBatchOutput = {
     processingErrors: number;
     totalValidationErrors: number;
     totalValidationWarnings: number;
+    confidenceScore?: number;
   };
   issueSummary?: ValidateMixinBatchIssueSummaryItem[];
+  toolHealth?: MappingHealthReport;
 };
 
 export type ValidateMixinOutput = MixinValidationResult | ValidateMixinBatchOutput;
@@ -759,6 +764,15 @@ function normalizeStrictPositiveInt(
   }
   return value;
 }
+
+const COMMON_SOURCE_ROOTS = [
+  "src/main/java",
+  "common/src/main/java",
+  "fabric/src/main/java",
+  "neoforge/src/main/java",
+  "forge/src/main/java",
+  "quilt/src/main/java"
+] as const;
 
 function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   if (mapping == null) {
@@ -3247,15 +3261,40 @@ export class SourceService {
           message: `Mixin config "${input.mixinConfigPath}" contains no mixin class entries.`
         });
       }
-      // Determine source root
-      const sourceRoot = input.sourceRoot ?? "src/main/java";
+      // Determine source root(s)
       const projectBase = input.projectPath
         ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
         : dirname(resolvedConfigPath);
+
+      let sourceRootCandidates: string[];
+      if (input.sourceRoots && input.sourceRoots.length > 0) {
+        sourceRootCandidates = input.sourceRoots;
+      } else if (input.sourceRoot) {
+        sourceRootCandidates = [input.sourceRoot];
+      } else {
+        // Auto-detect: include any root that contains at least one configured mixin class.
+        const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
+          const fqcn = pkg ? `${pkg}.${className}` : className;
+          const relative = fqcn.replace(/\./g, "/") + ".java";
+          return existsSync(resolvePath(projectBase, candidateRoot, relative));
+        }));
+        if (detected.length > 0) {
+          sourceRootCandidates = detected;
+        } else {
+          sourceRootCandidates = ["src/main/java"];
+        }
+      }
+
+      // Build sourcePaths by probing each class against candidate roots
       const sourcePaths = classNames.map((cls) => {
         const fqcn = pkg ? `${pkg}.${cls}` : cls;
         const relativePath = fqcn.replace(/\./g, "/") + ".java";
-        return resolvePath(projectBase, sourceRoot, relativePath);
+        for (const root of sourceRootCandidates) {
+          const candidate = resolvePath(projectBase, root, relativePath);
+          if (existsSync(candidate)) return candidate;
+        }
+        // Fallback to first root for error reporting
+        return resolvePath(projectBase, sourceRootCandidates[0], relativePath);
       });
       return this.validateMixinBatch({ ...input, mixinConfigPath: undefined, sourcePaths });
     }
@@ -3359,6 +3398,32 @@ export class SourceService {
     } else {
       jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
     }
+
+    // Health check: probe mapping infrastructure
+    let healthReport: MappingHealthReport | undefined;
+    try {
+      const health = await this.mappingService.checkMappingHealth({
+        version,
+        requestedMapping,
+        sourcePriority: input.sourcePriority
+      });
+      const jarAvailable = existsSync(jarPath);
+      healthReport = {
+        jarAvailable,
+        jarPath,
+        mojangMappingsAvailable: health.mojangMappingsAvailable,
+        tinyMappingsAvailable: health.tinyMappingsAvailable,
+        memberRemapAvailable: health.memberRemapAvailable,
+        overallHealthy: jarAvailable && health.mojangMappingsAvailable,
+        degradations: [
+          ...(jarAvailable ? [] : ["Game jar not found."]),
+          ...health.degradations
+        ]
+      };
+    } catch {
+      // Health check failed — proceed without it
+    }
+
     const parsed = parseMixinSource(source);
 
     const targetMembers = new Map<string, ResolvedTargetMembers>();
@@ -3506,7 +3571,8 @@ export class SourceService {
       parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain,
       remapFailedMembers, signatureFailedTargets,
       input.explain ? { scope: input.scope, sourcePriority: input.sourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
-      input.warningMode
+      input.warningMode,
+      healthReport
     );
 
     // Apply minSeverity / hideUncertain filters
@@ -3556,13 +3622,17 @@ export class SourceService {
     let invalidCount = 0;
     let errorCount = 0;
 
+    // P5: default warningMode to "aggregated" in batch mode
+    const batchWarningMode = input.warningMode ?? "aggregated";
+
     for (const sp of paths) {
       try {
         const singleResult = await this.validateMixin({
           ...input,
           sourcePaths: undefined,
           source: undefined,
-          sourcePath: sp
+          sourcePath: sp,
+          warningMode: batchWarningMode
         }) as MixinValidationResult;
         results.push({ sourcePath: sp, result: singleResult });
         if (singleResult.valid) {
@@ -3617,6 +3687,15 @@ export class SourceService {
       }
     }
 
+    // Extract shared toolHealth from first result (all share same version/mapping)
+    const sharedHealth = results.find((r) => r.result?.toolHealth)?.result?.toolHealth;
+
+    // Batch confidenceScore = min of all individual scores
+    const scores = results
+      .map((r) => r.result?.confidenceScore)
+      .filter((s): s is number => s != null);
+    const batchConfidenceScore = scores.length > 0 ? Math.min(...scores) : undefined;
+
     return {
       results,
       summary: {
@@ -3626,9 +3705,11 @@ export class SourceService {
         errors: errorCount,
         processingErrors: errorCount,
         totalValidationErrors,
-        totalValidationWarnings
+        totalValidationWarnings,
+        confidenceScore: batchConfidenceScore
       },
-      issueSummary
+      issueSummary,
+      toolHealth: sharedHealth
     };
   }
 
