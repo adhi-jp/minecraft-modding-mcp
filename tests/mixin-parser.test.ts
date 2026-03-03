@@ -415,6 +415,48 @@ public interface PlayerAccessor {
   assert.equal(result.parseWarnings.length, 0);
 });
 
+test("parseMixinSource parses @Shadow field with FQN annotation on separate line", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @org.jetbrains.annotations.Nullable
+  private int health;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "health");
+});
+
+test("parseMixinSource parses @Accessor with FQN annotation", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  @org.jetbrains.annotations.Nullable
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "health");
+});
+
+test("parseMixinSource strips FQN inline annotation with parens", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @org.example.Nullable() private int health;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].name, "health");
+});
+
 test("parseMixinSource parses @Shadow method with inline annotation on declaration", () => {
   const source = `
 @Mixin(PlayerEntity.class)

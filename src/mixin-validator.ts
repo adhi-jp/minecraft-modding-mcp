@@ -462,23 +462,32 @@ export function validateParsedMixin(
       switch (issue.kind) {
         case "target-not-found":
           issue.explanation = `The class "${issue.target}" was not found in the game jar. It may be misspelled, from a different version, or use a different mapping namespace.`;
-          issue.suggestedCall = { tool: "find-class", params: { name: issue.target, ...(version ? { version } : {}) } };
+          if (version && mapping) {
+            issue.suggestedCall = {
+              tool: "check-symbol-exists",
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto" }
+            };
+          }
           break;
         case "target-mapping-failed":
           issue.explanation = `Mapping lookup failed for "${issue.target}". The class may exist under a different name in the target namespace.`;
-          issue.suggestedCall = {
-            tool: "check-symbol-exists",
-            params: { kind: "class", name: issue.target, ...(version ? { version } : {}), ...(mapping ? { sourceMapping: mapping } : {}), nameMode: "auto" }
-          };
+          if (version && mapping) {
+            issue.suggestedCall = {
+              tool: "check-symbol-exists",
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto" }
+            };
+          }
           break;
         case "method-not-found": {
           const parts = issue.target.split("#");
           const className = parts[0] ?? issue.target;
           issue.explanation = `The method was not found in the target class. It may be named differently in the current mapping, or might not exist in this version.`;
-          issue.suggestedCall = {
-            tool: "get-class-source",
-            params: { className, ...(version ? { version } : {}), ...(mapping ? { mapping } : {}), mode: "metadata" }
-          };
+          if (version) {
+            issue.suggestedCall = {
+              tool: "get-class-source",
+              params: { className, targetKind: "version" as const, targetValue: version, ...(mapping ? { mapping } : {}), mode: "metadata" }
+            };
+          }
           break;
         }
         case "field-not-found": {
@@ -486,10 +495,12 @@ export function validateParsedMixin(
           const ownerName = parts[0] ?? issue.target;
           const fieldName = parts[1] ?? issue.target;
           issue.explanation = `The field "${fieldName}" was not found in the target class. Verify the field name matches the expected mapping namespace.`;
-          issue.suggestedCall = {
-            tool: "check-symbol-exists",
-            params: { kind: "field", owner: ownerName, name: fieldName, ...(version ? { version } : {}), ...(mapping ? { sourceMapping: mapping } : {}), signatureMode: "name-only" }
-          };
+          if (version && mapping) {
+            issue.suggestedCall = {
+              tool: "check-symbol-exists",
+              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping }
+            };
+          }
           break;
         }
       }

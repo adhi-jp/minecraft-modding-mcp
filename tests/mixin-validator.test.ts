@@ -571,8 +571,12 @@ test("validateParsedMixin explain=true adds explanation to target-not-found", ()
   const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, undefined, undefined, true);
   assert.ok(result.issues[0].explanation);
   assert.ok(result.issues[0].suggestedCall);
-  assert.equal(result.issues[0].suggestedCall!.tool, "find-class");
+  assert.equal(result.issues[0].suggestedCall!.tool, "check-symbol-exists");
+  assert.equal(result.issues[0].suggestedCall!.params.kind, "class");
   assert.equal(result.issues[0].suggestedCall!.params.name, "MissingClass");
+  assert.equal(result.issues[0].suggestedCall!.params.version, "1.21");
+  assert.equal(result.issues[0].suggestedCall!.params.sourceMapping, "mojang");
+  assert.equal(result.issues[0].suggestedCall!.params.nameMode, "auto");
 });
 
 test("validateParsedMixin explain=true adds suggestedCall for method-not-found", () => {
@@ -595,6 +599,45 @@ test("validateParsedMixin explain=true adds suggestedCall for method-not-found",
   assert.ok(issue.suggestedCall);
   assert.equal(issue.suggestedCall!.tool, "get-class-source");
   assert.equal(issue.suggestedCall!.params.mode, "metadata");
+  assert.equal(issue.suggestedCall!.params.targetKind, "version");
+  assert.equal(issue.suggestedCall!.params.targetValue, "1.21");
+  assert.equal(issue.suggestedCall!.params.version, undefined);
+});
+
+test("validateParsedMixin explain=true field-not-found omits signatureMode", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "field", name: "missingField", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, undefined, undefined, true);
+  const issue = result.issues.find((i) => i.kind === "field-not-found");
+  assert.ok(issue, "expected field-not-found issue");
+  assert.ok(issue!.suggestedCall);
+  assert.equal(issue!.suggestedCall!.tool, "check-symbol-exists");
+  assert.equal(issue!.suggestedCall!.params.kind, "field");
+  assert.equal(issue!.suggestedCall!.params.signatureMode, undefined);
+  assert.equal(issue!.suggestedCall!.params.version, "1.21");
+  assert.equal(issue!.suggestedCall!.params.sourceMapping, "mojang");
+});
+
+test("validateParsedMixin explain=true omits suggestedCall when provenance is missing", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, undefined, true);
+  assert.ok(result.issues[0].explanation);
+  assert.equal(result.issues[0].suggestedCall, undefined);
 });
 
 test("validateParsedMixin explain=false omits explanation and suggestedCall", () => {

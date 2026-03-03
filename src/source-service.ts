@@ -543,6 +543,8 @@ export type ValidateMixinBatchOutput = {
     total: number;
     valid: number;
     invalid: number;
+    /** @deprecated Use processingErrors instead */
+    errors: number;
     processingErrors: number;
     totalValidationErrors: number;
     totalValidationWarnings: number;
@@ -3501,6 +3503,7 @@ export class SourceService {
         total: paths.length,
         valid: validCount,
         invalid: invalidCount,
+        errors: errorCount,
         processingErrors: errorCount,
         totalValidationErrors,
         totalValidationWarnings

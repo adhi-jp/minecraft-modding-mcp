@@ -134,7 +134,7 @@ function skipAnnotations(lines: string[], startIndex: number): number {
       }
     } else {
       // Simple annotation like `@Final` — check for trailing declaration
-      const stripped = lines[idx].replace(/^\s*@\w+\s*/, "").trim();
+      const stripped = lines[idx].replace(/^\s*@[\w$.]+\s*/, "").trim();
       if (stripped === "") {
         idx++;
       } else {
@@ -146,7 +146,7 @@ function skipAnnotations(lines: string[], startIndex: number): number {
 }
 
 /** Strip inline annotations (e.g. `@Final @Nullable`) from a declaration line. */
-const INLINE_ANNOTATION_RE = /\s*@\w+(?:\([^)]*\))?\s*/g;
+const INLINE_ANNOTATION_RE = /\s*@[\w$.]+(?:\([^)]*\))?\s*/g;
 function stripInlineAnnotations(line: string): string {
   return line.replace(INLINE_ANNOTATION_RE, " ").trim();
 }
