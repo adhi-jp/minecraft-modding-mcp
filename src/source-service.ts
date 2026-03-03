@@ -3259,11 +3259,11 @@ export class SourceService {
           if (mapped.resolved && mapped.resolvedSymbol) {
             officialName = mapped.resolvedSymbol.name;
           } else {
-            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official.`);
+            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official; using "${officialName}" for lookup.`);
             mappingFailedTargets.add(target.className);
           }
         } catch {
-          warnings.push(`Mapping lookup failed for class "${resolvedClassName}".`);
+          warnings.push(`Mapping lookup failed for class "${resolvedClassName}"; using "${officialName}" for lookup.`);
           mappingFailedTargets.add(target.className);
         }
       }
@@ -3289,7 +3289,7 @@ export class SourceService {
               this.remapSignatureMembers(sig.fields, "field", version, requestedMapping, input.sourcePriority, warnings)
             ]);
           } catch {
-            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names.`);
+            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names. Member names shown may be in official (obfuscated) namespace.`);
             mappingApplied = "official";
           }
         }
@@ -3301,7 +3301,7 @@ export class SourceService {
           fields
         });
       } catch {
-        warnings.push(`Could not load signature for class "${officialName}".`);
+        warnings.push(`Could not load signature for class "${resolvedClassName}" (official: "${officialName}").`);
       }
     }
 
