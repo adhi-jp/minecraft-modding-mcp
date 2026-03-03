@@ -53,6 +53,10 @@ const MIXIN_ANNOTATION_START_RE = /^\s*@Mixin\s*\(/;
 const MIXIN_TARGET_RE = /(\w[\w.]*?)\.class/g;
 const MIXIN_PRIORITY_RE = /priority\s*=\s*(\d+)/;
 
+// String-form targets: @Mixin(targets = "pkg.Class") or @Mixin(targets = {"pkg.A", "pkg.B"})
+const MIXIN_TARGETS_STRING_RE = /targets\s*=\s*(?:\{([^}]+)\}|"([^"]+)")/;
+const MIXIN_TARGETS_STRING_ITEM_RE = /"([^"]+)"/g;
+
 // Injection annotations: @Inject, @Redirect, @ModifyArg, @ModifyVariable, @ModifyConstant, @ModifyExpressionValue
 // Also MixinExtras: @WrapOperation, @WrapWithCondition, @ModifyReturnValue
 const INJECTION_ANNOTATION_RE =
@@ -152,6 +156,23 @@ export function parseMixinSource(source: string): ParsedMixin {
       let match: RegExpExecArray | null;
       while ((match = MIXIN_TARGET_RE.exec(mixinText)) !== null) {
         targets.push({ className: match[1] });
+      }
+      // Fallback: parse targets = "..." or targets = {"a", "b"} string form
+      if (targets.length === 0) {
+        const targetsStringMatch = MIXIN_TARGETS_STRING_RE.exec(mixinText);
+        if (targetsStringMatch) {
+          const arrayContent = targetsStringMatch[1]; // {..."..."...} content
+          const singleTarget = targetsStringMatch[2]; // single "..." content
+          if (arrayContent) {
+            MIXIN_TARGETS_STRING_ITEM_RE.lastIndex = 0;
+            let itemMatch: RegExpExecArray | null;
+            while ((itemMatch = MIXIN_TARGETS_STRING_ITEM_RE.exec(arrayContent)) !== null) {
+              targets.push({ className: itemMatch[1] });
+            }
+          } else if (singleTarget) {
+            targets.push({ className: singleTarget });
+          }
+        }
       }
       const priorityMatch = MIXIN_PRIORITY_RE.exec(mixinText);
       if (priorityMatch) {

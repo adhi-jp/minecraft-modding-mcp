@@ -220,6 +220,76 @@ public abstract class MultiMixin {
 });
 
 /* ------------------------------------------------------------------ */
+/*  String-form targets: @Mixin(targets = "...")                       */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses single string target", () => {
+  const source = `
+@Mixin(targets = "net.minecraft.server.MinecraftServer")
+public abstract class ServerMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses array string targets", () => {
+  const source = `
+@Mixin(targets = {"net.minecraft.server.MinecraftServer", "net.minecraft.client.Minecraft"})
+public abstract class MultiMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.targets.length, 2);
+  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
+  assert.equal(result.targets[1].className, "net.minecraft.client.Minecraft");
+});
+
+test("parseMixinSource parses string targets with priority", () => {
+  const source = `
+@Mixin(targets = "net.minecraft.server.MinecraftServer", priority = 900)
+public abstract class PriorityMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
+  assert.equal(result.priority, 900);
+});
+
+test("parseMixinSource parses multi-line string targets", () => {
+  const source = `
+@Mixin(
+  targets = {
+    "net.minecraft.server.MinecraftServer",
+    "net.minecraft.client.Minecraft"
+  },
+  priority = 1000
+)
+public abstract class MultiLineMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.targets.length, 2);
+  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
+  assert.equal(result.targets[1].className, "net.minecraft.client.Minecraft");
+  assert.equal(result.priority, 1000);
+});
+
+test("parseMixinSource prefers .class format over string targets", () => {
+  const source = `
+@Mixin(value = PlayerEntity.class, targets = "net.minecraft.Foo")
+public abstract class PreferClassMixin {
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.targets.length, 1);
+  assert.equal(result.targets[0].className, "PlayerEntity");
+});
+
+/* ------------------------------------------------------------------ */
 /*  Import parsing tests                                               */
 /* ------------------------------------------------------------------ */
 
