@@ -103,6 +103,54 @@ function collectMultilineAnnotation(lines: string[], startIndex: number): { text
   return { text, endIndex: lines.length - 1 };
 }
 
+/**
+ * Skip past annotations (including multi-line ones) starting at `startIndex`.
+ * Returns the index of the first non-annotation line.
+ * Lines with inline annotation + declaration (e.g. `@Nullable private int x;`)
+ * are treated as declaration lines (not skipped).
+ */
+function skipAnnotations(lines: string[], startIndex: number): number {
+  let idx = startIndex;
+  while (idx < lines.length && /^\s*@/.test(lines[idx])) {
+    if (lines[idx].includes("(")) {
+      // Check if parentheses are unbalanced (multi-line annotation) — always skip
+      let depth = 0;
+      for (const ch of lines[idx]) {
+        if (ch === "(") depth++;
+        if (ch === ")") depth--;
+      }
+      if (depth > 0) {
+        // Multi-line annotation — skip to its end
+        const { endIndex } = collectMultilineAnnotation(lines, idx);
+        idx = endIndex + 1;
+        continue;
+      }
+      // Single-line annotation with parens: check if declaration text remains
+      const stripped = stripInlineAnnotations(lines[idx]);
+      if (stripped === "") {
+        idx++;
+      } else {
+        break; // declaration with inline annotation
+      }
+    } else {
+      // Simple annotation like `@Final` — check for trailing declaration
+      const stripped = lines[idx].replace(/^\s*@\w+\s*/, "").trim();
+      if (stripped === "") {
+        idx++;
+      } else {
+        break; // e.g. `@Deprecated public abstract void foo();`
+      }
+    }
+  }
+  return idx;
+}
+
+/** Strip inline annotations (e.g. `@Final @Nullable`) from a declaration line. */
+const INLINE_ANNOTATION_RE = /\s*@\w+(?:\([^)]*\))?\s*/g;
+function stripInlineAnnotations(line: string): string {
+  return line.replace(INLINE_ANNOTATION_RE, " ").trim();
+}
+
 function inferAccessorTarget(methodName: string): string {
   const getterMatch = GETTER_PREFIX_RE.exec(methodName);
   if (getterMatch) {
@@ -234,12 +282,10 @@ export function parseMixinSource(source: string): ParsedMixin {
     if (SHADOW_ANNOTATION_RE.test(line)) {
       // Advance past @Shadow line to find the declaration
       let declLine = i + 1;
-      // Skip additional annotations between @Shadow and declaration
-      while (declLine < lines.length && /^\s*@/.test(lines[declLine])) {
-        declLine++;
-      }
+      // Skip additional annotations between @Shadow and declaration (including multi-line)
+      declLine = skipAnnotations(lines, declLine);
       if (declLine < lines.length) {
-        const declText = lines[declLine];
+        const declText = stripInlineAnnotations(lines[declLine]);
         const methodDeclMatch = METHOD_DECL_RE.exec(declText);
         const fieldDeclMatch = FIELD_DECL_RE.exec(declText);
         // Method if it has parentheses
@@ -271,13 +317,11 @@ export function parseMixinSource(source: string): ParsedMixin {
         i = endIndex;
       }
 
-      // Find the method declaration following the annotation
+      // Find the method declaration following the annotation (skip multi-line annotations)
       let methodLine = i + 1;
-      while (methodLine < lines.length && /^\s*@/.test(lines[methodLine])) {
-        methodLine++;
-      }
+      methodLine = skipAnnotations(lines, methodLine);
       if (methodLine < lines.length) {
-        const methodDeclMatch = METHOD_DECL_RE.exec(lines[methodLine]);
+        const methodDeclMatch = METHOD_DECL_RE.exec(stripInlineAnnotations(lines[methodLine]));
         if (methodDeclMatch) {
           const methodName = methodDeclMatch[2];
           const targetName = explicitTarget ?? inferAccessorTarget(methodName);

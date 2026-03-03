@@ -348,6 +348,88 @@ public abstract class ItemEntityMixin {
 });
 
 /* ------------------------------------------------------------------ */
+/*  Multi-line annotation skip / inline annotation strip               */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Shadow @Final field", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Final
+  private int maxHealth;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "maxHealth");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow with multi-line annotation in between", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Unique(value = "test"
+  )
+  private int health;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses declaration with inline annotation", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Final
+  @Nullable private int health;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].name, "health");
+});
+
+test("parseMixinSource parses @Accessor after multi-line annotation", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  @Unique(
+    value = "test"
+  )
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow method with inline annotation on declaration", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Deprecated public abstract void doWork();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "method");
+  assert.equal(result.shadows[0].name, "doWork");
+});
+
+/* ------------------------------------------------------------------ */
 /*  default/synchronized modifier tests                                */
 /* ------------------------------------------------------------------ */
 
