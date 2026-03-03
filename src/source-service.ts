@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
 
@@ -511,6 +511,8 @@ export type ValidateMixinInput = {
   source?: string;
   sourcePath?: string;
   sourcePaths?: string[];
+  mixinConfigPath?: string;
+  sourceRoot?: string;
   version: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -3152,6 +3154,47 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
+    // Mixin config mode: read JSON config and derive sourcePaths
+    if (input.mixinConfigPath) {
+      const normalizedConfigPath = normalizePathForHost(input.mixinConfigPath, undefined, "mixinConfigPath");
+      const resolvedConfigPath = isAbsolute(normalizedConfigPath)
+        ? normalizedConfigPath
+        : resolvePath(process.cwd(), normalizedConfigPath);
+      let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
+      try {
+        const raw = await readFile(resolvedConfigPath, "utf-8");
+        configJson = JSON.parse(raw);
+      } catch (err) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Could not read/parse mixinConfigPath "${input.mixinConfigPath}": ${err instanceof Error ? err.message : String(err)}`
+        });
+      }
+      const pkg = configJson.package ?? "";
+      const classNames = [
+        ...(configJson.mixins ?? []),
+        ...(configJson.client ?? []),
+        ...(configJson.server ?? [])
+      ];
+      if (classNames.length === 0) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Mixin config "${input.mixinConfigPath}" contains no mixin class entries.`
+        });
+      }
+      // Determine source root
+      const sourceRoot = input.sourceRoot ?? "src/main/java";
+      const projectBase = input.projectPath
+        ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
+        : dirname(resolvedConfigPath);
+      const sourcePaths = classNames.map((cls) => {
+        const fqcn = pkg ? `${pkg}.${cls}` : cls;
+        const relativePath = fqcn.replace(/\./g, "/") + ".java";
+        return resolvePath(projectBase, sourceRoot, relativePath);
+      });
+      return this.validateMixinBatch({ ...input, mixinConfigPath: undefined, sourcePaths });
+    }
+
     // Batch mode: delegate to validateMixinBatch when sourcePaths is provided
     if (input.sourcePaths && input.sourcePaths.length > 0) {
       return this.validateMixinBatch(input);

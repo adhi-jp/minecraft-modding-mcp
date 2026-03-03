@@ -16,12 +16,12 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `resolve-artifact` \|.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
     readme,
-    /\| `validate-mixin` \|.*`source\?`.*`sourcePath\?`.*`sourcePaths\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/
+    /\| `validate-mixin` \|.*`source\?`.*`sourcePath\?`.*`sourcePaths\?`.*`mixinConfigPath\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`/
   );
   assert.match(readme, /\| `find-class` \|/);
   assert.match(readme, /\| `get-class-source` \|.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
   assert.match(readme, /`get-class-source` mode defaults to `metadata`/);
-  assert.match(readme, /`validate-mixin` requires exactly one of `source`, `sourcePath`, or `sourcePaths`/);
+  assert.match(readme, /`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`/);
   assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
   assert.match(readme, /nameMode=auto/);
 });

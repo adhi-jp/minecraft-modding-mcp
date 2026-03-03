@@ -207,7 +207,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `kind` (`method`), `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
 | `get-class-api-matrix` | Show one class API as a mapping matrix (`official/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `ambiguousRowCount?`, `meta.warnings[]` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
-| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
+| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
 
 ### NBT Utilities
 
@@ -237,7 +237,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `summary`, `provenance?`; batch: `results[]`, `summary` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `summary`, `provenance?`, `resolvedMembers?`; batch: `results[]`, `summary` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -253,7 +253,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
-`validate-mixin` requires exactly one of `source`, `sourcePath`, or `sourcePaths`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads.
+`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation.
 `validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.

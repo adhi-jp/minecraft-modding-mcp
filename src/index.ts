@@ -607,9 +607,11 @@ const indexArtifactShape = {
 const indexArtifactSchema = z.object(indexArtifactShape);
 
 const validateMixinShape = {
-  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath/sourcePaths)"),
-  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source/sourcePaths)"),
+  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath/sourcePaths/mixinConfigPath)"),
+  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source/sourcePaths/mixinConfigPath)"),
   sourcePaths: z.array(z.string().min(1)).optional().describe("Array of Mixin .java file paths for batch validation"),
+  mixinConfigPath: optionalNonEmptyString.describe("Path to mixin config JSON (e.g. modid.mixins.json); auto-discovers and batch-validates all listed classes"),
+  sourceRoot: optionalNonEmptyString.describe("Source root relative to projectPath (default 'src/main/java')"),
   version: nonEmptyString.describe("Minecraft version"),
   mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
@@ -628,10 +630,11 @@ const validateMixinSchema = z.object(validateMixinShape).refine(
     const hasSource = d.source != null;
     const hasSourcePath = d.sourcePath != null;
     const hasSourcePaths = d.sourcePaths != null && d.sourcePaths.length > 0;
-    // Exactly one of the three must be provided
-    return [hasSource, hasSourcePath, hasSourcePaths].filter(Boolean).length === 1;
+    const hasMixinConfig = d.mixinConfigPath != null;
+    // Exactly one of the four must be provided
+    return [hasSource, hasSourcePath, hasSourcePaths, hasMixinConfig].filter(Boolean).length === 1;
   },
-  { message: "Exactly one of 'source', 'sourcePath', or 'sourcePaths' must be provided." }
+  { message: "Exactly one of 'source', 'sourcePath', 'sourcePaths', or 'mixinConfigPath' must be provided." }
 );
 
 const validateAccessWidenerShape = {
@@ -1438,6 +1441,8 @@ server.tool("validate-mixin",
       source: input.source,
       sourcePath: input.sourcePath,
       sourcePaths: input.sourcePaths,
+      mixinConfigPath: input.mixinConfigPath,
+      sourceRoot: input.sourceRoot,
       version: input.version,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
