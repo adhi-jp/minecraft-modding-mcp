@@ -554,6 +554,60 @@ test("validateParsedMixin distinguishes mapping-failed and not-found in same bat
 });
 
 /* ------------------------------------------------------------------ */
+/*  explain mode                                                       */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin explain=true adds explanation to target-not-found", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, undefined, undefined, true);
+  assert.ok(result.issues[0].explanation);
+  assert.ok(result.issues[0].suggestedCall);
+  assert.equal(result.issues[0].suggestedCall!.tool, "find-class");
+  assert.equal(result.issues[0].suggestedCall!.params.name, "MissingClass");
+});
+
+test("validateParsedMixin explain=true adds suggestedCall for method-not-found", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, undefined, undefined, true);
+  const issue = result.issues[0];
+  assert.ok(issue.suggestedCall);
+  assert.equal(issue.suggestedCall!.tool, "get-class-source");
+  assert.equal(issue.suggestedCall!.params.mode, "metadata");
+});
+
+test("validateParsedMixin explain=false omits explanation and suggestedCall", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].explanation, undefined);
+  assert.equal(result.issues[0].suggestedCall, undefined);
+});
+
+/* ------------------------------------------------------------------ */
 /*  category classification                                            */
 /* ------------------------------------------------------------------ */
 

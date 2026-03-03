@@ -619,7 +619,9 @@ const validateMixinShape = {
   minSeverity: z.enum(["error", "warning", "all"]).optional()
     .describe("'error'=errors only, 'warning'=errors+warnings, 'all'=everything (default 'all')"),
   hideUncertain: z.boolean().optional()
-    .describe("Omit issues with confidence='uncertain' (default false)")
+    .describe("Omit issues with confidence='uncertain' (default false)"),
+  explain: z.boolean().optional()
+    .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery (default false)")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
   (d) => {
@@ -1443,7 +1445,8 @@ server.tool("validate-mixin",
       projectPath: input.projectPath,
       preferProjectVersion: input.preferProjectVersion,
       minSeverity: input.minSeverity,
-      hideUncertain: input.hideUncertain
+      hideUncertain: input.hideUncertain,
+      explain: input.explain
     }) as Promise<Record<string, unknown>>
   )
 );

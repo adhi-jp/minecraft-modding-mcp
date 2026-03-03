@@ -519,6 +519,7 @@ export type ValidateMixinInput = {
   preferProjectVersion?: boolean;
   minSeverity?: "error" | "warning" | "all";
   hideUncertain?: boolean;
+  explain?: boolean;
 };
 
 export type ValidateMixinBatchResult = {
@@ -3344,7 +3345,7 @@ export class SourceService {
       remapFailures: remapFailures > 0 ? remapFailures : undefined
     };
 
-    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets);
+    const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain);
 
     // Apply minSeverity / hideUncertain filters
     const minSeverity = input.minSeverity ?? "all";

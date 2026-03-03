@@ -32,6 +32,8 @@ export type ValidationIssue = {
   confidence?: IssueConfidence;
   confidenceReason?: string;
   category?: IssueCategory;
+  explanation?: string;
+  suggestedCall?: { tool: string; params: Record<string, unknown> };
 };
 
 export type ValidationSummary = {
@@ -365,7 +367,8 @@ export function validateParsedMixin(
   warnings: string[],
   provenance?: MixinValidationProvenance,
   confidence?: IssueConfidence,
-  mappingFailedTargets?: Set<string>
+  mappingFailedTargets?: Set<string>,
+  explain?: boolean
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -448,6 +451,48 @@ export function validateParsedMixin(
   for (const issue of issues) {
     if (!issue.category) {
       issue.category = "validation";
+    }
+  }
+
+  // Enrich issues with explanations and suggested calls when explain=true
+  if (explain) {
+    const version = provenance?.version;
+    const mapping = provenance?.requestedMapping;
+    for (const issue of issues) {
+      switch (issue.kind) {
+        case "target-not-found":
+          issue.explanation = `The class "${issue.target}" was not found in the game jar. It may be misspelled, from a different version, or use a different mapping namespace.`;
+          issue.suggestedCall = { tool: "find-class", params: { name: issue.target, ...(version ? { version } : {}) } };
+          break;
+        case "target-mapping-failed":
+          issue.explanation = `Mapping lookup failed for "${issue.target}". The class may exist under a different name in the target namespace.`;
+          issue.suggestedCall = {
+            tool: "check-symbol-exists",
+            params: { kind: "class", name: issue.target, ...(version ? { version } : {}), ...(mapping ? { sourceMapping: mapping } : {}), nameMode: "auto" }
+          };
+          break;
+        case "method-not-found": {
+          const parts = issue.target.split("#");
+          const className = parts[0] ?? issue.target;
+          issue.explanation = `The method was not found in the target class. It may be named differently in the current mapping, or might not exist in this version.`;
+          issue.suggestedCall = {
+            tool: "get-class-source",
+            params: { className, ...(version ? { version } : {}), ...(mapping ? { mapping } : {}), mode: "metadata" }
+          };
+          break;
+        }
+        case "field-not-found": {
+          const parts = issue.target.split("#");
+          const ownerName = parts[0] ?? issue.target;
+          const fieldName = parts[1] ?? issue.target;
+          issue.explanation = `The field "${fieldName}" was not found in the target class. Verify the field name matches the expected mapping namespace.`;
+          issue.suggestedCall = {
+            tool: "check-symbol-exists",
+            params: { kind: "field", owner: ownerName, name: fieldName, ...(version ? { version } : {}), ...(mapping ? { sourceMapping: mapping } : {}), signatureMode: "name-only" }
+          };
+          break;
+        }
+      }
     }
   }
 
