@@ -7,6 +7,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### fix: monkey test findings — strictVersion, cursor validation, search fallback, mod truncation
+
+#### Added
+- `resolve-artifact`, `get-class-source`, `get-class-members`: `strictVersion` boolean parameter rejects version-approximated results with `ERR_VERSION_NOT_FOUND` instead of silently returning them (default `false` preserves existing behavior).
+- `search-class-source`: `queryMode` parameter (`auto`/`token`/`literal`) controls FTS5 vs substring scan behavior. `auto` (default) falls back to literal scan when FTS5 returns 0 results for separator-containing queries (e.g. `dispatcher.register`).
+- `get-mod-class-source`: `maxLines`, `maxChars`, `outputFile` truncation parameters matching `get-class-source` behavior.
+
+#### Fixed
+- `parseCursor` / `parseSearchCursor` in storage layer now throw `ERR_INVALID_INPUT` on invalid non-empty cursors instead of silently returning first page.
+- `search-class-source`: `queryMode=token` now avoids non-indexed fallback paths (including `indexedSearchEnabled=false`) and cursor context now includes `queryMode`, preventing cross-mode cursor reuse.
+- `get-mod-class-source`: when `outputFile` is used with `maxLines`/`maxChars`, the written file now reflects the truncated content and truncation flags remain accurate.
+
 ### fix(mixin): validate-mixin / check-symbol-exists bug fixes and improvements
 
 #### Fixed

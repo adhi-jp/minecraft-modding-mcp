@@ -148,7 +148,8 @@ const resolveArtifactShape = {
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue")
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue"),
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
 
@@ -164,6 +165,7 @@ const getClassSourceShape = {
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue"),
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
   startLine: optionalPositiveInt,
   endLine: optionalPositiveInt,
   maxLines: optionalPositiveInt,
@@ -210,7 +212,8 @@ const getClassMembersShape = {
   maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
   projectPath: optionalNonEmptyString,
   scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version")
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
 const getClassMembersSchema = z
   .object(getClassMembersShape)
@@ -236,6 +239,7 @@ const searchClassSourceShape = {
   snippetLines: optionalPositiveInt.describe("default 8, clamp 1..80"),
   includeDefinition: z.boolean().optional().describe("default false"),
   includeOneHop: z.boolean().optional().describe("default false"),
+  queryMode: z.enum(["auto", "token", "literal"]).optional().describe("auto (default): FTS5 with literal fallback for separator queries; token: FTS5 only; literal: substring scan only"),
   limit: optionalPositiveInt.describe("default 20"),
   cursor: optionalNonEmptyString
 };
@@ -679,7 +683,10 @@ const decompileModJarSchema = z.object(decompileModJarShape);
 
 const getModClassSourceShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
-  className: nonEmptyString.describe("Fully-qualified class name (e.g. com.example.MyMixin)")
+  className: nonEmptyString.describe("Fully-qualified class name (e.g. com.example.MyMixin)"),
+  maxLines: optionalPositiveInt.describe("Max lines to return"),
+  maxChars: optionalPositiveInt.describe("Hard character limit; truncates if exceeded"),
+  outputFile: optionalNonEmptyString.describe("Write full source to file, return placeholder in content")
 };
 const getModClassSourceSchema = z.object(getModClassSourceShape);
 
@@ -1110,7 +1117,8 @@ server.tool("resolve-artifact",
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
       scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1151,6 +1159,7 @@ server.tool("get-class-source",
       projectPath: input.projectPath,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion,
       startLine: input.startLine,
       endLine: input.endLine,
       maxLines: input.maxLines,
@@ -1179,7 +1188,8 @@ server.tool("get-class-members",
       maxMembers: input.maxMembers,
       projectPath: input.projectPath,
       scope: input.scope as ArtifactScope | undefined,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1222,6 +1232,7 @@ server.tool("search-class-source",
             }
           | undefined,
         include,
+        queryMode: input.queryMode,
         limit: input.limit,
         cursor: input.cursor
       }) as Promise<Record<string, unknown>>;
@@ -1531,7 +1542,10 @@ server.tool("get-mod-class-source",
   async (args) => runTool("get-mod-class-source", args, getModClassSourceSchema, async (input) =>
     sourceService.getModClassSource({
       jarPath: input.jarPath,
-      className: input.className
+      className: input.className,
+      maxLines: input.maxLines,
+      maxChars: input.maxChars,
+      outputFile: input.outputFile
     }) as Promise<Record<string, unknown>>
   )
 );

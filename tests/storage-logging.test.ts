@@ -7,8 +7,8 @@ test("storage catch paths emit warn logs", async () => {
   const artifactsRepo = await readFile("src/storage/artifacts-repo.ts", "utf8");
   const symbolsRepo = await readFile("src/storage/symbols-repo.ts", "utf8");
 
-  assert.match(filesRepo, /log\("warn", "storage\.files\.invalid_list_cursor"/);
-  assert.match(filesRepo, /log\("warn", "storage\.files\.invalid_search_cursor"/);
+  // F-02: invalid cursors now throw ERR_INVALID_INPUT instead of logging a warning
+  assert.match(filesRepo, /ERROR_CODES\.INVALID_INPUT/);
   assert.match(filesRepo, /log\("warn", "storage\.files\.fts_syntax_error"/);
   assert.match(filesRepo, /log\("warn", "storage\.files\.count_text_candidates_failed"/);
 

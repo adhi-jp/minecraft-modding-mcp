@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
@@ -34,12 +34,18 @@ export type DecompileModJarOutput = {
 export type GetModClassSourceInput = {
   jarPath: string;
   className: string;
+  maxLines?: number;
+  maxChars?: number;
+  outputFile?: string;
 };
 
 export type GetModClassSourceOutput = {
   className: string;
   content: string;
   totalLines: number;
+  truncated?: boolean;
+  charsTruncated?: boolean;
+  outputFilePath?: string;
   modId?: string;
   warnings: string[];
 };
@@ -135,11 +141,46 @@ export class ModDecompileService {
       });
     }
 
-    const content = readFileSync(join(outputDir, matched), "utf8");
+    const fullContent = readFileSync(join(outputDir, matched), "utf8");
+    const totalLines = fullContent.split("\n").length;
+    let content = fullContent;
+    let truncated: boolean | undefined;
+    let charsTruncated: boolean | undefined;
+    let outputFilePath: string | undefined;
+
+    // Apply maxLines truncation
+    if (input.maxLines != null && input.maxLines > 0) {
+      const lines = content.split("\n");
+      if (lines.length > input.maxLines) {
+        content = lines.slice(0, input.maxLines).join("\n");
+        truncated = true;
+      }
+    }
+
+    // Apply maxChars truncation
+    if (input.maxChars != null && input.maxChars > 0 && content.length > input.maxChars) {
+      content = content.slice(0, input.maxChars);
+      charsTruncated = true;
+      truncated = true;
+    }
+
+    // Write to outputFile if specified (after maxLines/maxChars truncation, if any)
+    if (input.outputFile) {
+      const outPath = isAbsolute(input.outputFile)
+        ? input.outputFile
+        : resolvePath(input.outputFile);
+      writeFileSync(outPath, content, "utf8");
+      outputFilePath = outPath;
+      content = `[Written to ${outPath}]`;
+    }
+
     return {
       className: filePathToClassName(matched),
       content,
-      totalLines: content.split("\n").length,
+      totalLines,
+      truncated,
+      charsTruncated,
+      outputFilePath,
       modId: analysis.modId,
       warnings
     };

@@ -178,11 +178,11 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
-| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?`, `scope?`, `preferProjectVersion?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
+| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
 | `find-class` | Resolve simple or fully-qualified class names inside an artifact | `className`, `artifactId`, `limit?` | `matches[]`, `total`, `warnings[]` |
-| `get-class-source` | Get class source by `artifactId` or resolve target on demand (`mode=metadata` by default) | `className`, `mode?`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
-| `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
-| `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
+| `get-class-source` | Get class source by `artifactId` or resolve target on demand (`mode=metadata` by default) | `className`, `mode?`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
+| `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?`, `strictVersion?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
+| `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `queryMode?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
 | `list-artifact-files` | List indexed source file paths with cursor pagination | `artifactId`, `prefix?`, `limit?`, `cursor?` | `items[]`, `nextCursor?`, `mappingApplied` |
 | `index-artifact` | Rebuild index metadata for an existing artifact | `artifactId`, `force?` | `reindexed`, `reason`, `counts`, `indexedAt`, `durationMs` |
@@ -227,7 +227,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 | --- | --- | --- | --- |
 | `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `jarKind`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
 | `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?` | `outputDir`, `fileCount`, `files?`, `source?`, `warnings[]` |
-| `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className` | `className`, `content`, `totalLines`, `warnings[]` |
+| `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className`, `maxLines?`, `maxChars?`, `outputFile?` | `className`, `content`, `totalLines`, `truncated?`, `charsTruncated?`, `outputFilePath?`, `warnings[]` |
 | `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
 | `remap-mod-jar` | Remap a Fabric mod JAR from intermediary to yarn/mojang names | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
 
@@ -268,6 +268,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
+`search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
 `get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
@@ -279,6 +280,7 @@ For `targetKind=coordinate` with a classifier (`group:artifact:version:classifie
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
 `search-mod-source` detects source-only jars and searches `.java` entries directly without decompilation.
+`get-mod-class-source` supports `maxLines`, `maxChars`, and `outputFile` with truncation behavior aligned to `get-class-source`; when `outputFile` is set, the written file reflects applied truncation.
 `find-mapping` returns `ambiguityReasons` when `status=ambiguous` to explain why candidates could not be uniquely resolved.
 `get-class-api-matrix` returns `ambiguousRowCount` when one or more rows required ambiguity fallback.
 `check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).

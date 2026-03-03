@@ -1,6 +1,7 @@
 import Database from "./sqlite.js";
 import { createHash } from "node:crypto";
 import type { FileRow, PagedResult } from "../types.js";
+import { createError, ERROR_CODES } from "../errors.js";
 import { log } from "../logger.js";
 
 type SqliteDatabase = InstanceType<typeof Database>;
@@ -71,12 +72,24 @@ function parseCursor(cursor: string | undefined): CursorPayload | undefined {
     const decoded = Buffer.from(cursor, "base64").toString("utf8");
     const parsed = JSON.parse(decoded) as CursorPayload;
     if (typeof parsed.sortKey !== "string") {
-      return undefined;
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "Invalid pagination cursor.",
+        details: {
+          nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
+        }
+      });
     }
     return parsed;
-  } catch {
-    log("warn", "storage.files.invalid_list_cursor", { cursor });
-    return undefined;
+  } catch (err) {
+    if (err instanceof Error && "code" in err) throw err;
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "Invalid pagination cursor.",
+      details: {
+        nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
+      }
+    });
   }
 }
 
@@ -93,12 +106,24 @@ function parseSearchCursor(cursor: string | undefined): SearchCursorPayload | un
     const decoded = Buffer.from(cursor, "base64").toString("utf8");
     const parsed = JSON.parse(decoded) as SearchCursorPayload;
     if (typeof parsed.score !== "number" || typeof parsed.filePath !== "string") {
-      return undefined;
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "Invalid pagination cursor.",
+        details: {
+          nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
+        }
+      });
     }
     return parsed;
-  } catch {
-    log("warn", "storage.files.invalid_search_cursor", { cursor });
-    return undefined;
+  } catch (err) {
+    if (err instanceof Error && "code" in err) throw err;
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "Invalid pagination cursor.",
+      details: {
+        nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
+      }
+    });
   }
 }
 

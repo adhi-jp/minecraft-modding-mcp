@@ -108,6 +108,7 @@ export type ResolveArtifactInput = {
   projectPath?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
+  strictVersion?: boolean;
 };
 
 export type ResolveArtifactOutput = {
@@ -178,6 +179,8 @@ export type SearchRelation = {
   relation: "calls" | "uses-type" | "imports";
 };
 
+export type QueryMode = "auto" | "token" | "literal";
+
 export type SearchClassSourceInput = {
   artifactId: string;
   query: string;
@@ -185,6 +188,7 @@ export type SearchClassSourceInput = {
   match?: SearchMatch;
   scope?: SearchScope;
   include?: SearchInclude;
+  queryMode?: QueryMode;
   limit?: number;
   cursor?: string;
 };
@@ -284,6 +288,7 @@ export type GetClassSourceInput = {
   projectPath?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
+  strictVersion?: boolean;
   startLine?: number;
   endLine?: number;
   maxLines?: number;
@@ -348,6 +353,7 @@ export type GetClassMembersInput = {
   projectPath?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
+  strictVersion?: boolean;
 };
 
 export type GetClassMembersOutput = {
@@ -1060,6 +1066,7 @@ function buildSearchCursorContext(input: {
   query: string;
   intent: SearchIntent;
   match: SearchMatch;
+  queryMode: QueryMode;
   scope: SearchScope | undefined;
   includeDefinition: boolean;
 }): string {
@@ -1068,6 +1075,7 @@ function buildSearchCursorContext(input: {
     query: input.query,
     intent: input.intent,
     match: input.match,
+    queryMode: input.queryMode,
     includeDefinition: input.includeDefinition,
     packagePrefix: input.scope?.packagePrefix ?? "",
     fileGlob: input.scope?.fileGlob ?? "",
@@ -1569,6 +1577,19 @@ export class SourceService {
       if (versionSourceDiscovery?.selectedSourceJarPath) {
         resolved.qualityFlags.push("source-jar-validated");
         if (kind === "version" && !hasExactVersionToken(versionSourceDiscovery.selectedSourceJarPath, value)) {
+          if (input.strictVersion) {
+            throw createError({
+              code: ERROR_CODES.VERSION_NOT_FOUND,
+              message: `Strict version match failed: requested "${value}" but nearest source jar is for a different version.`,
+              details: {
+                requestedVersion: value,
+                selectedSourceJar: versionSourceDiscovery.selectedSourceJarPath,
+                candidateArtifacts: versionSourceDiscovery.candidateArtifacts,
+                nextAction: "Use strictVersion=false (default) to allow approximation, or ensure the exact version source jar is in the Loom cache.",
+                suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value, strictVersion: false } }
+              }
+            });
+          }
           resolved.qualityFlags.push("version-approximated");
           warnings.push(
             `Requested version "${value}" but resolved source jar does not contain exact version string: ${versionSourceDiscovery.selectedSourceJarPath}`
@@ -1662,11 +1683,13 @@ export class SourceService {
       const snippetWindow = buildSnippetWindow(input.include?.snippetLines);
       const regexPattern = match === "regex" ? compileRegex(query) : undefined;
       const scope = input.scope;
+      const queryMode = input.queryMode ?? "auto";
       const cursorContext = buildSearchCursorContext({
         artifactId: artifact.artifactId,
         query,
         intent,
         match,
+        queryMode,
         scope,
         includeDefinition
       });
@@ -1682,6 +1705,8 @@ export class SourceService {
       const recordHit = (hit: SearchSourceHit): void => {
         accumulator.add(hit);
       };
+      const hasSeparators = /[._$]/.test(query);
+      const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
       if (intent === "symbol") {
         this.searchSymbolIntent(
           artifact.artifactId,
@@ -1703,31 +1728,46 @@ export class SourceService {
           });
           accumulator.setTotalApproxOverride(approxCount);
         }
+      } else if (queryMode === "literal" && intent === "text") {
+        // F-03: queryMode=literal forces substring scan for text intent
+        this.metrics.recordSearchFallback();
+        this.searchTextIntent(
+          artifact.artifactId,
+          query,
+          match,
+          scope,
+          includeDefinition,
+          snippetWindow,
+          regexPattern,
+          recordHit
+        );
       } else if (!indexedSearchEnabled) {
         this.metrics.recordIndexedDisabled();
-        this.metrics.recordSearchFallback();
-        if (intent === "path") {
-          this.searchPathIntent(
-            artifact.artifactId,
-            query,
-            match,
-            scope,
-            includeDefinition,
-            snippetWindow,
-            regexPattern,
-            recordHit
-          );
-        } else {
-          this.searchTextIntent(
-            artifact.artifactId,
-            query,
-            match,
-            scope,
-            includeDefinition,
-            snippetWindow,
-            regexPattern,
-            recordHit
-          );
+        if (!tokenOnlyTextIntent) {
+          this.metrics.recordSearchFallback();
+          if (intent === "path") {
+            this.searchPathIntent(
+              artifact.artifactId,
+              query,
+              match,
+              scope,
+              includeDefinition,
+              snippetWindow,
+              regexPattern,
+              recordHit
+            );
+          } else {
+            this.searchTextIntent(
+              artifact.artifactId,
+              query,
+              match,
+              scope,
+              includeDefinition,
+              snippetWindow,
+              regexPattern,
+              recordHit
+            );
+          }
         }
       } else if (canUseIndexedSearchPath(indexedSearchEnabled, intent, match, scope)) {
         try {
@@ -1757,6 +1797,20 @@ export class SourceService {
             // WS4: Use repo-level COUNT for totalApprox instead of accumulator count
             const approxCount = this.filesRepo.countTextCandidates(artifact.artifactId, query);
             accumulator.setTotalApproxOverride(approxCount);
+
+            // F-03: queryMode=auto fallback — when indexed returns 0 hits and query has separators, retry with literal scan
+            if (queryMode === "auto" && hasSeparators && accumulator.currentCount() === 0) {
+              this.searchTextIntent(
+                artifact.artifactId,
+                query,
+                match,
+                scope,
+                includeDefinition,
+                snippetWindow,
+                regexPattern,
+                recordHit
+              );
+            }
           }
           this.metrics.recordSearchIndexedHit();
         } catch (caughtError) {
@@ -1767,6 +1821,36 @@ export class SourceService {
             match,
             reason: caughtError instanceof Error ? caughtError.message : String(caughtError)
           });
+          // F-03: queryMode=token suppresses error-path fallback to brute-force scan
+          if (!tokenOnlyTextIntent) {
+            if (intent === "path") {
+              this.searchPathIntent(
+                artifact.artifactId,
+                query,
+                match,
+                scope,
+                includeDefinition,
+                snippetWindow,
+                regexPattern,
+                recordHit
+              );
+            } else {
+              this.searchTextIntent(
+                artifact.artifactId,
+                query,
+                match,
+                scope,
+                includeDefinition,
+                snippetWindow,
+                regexPattern,
+                recordHit
+              );
+            }
+          }
+        }
+      } else {
+        if (!tokenOnlyTextIntent) {
+          this.metrics.recordSearchFallback();
           if (intent === "path") {
             this.searchPathIntent(
               artifact.artifactId,
@@ -1790,31 +1874,6 @@ export class SourceService {
               recordHit
             );
           }
-        }
-      } else {
-        this.metrics.recordSearchFallback();
-        if (intent === "path") {
-          this.searchPathIntent(
-            artifact.artifactId,
-            query,
-            match,
-            scope,
-            includeDefinition,
-            snippetWindow,
-            regexPattern,
-            recordHit
-          );
-        } else {
-          this.searchTextIntent(
-            artifact.artifactId,
-            query,
-            match,
-            scope,
-            includeDefinition,
-            snippetWindow,
-            regexPattern,
-            recordHit
-          );
         }
       }
       this.metrics.recordSearchIntentDuration(intent, Date.now() - intentStartedAt);
@@ -2810,7 +2869,8 @@ export class SourceService {
         allowDecompile: input.allowDecompile,
         projectPath: input.projectPath,
         scope: input.scope,
-        preferProjectVersion: input.preferProjectVersion
+        preferProjectVersion: input.preferProjectVersion,
+        strictVersion: input.strictVersion
       });
       artifactId = resolved.artifactId;
       origin = resolved.origin;
@@ -3021,7 +3081,8 @@ export class SourceService {
         allowDecompile: input.allowDecompile,
         projectPath: input.projectPath,
         scope: input.scope,
-        preferProjectVersion: input.preferProjectVersion
+        preferProjectVersion: input.preferProjectVersion,
+        strictVersion: input.strictVersion
       });
       artifactId = resolved.artifactId;
       origin = resolved.origin;

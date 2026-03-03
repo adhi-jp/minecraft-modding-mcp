@@ -924,6 +924,71 @@ test("SourceService ignores cursor when search intent changes", async () => {
   assert.equal(pathWithForeignCursor.hits[0]?.filePath, pathWithoutCursor.hits[0]?.filePath);
 });
 
+test("SourceService ignores cursor when queryMode changes", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-cursor-query-mode-mismatch-"));
+  const binaryJarPath = join(root, "server-cursor-mode.jar");
+  const sourcesJarPath = join(root, "server-cursor-mode-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/FooNeedleA.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "net/minecraft/server/FooNeedleB.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/FooNeedleA.java": [
+      "package net.minecraft.server;",
+      "public class FooNeedleA {",
+      "  String payload = \"FooNeedle at start\";",
+      "}"
+    ].join("\n"),
+    "net/minecraft/server/FooNeedleB.java": [
+      "package net.minecraft.server;",
+      "public class FooNeedleB {",
+      "  String payload = \"xxxxxxxxxxxxxxxxxxxx FooNeedle later\";",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  const literalPage = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "FooNeedle",
+    intent: "text",
+    match: "contains",
+    queryMode: "literal",
+    limit: 1
+  });
+  assert.ok(literalPage.nextCursor);
+
+  const tokenWithoutCursor = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "FooNeedle",
+    intent: "text",
+    match: "contains",
+    queryMode: "token",
+    limit: 1
+  });
+  assert.equal(tokenWithoutCursor.hits.length, 1);
+
+  const tokenWithForeignCursor = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "FooNeedle",
+    intent: "text",
+    match: "contains",
+    queryMode: "token",
+    cursor: literalPage.nextCursor,
+    limit: 1
+  });
+
+  assert.equal(tokenWithForeignCursor.hits.length, 1);
+  assert.equal(tokenWithForeignCursor.hits[0]?.filePath, tokenWithoutCursor.hits[0]?.filePath);
+});
+
 test("SourceService changes artifactId when source jar signature changes", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-signature-"));
@@ -5011,4 +5076,267 @@ test("SourceService validateMixin falls back to vanilla when scope=merged resolu
   assert.ok(result.provenance!.scopeFallback!.reason.includes("Loom cache"));
   assert.equal(result.provenance?.jarType, "vanilla-client");
   assert.ok(result.warnings.some((w) => w.includes("falling back to vanilla")));
+});
+
+// ---------------------------------------------------------------------------
+// F-01: strictVersion rejects version-approximated results
+// ---------------------------------------------------------------------------
+test("F-01: resolveArtifact with strictVersion=true throws on version mismatch", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f01-strict-"));
+  const projectPath = join(root, "workspace");
+
+  // Create Loom cache with a jar named for version 1.21.10 (not 1.21.11)
+  const loomCache = join(projectPath, ".gradle", "loom-cache");
+  await mkdir(loomCache, { recursive: true });
+  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java":
+      "package net.minecraft.world.level.block;\npublic class Blocks {}"
+  });
+
+  const remoteJarPath = join(root, "remote-1.21.11.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.11" },
+          versions: [
+            { id: "1.21.11", type: "release", url: "https://example.test/versions/1.21.11.json" }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.11.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.11",
+          downloads: { client: { url: "https://example.test/downloads/client-1.21.11.jar" } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.11.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    await assert.rejects(
+      () => service.resolveArtifact({
+        target: { kind: "version", value: "1.21.11" },
+        mapping: "mojang",
+        projectPath,
+        strictVersion: true
+      } as any),
+      (error: any) => {
+        assert.equal(error.code, ERROR_CODES.VERSION_NOT_FOUND);
+        assert.ok(error.message.includes("Strict version match failed"));
+        assert.equal(error.details.requestedVersion, "1.21.11");
+        assert.ok(error.details.suggestedCall);
+        assert.equal(error.details.suggestedCall.tool, "resolve-artifact");
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+test("F-01: resolveArtifact with strictVersion=false still returns version-approximated flag", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f01-lax-"));
+  const projectPath = join(root, "workspace");
+
+  const loomCache = join(projectPath, ".gradle", "loom-cache");
+  await mkdir(loomCache, { recursive: true });
+  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java":
+      "package net.minecraft.world.level.block;\npublic class Blocks {}"
+  });
+
+  const remoteJarPath = join(root, "remote-1.21.11.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: "1.21.11" },
+          versions: [
+            { id: "1.21.11", type: "release", url: "https://example.test/versions/1.21.11.json" }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/versions/1.21.11.json") {
+      return new Response(
+        JSON.stringify({
+          id: "1.21.11",
+          downloads: { client: { url: "https://example.test/downloads/client-1.21.11.jar" } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://example.test/downloads/client-1.21.11.jar") {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    const resolved = await service.resolveArtifact({
+      target: { kind: "version", value: "1.21.11" },
+      mapping: "mojang",
+      projectPath,
+      strictVersion: false
+    } as any);
+    assert.ok(
+      resolved.qualityFlags.includes("version-approximated"),
+      `Expected version-approximated flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F-03: queryMode search fallback for separator-containing queries
+// ---------------------------------------------------------------------------
+test("F-03: search-class-source queryMode=auto falls back to literal for separator queries", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f03-auto-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  // Create a jar with a file containing "dispatcher.register"
+  const jarPath = join(root, "test-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/commands/CommandDispatcher.java":
+      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
+  });
+
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: jarPath }
+  } as any);
+
+  // queryMode=auto (default) should find "dispatcher.register" via fallback
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "dispatcher.register",
+    intent: "text",
+    match: "contains",
+    queryMode: "auto"
+  });
+  assert.ok(result.hits.length > 0, "auto mode should find separator-containing query via fallback");
+});
+
+test("F-03: search-class-source queryMode=token returns 0 hits for separator query", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f03-token-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const jarPath = join(root, "test-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/commands/CommandDispatcher.java":
+      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
+  });
+
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: jarPath }
+  } as any);
+
+  // queryMode=token should NOT find "dispatcher.register" (FTS5 splits on dots)
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "dispatcher.register",
+    intent: "text",
+    match: "contains",
+    queryMode: "token"
+  });
+  assert.equal(result.hits.length, 0, "token mode should not find separator-split query in FTS5");
+});
+
+test("F-03: search-class-source queryMode=token does not fallback when indexed search is disabled", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f03-token-no-index-"));
+  const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
+
+  const jarPath = join(root, "test-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/commands/CommandDispatcher.java":
+      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
+  });
+
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: jarPath }
+  } as any);
+
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "dispatcher.register",
+    intent: "text",
+    match: "contains",
+    queryMode: "token"
+  });
+  assert.equal(result.hits.length, 0, "token mode should not fallback to literal scan when indexed search is disabled");
+});
+
+test("F-03: search-class-source queryMode=literal forces substring scan", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-f03-literal-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const jarPath = join(root, "test-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/commands/CommandDispatcher.java":
+      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
+  });
+
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: jarPath }
+  } as any);
+
+  // queryMode=literal should always find via substring scan
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "dispatcher.register",
+    intent: "text",
+    match: "contains",
+    queryMode: "literal"
+  });
+  assert.ok(result.hits.length > 0, "literal mode should find via substring scan");
 });

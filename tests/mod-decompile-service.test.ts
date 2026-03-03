@@ -143,3 +143,151 @@ test("getModClassSource normalizes jarPath before class lookup", async () => {
   assert.match(result.content, /class Demo/);
   assert.deepEqual(calls, [realpathSync(jarPath)]);
 });
+
+// ---------------------------------------------------------------------------
+// F-04: getModClassSource truncation params
+// ---------------------------------------------------------------------------
+function buildMockService(
+  root: string,
+  outputDir: string,
+  files: string[],
+  modId = "test-mod"
+): ModDecompileService {
+  const service = new ModDecompileService(buildTestConfig(root));
+  (
+    service as unknown as {
+      ensureDecompiled: (
+        jarPath: string,
+        warnings: string[]
+      ) => Promise<{
+        outputDir: string;
+        files: string[];
+        analysis: {
+          loader: "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
+          modId?: string;
+          classCount: number;
+        };
+      }>;
+    }
+  ).ensureDecompiled = async () => ({
+    outputDir,
+    files,
+    analysis: { loader: "fabric" as const, modId, classCount: files.length }
+  });
+  return service;
+}
+
+test("F-04: getModClassSource maxLines truncates output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-f04-maxlines-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+  await writeFile(join(outputDir, "com/example/Demo.java"), lines.join("\n"), "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo",
+    maxLines: 10
+  });
+
+  assert.equal(result.totalLines, 100);
+  assert.equal(result.content.split("\n").length, 10);
+  assert.equal(result.truncated, true);
+});
+
+test("F-04: getModClassSource maxChars truncates output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-f04-maxchars-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  const content = "x".repeat(500);
+  await writeFile(join(outputDir, "com/example/Demo.java"), content, "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo",
+    maxChars: 100
+  });
+
+  assert.ok(result.content.length <= 100);
+  assert.equal(result.charsTruncated, true);
+  assert.equal(result.truncated, true);
+});
+
+test("F-04: getModClassSource outputFile writes to file and returns placeholder", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-f04-outfile-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await writeFile(join(outputDir, "com/example/Demo.java"), "package com.example;\npublic class Demo {}", "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const outPath = join(root, "output.java");
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo",
+    outputFile: outPath
+  });
+
+  assert.ok(result.content.includes("[Written to"));
+  assert.equal(result.outputFilePath, outPath);
+  const { readFileSync } = await import("node:fs");
+  const written = readFileSync(outPath, "utf8");
+  assert.ok(written.includes("class Demo"));
+});
+
+test("F-04: getModClassSource outputFile honors maxLines truncation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-f04-outfile-maxlines-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+  await writeFile(join(outputDir, "com/example/Demo.java"), lines.join("\n"), "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const outPath = join(root, "output.java");
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo",
+    maxLines: 5,
+    outputFile: outPath
+  });
+
+  const { readFileSync } = await import("node:fs");
+  const written = readFileSync(outPath, "utf8");
+  assert.equal(written.split("\n").length, 5);
+  assert.equal(result.truncated, true);
+});
+
+test("F-04: getModClassSource with no truncation params returns full content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-f04-full-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`);
+  await writeFile(join(outputDir, "com/example/Demo.java"), lines.join("\n"), "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo"
+  });
+
+  assert.equal(result.totalLines, 50);
+  assert.equal(result.content.split("\n").length, 50);
+  assert.equal(result.truncated, undefined);
+  assert.equal(result.charsTruncated, undefined);
+});

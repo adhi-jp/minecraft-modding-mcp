@@ -565,6 +565,65 @@ test("symbolsRepo.countScopedSymbols returns correct count", async () => {
   assert.equal(exactCount, 1);
 });
 
+// ---------------------------------------------------------------------------
+// F-02: Invalid cursor rejection
+// ---------------------------------------------------------------------------
+test("F-02: listFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
+  const { artifacts, files } = await createRepos();
+  seedArtifact(artifacts, "artifact-cursor-invalid");
+  files.replaceFilesForArtifact("artifact-cursor-invalid", [
+    { filePath: "a/Foo.java", content: "class Foo {}", contentBytes: 12, contentHash: "h1" }
+  ]);
+
+  assert.throws(
+    () => files.listFiles("artifact-cursor-invalid", { limit: 10, cursor: "not-a-cursor" }),
+    (error: any) => error.code === "ERR_INVALID_INPUT"
+  );
+});
+
+test("F-02: listFiles with valid base64 but wrong schema throws ERR_INVALID_INPUT", async () => {
+  const { artifacts, files } = await createRepos();
+  seedArtifact(artifacts, "artifact-cursor-schema");
+  files.replaceFilesForArtifact("artifact-cursor-schema", [
+    { filePath: "a/Foo.java", content: "class Foo {}", contentBytes: 12, contentHash: "h1" }
+  ]);
+
+  // Valid base64, but wrong type (sortKey should be string, not number)
+  const badCursor = Buffer.from(JSON.stringify({ sortKey: 123 }), "utf8").toString("base64");
+  assert.throws(
+    () => files.listFiles("artifact-cursor-schema", { limit: 10, cursor: badCursor }),
+    (error: any) => error.code === "ERR_INVALID_INPUT"
+  );
+});
+
+test("F-02: searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
+  const { artifacts, files } = await createRepos();
+  seedArtifact(artifacts, "artifact-search-cursor-invalid");
+  files.replaceFilesForArtifact("artifact-search-cursor-invalid", [
+    { filePath: "a/Foo.java", content: "class Foo {}", contentBytes: 12, contentHash: "h1" }
+  ]);
+
+  assert.throws(
+    () => files.searchFiles("artifact-search-cursor-invalid", { query: "Foo", limit: 10, cursor: "garbage" }),
+    (error: any) => error.code === "ERR_INVALID_INPUT"
+  );
+});
+
+test("F-02: listFiles with undefined/empty cursor returns first page (unchanged)", async () => {
+  const { artifacts, files } = await createRepos();
+  seedArtifact(artifacts, "artifact-cursor-empty");
+  files.replaceFilesForArtifact("artifact-cursor-empty", [
+    { filePath: "a/Foo.java", content: "class Foo {}", contentBytes: 12, contentHash: "h1" },
+    { filePath: "b/Bar.java", content: "class Bar {}", contentBytes: 12, contentHash: "h2" }
+  ]);
+
+  const result1 = files.listFiles("artifact-cursor-empty", { limit: 10, cursor: undefined });
+  assert.equal(result1.items.length, 2);
+
+  const result2 = files.listFiles("artifact-cursor-empty", { limit: 10, cursor: "" });
+  assert.equal(result2.items.length, 2);
+});
+
 test("filesRepo.searchFileCandidates incorporates BM25 rank bonus for content matches", async () => {
   const { artifacts, files } = await createRepos();
   const artifactId = "artifact-bm25-rank";

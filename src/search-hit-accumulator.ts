@@ -29,6 +29,7 @@ export interface SearchCursorPayload {
 export interface SearchHitAccumulator {
   add(hit: SearchSourceHit): void;
   setTotalApproxOverride(count: number): void;
+  currentCount(): number;
   finalize(): {
     page: SearchSourceHit[];
     nextCursorHit?: SearchSourceHit;
@@ -199,6 +200,9 @@ export function createSearchHitAccumulator(
     },
     setTotalApproxOverride(count: number): void {
       totalApproxOverride = Math.max(0, Math.trunc(count));
+    },
+    currentCount(): number {
+      return heap.length;
     },
     finalize() {
       // Sort heap contents by scoreHitOrder (best first)
