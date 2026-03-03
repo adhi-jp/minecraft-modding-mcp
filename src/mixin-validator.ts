@@ -60,6 +60,14 @@ export type StructuredWarning = {
   message: string;
 };
 
+export type ResolvedMember = {
+  annotation: string;
+  name: string;
+  line?: number;
+  resolvedTo?: string;
+  status: "resolved" | "not-found";
+};
+
 export type MixinValidationResult = {
   className: string;
   targets: string[];
@@ -71,6 +79,7 @@ export type MixinValidationResult = {
   provenance?: MixinValidationProvenance;
   warnings: string[];
   structuredWarnings?: StructuredWarning[];
+  resolvedMembers?: ResolvedMember[];
 };
 
 export type ResolvedTargetMembers = {
@@ -210,6 +219,7 @@ function validateInjection(
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
   issues: ValidationIssue[],
+  resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
   confidenceReason?: string
 ): void {
@@ -235,6 +245,20 @@ function validateInjection(
         confidence,
         confidenceReason
       });
+      resolvedMembers.push({
+        annotation: `@${inj.annotation}`,
+        name: methodName,
+        line: inj.line,
+        status: "not-found"
+      });
+    } else {
+      resolvedMembers.push({
+        annotation: `@${inj.annotation}`,
+        name: methodName,
+        line: inj.line,
+        resolvedTo: `${targetName}#${methodName}`,
+        status: "resolved"
+      });
     }
   }
 }
@@ -244,6 +268,7 @@ function validateShadow(
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
   issues: ValidationIssue[],
+  resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
   confidenceReason?: string
 ): void {
@@ -266,6 +291,9 @@ function validateShadow(
           confidence,
           confidenceReason
         });
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
+      } else {
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${shadow.name}`, status: "resolved" });
       }
     } else {
       const methodNames = allMethodNames(members);
@@ -282,6 +310,9 @@ function validateShadow(
           confidence,
           confidenceReason
         });
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
+      } else {
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${shadow.name}`, status: "resolved" });
       }
     }
   }
@@ -292,6 +323,7 @@ function validateAccessor(
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
   issues: ValidationIssue[],
+  resolvedMembers: ResolvedMember[],
   confidence?: IssueConfidence,
   confidenceReason?: string
 ): void {
@@ -316,6 +348,9 @@ function validateAccessor(
         confidence,
         confidenceReason
       });
+      resolvedMembers.push({ annotation: `@${accessor.annotation}`, name: accessor.targetName, line: accessor.line, status: "not-found" });
+    } else {
+      resolvedMembers.push({ annotation: `@${accessor.annotation}`, name: accessor.targetName, line: accessor.line, resolvedTo: `${targetName}#${accessor.targetName}`, status: "resolved" });
     }
   }
 }
@@ -367,17 +402,18 @@ export function validateParsedMixin(
 
   // Only validate members against targets that were resolved
   const resolvedTargetNames = targetNames.filter((t) => targetMembers.has(t));
+  const resolvedMembers: ResolvedMember[] = [];
 
   for (const inj of parsed.injections) {
-    validateInjection(inj, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
+    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
   }
 
   for (const shadow of parsed.shadows) {
-    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
+    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
   }
 
   for (const accessor of parsed.accessors) {
-    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, confidence, confidenceReason);
+    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason);
   }
 
   // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
@@ -427,7 +463,8 @@ export function validateParsedMixin(
     },
     provenance,
     warnings,
-    structuredWarnings: structuredWarnings.length > 0 ? structuredWarnings : undefined
+    structuredWarnings: structuredWarnings.length > 0 ? structuredWarnings : undefined,
+    resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined
   };
 }
 

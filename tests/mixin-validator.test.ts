@@ -11,7 +11,8 @@ import {
   validateParsedMixin,
   validateParsedAccessWidener,
   type ResolvedTargetMembers,
-  type MixinValidationProvenance
+  type MixinValidationProvenance,
+  type ResolvedMember
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
 
@@ -445,6 +446,67 @@ test("validateParsedAccessWidener summary counts", () => {
   assert.equal(result.summary.total, 2);
   assert.equal(result.summary.valid, 1);
   assert.equal(result.summary.invalid, 1);
+});
+
+/* ------------------------------------------------------------------ */
+/*  resolvedMembers tracking                                           */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin includes resolvedMembers for resolved injection", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.resolvedMembers);
+  assert.equal(result.resolvedMembers!.length, 1);
+  assert.equal(result.resolvedMembers![0].status, "resolved");
+  assert.equal(result.resolvedMembers![0].resolvedTo, "PlayerEntity#tick");
+});
+
+test("validateParsedMixin includes resolvedMembers for not-found shadow", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "field", name: "missing", line: 8 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.resolvedMembers);
+  assert.equal(result.resolvedMembers![0].status, "not-found");
+  assert.equal(result.resolvedMembers![0].annotation, "@Shadow");
+});
+
+test("validateParsedMixin resolvedMembers tracks accessors", () => {
+  const parsed = makeParsedMixin({
+    accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.resolvedMembers);
+  assert.equal(result.resolvedMembers![0].status, "resolved");
+  assert.equal(result.resolvedMembers![0].annotation, "@Accessor");
+});
+
+test("validateParsedMixin omits resolvedMembers when no members to validate", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.resolvedMembers, undefined);
 });
 
 /* ------------------------------------------------------------------ */
