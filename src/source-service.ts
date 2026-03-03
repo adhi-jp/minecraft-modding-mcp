@@ -536,7 +536,14 @@ export type ValidateMixinBatchIssueSummaryItem = {
 
 export type ValidateMixinBatchOutput = {
   results: ValidateMixinBatchResult[];
-  summary: { total: number; valid: number; invalid: number; errors: number };
+  summary: {
+    total: number;
+    valid: number;
+    invalid: number;
+    processingErrors: number;
+    totalValidationErrors: number;
+    totalValidationWarnings: number;
+  };
   issueSummary?: ValidateMixinBatchIssueSummaryItem[];
 };
 
@@ -3434,13 +3441,25 @@ export class SourceService {
       ? [...issueGroupMap.values()]
       : undefined;
 
+    // Aggregate validation-level errors/warnings across all results
+    let totalValidationErrors = 0;
+    let totalValidationWarnings = 0;
+    for (const r of results) {
+      if (r.result) {
+        totalValidationErrors += r.result.summary.errors;
+        totalValidationWarnings += r.result.summary.warnings;
+      }
+    }
+
     return {
       results,
       summary: {
         total: paths.length,
         valid: validCount,
         invalid: invalidCount,
-        errors: errorCount
+        processingErrors: errorCount,
+        totalValidationErrors,
+        totalValidationWarnings
       },
       issueSummary
     };
