@@ -253,9 +253,16 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
-`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation.
+`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation (`sourceRoot` defaults to `src/main/java`).
 `validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
+`validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.
+`validate-mixin` parser handles multi-line annotations between `@Shadow`/`@Accessor` and declarations, and strips inline annotations from declaration lines.
+`validate-mixin` distinguishes `target-mapping-failed` (warning, uncertain) from `target-not-found` (error) when class mapping fails.
+`validate-mixin` issues and `structuredWarnings` include `category` (`mapping`, `configuration`, or `validation`) to distinguish setup problems from real validation errors.
+`validate-mixin` single-file responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
+`validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery.
+`validate-mixin` batch `summary` uses `processingErrors` (exception count), `totalValidationErrors`, and `totalValidationWarnings` instead of the ambiguous `errors` field.
 `resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `targetValue` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `targetKind=version`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
@@ -275,6 +282,7 @@ Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path b
 `find-mapping` returns `ambiguityReasons` when `status=ambiguous` to explain why candidates could not be uniquely resolved.
 `get-class-api-matrix` returns `ambiguousRowCount` when one or more rows required ambiguity fallback.
 `check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).
+`check-symbol-exists` supports `signatureMode=name-only` to match methods by owner+name without requiring a descriptor. Single match returns `resolved`; multiple overloads return `ambiguous` with all candidates.
 `check-symbol-exists` always validates input shape first and returns `ERR_INVALID_INPUT` for invalid symbol combinations, even when mapping data is unavailable.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
 

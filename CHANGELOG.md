@@ -7,6 +7,23 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### fix(mixin): validate-mixin / check-symbol-exists bug fixes and improvements
+
+#### Fixed
+- `validate-mixin`: parser now supports `@Mixin(targets = "...")` and `@Mixin(targets = {"a", "b"})` string forms as fallback when `.class` literal format yields no targets.
+- `validate-mixin`: `@Shadow`/`@Accessor`/`@Invoker` annotation skip loop now handles multi-line annotations (e.g. `@Unique(value = "..."\n)`) between the annotation and declaration. Inline annotations (e.g. `@Nullable`, `@Deprecated`) on declaration lines are stripped before matching.
+- `validate-mixin`: mapping failures (e.g. mojang→official lookup fails) are now reported as `target-mapping-failed` warnings with `confidence=uncertain` instead of false-positive `target-not-found` errors.
+- `validate-mixin`: batch `summary.errors` (ambiguous: meant processing exceptions) renamed to `processingErrors`; added `totalValidationErrors` and `totalValidationWarnings` aggregate fields.
+- `validate-mixin`: error messages now show both the requested mapping name and official name when mapping fallback occurs, preventing display of opaque obfuscated names.
+- `check-symbol-exists`: `signatureMode=name-only` allows matching methods by owner+name without requiring a descriptor, resolving the contradiction where descriptor was required but mapping data might lack it.
+
+#### Added
+- `validate-mixin`: `resolvedMembers` field in single-file results tracks each injection/shadow/accessor's resolution status (`resolved` or `not-found`) with the resolved target.
+- `validate-mixin`: `category` field on `ValidationIssue` and `StructuredWarning` classifies entries as `mapping`, `configuration`, or `validation`.
+- `validate-mixin`: `explain=true` parameter enriches each issue with `explanation` (human-readable cause) and `suggestedCall` (`{ tool, params }`) for agent-driven recovery.
+- `validate-mixin`: `mixinConfigPath` parameter reads a mixin config JSON (e.g. `modid.mixins.json`) and auto-discovers source files from `package` + class names for batch validation. `sourceRoot` (default `src/main/java`) controls source lookup.
+- `check-symbol-exists`: `signatureMode` parameter (`exact` default, `name-only` for descriptor-less matching).
+
 ### chore(ci): temporarily disable Codecov workflow
 
 #### Changed
