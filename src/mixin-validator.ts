@@ -31,6 +31,7 @@ export type ValidationIssue = {
   line?: number;
   confidence?: IssueConfidence;
   confidenceReason?: string;
+  category?: IssueCategory;
 };
 
 export type ValidationSummary = {
@@ -55,9 +56,12 @@ export type MixinValidationProvenance = {
   remapFailures?: number;
 };
 
+export type IssueCategory = "mapping" | "configuration" | "validation";
+
 export type StructuredWarning = {
   severity: "info" | "warning";
   message: string;
+  category?: IssueCategory;
 };
 
 export type ResolvedMember = {
@@ -384,7 +388,8 @@ export function validateParsedMixin(
           target: target.className,
           message: `Could not map target class "${target.className}" to official namespace; class may still exist under a different mapping.`,
           confidence: "uncertain",
-          confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`
+          confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`,
+          category: "mapping"
         });
       } else {
         issues.push({
@@ -394,7 +399,8 @@ export function validateParsedMixin(
           target: target.className,
           message: `Target class "${target.className}" not found in game jar.`,
           confidence,
-          confidenceReason
+          confidenceReason,
+          category: "validation"
         });
       }
     }
@@ -438,11 +444,20 @@ export function validateParsedMixin(
   const definiteErrors = issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
   const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
 
-  // Build structuredWarnings — classify by severity
+  // Assign category to member validation issues that don't have one yet
+  for (const issue of issues) {
+    if (!issue.category) {
+      issue.category = "validation";
+    }
+  }
+
+  // Build structuredWarnings — classify by severity and category
   const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
+  const CONFIG_WARNING_RE = /(?:version|gradle|jar\b|properties|project)/i;
   const structuredWarnings: StructuredWarning[] = warnings.map((msg) => ({
     severity: MAPPING_WARNING_RE.test(msg) ? "warning" as const : "info" as const,
-    message: msg
+    message: msg,
+    category: MAPPING_WARNING_RE.test(msg) ? "mapping" as IssueCategory : CONFIG_WARNING_RE.test(msg) ? "configuration" as IssueCategory : "validation" as IssueCategory
   }));
 
   return {

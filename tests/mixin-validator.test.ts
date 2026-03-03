@@ -12,7 +12,8 @@ import {
   validateParsedAccessWidener,
   type ResolvedTargetMembers,
   type MixinValidationProvenance,
-  type ResolvedMember
+  type ResolvedMember,
+  type IssueCategory
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
 
@@ -550,6 +551,51 @@ test("validateParsedMixin distinguishes mapping-failed and not-found in same bat
   const kinds = result.issues.map((i) => i.kind);
   assert.ok(kinds.includes("target-mapping-failed"));
   assert.ok(kinds.includes("target-not-found"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  category classification                                            */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin target-mapping-failed has category=mapping", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const mappingFailedTargets = new Set(["SomeClass"]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
+  assert.equal(result.issues[0].category, "mapping");
+});
+
+test("validateParsedMixin validation issues have category=validation", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].category, "validation");
+});
+
+test("validateParsedMixin structuredWarnings have category", () => {
+  const parsed = makeParsedMixin();
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [
+    "Could not remap field from yarn to official.",
+    "Overriding version with project version from gradle.properties.",
+    "Some generic info."
+  ];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.structuredWarnings);
+  assert.equal(result.structuredWarnings![0].category, "mapping");
+  assert.equal(result.structuredWarnings![1].category, "configuration");
+  assert.equal(result.structuredWarnings![2].category, "validation");
 });
 
 /* ------------------------------------------------------------------ */
