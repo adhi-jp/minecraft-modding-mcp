@@ -4783,36 +4783,7 @@ export class SourceService {
       }
     }
 
-    // Remap unique member names
-    const memberEntries = [...memberKeyToRemapped.entries()];
-    await Promise.all(
-      memberEntries.map(async ([key, _officialName]) => {
-        const [ownerFqn, name, descriptor] = key.split("\0");
-        try {
-          const mapped = await this.mappingService.findMapping({
-            version,
-            kind,
-            name,
-            owner: ownerFqn,
-            descriptor: kind === "method" ? descriptor : undefined,
-            sourceMapping: "official",
-            targetMapping: mapping,
-            sourcePriority
-          });
-          if (mapped.resolved && mapped.resolvedSymbol) {
-            memberKeyToRemapped.set(key, mapped.resolvedSymbol.name);
-          } else {
-            warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
-            failedNames.add(name!);
-          }
-        } catch {
-          warnings.push(`Remap failed for ${kind} "${name}".`);
-          failedNames.add(name!);
-        }
-      })
-    );
-
-    // Remap unique owner FQNs
+    // Phase 1: Remap owner FQNs first (needed for member disambiguation)
     const ownerEntries = [...ownerToRemapped.entries()];
     await Promise.all(
       ownerEntries.map(async ([officialFqn]) => {
@@ -4830,6 +4801,53 @@ export class SourceService {
           }
         } catch {
           // keep official FQN as fallback
+        }
+      })
+    );
+
+    // Phase 2: Remap member names using resolved owners for disambiguation
+    const memberEntries = [...memberKeyToRemapped.entries()];
+    await Promise.all(
+      memberEntries.map(async ([key, _officialName]) => {
+        const [ownerFqn, name, descriptor] = key.split("\0");
+        try {
+          const targetOwner = ownerToRemapped.get(ownerFqn!) ?? ownerFqn;
+          const mapped = await this.mappingService.findMapping({
+            version,
+            kind,
+            name,
+            owner: ownerFqn,
+            descriptor: kind === "method" ? descriptor : undefined,
+            sourceMapping: "official",
+            targetMapping: mapping,
+            sourcePriority,
+            disambiguation: { ownerHint: targetOwner }
+          });
+          if (mapped.resolved && mapped.resolvedSymbol) {
+            memberKeyToRemapped.set(key, mapped.resolvedSymbol.name);
+          } else if (mapped.status === "ambiguous" && mapped.candidates && mapped.candidates.length > 0) {
+            // Disambiguate: filter by target owner and pick the best candidate
+            const ownerMatched = mapped.candidates.filter(
+              (c) => c.owner === targetOwner
+            );
+            const best = ownerMatched.length > 0 ? ownerMatched : mapped.candidates;
+            if (best.length > 0) {
+              memberKeyToRemapped.set(key, best[0]!.name);
+              // Only mark as failed if the best candidate is not a high-confidence match
+              if (best[0]!.confidence < 0.9) {
+                failedNames.add(name!);
+              }
+            } else {
+              warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
+              failedNames.add(name!);
+            }
+          } else {
+            warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
+            failedNames.add(name!);
+          }
+        } catch {
+          warnings.push(`Remap failed for ${kind} "${name}".`);
+          failedNames.add(name!);
         }
       })
     );

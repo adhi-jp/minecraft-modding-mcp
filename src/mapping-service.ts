@@ -481,13 +481,95 @@ function ensurePairIndex(indexes: Map<PairKey, DirectionIndex>, from: SourceMapp
   return created;
 }
 
+/** Map of proguard primitive type names to JVM type characters. */
+const PROGUARD_PRIMITIVES: Record<string, string> = {
+  void: "V", boolean: "Z", byte: "B", char: "C",
+  short: "S", int: "I", long: "J", float: "F", double: "D"
+};
+
+/**
+ * Convert a single proguard type (e.g. "int", "net.minecraft.Foo", "int[][]")
+ * to JVM notation (e.g. "I", "Lnet/minecraft/Foo;", "[[I").
+ * `classLookup` maps mojang class names → official class names (for the official descriptor).
+ * Pass `undefined` to skip class name translation (for mojang descriptors).
+ */
+function proguardTypeToJvm(type: string, classLookup: Map<string, string> | undefined): string {
+  let arrayDepth = 0;
+  let base = type;
+  while (base.endsWith("[]")) {
+    arrayDepth += 1;
+    base = base.slice(0, -2);
+  }
+  const prefix = "[".repeat(arrayDepth);
+  const primitive = PROGUARD_PRIMITIVES[base];
+  if (primitive) {
+    return `${prefix}${primitive}`;
+  }
+  const translated = classLookup ? (classLookup.get(base) ?? base) : base;
+  return `${prefix}L${translated.replace(/\./g, "/")};`;
+}
+
+/**
+ * Parse a proguard method signature (after stripLineInfo) into a JVM descriptor.
+ * Input format: "returnType methodName(paramType1,paramType2,...)"
+ * Returns `{ name, descriptor }` or `undefined` if parsing fails.
+ */
+function parseProguardMethod(
+  value: string,
+  classLookup: Map<string, string> | undefined
+): { name: string; descriptor: string } | undefined {
+  const match = /^(.+?)\s+([^\s(]+)\((.*)\)$/.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const returnType = match[1]!.trim();
+  const name = match[2]!.trim();
+  const params = match[3]!.trim();
+  if (!name) {
+    return undefined;
+  }
+  const paramParts = params ? params.split(",").map((p) => p.trim()) : [];
+  const paramDescriptor = paramParts.map((p) => proguardTypeToJvm(p, classLookup)).join("");
+  const returnDescriptor = proguardTypeToJvm(returnType, classLookup);
+  return { name, descriptor: `(${paramDescriptor})${returnDescriptor}` };
+}
+
 function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
   const officialToMojang = createDirectionIndex();
   const mojangToOfficial = createDirectionIndex();
-  let classCount = 0;
-  let currentClass: { official: string; mojang: string } | undefined;
 
-  for (const rawLine of text.split(/\r?\n/)) {
+  // Two-pass parsing: first collect class name mappings, then parse members with descriptors.
+  const lines = text.split(/\r?\n/);
+
+  // Pass 1: collect class name mappings (mojang → official)
+  const mojangToOfficialClass = new Map<string, string>();
+  let classCount = 0;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+    const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
+    if (classMatch) {
+      const mojangClass = classMatch[1]?.trim() ?? "";
+      const officialClass = classMatch[2]?.trim() ?? "";
+      if (mojangClass && officialClass) {
+        mojangToOfficialClass.set(mojangClass, officialClass);
+        classCount += 1;
+      }
+    }
+  }
+
+  if (classCount === 0) {
+    throw createError({
+      code: ERROR_CODES.MAPPING_UNAVAILABLE,
+      message: "No class mappings could be parsed from client mappings."
+    });
+  }
+
+  // Pass 2: build full index with descriptors
+  let currentClass: { official: string; mojang: string } | undefined;
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
       continue;
@@ -502,7 +584,6 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
         continue;
       }
 
-      classCount += 1;
       currentClass = {
         official: officialClass,
         mojang: mojangClass
@@ -536,17 +617,23 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
     }
 
     const mojangMemberSignature = stripLineInfo(leftRaw);
-    const methodName = parseMethodName(mojangMemberSignature);
-    if (methodName) {
+
+    // Try method parsing with JVM descriptor
+    const officialMethod = parseProguardMethod(mojangMemberSignature, mojangToOfficialClass);
+    if (officialMethod) {
+      const mojangMethod = parseProguardMethod(mojangMemberSignature, undefined);
+      const officialDescriptor = officialMethod.descriptor;
+      const mojangDescriptor = mojangMethod?.descriptor;
+
       addLookupEntries(
         officialToMojang,
-        createMethodSymbolRecord(currentClass.official, rightRaw, undefined),
-        createMethodSymbolRecord(currentClass.mojang, methodName, undefined)
+        createMethodSymbolRecord(currentClass.official, rightRaw, officialDescriptor),
+        createMethodSymbolRecord(currentClass.mojang, officialMethod.name, mojangDescriptor)
       );
       addLookupEntries(
         mojangToOfficial,
-        createMethodSymbolRecord(currentClass.mojang, methodName, undefined),
-        createMethodSymbolRecord(currentClass.official, rightRaw, undefined)
+        createMethodSymbolRecord(currentClass.mojang, officialMethod.name, mojangDescriptor),
+        createMethodSymbolRecord(currentClass.official, rightRaw, officialDescriptor)
       );
       continue;
     }
@@ -565,13 +652,6 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
       createFieldSymbolRecord(currentClass.mojang, fieldName),
       createFieldSymbolRecord(currentClass.official, rightRaw)
     );
-  }
-
-  if (classCount === 0) {
-    throw createError({
-      code: ERROR_CODES.MAPPING_UNAVAILABLE,
-      message: "No class mappings could be parsed from client mappings."
-    });
   }
 
   const result = new Map<PairKey, DirectionIndex>();
@@ -1232,7 +1312,8 @@ export class MappingService {
     if (
       queryRecord.kind === "method" &&
       queryRecord.descriptor &&
-      pathUsesSource(graph.pairs, path, "mojang-client-mappings")
+      pathUsesSource(graph.pairs, path, "mojang-client-mappings") &&
+      candidates.length !== 1
     ) {
       warnings.push(
         "Method descriptor could not be preserved through mojang-client-mappings and may have used name-based fallback."

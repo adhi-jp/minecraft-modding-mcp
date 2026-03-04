@@ -383,7 +383,7 @@ test("MappingService maps descriptor-qualified methods through tiny mappings", a
   assert.equal(result.candidates[0]?.descriptor, "(I)V");
 });
 
-test("MappingService falls back from descriptor to name for mojang client mappings with warning", async () => {
+test("MappingService resolves exact method descriptor through mojang client mappings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-method-mojang-fallback-"));
   const config = buildTestConfig(root);
@@ -414,9 +414,10 @@ test("MappingService falls back from descriptor to name for mojang client mappin
     targetMapping: "mojang"
   });
 
-  assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedMethod");
+  assert.equal(result.resolved, true);
+  assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedMethod(I)V");
   assert.equal(result.candidates[0]?.kind, "method");
-  assert.ok(result.warnings.some((warning) => warning.includes("descriptor")));
+  assert.equal(result.candidates[0]?.descriptor, "(I)V");
 });
 
 test("MappingService returns identity candidate when source/target mapping are equal", async () => {
@@ -615,9 +616,8 @@ test("MappingService returns mapping_unavailable when exact lookup crosses mojan
     targetMapping: "mojang"
   });
 
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "mapping_unavailable");
-  assert.ok(result.warnings.some((warning) => warning.includes("descriptor")));
+  assert.equal(result.resolved, true);
+  assert.equal(result.status, "resolved");
 });
 
 test("MappingService returns ambiguous for exact method lookup when tiny data has duplicate target names", async () => {
