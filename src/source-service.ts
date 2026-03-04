@@ -519,7 +519,7 @@ export type ValidateMixinInput = {
   source?: string;
   sourcePath?: string;
   sourcePaths?: string[];
-  mixinConfigPath?: string;
+  mixinConfigPath?: string | string[];
   sourceRoot?: string;
   sourceRoots?: string[];
   version: string;
@@ -532,6 +532,8 @@ export type ValidateMixinInput = {
   hideUncertain?: boolean;
   explain?: boolean;
   warningMode?: "full" | "aggregated";
+  preferProjectMapping?: boolean;
+  reportMode?: "compact" | "full";
 };
 
 export type ValidateMixinBatchResult = {
@@ -3239,70 +3241,86 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
-    // Mixin config mode: read JSON config and derive sourcePaths
+    // Mixin config mode: read JSON config(s) and derive sourcePaths
     if (input.mixinConfigPath) {
-      const normalizedConfigPath = normalizePathForHost(input.mixinConfigPath, undefined, "mixinConfigPath");
-      const resolvedConfigPath = isAbsolute(normalizedConfigPath)
-        ? normalizedConfigPath
-        : resolvePath(process.cwd(), normalizedConfigPath);
-      let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
-      try {
-        const raw = await readFile(resolvedConfigPath, "utf-8");
-        configJson = JSON.parse(raw);
-      } catch (err) {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `Could not read/parse mixinConfigPath "${input.mixinConfigPath}": ${err instanceof Error ? err.message : String(err)}`
-        });
-      }
-      const pkg = configJson.package ?? "";
-      const classNames = [
-        ...(configJson.mixins ?? []),
-        ...(configJson.client ?? []),
-        ...(configJson.server ?? [])
-      ];
-      if (classNames.length === 0) {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `Mixin config "${input.mixinConfigPath}" contains no mixin class entries.`
-        });
-      }
-      // Determine source root(s)
-      const projectBase = input.projectPath
-        ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
-        : dirname(resolvedConfigPath);
+      const configPaths = Array.isArray(input.mixinConfigPath) ? input.mixinConfigPath : [input.mixinConfigPath];
+      const allSourcePaths: string[] = [];
 
-      let sourceRootCandidates: string[];
-      if (input.sourceRoots && input.sourceRoots.length > 0) {
-        sourceRootCandidates = input.sourceRoots;
-      } else if (input.sourceRoot) {
-        sourceRootCandidates = [input.sourceRoot];
-      } else {
-        // Auto-detect: include any root that contains at least one configured mixin class.
-        const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
-          const fqcn = pkg ? `${pkg}.${className}` : className;
-          const relative = fqcn.replace(/\./g, "/") + ".java";
-          return existsSync(resolvePath(projectBase, candidateRoot, relative));
-        }));
-        if (detected.length > 0) {
-          sourceRootCandidates = detected;
+      for (const rawConfigPath of configPaths) {
+        const normalizedConfigPath = normalizePathForHost(rawConfigPath, undefined, "mixinConfigPath");
+        const resolvedConfigPath = isAbsolute(normalizedConfigPath)
+          ? normalizedConfigPath
+          : resolvePath(process.cwd(), normalizedConfigPath);
+        let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
+        try {
+          const raw = await readFile(resolvedConfigPath, "utf-8");
+          configJson = JSON.parse(raw);
+        } catch (err) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: `Could not read/parse mixinConfigPath "${rawConfigPath}": ${err instanceof Error ? err.message : String(err)}`
+          });
+        }
+        const pkg = configJson.package ?? "";
+        const classNames = [
+          ...(configJson.mixins ?? []),
+          ...(configJson.client ?? []),
+          ...(configJson.server ?? [])
+        ];
+        if (classNames.length === 0) {
+          continue; // Skip empty configs in array mode
+        }
+        // Determine source root(s)
+        const projectBase = input.projectPath
+          ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
+          : dirname(resolvedConfigPath);
+
+        let sourceRootCandidates: string[];
+        if (input.sourceRoots && input.sourceRoots.length > 0) {
+          sourceRootCandidates = input.sourceRoots;
+        } else if (input.sourceRoot) {
+          sourceRootCandidates = [input.sourceRoot];
         } else {
-          sourceRootCandidates = ["src/main/java"];
+          // Auto-detect: include any root that contains at least one configured mixin class.
+          const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
+            const fqcn = pkg ? `${pkg}.${className}` : className;
+            const relative = fqcn.replace(/\./g, "/") + ".java";
+            return existsSync(resolvePath(projectBase, candidateRoot, relative));
+          }));
+          if (detected.length > 0) {
+            sourceRootCandidates = detected;
+          } else {
+            sourceRootCandidates = ["src/main/java"];
+          }
+        }
+
+        // Build sourcePaths by probing each class against candidate roots
+        for (const cls of classNames) {
+          const fqcn = pkg ? `${pkg}.${cls}` : cls;
+          const relativePath = fqcn.replace(/\./g, "/") + ".java";
+          let found = false;
+          for (const root of sourceRootCandidates) {
+            const candidate = resolvePath(projectBase, root, relativePath);
+            if (existsSync(candidate)) {
+              allSourcePaths.push(candidate);
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            // Fallback to first root for error reporting
+            allSourcePaths.push(resolvePath(projectBase, sourceRootCandidates[0], relativePath));
+          }
         }
       }
 
-      // Build sourcePaths by probing each class against candidate roots
-      const sourcePaths = classNames.map((cls) => {
-        const fqcn = pkg ? `${pkg}.${cls}` : cls;
-        const relativePath = fqcn.replace(/\./g, "/") + ".java";
-        for (const root of sourceRootCandidates) {
-          const candidate = resolvePath(projectBase, root, relativePath);
-          if (existsSync(candidate)) return candidate;
-        }
-        // Fallback to first root for error reporting
-        return resolvePath(projectBase, sourceRootCandidates[0], relativePath);
-      });
-      return this.validateMixinBatch({ ...input, mixinConfigPath: undefined, sourcePaths });
+      if (allSourcePaths.length === 0) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Mixin config(s) contain no mixin class entries.`
+        });
+      }
+      return this.validateMixinBatch({ ...input, mixinConfigPath: undefined, sourcePaths: allSourcePaths });
     }
 
     // Batch mode: delegate to validateMixinBatch when sourcePaths is provided
@@ -3342,9 +3360,9 @@ export class SourceService {
     const warnings: string[] = [];
     let mappingAutoDetected = false;
 
-    // Auto-detect mapping from project config when not explicitly provided
+    // Auto-detect mapping from project config when not explicitly provided (or when preferProjectMapping is set)
     let detectedMapping: SourceMapping | undefined;
-    if (!input.mapping && input.projectPath) {
+    if ((!input.mapping || input.preferProjectMapping) && input.projectPath) {
       try {
         const detection = await this.workspaceMappingService.detectCompileMapping({ projectPath: input.projectPath });
         if (detection.resolved && detection.mappingApplied) {
@@ -3405,6 +3423,17 @@ export class SourceService {
       jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
     }
 
+    // Guard: reject sources jars — they contain Java source, not bytecode
+    if (jarPath.includes("-sources.jar")) {
+      warnings.push(`Resolved jar appears to be a sources jar. Falling back to vanilla client jar.`);
+      jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
+      scopeFallback = {
+        requested: input.scope ?? "vanilla",
+        applied: "vanilla",
+        reason: "Resolved jar was a sources jar, not a binary class jar."
+      };
+    }
+
     // Health check: probe mapping infrastructure
     let healthReport: MappingHealthReport | undefined;
     try {
@@ -3436,6 +3465,8 @@ export class SourceService {
     const mappingFailedTargets = new Set<string>();
     const remapFailedMembers = new Map<string, Set<string>>();
     const signatureFailedTargets = new Set<string>();
+    const symbolExistsButSignatureFailed = new Set<string>();
+    const resolutionTrace: MixinValidationProvenance["resolutionTrace"] = input.explain ? [] : undefined;
 
     for (const target of parsed.targets) {
       // Bug 1 fix: resolve simple names via imports
@@ -3472,13 +3503,16 @@ export class SourceService {
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             officialName = mapped.resolvedSymbol.name;
+            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: true });
           } else {
             warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official; using "${officialName}" for lookup.`);
             mappingFailedTargets.add(target.className);
+            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: false, detail: "No mapping found" });
           }
-        } catch {
+        } catch (mapErr) {
           warnings.push(`Mapping lookup failed for class "${resolvedClassName}"; using "${officialName}" for lookup.`);
           mappingFailedTargets.add(target.className);
+          resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: false, detail: mapErr instanceof Error ? mapErr.message : String(mapErr) });
         }
       }
 
@@ -3489,6 +3523,7 @@ export class SourceService {
           access: "all"
         });
         warnings.push(...sig.warnings);
+        resolutionTrace?.push({ target: target.className, step: "signature", input: officialName, output: `${sig.methods.length} methods, ${sig.fields.length} fields`, success: true });
 
         // Bug 2 fix: remap signature members to requested mapping
         let constructors = sig.constructors;
@@ -3513,10 +3548,14 @@ export class SourceService {
             for (const n of fieldResult.failedNames) targetFailed.add(n);
             if (targetFailed.size > 0) {
               remapFailedMembers.set(target.className, targetFailed);
+              resolutionTrace?.push({ target: target.className, step: "remap", input: `${targetFailed.size} members`, output: "failed", success: false });
+            } else {
+              resolutionTrace?.push({ target: target.className, step: "remap", input: `${methods.length + fields.length} members`, output: "remapped", success: true });
             }
-          } catch {
+          } catch (remapErr) {
             warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names. Member names shown may be in official (obfuscated) namespace.`);
             mappingApplied = "official";
+            resolutionTrace?.push({ target: target.className, step: "remap", input: resolvedClassName, output: "official fallback", success: false, detail: remapErr instanceof Error ? remapErr.message : String(remapErr) });
           }
         }
 
@@ -3526,9 +3565,39 @@ export class SourceService {
           methods,
           fields
         });
-      } catch {
+      } catch (sigErr) {
         warnings.push(`Could not load signature for class "${resolvedClassName}" (official: "${officialName}").`);
         signatureFailedTargets.add(target.className);
+        resolutionTrace?.push({ target: target.className, step: "signature", input: officialName, output: "CLASS_NOT_FOUND", success: false, detail: sigErr instanceof Error ? sigErr.message : String(sigErr) });
+
+        // Fallback: check if the symbol exists in the mapping graph even though getSignature failed
+        try {
+          const existenceCheck = await this.mappingService.checkSymbolExists({
+            version, kind: "class", name: resolvedClassName,
+            sourceMapping: requestedMapping, nameMode: "auto"
+          });
+          if (existenceCheck.resolved) {
+            signatureFailedTargets.delete(target.className);
+            symbolExistsButSignatureFailed.add(target.className);
+            resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "exists in mapping graph", success: true });
+          } else {
+            resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "not found", success: false });
+          }
+        } catch {
+          // Fallback check failed — keep as signatureFailedTarget
+          resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "check failed", success: false });
+        }
+      }
+    }
+
+    // Fix toolHealth accuracy: reflect actual failures after target resolution
+    if (healthReport) {
+      const hasFailures = signatureFailedTargets.size > 0 || mappingFailedTargets.size > 0;
+      if (hasFailures && healthReport.overallHealthy) {
+        healthReport.overallHealthy = false;
+        healthReport.degradations.push(
+          `${mappingFailedTargets.size} mapping failure(s), ${signatureFailedTargets.size} signature failure(s).`
+        );
       }
     }
 
@@ -3570,7 +3639,8 @@ export class SourceService {
       mappingChain: mappingChain.length > 0 ? mappingChain : undefined,
       remapFailures: remapFailures > 0 ? remapFailures : undefined,
       mappingAutoDetected: mappingAutoDetected || undefined,
-      scopeFallback
+      scopeFallback,
+      resolutionTrace: resolutionTrace && resolutionTrace.length > 0 ? resolutionTrace : undefined
     };
 
     const result = validateParsedMixin(
@@ -3578,7 +3648,8 @@ export class SourceService {
       remapFailedMembers, signatureFailedTargets,
       input.explain ? { scope: input.scope, sourcePriority: input.sourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
       input.warningMode,
-      healthReport
+      healthReport,
+      symbolExistsButSignatureFailed.size > 0 ? symbolExistsButSignatureFailed : undefined
     );
 
     // Apply minSeverity / hideUncertain filters
@@ -3616,6 +3687,17 @@ export class SourceService {
       };
       result.unfilteredSummary = unfilteredSummary;
       result.valid = filteredDefiniteErrors === 0;
+    }
+
+    // Apply compact report mode
+    if (input.reportMode === "compact") {
+      result.resolvedMembers = undefined;
+      result.structuredWarnings = undefined;
+      result.aggregatedWarnings = undefined;
+      result.toolHealth = undefined;
+      if (result.provenance) {
+        result.provenance.resolutionTrace = undefined;
+      }
     }
 
     return result;

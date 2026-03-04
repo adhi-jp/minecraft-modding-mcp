@@ -614,7 +614,7 @@ const validateMixinShape = {
   source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath/sourcePaths/mixinConfigPath)"),
   sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source/sourcePaths/mixinConfigPath)"),
   sourcePaths: z.array(z.string().min(1)).optional().describe("Array of Mixin .java file paths for batch validation"),
-  mixinConfigPath: optionalNonEmptyString.describe("Path to mixin config JSON (e.g. modid.mixins.json); auto-discovers and batch-validates all listed classes"),
+  mixinConfigPath: z.union([nonEmptyString, z.array(nonEmptyString).min(1)]).optional().describe("Path (or array of paths) to mixin config JSON (e.g. modid.mixins.json); auto-discovers and batch-validates all listed classes"),
   sourceRoot: optionalNonEmptyString.describe("Source root relative to projectPath (default 'src/main/java')"),
   sourceRoots: z.array(z.string().min(1)).optional()
     .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
@@ -631,14 +631,18 @@ const validateMixinShape = {
   explain: z.boolean().optional()
     .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery (default false)"),
   warningMode: z.enum(["full", "aggregated"]).optional()
-    .describe("'full'=all warnings (default), 'aggregated'=group warnings by category with counts and samples")
+    .describe("'full'=all warnings (default), 'aggregated'=group warnings by category with counts and samples"),
+  preferProjectMapping: z.boolean().optional()
+    .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
+  reportMode: z.enum(["compact", "full"]).optional()
+    .describe("'compact' omits resolvedMembers/structuredWarnings/toolHealth details, 'full'=everything (default)")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
   (d) => {
     const hasSource = d.source != null;
     const hasSourcePath = d.sourcePath != null;
     const hasSourcePaths = d.sourcePaths != null && d.sourcePaths.length > 0;
-    const hasMixinConfig = d.mixinConfigPath != null;
+    const hasMixinConfig = d.mixinConfigPath != null && (typeof d.mixinConfigPath === "string" || (Array.isArray(d.mixinConfigPath) && d.mixinConfigPath.length > 0));
     // Exactly one of the four must be provided
     return [hasSource, hasSourcePath, hasSourcePaths, hasMixinConfig].filter(Boolean).length === 1;
   },
@@ -1468,7 +1472,9 @@ server.tool("validate-mixin",
       minSeverity: input.minSeverity,
       hideUncertain: input.hideUncertain,
       explain: input.explain,
-      warningMode: input.warningMode
+      warningMode: input.warningMode,
+      preferProjectMapping: input.preferProjectMapping,
+      reportMode: input.reportMode
     }) as Promise<Record<string, unknown>>
   )
 );

@@ -73,7 +73,7 @@ const METHOD_DECL_RE =
   /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
 
 // @Accessor / @Invoker
-const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*(?:value\s*=\s*)?"([^"]+)"\s*(?:,\s*\w+\s*=\s*(?:\w+|"[^"]*")\s*)*\))?(?:\s|$)/;
+const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*\)|\(\s*(?:value\s*=\s*)?"([^"]+)"\s*(?:,\s*\w+\s*=\s*(?:\w+|"[^"]*")\s*)*\))?(?:\s|$)/;
 const ACCESSOR_ANNOTATION_START_RE = /^\s*@(Accessor|Invoker)\s*\(/;
 const ACCESSOR_EXPLICIT_RE = /"([^"]+)"/;
 

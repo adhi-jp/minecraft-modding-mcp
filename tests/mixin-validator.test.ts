@@ -1675,3 +1675,179 @@ test("P7: accessor falsePositiveRisk high when memberRemapAvailable=false and re
   assert.equal(result.issues[0].kind, "field-not-found");
   assert.equal(result.issues[0].falsePositiveRisk, "high");
 });
+
+/* ------------------------------------------------------------------ */
+/*  Phase 1A: symbolExistsButSignatureFailed fallback                  */
+/* ------------------------------------------------------------------ */
+
+test("symbolExistsButSignatureFailed produces tool_issue warning and skipped members", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }],
+    shadows: [{ kind: "field", name: "health", line: 8 }],
+    accessors: [{ annotation: "Accessor", name: "getSpeed", targetName: "speed", line: 12 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const symbolExistsSet = new Set(["PlayerEntity"]);
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, symbolExistsSet
+  );
+
+  // Should be valid (warning only, not error)
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].kind, "target-not-found");
+  assert.equal(result.issues[0].issueOrigin, "tool_issue");
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
+  assert.ok(result.issues[0].message.includes("exists in mapping data"));
+
+  // All members should be skipped
+  assert.ok(result.resolvedMembers);
+  assert.equal(result.resolvedMembers!.length, 3);
+  for (const rm of result.resolvedMembers!) {
+    assert.equal(rm.status, "skipped");
+  }
+});
+
+test("symbolExistsButSignatureFailed does not block normal signature-resolved targets", () => {
+  const parsed = makeParsedMixin({
+    targets: [{ className: "PlayerEntity" }, { className: "LivingEntity" }],
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+  const symbolExistsSet = new Set(["LivingEntity"]);
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, undefined, symbolExistsSet
+  );
+
+  assert.equal(result.valid, true);
+  // 1 warning for LivingEntity, 0 errors
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].target, "LivingEntity");
+  assert.equal(result.issues[0].severity, "warning");
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 2A: issueOrigin classification                               */
+/* ------------------------------------------------------------------ */
+
+test("issueOrigin is code_issue for genuine target-class-missing", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "NonExistentClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues[0].issueOrigin, "code_issue");
+});
+
+test("issueOrigin is tool_issue for target-mapping-failed", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const mappingFailed = new Set(["SomeClass"]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailed);
+  assert.equal(result.issues[0].issueOrigin, "tool_issue");
+});
+
+test("issueOrigin is tool_issue for member-remap-failed", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "field", name: "healht", line: 8 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const remapFailed = new Map([["PlayerEntity", new Set(["healht"])]]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, undefined, undefined, undefined, false,
+    remapFailed
+  );
+  assert.equal(result.issues[0].issueOrigin, "tool_issue");
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 2C: quickSummary                                             */
+/* ------------------------------------------------------------------ */
+
+test("quickSummary reports all members validated when no issues", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }],
+    shadows: [{ kind: "field", name: "health", line: 8 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"], fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.quickSummary);
+  assert.ok(result.quickSummary!.includes("2 member(s) validated successfully"));
+});
+
+test("quickSummary reports error counts when issues exist", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "nonExistent", line: 5 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.quickSummary);
+  assert.ok(result.quickSummary!.includes("error(s)"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 2D: improved error messages                                  */
+/* ------------------------------------------------------------------ */
+
+test("@Shadow field-not-found message includes available field count", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "field", name: "missingField", line: 8 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "hunger", "xp"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.issues[0].message.includes("3 field(s) available"));
+});
+
+test("@Shadow method-not-found message includes available method count", () => {
+  const parsed = makeParsedMixin({
+    shadows: [{ kind: "method", name: "missingMethod", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.issues[0].message.includes("2 method(s) available"));
+});
+
+test("@Accessor error includes inference hint with prefix removal", () => {
+  const parsed = makeParsedMixin({
+    accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["hunger"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.issues[0].message.includes("inferred"));
+  assert.ok(result.issues[0].message.includes("prefix removal"));
+});

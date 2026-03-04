@@ -684,3 +684,49 @@ public abstract class PlayerMixin {
   assert.equal(result.injections[0].annotation, "WrapWithCondition");
   assert.equal(result.injections[0].method, "attack");
 });
+
+/* ------------------------------------------------------------------ */
+/*  Phase 1D: @Accessor empty-paren and bare annotation                */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Accessor() with empty parentheses", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor()
+  int getHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].annotation, "Accessor");
+  assert.equal(result.accessors[0].name, "getHealth");
+  assert.equal(result.accessors[0].targetName, "health");
+});
+
+test("parseMixinSource parses bare @Accessor without parentheses", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  int getMaxHealth();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].targetName, "maxHealth");
+});
+
+test("parseMixinSource parses @Invoker() with empty parentheses", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerInvoker {
+  @Invoker()
+  void invokeDamage();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].annotation, "Invoker");
+  assert.equal(result.accessors[0].targetName, "damage");
+});

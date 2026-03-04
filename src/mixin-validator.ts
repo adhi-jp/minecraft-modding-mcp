@@ -52,6 +52,7 @@ export type ValidationIssue = {
   explanation?: string;
   suggestedCall?: { tool: string; params: Record<string, unknown> };
   falsePositiveRisk?: "high" | "medium" | "low";
+  issueOrigin?: "code_issue" | "tool_issue";
 };
 
 export type ValidationSummary = {
@@ -77,6 +78,14 @@ export type MixinValidationProvenance = {
   remapFailures?: number;
   mappingAutoDetected?: boolean;
   scopeFallback?: { requested: string; applied: string; reason: string };
+  resolutionTrace?: Array<{
+    target: string;
+    step: "mapping" | "signature" | "remap" | "fallback-check";
+    input: string;
+    output: string;
+    success: boolean;
+    detail?: string;
+  }>;
 };
 
 export type IssueCategory = "mapping" | "configuration" | "validation" | "resolution";
@@ -92,7 +101,7 @@ export type ResolvedMember = {
   name: string;
   line?: number;
   resolvedTo?: string;
-  status: "resolved" | "not-found";
+  status: "resolved" | "not-found" | "skipped";
 };
 
 export type AggregatedWarningGroup = {
@@ -116,6 +125,7 @@ export type MixinValidationResult = {
   resolvedMembers?: ResolvedMember[];
   toolHealth?: MappingHealthReport;
   confidenceScore?: number;
+  quickSummary?: string;
 };
 
 export type ResolvedTargetMembers = {
@@ -395,7 +405,7 @@ function validateShadow(
           kind: "field-not-found",
           annotation: "@Shadow",
           target: `${targetName}#${shadow.name}`,
-          message: `Field "${shadow.name}" not found in target class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+          message: `Field "${shadow.name}" not found in target class "${targetName}" (${fieldNames.length} field(s) available).${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
@@ -416,7 +426,7 @@ function validateShadow(
           kind: "method-not-found",
           annotation: "@Shadow",
           target: `${targetName}#${shadow.name}`,
-          message: `Method "${shadow.name}" not found in target class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+          message: `Method "${shadow.name}" not found in target class "${targetName}" (${methodNames.length} method(s) available).${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
@@ -465,12 +475,15 @@ function validateAccessor(
       const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
 
       const suggestions = suggestSimilar(accessor.targetName, candidateNames);
+      const inferenceHint = accessor.targetName !== accessor.name
+        ? ` (inferred "${accessor.targetName}" from "${accessor.name}" via prefix removal)`
+        : "";
       issues.push({
         severity: memberDegraded ? "warning" : "error",
         kind: accessor.annotation === "Invoker" ? "method-not-found" : "field-not-found",
         annotation: `@${accessor.annotation}`,
         target: `${targetName}#${accessor.targetName}`,
-        message: `Target "${accessor.targetName}" (inferred from "${accessor.name}") not found in class "${targetName}".${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+        message: `Target "${accessor.targetName}" not found in class "${targetName}".${inferenceHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         line: accessor.line,
         confidence: issueConfidence,
@@ -497,7 +510,8 @@ export function validateParsedMixin(
   signatureFailedTargets?: Set<string>,
   suggestedCallContext?: { scope?: string; sourcePriority?: string; projectPath?: string; mapping?: string },
   warningMode?: "full" | "aggregated",
-  healthReport?: MappingHealthReport
+  healthReport?: MappingHealthReport,
+  symbolExistsButSignatureFailed?: Set<string>
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -507,6 +521,8 @@ export function validateParsedMixin(
     : confidence === "likely"
       ? "Some members could not be remapped."
       : undefined;
+
+  const resolvedMembers: ResolvedMember[] = [];
 
   // Check target classes exist
   for (const target of parsed.targets) {
@@ -525,6 +541,47 @@ export function validateParsedMixin(
           resolutionPath: "target-mapping-failed",
           falsePositiveRisk: healthReport?.overallHealthy === false ? "high" : "medium"
         });
+      } else if (symbolExistsButSignatureFailed?.has(target.className)) {
+        // Symbol exists in mapping graph but getSignature failed — tool limitation, not code issue
+        issues.push({
+          severity: "warning",
+          kind: "target-not-found",
+          annotation: "@Mixin",
+          target: target.className,
+          message: `Target class "${target.className}" exists in mapping data but could not be loaded from game jar (tool limitation). Members not validated.`,
+          confidence: "uncertain",
+          confidenceReason: "Class exists in mapping graph but bytecode signature extraction failed.",
+          category: "resolution",
+          resolutionPath: "source-signature-unavailable",
+          issueOrigin: "tool_issue",
+          falsePositiveRisk: "high"
+        });
+        // Skip member validation for this target — add skipped entries for each declared member
+        for (const inj of parsed.injections) {
+          const methodName = extractMethodName(inj.method);
+          resolvedMembers.push({
+            annotation: `@${inj.annotation}`,
+            name: methodName,
+            line: inj.line,
+            status: "skipped"
+          });
+        }
+        for (const shadow of parsed.shadows) {
+          resolvedMembers.push({
+            annotation: "@Shadow",
+            name: shadow.name,
+            line: shadow.line,
+            status: "skipped"
+          });
+        }
+        for (const accessor of parsed.accessors) {
+          resolvedMembers.push({
+            annotation: `@${accessor.annotation}`,
+            name: accessor.targetName,
+            line: accessor.line,
+            status: "skipped"
+          });
+        }
       } else if (signatureFailedTargets?.has(target.className)) {
         const degraded = healthReport?.overallHealthy === false;
         issues.push({
@@ -559,7 +616,6 @@ export function validateParsedMixin(
 
   // Only validate members against targets that were resolved
   const resolvedTargetNames = targetNames.filter((t) => targetMembers.has(t));
-  const resolvedMembers: ResolvedMember[] = [];
 
   for (const inj of parsed.injections) {
     validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
@@ -596,10 +652,16 @@ export function validateParsedMixin(
   const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
   const resolutionErrors = issues.filter((i) => i.resolutionPath != null).length;
 
-  // Assign category to member validation issues that don't have one yet
+  // Assign category and issueOrigin to issues that don't have them yet
   for (const issue of issues) {
     if (!issue.category) {
       issue.category = issue.resolutionPath ? "resolution" : "validation";
+    }
+    if (!issue.issueOrigin) {
+      const toolPaths: ResolutionPath[] = ["target-mapping-failed", "member-remap-failed", "source-signature-unavailable"];
+      issue.issueOrigin = issue.resolutionPath && toolPaths.includes(issue.resolutionPath)
+        ? "tool_issue"
+        : "code_issue";
     }
   }
 
@@ -706,6 +768,12 @@ export function validateParsedMixin(
     ? computeConfidenceScore(healthReport, provenance, remapFailureCount)
     : undefined;
 
+  // Build quick summary
+  const total = parsed.injections.length + parsed.shadows.length + parsed.accessors.length;
+  const quickSummary = issues.length === 0
+    ? `${total} member(s) validated successfully.`
+    : `${definiteErrors} error(s), ${uncertainErrors} uncertain, ${warningCount} warning(s).`;
+
   return {
     className: parsed.className,
     targets: targetNames,
@@ -716,7 +784,7 @@ export function validateParsedMixin(
       injections: parsed.injections.length,
       shadows: parsed.shadows.length,
       accessors: parsed.accessors.length,
-      total: parsed.injections.length + parsed.shadows.length + parsed.accessors.length,
+      total,
       errors: errorCount,
       warnings: warningCount,
       definiteErrors,
@@ -729,7 +797,8 @@ export function validateParsedMixin(
     aggregatedWarnings,
     resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined,
     toolHealth: healthReport,
-    confidenceScore
+    confidenceScore,
+    quickSummary
   };
 }
 

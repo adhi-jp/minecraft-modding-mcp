@@ -83,6 +83,16 @@ test("index.ts accepts mapping source priority override inputs", async () => {
   assert.match(source, /const SOURCE_PRIORITIES = \["loom-first", "maven-first"\] as const;/);
 });
 
+test("index.ts trims validate-mixin mixinConfigPath for string and array forms", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /const nonEmptyString = z\.string\(\)\.trim\(\)\.min\(1\);/);
+  assert.match(
+    source,
+    /mixinConfigPath:\s*z\.union\(\[\s*nonEmptyString,\s*z\.array\(nonEmptyString\)\.min\(1\)\s*\]\)\.optional\(\)/
+  );
+});
+
 test("index.ts documents symbol-query grammar for mapping tools", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
