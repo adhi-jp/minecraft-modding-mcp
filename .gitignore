@@ -45,3 +45,4 @@ coverage/
 
 # Development artifacts
 .plans/
+.reference/
