@@ -854,3 +854,85 @@ public interface PlayerInvoker {
   assert.equal(result.accessors[0].annotation, "Invoker");
   assert.equal(result.accessors[0].targetName, "damage");
 });
+
+/* ------------------------------------------------------------------ */
+/*  $ in member names                                                   */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Accessor with $ in method name", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  Player metaStorage$getPlayer();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "metaStorage$getPlayer");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow field with $ in name", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  private int some$field;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "some$field");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+/* ------------------------------------------------------------------ */
+/*  @Shadow same-line declarations                                      */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Shadow @Final same-line field declaration", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow @Final private static Component TOO_EXPENSIVE_TEXT;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "TOO_EXPENSIVE_TEXT");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow same-line field (no extra annotations)", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow private int health;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "health");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses multiple consecutive same-line @Shadow declarations", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow @Final private static Component TOO_EXPENSIVE_TEXT;
+  @Shadow private int repairItemCountCost;
+  @Shadow private String itemName;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 3);
+  assert.equal(result.shadows[0].name, "TOO_EXPENSIVE_TEXT");
+  assert.equal(result.shadows[1].name, "repairItemCountCost");
+  assert.equal(result.shadows[2].name, "itemName");
+  assert.equal(result.parseWarnings.length, 0);
+});

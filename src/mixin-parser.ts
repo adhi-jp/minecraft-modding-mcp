@@ -68,9 +68,9 @@ const METHOD_ATTR_ITEM_RE = /"([^"]+)"/g;
 // @Shadow field / method
 const SHADOW_ANNOTATION_RE = /^\s*@Shadow\b/;
 const FIELD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+(\w+)\s*[;=]/;
+  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+([\w$]+)\s*[;=]/;
 const METHOD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(?:<[\w<>,.\s?&\[\]]+>\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+(\w+)\s*\(/;
+  /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(?:<[\w<>,.\s?&\[\]]+>\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+([\w$]+)\s*\(/;
 
 // @Accessor / @Invoker
 const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*\)|\(\s*(?:value\s*=\s*)?"([^"]+)"\s*(?:,\s*\w+\s*=\s*(?:\w+|"[^"]*")\s*)*\))?(?:\s|$)/;
@@ -280,6 +280,19 @@ export function parseMixinSource(source: string): ParsedMixin {
 
     // --- @Shadow ---
     if (SHADOW_ANNOTATION_RE.test(line)) {
+      // Try same-line declaration first (e.g. `@Shadow @Final private int x;`)
+      const inlineDecl = stripInlineAnnotations(line);
+      const inlineMethodMatch = inlineDecl.includes("(") ? METHOD_DECL_RE.exec(inlineDecl) : null;
+      const inlineFieldMatch = !inlineMethodMatch ? FIELD_DECL_RE.exec(inlineDecl) : null;
+      if (inlineMethodMatch) {
+        shadows.push({ kind: "method", name: inlineMethodMatch[2], line: lineNum });
+        i++;
+        continue;
+      } else if (inlineFieldMatch) {
+        shadows.push({ kind: "field", name: inlineFieldMatch[2], line: lineNum });
+        i++;
+        continue;
+      }
       // Advance past @Shadow line to find the declaration
       let declLine = i + 1;
       // Skip additional annotations between @Shadow and declaration (including multi-line)
