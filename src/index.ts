@@ -635,7 +635,11 @@ const validateMixinShape = {
   preferProjectMapping: z.boolean().optional()
     .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
   reportMode: z.enum(["compact", "full"]).optional()
-    .describe("'compact' omits resolvedMembers/structuredWarnings/toolHealth details, 'full'=everything (default)")
+    .describe("'compact' omits resolvedMembers/structuredWarnings/toolHealth details, 'full'=everything (default)"),
+  warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
+    .describe("Only include warnings/issues matching these categories (default: all)"),
+  treatInfoAsWarning: z.boolean().optional()
+    .describe("When false, suppress info-severity structured warnings from output (default true)")
 };
 const validateMixinSchema = z.object(validateMixinShape).refine(
   (d) => {
@@ -1474,7 +1478,9 @@ server.tool("validate-mixin",
       explain: input.explain,
       warningMode: input.warningMode,
       preferProjectMapping: input.preferProjectMapping,
-      reportMode: input.reportMode
+      reportMode: input.reportMode,
+      warningCategoryFilter: input.warningCategoryFilter,
+      treatInfoAsWarning: input.treatInfoAsWarning
     }) as Promise<Record<string, unknown>>
   )
 );

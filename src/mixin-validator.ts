@@ -52,7 +52,7 @@ export type ValidationIssue = {
   explanation?: string;
   suggestedCall?: { tool: string; params: Record<string, unknown> };
   falsePositiveRisk?: "high" | "medium" | "low";
-  issueOrigin?: "code_issue" | "tool_issue";
+  issueOrigin?: "code_issue" | "tool_issue" | "parser_limitation";
 };
 
 export type ValidationSummary = {
@@ -65,6 +65,7 @@ export type ValidationSummary = {
   definiteErrors: number;
   uncertainErrors: number;
   resolutionErrors: number;
+  parseWarnings: number;
 };
 
 export type MixinValidationProvenance = {
@@ -88,7 +89,7 @@ export type MixinValidationProvenance = {
   }>;
 };
 
-export type IssueCategory = "mapping" | "configuration" | "validation" | "resolution";
+export type IssueCategory = "mapping" | "configuration" | "validation" | "resolution" | "parse";
 
 export type StructuredWarning = {
   severity: "info" | "warning";
@@ -629,20 +630,33 @@ export function validateParsedMixin(
     validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
-  // Add parse warnings — escalate @Accessor/@Invoker parse failures to issues
+  // Add parse warnings — escalate @Accessor/@Invoker/@Shadow parse failures to issues
   for (const pw of parsed.parseWarnings) {
-    if (/@Accessor\b/.test(pw) || /@Invoker\b/.test(pw)) {
+    if (/@(Accessor|Invoker|Shadow)\b/.test(pw)) {
+      const annotation = pw.includes("@Accessor") ? "@Accessor"
+        : pw.includes("@Invoker") ? "@Invoker" : "@Shadow";
       issues.push({
         severity: "warning",
         kind: "unknown-annotation",
-        annotation: pw.includes("@Accessor") ? "@Accessor" : "@Invoker",
+        annotation,
         target: parsed.className,
         message: pw,
-        confidence,
-        confidenceReason
+        confidence: "uncertain",
+        confidenceReason: "Parser could not extract member declaration; the annotation may be valid.",
+        category: "parse",
+        issueOrigin: "parser_limitation",
+        falsePositiveRisk: "high"
       });
     } else {
       warnings.push(pw);
+    }
+  }
+
+  // Contradiction detection: if some same-annotation members resolved OK but parse failed for others, note it
+  const resolvedAnnotations = new Set(resolvedMembers.filter((m) => m.status === "resolved").map((m) => m.annotation));
+  for (const issue of issues) {
+    if (issue.category === "parse" && resolvedAnnotations.has(issue.annotation)) {
+      issue.message += " (Note: other members with the same annotation resolved successfully.)";
     }
   }
 
@@ -651,6 +665,7 @@ export function validateParsedMixin(
   const definiteErrors = issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
   const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
   const resolutionErrors = issues.filter((i) => i.resolutionPath != null).length;
+  const parseWarningCount = issues.filter((i) => i.category === "parse").length;
 
   // Assign category and issueOrigin to issues that don't have them yet
   for (const issue of issues) {
@@ -658,10 +673,14 @@ export function validateParsedMixin(
       issue.category = issue.resolutionPath ? "resolution" : "validation";
     }
     if (!issue.issueOrigin) {
-      const toolPaths: ResolutionPath[] = ["target-mapping-failed", "member-remap-failed", "source-signature-unavailable"];
-      issue.issueOrigin = issue.resolutionPath && toolPaths.includes(issue.resolutionPath)
-        ? "tool_issue"
-        : "code_issue";
+      if (issue.category === "parse") {
+        issue.issueOrigin = "parser_limitation";
+      } else {
+        const toolPaths: ResolutionPath[] = ["target-mapping-failed", "member-remap-failed", "source-signature-unavailable"];
+        issue.issueOrigin = issue.resolutionPath && toolPaths.includes(issue.resolutionPath)
+          ? "tool_issue"
+          : "code_issue";
+      }
     }
   }
 
@@ -728,10 +747,14 @@ export function validateParsedMixin(
   // Build structuredWarnings — classify by severity and category
   const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
   const CONFIG_WARNING_RE = /(?:version|gradle|jar\b|properties|project)/i;
+  const PARSE_WARNING_RE = /(?:could not parse|parse\s+warning|missing method attribute)/i;
   const structuredWarnings: StructuredWarning[] = warnings.map((msg) => ({
-    severity: MAPPING_WARNING_RE.test(msg) ? "warning" as const : "info" as const,
+    severity: MAPPING_WARNING_RE.test(msg) ? "warning" as const : PARSE_WARNING_RE.test(msg) ? "warning" as const : "info" as const,
     message: msg,
-    category: MAPPING_WARNING_RE.test(msg) ? "mapping" as IssueCategory : CONFIG_WARNING_RE.test(msg) ? "configuration" as IssueCategory : "validation" as IssueCategory
+    category: MAPPING_WARNING_RE.test(msg) ? "mapping" as IssueCategory
+      : PARSE_WARNING_RE.test(msg) ? "parse" as IssueCategory
+      : CONFIG_WARNING_RE.test(msg) ? "configuration" as IssueCategory
+      : "validation" as IssueCategory
   }));
 
   // Warning aggregation mode
@@ -789,7 +812,8 @@ export function validateParsedMixin(
       warnings: warningCount,
       definiteErrors,
       uncertainErrors,
-      resolutionErrors
+      resolutionErrors,
+      parseWarnings: parseWarningCount
     },
     provenance,
     warnings: outputWarnings,

@@ -807,7 +807,7 @@ test("validateParsedMixin error message includes descriptor hint", () => {
 /*  Phase 3: @Accessor/@Invoker parse warning escalation               */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin escalates @Accessor parse warning to issue", () => {
+test("validateParsedMixin escalates @Accessor parse warning to issue with parse category", () => {
   const parsed = makeParsedMixin({
     parseWarnings: ["Line 5: Could not parse @Accessor method declaration."]
   });
@@ -820,10 +820,13 @@ test("validateParsedMixin escalates @Accessor parse warning to issue", () => {
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].severity, "warning");
   assert.equal(result.issues[0].annotation, "@Accessor");
+  assert.equal(result.issues[0].category, "parse");
+  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
   assert.equal(warnings.length, 0);
 });
 
-test("validateParsedMixin escalates @Invoker parse warning to issue", () => {
+test("validateParsedMixin escalates @Invoker parse warning to issue with parse category", () => {
   const parsed = makeParsedMixin({
     parseWarnings: ["Line 8: Could not parse @Invoker method declaration."]
   });
@@ -835,9 +838,68 @@ test("validateParsedMixin escalates @Invoker parse warning to issue", () => {
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].annotation, "@Invoker");
+  assert.equal(result.issues[0].category, "parse");
+  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
 });
 
-test("validateParsedMixin keeps non-accessor parse warnings in warnings[]", () => {
+test("validateParsedMixin escalates @Shadow parse warning to issue", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].annotation, "@Shadow");
+  assert.equal(result.issues[0].category, "parse");
+  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
+  assert.equal(result.issues[0].falsePositiveRisk, "high");
+  assert.equal(warnings.length, 0);
+});
+
+test("validateParsedMixin adds contradiction note when parse fails but same annotation resolves", () => {
+  const parsed: ParsedMixin = {
+    className: "TestMixin",
+    targets: [{ className: "PlayerEntity" }],
+    imports: new Map(),
+    injections: [],
+    shadows: [{ kind: "field", name: "health", line: 5 }],
+    accessors: [],
+    parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
+  };
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  // The @Shadow field "health" should resolve, and the parse warning should note the contradiction
+  const parseIssue = result.issues.find((i) => i.category === "parse");
+  assert.ok(parseIssue);
+  assert.ok(parseIssue!.message.includes("other members with the same annotation resolved successfully"));
+});
+
+test("validateParsedMixin summary includes parseWarnings count", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: [
+      "Line 5: Could not parse @Accessor method declaration.",
+      "Line 8: Could not parse @Shadow member declaration."
+    ]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.summary.parseWarnings, 2);
+});
+
+test("validateParsedMixin keeps non-accessor/shadow parse warnings in warnings[]", () => {
   const parsed = makeParsedMixin({
     parseWarnings: ["Line 3: @Inject missing method attribute."]
   });
@@ -849,6 +911,7 @@ test("validateParsedMixin keeps non-accessor parse warnings in warnings[]", () =
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.equal(result.issues.length, 0);
   assert.ok(warnings.some((w) => w.includes("@Inject")));
+  assert.equal(result.summary.parseWarnings, 0);
 });
 
 /* ------------------------------------------------------------------ */
@@ -1836,6 +1899,26 @@ test("@Shadow method-not-found message includes available method count", () => {
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.ok(result.issues[0].message.includes("2 method(s) available"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  structuredWarnings: parse category classification                    */
+/* ------------------------------------------------------------------ */
+
+test("validateParsedMixin classifies 'missing method attribute' warning as parse category", () => {
+  const parsed = makeParsedMixin({
+    parseWarnings: ["Line 3: @Inject missing method attribute."]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", {})]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.ok(result.structuredWarnings);
+  const parseSw = result.structuredWarnings!.find((sw) => sw.category === "parse");
+  assert.ok(parseSw);
+  assert.equal(parseSw!.severity, "warning");
 });
 
 test("@Accessor error includes inference hint with prefix removal", () => {

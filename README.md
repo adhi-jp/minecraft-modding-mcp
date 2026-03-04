@@ -237,7 +237,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `summary`, `provenance?`, `resolvedMembers?`, `toolHealth?`, `confidenceScore?`; batch: `results[]`, `summary`, `toolHealth?` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `aggregatedWarnings?`, `summary` (incl. `parseWarnings`), `unfilteredSummary?`, `provenance?`, `resolvedMembers?`, `toolHealth?`, `confidenceScore?`; batch: `results[]`, `summary`, `toolHealth?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -259,7 +259,8 @@ Tools for querying generated registry data and inspecting server runtime state.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.
 `validate-mixin` parser handles multi-line annotations between `@Shadow`/`@Accessor` and declarations, and strips inline annotations from declaration lines.
 `validate-mixin` distinguishes `target-mapping-failed` (warning, uncertain) from `target-not-found` (error) when class mapping fails.
-`validate-mixin` issues and `structuredWarnings` include `category` (`mapping`, `configuration`, or `validation`) to distinguish setup problems from real validation errors.
+`validate-mixin` issues and `structuredWarnings` include `category` (`mapping`, `configuration`, `validation`, `resolution`, or `parse`) to distinguish setup/tooling/parser limits from real validation errors.
+`validate-mixin` supports post-filtering with `minSeverity`, `hideUncertain`, and `warningCategoryFilter`; `treatInfoAsWarning=false` suppresses info-level entries in `structuredWarnings`.
 `validate-mixin` single-file responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
 `validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery.
 `validate-mixin` batch `summary` uses `processingErrors` (exception count), `totalValidationErrors`, and `totalValidationWarnings` instead of the ambiguous `errors` field.

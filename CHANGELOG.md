@@ -27,14 +27,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin`: mapping failures (e.g. mojang→official lookup fails) are now reported as `target-mapping-failed` warnings with `confidence=uncertain` instead of false-positive `target-not-found` errors.
 - `validate-mixin`: batch `summary.errors` (ambiguous: meant processing exceptions) renamed to `processingErrors`; added `totalValidationErrors` and `totalValidationWarnings` aggregate fields.
 - `validate-mixin`: error messages now show both the requested mapping name and official name when mapping fallback occurs, preventing display of opaque obfuscated names.
+- `validate-mixin`: `hideUncertain`/`minSeverity` filtering now recomputes `summary.parseWarnings` from filtered issues so `summary` stays consistent with `issues[]`.
 - `check-symbol-exists`: `signatureMode=name-only` allows matching methods by owner+name without requiring a descriptor, resolving the contradiction where descriptor was required but mapping data might lack it.
 
 #### Added
 - `validate-mixin`: `resolvedMembers` field in single-file results tracks each injection/shadow/accessor's resolution status (`resolved` or `not-found`) with the resolved target.
-- `validate-mixin`: `category` field on `ValidationIssue` and `StructuredWarning` classifies entries as `mapping`, `configuration`, or `validation`.
+- `validate-mixin`: `category` field on `ValidationIssue` and `StructuredWarning` classifies entries as `mapping`, `configuration`, `validation`, `resolution`, or `parse`.
 - `validate-mixin`: `explain=true` parameter enriches each issue with `explanation` (human-readable cause) and `suggestedCall` (`{ tool, params }`) for agent-driven recovery.
 - `validate-mixin`: `mixinConfigPath` parameter reads a mixin config JSON (e.g. `modid.mixins.json`) and auto-discovers source files from `package` + class names for batch validation. `sourceRoot` (default `src/main/java`) and `sourceRoots[]` control source lookup.
 - `validate-mixin`: mixin-config auto-discovery now scans all configured mixin classes across common module roots (including `src/client/java` and `<loader>/src/client/java`), avoiding false processing errors when mixins are split between `common`/`fabric`/`neoforge`/`forge`/`quilt` main+client source sets.
+- `validate-mixin`: parser/type matching now supports fully-qualified/generic/array/wildcard member signatures in `@Shadow`/`@Accessor` declarations.
+- `validate-mixin`: parse failures for `@Shadow` are now promoted to parse-category issues (`issueOrigin=parser_limitation`, `falsePositiveRisk=high`), and parse warning totals are exposed via `summary.parseWarnings`.
+- `validate-mixin`: new controls `warningCategoryFilter` and `treatInfoAsWarning` allow category filtering and optional suppression of info-level `structuredWarnings`.
 - `check-symbol-exists`: `signatureMode` parameter (`exact` default, `name-only` for descriptor-less matching).
 
 ### chore(ci): temporarily disable Codecov workflow

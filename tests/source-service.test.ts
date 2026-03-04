@@ -5078,6 +5078,53 @@ test("SourceService validateMixin falls back to vanilla when scope=merged resolu
   assert.ok(result.warnings.some((w) => w.includes("falling back to vanilla")));
 });
 
+test("SourceService validateMixin hideUncertain recomputes parseWarnings summary", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-hide-uncertain-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    source: [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "import org.spongepowered.asm.mixin.gen.Accessor;",
+      "",
+      "@Mixin(Main.class)",
+      "public interface BadAccessorMixin {",
+      "  @Accessor",
+      "  int notAMethod;",
+      "}"
+    ].join("\n"),
+    version: "1.21",
+    mapping: "official",
+    hideUncertain: true
+  });
+
+  assert.equal(result.issues.length, 0);
+  assert.equal(result.summary.warnings, 0);
+  assert.equal(result.summary.parseWarnings, 0);
+  assert.equal(result.unfilteredSummary?.parseWarnings, 1);
+});
+
 test("SourceService validateMixin mixinConfigPath auto-detect finds multiple module source roots", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-config-roots-"));

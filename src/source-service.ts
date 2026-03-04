@@ -534,6 +534,8 @@ export type ValidateMixinInput = {
   warningMode?: "full" | "aggregated";
   preferProjectMapping?: boolean;
   reportMode?: "compact" | "full";
+  warningCategoryFilter?: ("mapping" | "configuration" | "validation" | "resolution" | "parse")[];
+  treatInfoAsWarning?: boolean;
 };
 
 export type ValidateMixinBatchResult = {
@@ -1405,10 +1407,10 @@ export class SourceService {
     // P5: preferProjectVersion - detect MC version from gradle.properties
     if (input.preferProjectVersion && input.projectPath && kind === "version") {
       const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
-      if (detected) {
+      if (detected && detected !== value) {
         warnings.push(`Overriding version "${value}" with project version "${detected}" from gradle.properties.`);
-        value = detected;
       }
+      value = detected ?? value;
     }
     if (!value) {
       throw createError({
@@ -3384,10 +3386,10 @@ export class SourceService {
     // preferProjectVersion: detect MC version from gradle.properties
     if (input.preferProjectVersion && input.projectPath) {
       const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
-      if (detected) {
+      if (detected && detected !== version) {
         warnings.push(`Overriding version "${version}" with project version "${detected}" from gradle.properties.`);
-        version = detected;
       }
+      version = detected ?? version;
     }
 
     // Resolve jar: use Loom cache for non-vanilla scope with projectPath
@@ -3675,6 +3677,7 @@ export class SourceService {
       const filteredDefiniteErrors = filtered.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
       const filteredUncertainErrors = filtered.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
       const filteredResolutionErrors = filtered.filter((i) => i.resolutionPath != null).length;
+      const filteredParseWarnings = filtered.filter((i) => i.category === "parse").length;
 
       result.issues = filtered;
       result.summary = {
@@ -3683,10 +3686,41 @@ export class SourceService {
         warnings: filteredWarnings,
         definiteErrors: filteredDefiniteErrors,
         uncertainErrors: filteredUncertainErrors,
-        resolutionErrors: filteredResolutionErrors
+        resolutionErrors: filteredResolutionErrors,
+        parseWarnings: filteredParseWarnings
       };
       result.unfilteredSummary = unfilteredSummary;
       result.valid = filteredDefiniteErrors === 0;
+    }
+
+    // Apply warningCategoryFilter
+    if (input.warningCategoryFilter && input.warningCategoryFilter.length > 0) {
+      const allowedCategories = new Set(input.warningCategoryFilter);
+      result.issues = result.issues.filter((i) => i.category && allowedCategories.has(i.category));
+      if (result.structuredWarnings) {
+        result.structuredWarnings = result.structuredWarnings.filter((sw) => sw.category && allowedCategories.has(sw.category));
+        if (result.structuredWarnings.length === 0) result.structuredWarnings = undefined;
+      }
+      // Re-compute summary after category filter
+      const catErrors = result.issues.filter((i) => i.severity === "error").length;
+      const catWarnings = result.issues.filter((i) => i.severity === "warning").length;
+      const catDefiniteErrors = result.issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
+      result.summary = {
+        ...result.summary,
+        errors: catErrors,
+        warnings: catWarnings,
+        definiteErrors: catDefiniteErrors,
+        uncertainErrors: result.issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length,
+        resolutionErrors: result.issues.filter((i) => i.resolutionPath != null).length,
+        parseWarnings: result.issues.filter((i) => i.category === "parse").length
+      };
+      result.valid = catDefiniteErrors === 0;
+    }
+
+    // Apply treatInfoAsWarning filter
+    if (input.treatInfoAsWarning === false && result.structuredWarnings) {
+      result.structuredWarnings = result.structuredWarnings.filter((sw) => sw.severity !== "info");
+      if (result.structuredWarnings.length === 0) result.structuredWarnings = undefined;
     }
 
     // Apply compact report mode

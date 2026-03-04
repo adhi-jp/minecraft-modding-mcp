@@ -68,9 +68,9 @@ const METHOD_ATTR_ITEM_RE = /"([^"]+)"/g;
 // @Shadow field / method
 const SHADOW_ANNOTATION_RE = /^\s*@Shadow\b/;
 const FIELD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*[;=]/;
+  /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+(\w+)\s*[;=]/;
 const METHOD_DECL_RE =
-  /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(/;
+  /(?:private|protected|public)?\s*(?:default\s+)?(?:static\s+)?(?:synchronized\s+)?(?:abstract\s+)?(?:native\s+)?(?:<[\w<>,.\s?&\[\]]+>\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+(\w+)\s*\(/;
 
 // @Accessor / @Invoker
 const ACCESSOR_ANNOTATION_RE = /^\s*@(Accessor|Invoker)\s*(?:\(\s*\)|\(\s*(?:value\s*=\s*)?"([^"]+)"\s*(?:,\s*\w+\s*=\s*(?:\w+|"[^"]*")\s*)*\))?(?:\s|$)/;

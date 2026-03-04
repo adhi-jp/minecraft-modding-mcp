@@ -717,6 +717,130 @@ public interface PlayerAccessor {
   assert.equal(result.accessors[0].targetName, "maxHealth");
 });
 
+/* ------------------------------------------------------------------ */
+/*  Extended type support: arrays, wildcards, FQN types                 */
+/* ------------------------------------------------------------------ */
+
+test("parseMixinSource parses @Shadow field with array type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  private int[][] matrix;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "matrix");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow field with FQN type and generics", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  private java.util.Map<ResourceKey<Level>, ServerLevel> levels;
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "field");
+  assert.equal(result.shadows[0].name, "levels");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Accessor with array return type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  Slot[] getSlots();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "getSlots");
+  assert.equal(result.accessors[0].targetName, "slots");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Accessor with wildcard return type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  List<?> getItems();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "getItems");
+  assert.equal(result.accessors[0].targetName, "items");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Accessor with bounded wildcard return type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  List<? extends Item> getItems();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "getItems");
+  assert.equal(result.accessors[0].targetName, "items");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow method with FQN return type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  public abstract net.minecraft.world.item.ItemStack getMainHandItem();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "method");
+  assert.equal(result.shadows[0].name, "getMainHandItem");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Accessor with no-modifier return type", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  ServerTickRateManager tickRateManager();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.accessors.length, 1);
+  assert.equal(result.accessors[0].name, "tickRateManager");
+  assert.equal(result.accessors[0].targetName, "tickRateManager");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
+test("parseMixinSource parses @Shadow method with type parameter prefix", () => {
+  const source = `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  public abstract <T extends Entity> List<T> getEntities();
+}
+`;
+  const result = parseMixinSource(source);
+  assert.equal(result.shadows.length, 1);
+  assert.equal(result.shadows[0].kind, "method");
+  assert.equal(result.shadows[0].name, "getEntities");
+  assert.equal(result.parseWarnings.length, 0);
+});
+
 test("parseMixinSource parses @Invoker() with empty parentheses", () => {
   const source = `
 @Mixin(PlayerEntity.class)
