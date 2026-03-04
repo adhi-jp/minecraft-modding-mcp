@@ -1613,6 +1613,7 @@ export async function startServer(): Promise<void> {
   // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
   process.stdin.resume();
   serverStarted = true;
+  setImmediate(getSourceService); // Eagerly init SourceService during MCP handshake
 }
 
 export { server, sourceService, config, SERVER_VERSION };
