@@ -1,6 +1,6 @@
 {
   "name": "@adhisang/minecraft-modding-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP server with utilities for Minecraft modding workflows",
   "type": "module",
   "main": "dist/index.js",
