@@ -181,8 +181,6 @@ export async function decompileBinaryJar(
 
   try {
     mkdirSync(outputDir, { recursive: true });
-    await assertVineflowerAvailable(options.vineflowerJarPath);
-    await assertJavaAvailable();
 
     if (statSync(outputDir, { throwIfNoEntry: false })) {
       const existingJavaFiles = await collectJavaFiles(outputDir);
@@ -208,6 +206,9 @@ export async function decompileBinaryJar(
         };
       }
     }
+
+    await assertVineflowerAvailable(options.vineflowerJarPath);
+    await assertJavaAvailable();
 
     const profilesAttempted: string[] = [];
     let lastDecompileError: unknown;
