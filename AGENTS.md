@@ -38,6 +38,15 @@
 - Before editing CHANGELOG release sections, verify commit/tag boundaries (`git log --oneline --decorate` and `git tag` with remote-tracking tags) so entries map to the correct release window.
 - Editing an already-tagged release section is allowed only with explicit user instruction and a documented history-rewrite/release-correction plan.
 
+## Release Changelog Consistency Gate (MUST)
+- During release preparation, you MUST verify that every CHANGELOG bullet planned for the release exactly matches the current implementation state; treat this as a blocking gate.
+- Required procedure before release tagging/publishing:
+  - Build a checklist from the target CHANGELOG section (`Added`/`Changed`/`Fixed`/`Performance`/`Documentation`).
+  - For each checklist item, collect concrete evidence from code/tests/docs (for example: symbol/parameter presence via `rg`, behavior validation via targeted tests, and contract text in README).
+  - If any bullet is unverifiable, stale, or contradicted by code/tests, update CHANGELOG and/or implementation in the same change set until all items reconcile.
+  - Record the verification evidence in the release work log/PR notes; do not proceed on assumption-only validation.
+- Never finalize a release with unresolved CHANGELOG-to-implementation drift.
+
 ## Platform and Path Safety (MUST)
 - Preserve WSL/Windows path normalization behavior for filesystem and JAR paths.
 - Any path-normalization fix MUST include regression tests for boundary cases.

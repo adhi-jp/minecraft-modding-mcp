@@ -188,6 +188,7 @@ test("index.ts lazily initializes SourceService to reduce startup overhead", asy
   assert.match(source, /function\s+getSourceService\(\):\s*SourceService/);
   assert.match(source, /sourceServiceInstance\s*\?\?=\s*new\s+SourceService\(config\)/);
   assert.match(source, /const\s+sourceService\s*=\s*new\s+Proxy\(/);
+  assert.doesNotMatch(source, /setImmediate\(getSourceService\)/);
 });
 
 test("get-class-members contract preserves actual mappingApplied metadata", async () => {

@@ -58,6 +58,7 @@ codex mcp list
 The stdio transport auto-detects both newline-delimited and `Content-Length` framing, so Codex and newline-based MCP clients can use the same server command.
 
 The server now lazily initializes heavyweight source/index services on first MCP request, reducing initial process startup latency for clients that only perform handshake/tool discovery.
+To preserve handshake reliability across clients, startup does not eagerly pre-initialize `SourceService` before tool discovery.
 
 #### Gemini CLI
 

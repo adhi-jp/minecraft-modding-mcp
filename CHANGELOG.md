@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- MCP startup regression: removed eager `SourceService` pre-initialization during server startup so `tools/list` handshakes are not blocked by SQLite initialization on slower environments.
+
+### Documentation
+- Clarified startup behavior in README (`SourceService` remains lazy and is not pre-initialized before tool discovery).
+- Added a mandatory AGENTS release-prep step to verify that CHANGELOG entries match actual implementation before release.
+
 ## [1.2.0] - 2026-03-05
 
 ### Added
