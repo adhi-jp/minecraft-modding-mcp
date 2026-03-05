@@ -11,8 +11,6 @@ permissions:
 
 jobs:
   test-and-coverage:
-    # Temporarily disabled; remove this guard to re-enable coverage uploads.
-    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
