@@ -56,6 +56,11 @@
 - Breaking changes MUST use `!` in the type/scope summary and include a `BREAKING CHANGE:` footer.
 - Keep commits logically scoped; do not mix unrelated changes.
 
+## CHANGELOG Content Rules (MUST)
+- CHANGELOG entries MUST describe user-facing changes only.
+- Do NOT record CI/CD pipeline changes, internal refactoring notes, implementation memos, workflow tweaks, or other changes that are invisible to end users.
+- Examples of entries to exclude: "Codecov workflow temporarily disabled", "Added a mandatory AGENTS release-prep step", internal build script changes.
+
 ## Prohibitions
 - Do not introduce public naming changes (tool names or parameters) without explicit migration documentation.
 - Do not ship temporary behavior toggles without documented removal criteria.

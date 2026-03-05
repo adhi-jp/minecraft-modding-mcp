@@ -13,7 +13,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Documentation
 - Clarified startup behavior in README (`SourceService` remains lazy and is not pre-initialized before tool discovery).
-- Added a mandatory AGENTS release-prep step to verify that CHANGELOG entries match actual implementation before release.
 
 ## [1.2.0] - 2026-03-05
 
@@ -58,7 +57,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Changed
 - Lazy `SourceService` initialization — deferred until first tool/resource access, reducing cold-start latency during MCP handshake.
 - Eagerly init `SourceService` during MCP handshake idle time for faster first-request response.
-- Codecov workflow temporarily disabled.
 
 ### Performance
 - Avoid duplicate UTF-8 decode during truncation.
