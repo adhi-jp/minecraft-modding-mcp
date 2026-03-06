@@ -272,6 +272,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
+`search-class-source` keeps `intent=path` indexed searches memory-bounded on large files by reading only the top-of-file snippet region when `includeDefinition=false`, with automatic full-content fallback when longer lines would otherwise change the returned snippet.
 `get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.

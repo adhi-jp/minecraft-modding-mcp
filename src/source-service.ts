@@ -1217,7 +1217,41 @@ function indexToLine(content: string, index: number): number {
   if (index <= 0) {
     return 1;
   }
-  return content.slice(0, index).split(/\r?\n/).length;
+  const upperBound = Math.min(index, content.length);
+  let line = 1;
+  for (let cursor = 0; cursor < upperBound; cursor += 1) {
+    if (content.charCodeAt(cursor) === 10) {
+      line += 1;
+    }
+  }
+  return line;
+}
+
+function countLines(content: string): number {
+  if (content.length === 0) {
+    return 1;
+  }
+
+  let lines = 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      lines += 1;
+    }
+  }
+  return lines;
+}
+
+function pathSnippetRequiredLines(snippetWindow: SnippetWindow): number {
+  return Math.max(1, snippetWindow.after + 1);
+}
+
+function estimatePathSnippetPrefixChars(snippetWindow: SnippetWindow): number {
+  const requiredLines = pathSnippetRequiredLines(snippetWindow);
+  return Math.min(65_536, Math.max(2_048, requiredLines * 512));
+}
+
+function prefixContainsPathSnippet(contentPrefix: string, snippetWindow: SnippetWindow): boolean {
+  return countLines(contentPrefix) >= pathSnippetRequiredLines(snippetWindow);
 }
 
 function lineToSymbol(symbol: SymbolRow): SearchResultSymbol | undefined {
@@ -1240,16 +1274,47 @@ function toContextSnippet(
   afterLines: number,
   withLineNumbers: boolean
 ): SnippetBuildResult {
-  const lines = content.split(/\r?\n/);
-  const centerLine = Math.min(Math.max(1, centerLineInput), Math.max(lines.length, 1));
+  const totalLines = countLines(content);
+  const centerLine = Math.min(Math.max(1, centerLineInput), Math.max(totalLines, 1));
   const requestedStart = Math.max(1, centerLine - beforeLines);
   const requestedEnd = centerLine + afterLines;
-  const startLine = Math.min(requestedStart, Math.max(lines.length, 1));
-  const endLine = Math.min(requestedEnd, Math.max(lines.length, 1));
-  const snippetLines = lines.slice(startLine - 1, endLine);
-  const snippet = withLineNumbers
-    ? snippetLines.map((line, index) => `${startLine + index}: ${line}`).join("\n")
-    : snippetLines.join("\n");
+  const startLine = Math.min(requestedStart, Math.max(totalLines, 1));
+  const endLine = Math.min(requestedEnd, Math.max(totalLines, 1));
+
+  const snippetLines: string[] = [];
+  let lineStart = 0;
+  let lineNumber = 1;
+  let index = 0;
+  while (index <= content.length) {
+    const charCode = index < content.length ? content.charCodeAt(index) : -1;
+    const isLineBreak = charCode === 10 || charCode === 13;
+    const isTerminator = index === content.length || isLineBreak;
+    if (!isTerminator) {
+      index += 1;
+      continue;
+    }
+
+    if (lineNumber >= startLine && lineNumber <= endLine) {
+      const line = content.slice(lineStart, index);
+      snippetLines.push(withLineNumbers ? `${lineNumber}: ${line}` : line);
+      if (lineNumber === endLine) {
+        break;
+      }
+    }
+
+    if (index === content.length) {
+      break;
+    }
+
+    if (charCode === 13 && content.charCodeAt(index + 1) === 10) {
+      index += 1;
+    }
+    index += 1;
+    lineStart = index;
+    lineNumber += 1;
+  }
+
+  const snippet = snippetLines.join("\n");
 
   return {
     startLine,
@@ -4165,14 +4230,6 @@ export class SourceService {
       });
     }
 
-    const candidateContentRows = this.filesRepo.getFileContentsByPaths(
-      artifactId,
-      candidateRows.map((candidate) => candidate.filePath)
-    );
-    this.metrics.recordSearchDbRoundtrip();
-    this.metrics.recordSearchRowsScanned(candidateContentRows.length);
-    const contentByPath = new Map(candidateContentRows.map((row) => [row.filePath, row.content]));
-
     const needSymbols = includeDefinition || !!scope?.symbolKind;
     const symbolsByFile = needSymbols
       ? this.symbolsRepo.listSymbolsForFiles(
@@ -4188,13 +4245,51 @@ export class SourceService {
       );
     }
 
-    for (const candidate of candidateRows) {
+    const filteredCandidates = scope?.symbolKind
+      ? candidateRows.filter((candidate) => symbolsByFile.has(candidate.filePath))
+      : candidateRows;
+
+    let contentByPath: Map<string, string>;
+    if (!includeDefinition) {
+      const prefixRows = this.filesRepo.getFileContentPrefixesByPaths(
+        artifactId,
+        filteredCandidates.map((candidate) => candidate.filePath),
+        estimatePathSnippetPrefixChars(snippetWindow)
+      );
+      this.metrics.recordSearchDbRoundtrip();
+      this.metrics.recordSearchRowsScanned(prefixRows.length);
+
+      const fallbackPaths = prefixRows
+        .filter((row) => row.truncated && !prefixContainsPathSnippet(row.contentPrefix, snippetWindow))
+        .map((row) => row.filePath);
+      const fallbackContentRows = this.filesRepo.getFileContentsByPaths(artifactId, fallbackPaths);
+      if (fallbackContentRows.length > 0) {
+        this.metrics.recordSearchDbRoundtrip();
+        this.metrics.recordSearchRowsScanned(fallbackContentRows.length);
+      }
+
+      const fallbackContentByPath = new Map(
+        fallbackContentRows.map((row) => [row.filePath, row.content] as const)
+      );
+      contentByPath = new Map(
+        prefixRows.map((row) => [
+          row.filePath,
+          fallbackContentByPath.get(row.filePath) ?? row.contentPrefix
+        ] as const)
+      );
+    } else {
+      const candidateContentRows = this.filesRepo.getFileContentsByPaths(
+        artifactId,
+        filteredCandidates.map((candidate) => candidate.filePath)
+      );
+      this.metrics.recordSearchDbRoundtrip();
+      this.metrics.recordSearchRowsScanned(candidateContentRows.length);
+      contentByPath = new Map(candidateContentRows.map((row) => [row.filePath, row.content]));
+    }
+
+    for (const candidate of filteredCandidates) {
       const content = contentByPath.get(candidate.filePath);
       if (!content) {
-        continue;
-      }
-      // When symbolKind filter is set, skip files that have no symbols of that kind
-      if (scope?.symbolKind && !symbolsByFile.has(candidate.filePath)) {
         continue;
       }
       const definition = includeDefinition

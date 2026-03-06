@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Performance
+- `search-class-source`: reduce `intent=path` heap growth on large source files by loading bounded top-of-file snippets during indexed path search and falling back to full content only when needed to preserve exact snippet output.
+
 ## [1.2.1] - 2026-03-05
 
 ### Fixed

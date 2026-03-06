@@ -542,6 +542,48 @@ test("SourceService uses indexed search path for contains text/path queries with
   assert.equal(metrics.fallbackHits, 0);
 });
 
+test("SourceService path indexed search falls back to full content when prefix snippet is insufficient", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-indexed-path-prefix-fallback-"));
+  const binaryJarPath = join(root, "server-indexed-path-fallback.jar");
+  const sourcesJarPath = join(root, "server-indexed-path-fallback-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/NeedlePath.java": [
+      "package net.minecraft.server;",
+      "public class NeedlePath {",
+      `  // ${"x".repeat(5_000)}`,
+      "  void afterLongLine() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "official"
+  });
+
+  const pathSearch = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "NeedlePath",
+    intent: "path",
+    match: "contains",
+    include: {
+      includeDefinition: false,
+      includeOneHop: false
+    },
+    limit: 10
+  });
+
+  const hit = pathSearch.hits.find((entry) => entry.filePath === "net/minecraft/server/NeedlePath.java");
+  assert.ok(hit);
+  assert.match(hit.snippet, /4:   void afterLongLine\(\) \{\}/);
+});
+
 test("SourceService uses indexed search path for exact and prefix path queries without scope", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-indexed-exact-prefix-"));
