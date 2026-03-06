@@ -516,11 +516,23 @@ export type IndexArtifactOutput = {
 };
 
 export type ValidateMixinInput = {
-  source?: string;
-  sourcePath?: string;
-  sourcePaths?: string[];
-  mixinConfigPath?: string | string[];
-  sourceRoot?: string;
+  input:
+    | {
+        mode: "inline";
+        source: string;
+      }
+    | {
+        mode: "path";
+        path: string;
+      }
+    | {
+        mode: "paths";
+        paths: string[];
+      }
+    | {
+        mode: "config";
+        configPaths: string[];
+      };
   sourceRoots?: string[];
   version: string;
   mapping?: SourceMapping;
@@ -538,8 +550,15 @@ export type ValidateMixinInput = {
   treatInfoAsWarning?: boolean;
 };
 
+export type ValidateMixinResultSource = {
+  kind: "inline" | "path" | "config";
+  label: string;
+  path?: string;
+  configPath?: string;
+};
+
 export type ValidateMixinBatchResult = {
-  sourcePath: string;
+  source: ValidateMixinResultSource;
   result?: MixinValidationResult;
   error?: string;
 };
@@ -552,24 +571,32 @@ export type ValidateMixinBatchIssueSummaryItem = {
   sampleTargets: string[];
 };
 
-export type ValidateMixinBatchOutput = {
+export type ValidateMixinOutput = {
+  mode: ValidateMixinInput["input"]["mode"];
   results: ValidateMixinBatchResult[];
   summary: {
     total: number;
     valid: number;
     invalid: number;
-    /** @deprecated Use processingErrors instead */
-    errors: number;
     processingErrors: number;
     totalValidationErrors: number;
     totalValidationWarnings: number;
-    confidenceScore?: number;
   };
   issueSummary?: ValidateMixinBatchIssueSummaryItem[];
   toolHealth?: MappingHealthReport;
+  confidenceScore?: number;
+  warnings: string[];
 };
 
-export type ValidateMixinOutput = MixinValidationResult | ValidateMixinBatchOutput;
+type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
+  source?: string;
+  sourcePath?: string;
+};
+
+type ValidateMixinConfigSource = {
+  sourcePath: string;
+  configPath: string;
+};
 
 export type ValidateAccessWidenerInput = {
   content: string;
@@ -2254,12 +2281,13 @@ export class SourceService {
 
     const mappingApplied = workspaceDetection.mappingApplied;
     if (kind === "method") {
+      const methodOwner = owner as string;
+      const methodDescriptor = descriptor as string;
       const exact = await this.mappingService.resolveMethodMappingExact({
         version,
-        kind: "method",
-        owner,
+        owner: methodOwner,
         name,
-        descriptor: descriptor as string,
+        descriptor: methodDescriptor,
         sourceMapping: input.sourceMapping,
         targetMapping: mappingApplied,
         sourcePriority: input.sourcePriority
@@ -3410,93 +3438,82 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
-    // Mixin config mode: read JSON config(s) and derive sourcePaths
-    if (input.mixinConfigPath) {
-      const configPaths = Array.isArray(input.mixinConfigPath) ? input.mixinConfigPath : [input.mixinConfigPath];
-      const allSourcePaths: string[] = [];
+    const { input: sourceInput, ...sharedInput } = input;
+    const mode = sourceInput.mode;
 
-      for (const rawConfigPath of configPaths) {
-        const normalizedConfigPath = normalizePathForHost(rawConfigPath, undefined, "mixinConfigPath");
-        const resolvedConfigPath = isAbsolute(normalizedConfigPath)
-          ? normalizedConfigPath
-          : resolvePath(process.cwd(), normalizedConfigPath);
-        let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
-        try {
-          const raw = await readFile(resolvedConfigPath, "utf-8");
-          configJson = JSON.parse(raw);
-        } catch (err) {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: `Could not read/parse mixinConfigPath "${rawConfigPath}": ${err instanceof Error ? err.message : String(err)}`
-          });
+    if (mode === "inline") {
+      const singleResult = await this.validateMixinSingle({
+        ...sharedInput,
+        source: sourceInput.source
+      });
+      return this.buildValidateMixinOutput(mode, [
+        {
+          source: {
+            kind: "inline",
+            label: "<inline>"
+          },
+          result: singleResult
         }
-        const pkg = configJson.package ?? "";
-        const classNames = [
-          ...(configJson.mixins ?? []),
-          ...(configJson.client ?? []),
-          ...(configJson.server ?? [])
-        ];
-        if (classNames.length === 0) {
-          continue; // Skip empty configs in array mode
-        }
-        // Determine source root(s)
-        const projectBase = input.projectPath
-          ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
-          : dirname(resolvedConfigPath);
-
-        let sourceRootCandidates: string[];
-        if (input.sourceRoots && input.sourceRoots.length > 0) {
-          sourceRootCandidates = input.sourceRoots;
-        } else if (input.sourceRoot) {
-          sourceRootCandidates = [input.sourceRoot];
-        } else {
-          // Auto-detect: include any root that contains at least one configured mixin class.
-          const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
-            const fqcn = pkg ? `${pkg}.${className}` : className;
-            const relative = fqcn.replace(/\./g, "/") + ".java";
-            return existsSync(resolvePath(projectBase, candidateRoot, relative));
-          }));
-          if (detected.length > 0) {
-            sourceRootCandidates = detected;
-          } else {
-            sourceRootCandidates = ["src/main/java"];
-          }
-        }
-
-        // Build sourcePaths by probing each class against candidate roots
-        for (const cls of classNames) {
-          const fqcn = pkg ? `${pkg}.${cls}` : cls;
-          const relativePath = fqcn.replace(/\./g, "/") + ".java";
-          let found = false;
-          for (const root of sourceRootCandidates) {
-            const candidate = resolvePath(projectBase, root, relativePath);
-            if (existsSync(candidate)) {
-              allSourcePaths.push(candidate);
-              found = true;
-              break;
-            }
-          }
-          if (!found) {
-            // Fallback to first root for error reporting
-            allSourcePaths.push(resolvePath(projectBase, sourceRootCandidates[0], relativePath));
-          }
-        }
-      }
-
-      if (allSourcePaths.length === 0) {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `Mixin config(s) contain no mixin class entries.`
-        });
-      }
-      return this.validateMixinBatch({ ...input, mixinConfigPath: undefined, sourcePaths: allSourcePaths });
+      ]);
     }
 
-    // Batch mode: delegate to validateMixinBatch when sourcePaths is provided
-    if (input.sourcePaths && input.sourcePaths.length > 0) {
-      return this.validateMixinBatch(input);
+    if (mode === "path") {
+      const resolvedPath = this.resolveMixinInputPath(sourceInput.path, "path");
+      const singleResult = await this.validateMixinSingle({
+        ...sharedInput,
+        sourcePath: sourceInput.path
+      });
+      return this.buildValidateMixinOutput(mode, [
+        {
+          source: {
+            kind: "path",
+            label: resolvedPath,
+            path: resolvedPath
+          },
+          result: singleResult
+        }
+      ]);
     }
 
+    if (mode === "paths") {
+      return this.validateMixinMany(
+        mode,
+        sourceInput.paths.map((path) => ({
+          source: {
+            kind: "path" as const,
+            label: this.resolveMixinInputPath(path, "path"),
+            path: this.resolveMixinInputPath(path, "path")
+          },
+          sourcePath: path
+        })),
+        input
+      );
+    }
+
+    const configSources = await this.resolveMixinConfigSources(input);
+    if (configSources.length === 0) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "Mixin config(s) contain no mixin class entries."
+      });
+    }
+
+    return this.validateMixinMany(
+      mode,
+      configSources.map((entry) => ({
+        source: {
+          kind: "config" as const,
+          label: entry.sourcePath,
+          path: entry.sourcePath,
+          configPath: entry.configPath
+        },
+        sourcePath: entry.sourcePath
+      })),
+      input
+    );
+  }
+
+  private async validateMixinSingle(input: ValidateMixinSingleInput): Promise<MixinValidationResult> {
     let version = input.version.trim();
     if (!version) {
       throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
@@ -3904,45 +3921,143 @@ export class SourceService {
     return result;
   }
 
-  private async validateMixinBatch(input: ValidateMixinInput): Promise<ValidateMixinBatchOutput> {
-    const paths = input.sourcePaths!;
-    const results: ValidateMixinBatchResult[] = [];
-    let validCount = 0;
-    let invalidCount = 0;
-    let errorCount = 0;
+  private resolveMixinInputPath(rawPath: string, fieldName: string): string {
+    const normalizedPath = normalizePathForHost(rawPath, undefined, fieldName);
+    return isAbsolute(normalizedPath)
+      ? normalizedPath
+      : resolvePath(process.cwd(), normalizedPath);
+  }
 
-    // P5: default warningMode to "aggregated" in batch mode
-    const batchWarningMode = input.warningMode ?? "aggregated";
+  private async resolveMixinConfigSources(input: ValidateMixinInput): Promise<ValidateMixinConfigSource[]> {
+    if (input.input.mode !== "config") {
+      return [];
+    }
 
-    for (const sp of paths) {
+    const results: ValidateMixinConfigSource[] = [];
+
+    for (const rawConfigPath of input.input.configPaths) {
+      const resolvedConfigPath = this.resolveMixinInputPath(rawConfigPath, "configPath");
+      let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
       try {
-        const singleResult = await this.validateMixin({
-          ...input,
-          sourcePaths: undefined,
-          source: undefined,
-          sourcePath: sp,
-          warningMode: batchWarningMode
-        }) as MixinValidationResult;
-        results.push({ sourcePath: sp, result: singleResult });
-        if (singleResult.valid) {
-          validCount++;
-        } else {
-          invalidCount++;
-        }
+        const raw = await readFile(resolvedConfigPath, "utf-8");
+        configJson = JSON.parse(raw);
       } catch (err) {
-        results.push({
-          sourcePath: sp,
-          error: err instanceof Error ? err.message : String(err)
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Could not read/parse mixin config "${rawConfigPath}": ${err instanceof Error ? err.message : String(err)}`
         });
-        errorCount++;
+      }
+
+      const pkg = configJson.package ?? "";
+      const classNames = [
+        ...(configJson.mixins ?? []),
+        ...(configJson.client ?? []),
+        ...(configJson.server ?? [])
+      ];
+      if (classNames.length === 0) {
+        continue;
+      }
+
+      const projectBase = input.projectPath
+        ? (isAbsolute(input.projectPath) ? input.projectPath : resolvePath(process.cwd(), input.projectPath))
+        : dirname(resolvedConfigPath);
+
+      let sourceRootCandidates: string[];
+      if (input.sourceRoots && input.sourceRoots.length > 0) {
+        sourceRootCandidates = input.sourceRoots;
+      } else {
+        const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
+          const fqcn = pkg ? `${pkg}.${className}` : className;
+          const relative = fqcn.replace(/\./g, "/") + ".java";
+          return existsSync(resolvePath(projectBase, candidateRoot, relative));
+        }));
+        sourceRootCandidates = detected.length > 0 ? detected : ["src/main/java"];
+      }
+
+      for (const cls of classNames) {
+        const fqcn = pkg ? `${pkg}.${cls}` : cls;
+        const relativePath = fqcn.replace(/\./g, "/") + ".java";
+        let sourcePath = resolvePath(projectBase, sourceRootCandidates[0], relativePath);
+        for (const root of sourceRootCandidates) {
+          const candidate = resolvePath(projectBase, root, relativePath);
+          if (existsSync(candidate)) {
+            sourcePath = candidate;
+            break;
+          }
+        }
+        results.push({
+          sourcePath,
+          configPath: resolvedConfigPath
+        });
       }
     }
 
-    // Build issueSummary: aggregate issues across all results by (kind, confidence, category)
+    return results;
+  }
+
+  private async validateMixinMany(
+    mode: "paths" | "config",
+    entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
+    input: ValidateMixinInput
+  ): Promise<ValidateMixinOutput> {
+    const results: ValidateMixinBatchResult[] = [];
+    const batchWarningMode = input.warningMode ?? "aggregated";
+    const { input: _discardedInput, ...sharedInput } = input;
+
+    for (const entry of entries) {
+      try {
+        const singleResult = await this.validateMixinSingle({
+          ...sharedInput,
+          sourcePath: entry.sourcePath,
+          warningMode: batchWarningMode
+        });
+        results.push({
+          source: entry.source,
+          result: singleResult
+        });
+      } catch (err) {
+        results.push({
+          source: entry.source,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+
+    return this.buildValidateMixinOutput(mode, results);
+  }
+
+  private buildValidateMixinOutput(
+    mode: ValidateMixinOutput["mode"],
+    results: ValidateMixinBatchResult[]
+  ): ValidateMixinOutput {
+    let valid = 0;
+    let invalid = 0;
+    let processingErrors = 0;
+    let totalValidationErrors = 0;
+    let totalValidationWarnings = 0;
+    const warningSet = new Set<string>();
     const issueGroupMap = new Map<string, { kind: string; confidence: string; category: string; count: number; sampleTargets: string[] }>();
-    for (const r of results) {
-      if (!r.result) continue;
-      for (const issue of r.result.issues) {
+
+    for (const entry of results) {
+      if (!entry.result) {
+        processingErrors++;
+        continue;
+      }
+
+      if (entry.result.valid) {
+        valid++;
+      } else {
+        invalid++;
+      }
+
+      totalValidationErrors += entry.result.summary.errors;
+      totalValidationWarnings += entry.result.summary.warnings;
+
+      for (const warning of entry.result.warnings) {
+        warningSet.add(warning);
+      }
+
+      for (const issue of entry.result.issues) {
         const key = `${issue.kind}\0${issue.confidence ?? "unknown"}\0${issue.category ?? "validation"}`;
         const existing = issueGroupMap.get(key);
         if (existing) {
@@ -3962,43 +4077,27 @@ export class SourceService {
       }
     }
 
-    const issueSummary = issueGroupMap.size > 0
-      ? [...issueGroupMap.values()]
-      : undefined;
-
-    // Aggregate validation-level errors/warnings across all results
-    let totalValidationErrors = 0;
-    let totalValidationWarnings = 0;
-    for (const r of results) {
-      if (r.result) {
-        totalValidationErrors += r.result.summary.errors;
-        totalValidationWarnings += r.result.summary.warnings;
-      }
-    }
-
-    // Extract shared toolHealth from first result (all share same version/mapping)
-    const sharedHealth = results.find((r) => r.result?.toolHealth)?.result?.toolHealth;
-
-    // Batch confidenceScore = min of all individual scores
-    const scores = results
-      .map((r) => r.result?.confidenceScore)
-      .filter((s): s is number => s != null);
-    const batchConfidenceScore = scores.length > 0 ? Math.min(...scores) : undefined;
+    const issueSummary = issueGroupMap.size > 0 ? [...issueGroupMap.values()] : undefined;
+    const toolHealth = results.find((entry) => entry.result?.toolHealth)?.result?.toolHealth;
+    const confidenceScores = results
+      .map((entry) => entry.result?.confidenceScore)
+      .filter((score): score is number => score != null);
 
     return {
+      mode,
       results,
       summary: {
-        total: paths.length,
-        valid: validCount,
-        invalid: invalidCount,
-        errors: errorCount,
-        processingErrors: errorCount,
+        total: results.length,
+        valid,
+        invalid,
+        processingErrors,
         totalValidationErrors,
-        totalValidationWarnings,
-        confidenceScore: batchConfidenceScore
+        totalValidationWarnings
       },
       issueSummary,
-      toolHealth: sharedHealth
+      toolHealth,
+      confidenceScore: confidenceScores.length > 0 ? Math.min(...confidenceScores) : undefined,
+      warnings: [...warningSet]
     };
   }
 

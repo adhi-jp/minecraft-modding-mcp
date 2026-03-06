@@ -155,10 +155,9 @@ export type EnsureMappingAvailableOutput = {
 
 export type ResolveMethodMappingExactInput = {
   version: string;
-  kind: SymbolQueryKind;
   name: string;
-  owner?: string;
-  descriptor?: string;
+  owner: string;
+  descriptor: string;
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -1425,17 +1424,10 @@ export class MappingService {
         }
       });
     }
-    if (input.kind !== "method") {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: 'resolveMethodMappingExact requires kind="method".',
-        details: {
-          kind: input.kind
-        }
-      });
-    }
-
-    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input);
+    const { record: queryRecord, querySymbol } = normalizeQuerySymbol({
+      ...input,
+      kind: "method"
+    });
     const owner = queryRecord.owner as string;
     const method = queryRecord.name;
     const descriptor = queryRecord.descriptor as string;

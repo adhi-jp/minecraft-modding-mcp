@@ -108,44 +108,38 @@ const POSITIVE_INT_FIELD_NAMES = new Set([
 ]);
 const MAPPING_FIELD_NAMES = new Set(["mapping", "sourceMapping", "targetMapping", "classNameMapping"]);
 
-function validateTargetPair(
-  value: {
-    artifactId?: string;
-    targetKind?: SourceTargetInput["kind"];
-    targetValue?: string;
-  },
-  ctx: z.RefinementCtx
-): void {
-  const hasArtifactId = Boolean(value.artifactId);
-  const hasTargetKind = value.targetKind !== undefined;
-  const hasTargetValue = value.targetValue !== undefined;
+type ResolveArtifactTargetInput = {
+  kind: SourceTargetInput["kind"];
+  value: string;
+};
 
-  if (hasArtifactId && (hasTargetKind || hasTargetValue)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "artifactId and targetKind/targetValue are mutually exclusive.",
-      path: ["artifactId"]
-    });
-    return;
-  }
+type SourceLookupTargetInput =
+  | {
+      type: "artifact";
+      artifactId: string;
+    }
+  | {
+      type: "resolve";
+      kind: SourceTargetInput["kind"];
+      value: string;
+    };
 
-  if (hasTargetKind !== hasTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "targetKind and targetValue must be provided together.",
-      path: [hasTargetKind ? "targetValue" : "targetKind"]
-    });
-    return;
-  }
+const resolveArtifactTargetSchema = z.object({
+  kind: targetKindSchema,
+  value: nonEmptyString
+});
 
-  if (!hasArtifactId && !hasTargetKind) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Either artifactId or targetKind+targetValue must be provided.",
-      path: ["artifactId"]
-    });
-  }
-}
+const sourceLookupTargetSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("artifact"),
+    artifactId: nonEmptyString
+  }),
+  z.object({
+    type: z.literal("resolve"),
+    kind: targetKindSchema,
+    value: nonEmptyString
+  })
+]);
 
 const listVersionsShape = {
   includeSnapshots: z.boolean().optional().describe("default false"),
@@ -154,14 +148,16 @@ const listVersionsShape = {
 const listVersionsSchema = z.object(listVersionsShape);
 
 const resolveArtifactShape = {
-  targetKind: targetKindSchema.describe("version | jar | coordinate"),
-  targetValue: nonEmptyString,
+  target: z.object({
+    kind: targetKindSchema,
+    value: nonEmptyString
+  }).describe("Resolve target: { kind: version|jar|coordinate, value }"),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
@@ -169,15 +165,13 @@ const resolveArtifactSchema = z.object(resolveArtifactShape);
 const getClassSourceShape = {
   className: nonEmptyString,
   mode: sourceModeSchema.optional().describe("metadata (default) = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
-  artifactId: optionalNonEmptyString,
-  targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
-  targetValue: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.describe("Either { type: 'artifact', artifactId } or { type: 'resolve', kind, value }"),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override targetValue"),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
   startLine: optionalPositiveInt,
   endLine: optionalPositiveInt,
@@ -188,15 +182,6 @@ const getClassSourceShape = {
 const getClassSourceSchema = z
   .object(getClassSourceShape)
   .superRefine((value, ctx) => {
-    validateTargetPair(
-      {
-        artifactId: value.artifactId,
-        targetKind: value.targetKind,
-        targetValue: value.targetValue
-      },
-      ctx
-    );
-
     if (
       value.startLine !== undefined &&
       value.endLine !== undefined &&
@@ -212,9 +197,7 @@ const getClassSourceSchema = z
 
 const getClassMembersShape = {
   className: nonEmptyString,
-  artifactId: optionalNonEmptyString,
-  targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
-  targetValue: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.describe("Either { type: 'artifact', artifactId } or { type: 'resolve', kind, value }"),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
@@ -228,18 +211,7 @@ const getClassMembersShape = {
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
-const getClassMembersSchema = z
-  .object(getClassMembersShape)
-  .superRefine((value, ctx) => {
-    validateTargetPair(
-      {
-        artifactId: value.artifactId,
-        targetKind: value.targetKind,
-        targetValue: value.targetValue
-      },
-      ctx
-    );
-  });
+const getClassMembersSchema = z.object(getClassMembersShape);
 
 const searchClassSourceShape = {
   artifactId: nonEmptyString,
@@ -375,10 +347,9 @@ const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) =>
 
 const resolveMethodMappingExactShape = {
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema.describe("class | field | method"),
   name: nonEmptyString,
-  owner: optionalNonEmptyString,
-  descriptor: optionalNonEmptyString.describe("required for kind=method"),
+  owner: nonEmptyString,
+  descriptor: nonEmptyString.describe("required JVM descriptor"),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
@@ -386,31 +357,10 @@ const resolveMethodMappingExactShape = {
 const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
   .superRefine((value, ctx) => {
-    if (value.kind !== "method") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "resolve-method-mapping-exact requires kind=method.",
-        path: ["kind"]
-      });
-    }
-    if (!value.owner) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "owner is required when kind=method.",
-        path: ["owner"]
-      });
-    }
-    if (!value.descriptor) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "descriptor is required when kind=method.",
-        path: ["descriptor"]
-      });
-    }
     if (/[\s./()]/.test(value.name)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "name must be a simple method name when kind=method.",
+        message: "name must be a simple method name.",
         path: ["name"]
       });
     }
@@ -624,11 +574,24 @@ const indexArtifactShape = {
 const indexArtifactSchema = z.object(indexArtifactShape);
 
 const validateMixinShape = {
-  source: optionalNonEmptyString.describe("Mixin Java source text (mutually exclusive with sourcePath/sourcePaths/mixinConfigPath)"),
-  sourcePath: optionalNonEmptyString.describe("Path to Mixin .java file (alternative to source/sourcePaths/mixinConfigPath)"),
-  sourcePaths: z.array(z.string().min(1)).optional().describe("Array of Mixin .java file paths for batch validation"),
-  mixinConfigPath: z.union([nonEmptyString, z.array(nonEmptyString).min(1)]).optional().describe("Path (or array of paths) to mixin config JSON (e.g. modid.mixins.json); auto-discovers and batch-validates all listed classes"),
-  sourceRoot: optionalNonEmptyString.describe("Source root relative to projectPath (default 'src/main/java')"),
+  input: z.discriminatedUnion("mode", [
+    z.object({
+      mode: z.literal("inline"),
+      source: nonEmptyString.describe("Mixin Java source text")
+    }),
+    z.object({
+      mode: z.literal("path"),
+      path: nonEmptyString.describe("Path to a Mixin .java file")
+    }),
+    z.object({
+      mode: z.literal("paths"),
+      paths: z.array(nonEmptyString).min(1).describe("Array of Mixin .java file paths for batch validation")
+    }),
+    z.object({
+      mode: z.literal("config"),
+      configPaths: z.array(nonEmptyString).min(1).describe("Path array to mixin config JSON files (e.g. modid.mixins.json)")
+    })
+  ]),
   sourceRoots: z.array(z.string().min(1)).optional()
     .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
   version: nonEmptyString.describe("Minecraft version"),
@@ -654,17 +617,7 @@ const validateMixinShape = {
   treatInfoAsWarning: z.boolean().optional()
     .describe("When false, suppress info-severity structured warnings from output (default true)")
 };
-const validateMixinSchema = z.object(validateMixinShape).refine(
-  (d) => {
-    const hasSource = d.source != null;
-    const hasSourcePath = d.sourcePath != null;
-    const hasSourcePaths = d.sourcePaths != null && d.sourcePaths.length > 0;
-    const hasMixinConfig = d.mixinConfigPath != null && (typeof d.mixinConfigPath === "string" || (Array.isArray(d.mixinConfigPath) && d.mixinConfigPath.length > 0));
-    // Exactly one of the four must be provided
-    return [hasSource, hasSourcePath, hasSourcePaths, hasMixinConfig].filter(Boolean).length === 1;
-  },
-  { message: "Exactly one of 'source', 'sourcePath', 'sourcePaths', or 'mixinConfigPath' must be provided." }
-);
+const validateMixinSchema = z.object(validateMixinShape);
 
 const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),
@@ -813,14 +766,21 @@ function buildRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function buildTarget(
-  kind: SourceTargetInput["kind"] | undefined,
-  value: string | undefined
-): SourceTargetInput | undefined {
-  if (!kind || !value) {
-    return undefined;
+function normalizeSourceLookupTarget(
+  target: SourceLookupTargetInput
+): {
+  artifactId?: string;
+  target?: SourceTargetInput;
+} {
+  if (target.type === "artifact") {
+    return { artifactId: target.artifactId };
   }
-  return { kind, value };
+  return {
+    target: {
+      kind: target.kind,
+      value: target.value
+    }
+  };
 }
 
 function parseClassApiKinds(value: string | undefined): WorkspaceSymbolKind[] | undefined {
@@ -1197,15 +1157,12 @@ server.tool("list-versions",
 );
 
 server.tool("resolve-artifact",
-  "Resolve source artifact from version, jar path, or Maven coordinate and return artifact metadata. For targetKind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
+  "Resolve source artifact from a target object ({ kind, value }) and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
   resolveArtifactShape,
   { readOnlyHint: true },
   async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) =>
     sourceService.resolveArtifact({
-      target: {
-        kind: input.targetKind,
-        value: input.targetValue
-      },
+      target: input.target as ResolveArtifactTargetInput,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
@@ -1238,15 +1195,17 @@ server.tool("find-class",
 );
 
 server.tool("get-class-source",
-  "Get Java source for a class by artifactId or by resolving target (version/jar/coordinate). Default mode=metadata returns symbol outline only; use mode=snippet for bounded excerpts or mode=full for entire source.",
+  "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). Default mode=metadata returns symbol outline only; use mode=snippet for bounded excerpts or mode=full for entire source.",
   getClassSourceShape,
   { readOnlyHint: true },
-  async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) =>
+  async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) => {
+    const normalizedTarget = normalizeSourceLookupTarget(input.target as SourceLookupTargetInput);
+    return (
     sourceService.getClassSource({
       className: input.className,
       mode: input.mode,
-      artifactId: input.artifactId,
-      target: buildTarget(input.targetKind, input.targetValue),
+      artifactId: normalizedTarget.artifactId,
+      target: normalizedTarget.target,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
@@ -1260,18 +1219,21 @@ server.tool("get-class-source",
       maxChars: input.maxChars,
       outputFile: input.outputFile
     }) as Promise<Record<string, unknown>>
-  )
+    );
+  })
 );
 
 server.tool("get-class-members",
-  "Get fields/methods/constructors for one class from binary bytecode by artifactId or by resolving target (version/jar/coordinate).",
+  "Get fields/methods/constructors for one class from binary bytecode by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }).",
   getClassMembersShape,
   { readOnlyHint: true },
-  async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) =>
+  async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) => {
+    const normalizedTarget = normalizeSourceLookupTarget(input.target as SourceLookupTargetInput);
+    return (
     sourceService.getClassMembers({
       className: input.className,
-      artifactId: input.artifactId,
-      target: buildTarget(input.targetKind, input.targetValue),
+      artifactId: normalizedTarget.artifactId,
+      target: normalizedTarget.target,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
@@ -1285,7 +1247,8 @@ server.tool("get-class-members",
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion
     }) as Promise<Record<string, unknown>>
-  )
+    );
+  })
 );
 
 server.tool("search-class-source",
@@ -1415,7 +1378,6 @@ server.tool("resolve-method-mapping-exact",
   async (args) => runTool("resolve-method-mapping-exact", args, resolveMethodMappingExactSchema, async (input) =>
     sourceService.resolveMethodMappingExact({
       version: input.version,
-      kind: input.kind,
       name: input.name,
       owner: input.owner,
       descriptor: input.descriptor,
@@ -1545,11 +1507,7 @@ server.tool("validate-mixin",
   { readOnlyHint: true },
   async (args) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
     sourceService.validateMixin({
-      source: input.source,
-      sourcePath: input.sourcePath,
-      sourcePaths: input.sourcePaths,
-      mixinConfigPath: input.mixinConfigPath,
-      sourceRoot: input.sourceRoot,
+      input: input.input,
       sourceRoots: input.sourceRoots,
       version: input.version,
       mapping: input.mapping,

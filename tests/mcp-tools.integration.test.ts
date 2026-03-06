@@ -105,14 +105,52 @@ test("index.ts accepts mapping source priority override inputs", async () => {
   assert.match(source, /const SOURCE_PRIORITIES = \["loom-first", "maven-first"\] as const;/);
 });
 
-test("index.ts trims validate-mixin mixinConfigPath for string and array forms", async () => {
+test("index.ts documents validate-mixin mode-based input schema", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
   assert.match(source, /const nonEmptyString = z\.string\(\)\.trim\(\)\.min\(1\);/);
-  assert.match(
-    source,
-    /mixinConfigPath:\s*z\.union\(\[\s*nonEmptyString,\s*z\.array\(nonEmptyString\)\.min\(1\)\s*\]\)\.optional\(\)/
-  );
+  assert.match(source, /input:\s*z\.discriminatedUnion\("mode"/);
+  assert.match(source, /configPaths:\s*z\.array\(nonEmptyString\)\.min\(1\)/);
+});
+
+test("index.ts uses unified target objects for source resolution tools", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+  const resolveArtifactBlock = source.match(/const resolveArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const classSourceBlock = source.match(/const getClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const classMembersBlock = source.match(/const getClassMembersShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+
+  assert.match(resolveArtifactBlock, /target:\s*z\.object\(\{\s*kind:\s*targetKindSchema,\s*value:\s*nonEmptyString/s);
+  assert.match(source, /type:\s*z\.literal\("artifact"\),\s*artifactId:\s*nonEmptyString/s);
+  assert.match(source, /type:\s*z\.literal\("resolve"\),\s*kind:\s*targetKindSchema,\s*value:\s*nonEmptyString/s);
+  assert.doesNotMatch(resolveArtifactBlock, /targetKind:/);
+  assert.doesNotMatch(classSourceBlock, /artifactId:/);
+  assert.doesNotMatch(classSourceBlock, /targetKind:/);
+  assert.doesNotMatch(classMembersBlock, /artifactId:/);
+  assert.doesNotMatch(classMembersBlock, /targetKind:/);
+});
+
+test("index.ts removes kind from resolve-method-mapping-exact contract", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+  const block = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+
+  assert.match(block, /version:\s*nonEmptyString[\s\S]*owner:\s*nonEmptyString[\s\S]*descriptor:\s*nonEmptyString/s);
+  assert.doesNotMatch(block, /kind:/);
+  assert.doesNotMatch(source, /resolve-method-mapping-exact requires kind=method/);
+});
+
+test("index.ts reshapes validate-mixin around mode-based input", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /const validateMixinShape = \{[\s\S]*input:\s*z\.discriminatedUnion\("mode"/s);
+  assert.match(source, /mode:\s*z\.literal\("inline"\),\s*source:\s*nonEmptyString/s);
+  assert.match(source, /mode:\s*z\.literal\("path"\),\s*path:\s*nonEmptyString/s);
+  assert.match(source, /mode:\s*z\.literal\("paths"\),\s*paths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
+  assert.match(source, /mode:\s*z\.literal\("config"\),\s*configPaths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
+  assert.match(source, /sourceRoots:\s*z\.array\(z\.string\(\)\.min\(1\)\)\.optional\(\)/);
+  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePath:/);
+  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePaths:/);
+  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*mixinConfigPath:/);
+  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourceRoot:/);
 });
 
 test("index.ts documents symbol-query grammar for mapping tools", async () => {

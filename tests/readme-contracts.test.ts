@@ -13,15 +13,29 @@ test("README documents analyze-mod-jar inputs that match implementation", async 
 test("README documents source resolution options and source-mode behavior", async () => {
   const readme = await readFile("README.md", "utf8");
 
-  assert.match(readme, /\| `resolve-artifact` \|.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
+  assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
     readme,
-    /\| `validate-mixin` \|.*`source\?`.*`sourcePath\?`.*`sourcePaths\?`.*`mixinConfigPath\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`/
+    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`/
   );
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`mixinConfigPath\?`/);
   assert.match(readme, /\| `find-class` \|/);
-  assert.match(readme, /\| `get-class-source` \|.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
+  assert.match(readme, /\| `get-class-source` \|.*`target`.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
+  assert.match(readme, /\| `get-class-members` \|.*`target`.*`mapping\?`.*`access\?`/);
+  assert.match(
+    readme,
+    /\| `resolve-method-mapping-exact` \|.*`version`.*`name`.*`owner`.*`descriptor`.*`sourceMapping`.*`targetMapping`/
+  );
+  assert.doesNotMatch(readme, /\| `resolve-method-mapping-exact` \|.*`kind`/);
   assert.match(readme, /`get-class-source` mode defaults to `metadata`/);
-  assert.match(readme, /`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`/);
+  assert.match(readme, /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, or `config`/);
+  assert.match(readme, /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/);
+  assert.match(readme, /Replace `resolve-artifact` `targetKind` \+ `targetValue` with `target: \{ kind, value \}`/);
+  assert.match(readme, /Replace `get-class-source` \/ `get-class-members` top-level `artifactId` \/ `targetKind` \/ `targetValue`/);
+  assert.match(readme, /`resolve-method-mapping-exact` is method-only and no longer accepts `kind`/);
+  assert.match(readme, /Use `summary\.processingErrors` instead of `summary\.errors`/);
   assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
   assert.match(readme, /nameMode=auto/);
 });

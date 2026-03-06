@@ -375,8 +375,10 @@ async function main(): Promise<void> {
     const resolveResult = await client.callTool({
       name: "resolve-artifact",
       arguments: {
-        targetKind: "jar",
-        targetValue: binaryJarPath,
+        target: {
+          kind: "jar",
+          value: binaryJarPath
+        },
         mapping: "obfuscated",
         allowDecompile: false
       }
@@ -389,7 +391,10 @@ async function main(): Promise<void> {
     const classSourceResult = await client.callTool({
       name: "get-class-source",
       arguments: {
-        artifactId,
+        target: {
+          type: "artifact",
+          artifactId
+        },
         className: "net.minecraft.server.Main"
       }
     });

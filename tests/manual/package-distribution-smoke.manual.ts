@@ -16,6 +16,10 @@ type PackageJson = {
   version: string;
 };
 
+type PackManifestEntry = {
+  filename: string;
+};
+
 async function runNpm(args: string[], npmCache: string): Promise<void> {
   await execFileAsync("npm", args, {
     cwd: process.cwd(),
@@ -24,6 +28,17 @@ async function runNpm(args: string[], npmCache: string): Promise<void> {
       NPM_CONFIG_CACHE: npmCache
     }
   });
+}
+
+async function runNpmJson<T>(args: string[], npmCache: string): Promise<T> {
+  const { stdout } = await execFileAsync("npm", args, {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NPM_CONFIG_CACHE: npmCache
+    }
+  });
+  return JSON.parse(stdout) as T;
 }
 
 async function waitForStartupStability(child: ReturnType<typeof spawn>): Promise<void> {
@@ -50,13 +65,14 @@ async function main(): Promise<void> {
   const npmCache = join(root, "npm-cache");
   const extractDir = join(root, "extract");
   const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
-  const tarballName = `${packageJson.name}-${packageJson.version}.tgz`;
-  const tarballPath = join(process.cwd(), tarballName);
+  let tarballPath = "";
 
   try {
     await runNpm(["pack", "--dry-run"], npmCache);
-    await unlink(tarballPath).catch(() => undefined);
-    await runNpm(["pack"], npmCache);
+    const packEntries = await runNpmJson<PackManifestEntry[]>(["pack", "--json"], npmCache);
+    const tarballName = packEntries[0]?.filename;
+    assert.ok(tarballName, `npm pack --json did not return a filename for ${packageJson.name}@${packageJson.version}.`);
+    tarballPath = join(process.cwd(), tarballName);
 
     const { stdout: tarListRaw } = await execFileAsync("tar", ["-tf", tarballPath], {
       cwd: process.cwd()
@@ -93,7 +109,7 @@ async function main(): Promise<void> {
         MCP_CACHE_DIR: join(root, "cache"),
         MCP_SQLITE_PATH: join(root, "cache", "source-cache.db")
       },
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"]
     });
 
     await waitForStartupStability(child);

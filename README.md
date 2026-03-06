@@ -179,10 +179,10 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
-| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `targetKind`, `targetValue`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
+| `resolve-artifact` | Resolve source artifact from `version` / `jar` / `coordinate` | `target`, `mapping?`, `sourcePriority?`, `allowDecompile?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?` | `artifactId`, `origin`, `mappingApplied`, `qualityFlags[]`, `adjacentSourceCandidates?`, `sampleEntries?`, `warnings[]` |
 | `find-class` | Resolve simple or fully-qualified class names inside an artifact | `className`, `artifactId`, `limit?` | `matches[]`, `total`, `warnings[]` |
-| `get-class-source` | Get class source by `artifactId` or resolve target on demand (`mode=metadata` by default) | `className`, `mode?`, `artifactId?`, `targetKind?`, `targetValue?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
-| `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `artifactId?`, `targetKind?`, `targetValue?`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?`, `strictVersion?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
+| `get-class-source` | Get class source by artifact target or resolve target on demand (`mode=metadata` by default) | `className`, `target`, `mode?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
+| `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `target`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?`, `strictVersion?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
 | `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `queryMode?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
 | `list-artifact-files` | List indexed source file paths with cursor pagination | `artifactId`, `prefix?`, `limit?`, `cursor?` | `items[]`, `nextCursor?`, `mappingApplied` |
@@ -205,7 +205,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `ambiguityReasons?`, `provenance?`, `meta.warnings[]` |
-| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `kind` (`method`), `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
+| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
 | `get-class-api-matrix` | Show one class API as a mapping matrix (`obfuscated/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `ambiguousRowCount?`, `meta.warnings[]` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
 | `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
@@ -238,7 +238,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `source?`, `sourcePath?`, `sourcePaths?`, `mixinConfigPath?`, `sourceRoot?`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?` | single: `valid`, `issues[]`, `warnings[]`, `structuredWarnings?`, `aggregatedWarnings?`, `summary` (incl. `parseWarnings`), `unfilteredSummary?`, `provenance?`, `resolvedMembers?`, `toolHealth?`, `confidenceScore?`; batch: `results[]`, `summary`, `toolHealth?` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?` | `mode`, `results[]`, `summary`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -252,23 +252,25 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 ### Tool Constraints
 
-`get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
-`get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
+`resolve-artifact` now takes `target: { kind, value }`.
+`get-class-source` requires `target`, where `target.type="artifact"` selects a previously resolved `artifactId` and `target.type="resolve"` supplies `{ kind, value }` directly.
+`get-class-members` requires the same `target` object shape and still needs a binary jar (`binaryJarPath`) to read `.class` entries.
 Positive integer tool parameters accept numeric strings such as `"10"` in addition to JSON numbers.
-`validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation (`sourceRoots[]` or `sourceRoot` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
-`validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
+`validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
+`validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
+`validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.
 `validate-mixin` parser handles multi-line annotations between `@Shadow`/`@Accessor` and declarations, and strips inline annotations from declaration lines.
 `validate-mixin` distinguishes `target-mapping-failed` (warning, uncertain) from `target-not-found` (error) when class mapping fails.
 `validate-mixin` issues and `structuredWarnings` include `category` (`mapping`, `configuration`, `validation`, `resolution`, or `parse`) to distinguish setup/tooling/parser limits from real validation errors.
 `validate-mixin` supports post-filtering with `minSeverity`, `hideUncertain`, and `warningCategoryFilter`; `treatInfoAsWarning=false` suppresses info-level entries in `structuredWarnings`.
-`validate-mixin` single-file responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
+`validate-mixin` per-result responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
 `validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery.
-`validate-mixin` batch `summary` uses `processingErrors` (exception count), `totalValidationErrors`, and `totalValidationWarnings` instead of the ambiguous `errors` field.
-`resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
-`resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `targetValue` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `targetKind=version`.
-`resolve-artifact` with `targetKind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
+`validate-mixin` summary uses `processingErrors`, `totalValidationErrors`, and `totalValidationWarnings`; the deprecated `summary.errors` field was removed.
+`resolve-artifact` with `target.kind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
+`resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `target.value` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `target.kind=version`.
+`resolve-artifact` with `target.kind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
 `resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` will then fall back to the sibling binary artifact when possible.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
@@ -283,9 +285,9 @@ Positive integer tool parameters accept numeric strings such as `"10"` in additi
 `get-class-source` now falls back to the sibling binary artifact when a source-backed artifact is only partial (for example, merged Loom sources without `net.minecraft` entries).
 `get-class-source` mode defaults to `metadata` (symbol outline only); `mode=snippet` auto-sets `maxLines=200` when no line range/max is provided; `mode=full` returns the entire source. `outputFile` writes the selected text and returns the file path in `outputFile`.
 Decompile fallback for `resolve-artifact`/`get-class-source` now invokes Vineflower with flags before positional `<input-jar> <output-dir>` arguments to avoid false `ERR_DECOMPILER_FAILED` outcomes on valid jars.
-`resolve-artifact` with `targetKind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
+`resolve-artifact` with `target.kind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
 When a resolved artifact comes from a `*-sources.jar`, `get-class-members` now keeps the sibling binary jar (for example `minecraft-merged-<version>.jar`) instead of treating the source jar as bytecode.
-For `targetKind=coordinate` with a classifier (`group:artifact:version:classifier`), local Maven source lookup checks `<artifact>-<version>-<classifier>-sources.jar` first and then `<artifact>-<version>-sources.jar`.
+For `target.kind=coordinate` with a classifier (`group:artifact:version:classifier`), local Maven source lookup checks `<artifact>-<version>-<classifier>-sources.jar` first and then `<artifact>-<version>-sources.jar`.
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
 `search-mod-source` detects source-only jars and searches `.java` entries directly without decompilation.
@@ -295,6 +297,11 @@ Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path b
 `check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).
 `check-symbol-exists` supports `signatureMode=name-only` to match methods by owner+name without requiring a descriptor. Single match returns `resolved`; multiple overloads return `ambiguous` with all candidates.
 `check-symbol-exists` always validates input shape first and returns `ERR_INVALID_INPUT` for invalid symbol combinations, even when mapping data is unavailable.
+Migration notes:
+- Replace `resolve-artifact` `targetKind` + `targetValue` with `target: { kind, value }`.
+- Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
+- `resolve-method-mapping-exact` is method-only and no longer accepts `kind`.
+- Replace `validate-mixin` `source` / `sourcePath` / `sourcePaths` / `mixinConfigPath` / `sourceRoot` with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`. Use `summary.processingErrors` instead of `summary.errors`.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
 
 ## Resources
@@ -318,12 +325,17 @@ MCP resources provide URI-based access to Minecraft data, usable by any MCP clie
 | `class-members` | `mc://artifact/{artifactId}/members/{className}` | List constructors, methods, and fields for a class |
 | `artifact-metadata` | `mc://artifact/{artifactId}` | Metadata for a previously resolved artifact |
 
+`versions-list`, `runtime-metrics`, `find-mapping`, `class-members`, and `artifact-metadata` return structured JSON envelopes on success (`{ result, meta }`) and failure (`{ error, meta }`).
+`class-source` and `artifact-file` keep raw text responses on success, but still return structured JSON errors on failure.
+
 ## Response Envelope
 
 All tools return exactly one of:
 
 - Success: `{ result: { ... }, meta: { requestId, tool, durationMs, warnings[] } }`
 - Failure: `{ error: { type, title, detail, status, code, instance, fieldErrors?, hints? }, meta: { requestId, tool, durationMs, warnings[] } }`
+
+JSON resources follow the same `result/error/meta` pattern. Text resources return plain text on success.
 
 ## Examples
 
@@ -334,8 +346,10 @@ All tools return exactly one of:
 {
   "tool": "resolve-artifact",
   "arguments": {
-    "targetKind": "version",
-    "targetValue": "1.21.10",
+    "target": {
+      "kind": "version",
+      "value": "1.21.10"
+    },
     "mapping": "obfuscated",
     "allowDecompile": true,
     "projectPath": "/path/to/mod/workspace"
@@ -348,7 +362,10 @@ All tools return exactly one of:
 {
   "tool": "get-class-source",
   "arguments": {
-    "artifactId": "<artifact-id>",
+    "target": {
+      "type": "artifact",
+      "artifactId": "<artifact-id>"
+    },
     "className": "net.minecraft.server.Main",
     "startLine": 50,
     "endLine": 180,
@@ -489,7 +506,6 @@ Get a high-level summary of what changed between two releases, including class a
   "tool": "resolve-method-mapping-exact",
   "arguments": {
     "version": "1.21.10",
-    "kind": "method",
     "name": "f",
     "owner": "a.b.C",
     "descriptor": "(Ljava/lang/String;)V",
@@ -687,7 +703,10 @@ Check a Mixin class source for correctness against a target Minecraft version:
 {
   "tool": "validate-mixin",
   "arguments": {
-    "source": "@Mixin(PlayerEntity.class)\npublic abstract class PlayerMixin {\n  @Inject(method = \"tick\", at = @At(\"HEAD\"))\n  private void onTick(CallbackInfo ci) {}\n}",
+    "input": {
+      "mode": "inline",
+      "source": "@Mixin(PlayerEntity.class)\npublic abstract class PlayerMixin {\n  @Inject(method = \"tick\", at = @At(\"HEAD\"))\n  private void onTick(CallbackInfo ci) {}\n}"
+    },
     "version": "1.21.10",
     "mapping": "yarn"
   }
@@ -702,10 +721,13 @@ Run the same validation settings against multiple Mixin source files:
 {
   "tool": "validate-mixin",
   "arguments": {
-    "sourcePaths": [
-      "/path/to/PlayerMixin.java",
-      "/path/to/WorldMixin.java"
-    ],
+    "input": {
+      "mode": "paths",
+      "paths": [
+        "/path/to/PlayerMixin.java",
+        "/path/to/WorldMixin.java"
+      ]
+    },
     "version": "1.21.10",
     "mapping": "yarn"
   }
@@ -806,7 +828,7 @@ Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 `mapping: "mojang"` requires a source-backed artifact. If only decompile path is available, the server returns `ERR_MAPPING_NOT_APPLIED`.
 
 `resolve-artifact`, `get-class-members`, `trace-symbol-lifecycle`, and `diff-class-signatures` accept `obfuscated | mojang | intermediary | yarn` with constraints:
-- `intermediary` / `yarn` require a resolvable Minecraft version context (for example `targetKind=version` or a versioned coordinate).
+- `intermediary` / `yarn` require a resolvable Minecraft version context (for example `target.kind=version` or a versioned coordinate).
 - for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `obfuscated` with a warning.
 - `mojang` requires source-backed artifacts; decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
 
