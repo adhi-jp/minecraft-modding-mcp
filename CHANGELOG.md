@@ -14,6 +14,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Breaking change: `validate-mixin` replaced the mutually exclusive top-level source selector fields (`source`, `sourcePath`, `sourcePaths`, `mixinConfigPath`, `sourceRoot`) with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`.
 - Breaking change: `validate-mixin` now always returns normalized batch-style output with `mode`, `results[]`, and `summary`. The deprecated `summary.errors` field was removed; use `summary.processingErrors` instead.
 - Breaking change: `search-class-source` now returns compact hits only. The removed `snippetLines`, `includeDefinition`, and `includeOneHop` inputs no longer trigger snippet/definition/relation expansion, `totalApprox` was removed from responses, and `symbolKind` is only valid with `intent=symbol`.
+- MCP tool responses now mirror the `{ result?, error?, meta }` envelope in `structuredContent`, and failures also set `isError=true` for SDK-aware clients.
 - MCP resources: JSON resources now return structured `{ result, meta }` success envelopes and `{ error, meta }` failures. Text resources (`class-source`, `artifact-file`) still return raw text on success, but now also use structured JSON errors on failure.
 
 ### Fixed
@@ -22,9 +23,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `get-class-source` / `get-class-members`: when an artifact is resolved from a `*-sources.jar`, the server now keeps the sibling binary jar and automatically falls back to it when source coverage is incomplete instead of treating the source jar as bytecode.
 - `find-class`: zero-hit lookups against `mapping=obfuscated` now warn when the query looks like a deobfuscated Mojang class name.
 - Tool input parsing: positive integer parameters now accept numeric strings such as `"10"` instead of failing validation immediately.
+- Tool input parsing now leaves nested `typedJson` and JSON Patch `value` payload fields untouched, even when their keys happen to match top-level numeric option names such as `limit` or `maxLines`.
 
 ### Performance
 - `search-class-source`: reduce search latency, heap growth, and DB round-trips by returning compact hits only and skipping snippet hydration, relation expansion, and `totalApprox` count queries.
+- Tool input preprocessing now stays shallow, avoiding recursive scans through large nested payloads such as NBT typed JSON and patch bodies.
 
 ## [1.2.1] - 2026-03-05
 

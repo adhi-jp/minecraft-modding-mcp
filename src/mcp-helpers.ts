@@ -1,8 +1,19 @@
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { ERROR_CODES, type ErrorCode } from "./errors.js";
 
-export function objectResult<T extends Record<string, unknown>>(data: T): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data) }] };
+type ObjectResultOptions = {
+  isError?: boolean;
+};
+
+export function objectResult<T extends Record<string, unknown>>(
+  data: T,
+  options: ObjectResultOptions = {}
+): CallToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(data) }],
+    structuredContent: data,
+    ...(options.isError ? { isError: true } : {})
+  };
 }
 
 export function textResource(uri: string, value: string): ReadResourceResult {

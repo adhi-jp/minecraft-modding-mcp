@@ -256,6 +256,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `get-class-source` requires `target`, where `target.type="artifact"` selects a previously resolved `artifactId` and `target.type="resolve"` supplies `{ kind, value }` directly.
 `get-class-members` requires the same `target` object shape and still needs a binary jar (`binaryJarPath`) to read `.class` entries.
 Positive integer tool parameters accept numeric strings such as `"10"` in addition to JSON numbers.
+This numeric-string coercion only applies to documented top-level tool arguments; nested `typedJson` payloads and JSON Patch `value` objects are preserved verbatim.
 `validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
 `validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
@@ -339,6 +340,7 @@ All tools return exactly one of:
 - Failure: `{ error: { type, title, detail, status, code, instance, fieldErrors?, hints? }, meta: { requestId, tool, durationMs, warnings[] } }`
 
 JSON resources follow the same `result/error/meta` pattern. Text resources return plain text on success.
+The same JSON envelope is mirrored in MCP `structuredContent` for SDK-aware clients, and failures also set `isError=true`.
 
 ## Examples
 
@@ -902,6 +904,7 @@ The server runs as a single long-lived process communicating over stdio. Artifac
 - `SourceService` is the canonical implementation for artifact resolution, ingestion, and source querying.
 - `version` resolution downloads Mojang client JARs into cache and routes them through the same ingestion flow as `jar` and `coordinate` targets.
 - Tool responses are always wrapped as `{ result?, error?, meta }`.
+- Tool responses also mirror that envelope into MCP `structuredContent`, and failures set `isError=true`.
 - `meta` includes `requestId`, `tool`, `durationMs`, and `warnings[]`.
 
 ## License

@@ -6,6 +6,7 @@ import { ZodError, z } from "zod";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 
 import { objectResult } from "./mcp-helpers.js";
+import { prepareToolInput } from "./tool-input.js";
 
 import { loadConfig } from "./config.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
@@ -94,18 +95,6 @@ const sourceModeSchema = z.enum(SOURCE_MODES);
 const artifactScopeSchema = z.enum(ARTIFACT_SCOPES);
 const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
 const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
-const POSITIVE_INT_FIELD_NAMES = new Set([
-  "limit",
-  "startLine",
-  "endLine",
-  "maxLines",
-  "maxChars",
-  "maxMembers",
-  "maxBytes",
-  "maxVersions",
-  "maxClassResults"
-]);
-const MAPPING_FIELD_NAMES = new Set(["mapping", "sourceMapping", "targetMapping", "classNameMapping"]);
 
 type ResolveArtifactTargetInput = {
   kind: SourceTargetInput["kind"];
@@ -948,51 +937,6 @@ function extractFieldErrorsFromDetails(details: unknown): ProblemFieldError[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function coerceKnownNumericStrings(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => coerceKnownNumericStrings(entry));
-  }
-  if (typeof value !== "object" || value == null) {
-    return value;
-  }
-
-  const output: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof entry === "string" && POSITIVE_INT_FIELD_NAMES.has(key)) {
-      const trimmed = entry.trim();
-      if (/^\d+$/.test(trimmed)) {
-        output[key] = Number.parseInt(trimmed, 10);
-        continue;
-      }
-    }
-    output[key] = coerceKnownNumericStrings(entry);
-  }
-  return output;
-}
-
-function collectRemovedOfficialNamespacePaths(
-  value: unknown,
-  path: string[] = []
-): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry, index) => collectRemovedOfficialNamespacePaths(entry, [...path, String(index)]));
-  }
-  if (typeof value !== "object" || value == null) {
-    return [];
-  }
-
-  const matches: string[] = [];
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    const nextPath = [...path, key];
-    if (typeof entry === "string" && MAPPING_FIELD_NAMES.has(key) && entry.trim() === "official") {
-      matches.push(nextPath.join("."));
-      continue;
-    }
-    matches.push(...collectRemovedOfficialNamespacePaths(entry, nextPath));
-  }
-  return matches;
-}
-
 function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDetails {
   if (caughtError instanceof ZodError) {
     return {
@@ -1064,8 +1008,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   const startedAt = Date.now();
 
   try {
-    const normalizedInput = coerceKnownNumericStrings(rawInput);
-    const removedOfficialPaths = collectRemovedOfficialNamespacePaths(normalizedInput);
+    const { normalizedInput, removedOfficialPaths, suggestedReplacementInput } = prepareToolInput(rawInput);
     if (removedOfficialPaths.length > 0) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -1078,12 +1021,10 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
           })),
           nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
           suggestedCall:
-            typeof normalizedInput === "object" && normalizedInput != null
+            suggestedReplacementInput
               ? {
                   tool,
-                  params: JSON.parse(
-                    JSON.stringify(normalizedInput).replace(/"official"/g, "\"obfuscated\"")
-                  ) as Record<string, unknown>
+                  params: suggestedReplacementInput
                 }
               : undefined
         }
@@ -1144,7 +1085,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         durationMs: Date.now() - startedAt,
         warnings: []
       } satisfies ToolMeta
-    });
+    }, { isError: true });
   }
 }
 

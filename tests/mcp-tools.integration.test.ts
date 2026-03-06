@@ -76,24 +76,29 @@ test("index.ts accepts expanded mapping enum in tool inputs", async () => {
 });
 
 test("index.ts coerces numeric string inputs for positive integer params", async () => {
-  const source = await readFile("src/index.ts", "utf8");
+  const indexSource = await readFile("src/index.ts", "utf8");
+  const toolInputSource = await readFile("src/tool-input.ts", "utf8");
 
-  assert.match(source, /const optionalPositiveInt = z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\);/);
-  assert.match(source, /const POSITIVE_INT_FIELD_NAMES = new Set\(\[/);
-  assert.match(source, /function coerceKnownNumericStrings\(value: unknown\): unknown/);
-  assert.match(source, /typeof entry === "string" && POSITIVE_INT_FIELD_NAMES\.has\(key\)/);
-  assert.match(source, /Number\.parseInt\(trimmed, 10\)/);
-  assert.match(source, /const normalizedInput = coerceKnownNumericStrings\(rawInput\);/);
-  assert.match(source, /schema\.parse\(normalizedInput\)/);
+  assert.match(indexSource, /const optionalPositiveInt = z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\);/);
+  assert.match(indexSource, /import\s+\{\s*prepareToolInput\s*\}\s+from\s+"\.\/tool-input\.js"/);
+  assert.match(indexSource, /const \{ normalizedInput, removedOfficialPaths, suggestedReplacementInput \} = prepareToolInput\(rawInput\);/);
+  assert.match(toolInputSource, /const POSITIVE_INT_FIELD_NAMES = new Set\(\[/);
+  assert.match(toolInputSource, /function coerceTopLevelNumericStrings\(value: unknown\): unknown/);
+  assert.match(toolInputSource, /typeof value !== "object" \|\| value == null \|\| Array\.isArray\(value\)/);
+  assert.match(toolInputSource, /typeof entry === "string" && POSITIVE_INT_FIELD_NAMES\.has\(key\)/);
+  assert.match(toolInputSource, /Number\.parseInt\(trimmed, 10\)/);
+  assert.doesNotMatch(toolInputSource, /output\[key\] = coerceKnownNumericStrings\(entry\)/);
 });
 
 test("index.ts rejects removed official mapping namespace with obfuscated replacement hint", async () => {
-  const source = await readFile("src/index.ts", "utf8");
+  const indexSource = await readFile("src/index.ts", "utf8");
+  const toolInputSource = await readFile("src/tool-input.ts", "utf8");
 
-  assert.match(source, /const MAPPING_FIELD_NAMES = new Set\(\["mapping", "sourceMapping", "targetMapping", "classNameMapping"\]\);/);
-  assert.match(source, /function collectRemovedOfficialNamespacePaths\(/);
-  assert.match(source, /The "official" mapping namespace was removed\. Use "obfuscated" instead\./);
-  assert.match(source, /"official" is no longer supported for this field\. Use "obfuscated"\./);
+  assert.match(toolInputSource, /const MAPPING_FIELD_NAMES = new Set\(\["mapping", "sourceMapping", "targetMapping", "classNameMapping"\]\);/);
+  assert.match(toolInputSource, /function collectRemovedOfficialNamespacePaths\(value: unknown\): string\[\]/);
+  assert.match(toolInputSource, /function replaceRemovedOfficialMappings\(value: unknown\): Record<string, unknown> \| undefined/);
+  assert.match(indexSource, /The "official" mapping namespace was removed\. Use "obfuscated" instead\./);
+  assert.match(indexSource, /"official" is no longer supported for this field\. Use "obfuscated"\./);
 });
 
 test("index.ts accepts mapping source priority override inputs", async () => {
@@ -191,11 +196,14 @@ test("index.ts documents exact method mapping and workspace symbol tools", async
 
 test("index.ts formats tool responses with result/error/meta envelope", async () => {
   const source = await readFile("src/index.ts", "utf8");
+  const helperSource = await readFile("src/mcp-helpers.ts", "utf8");
 
   assert.match(source, /result:/);
   assert.match(source, /error:/);
   assert.match(source, /meta:/);
   assert.match(source, /patch:\s*z\.array\(/);
+  assert.match(helperSource, /structuredContent:\s*data/);
+  assert.match(helperSource, /options\.isError \? \{ isError: true \} : \{\}/);
 });
 
 test("index.ts validates includeKinds values instead of silently ignoring invalid kinds", async () => {

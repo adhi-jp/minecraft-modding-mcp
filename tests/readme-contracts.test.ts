@@ -44,6 +44,9 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /Use `summary\.processingErrors` instead of `summary\.errors`/);
   assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
   assert.match(readme, /nameMode=auto/);
+  assert.match(readme, /numeric-string coercion only applies to documented top-level tool arguments/);
+  assert.match(readme, /mirrored in MCP `structuredContent`/);
+  assert.match(readme, /failures also set `isError=true`/);
 });
 
 test("README documents CLI agent MCP quick start commands", async () => {
