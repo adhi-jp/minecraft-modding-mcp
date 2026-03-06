@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
+import { homedir } from "node:os";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import type { Config, ResolvedSourceArtifact, SourceTargetInput } from "./types.js";
@@ -33,6 +34,17 @@ function resolveExactJarSourceCandidate(inputJarPath: string): string {
   const jarName = basename(inputJarPath);
   const base = jarName.endsWith(".jar") ? jarName.slice(0, -4) : jarName;
   return join(directory, `${base}-sources.jar`);
+}
+
+function resolveSiblingBinaryJarCandidate(inputJarPath: string): string | undefined {
+  const directory = dirname(inputJarPath);
+  const jarName = basename(inputJarPath);
+  if (!jarName.endsWith("-sources.jar")) {
+    return undefined;
+  }
+  const binaryName = `${jarName.slice(0, -"-sources.jar".length)}.jar`;
+  const candidate = join(directory, binaryName);
+  return hasExistingJar(candidate) ? candidate : undefined;
 }
 
 function listAdjacentJarSourceCandidates(inputJarPath: string): string[] {
@@ -73,6 +85,86 @@ function resolveLocalCoordinateCandidates(localM2Path: string, coordinate: strin
   }
 
   return [...existing];
+}
+
+function resolveLocalCoordinateBinaryCandidate(localM2Path: string, coordinate: string): string | undefined {
+  const parsed = parseCoordinate(coordinate);
+  const groupPath = parsed.groupId.replace(/\./g, "/");
+  const baseDir = resolvePath(localM2Path, groupPath, parsed.artifactId, parsed.version);
+  const base = `${parsed.artifactId}-${parsed.version}`;
+  const classifierSuffix = parsed.classifier ? `-${parsed.classifier}` : "";
+
+  const candidates = [
+    resolvePath(baseDir, `${base}${classifierSuffix}.jar`),
+    ...(classifierSuffix ? [resolvePath(baseDir, `${base}.jar`)] : [])
+  ];
+
+  return candidates.find((candidate) => hasExistingJar(candidate));
+}
+
+function resolveGradleUserHome(): string {
+  const configured = process.env.GRADLE_USER_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  return resolvePath(homedir(), ".gradle");
+}
+
+function resolveGradleCacheCoordinateCandidate(
+  coordinate: string
+): { sourceJarPath?: string; binaryJarPath?: string } | undefined {
+  const parsed = parseCoordinate(coordinate);
+  const baseDir = resolvePath(
+    resolveGradleUserHome(),
+    "caches",
+    "modules-2",
+    "files-2.1",
+    parsed.groupId,
+    parsed.artifactId,
+    parsed.version
+  );
+  const base = `${parsed.artifactId}-${parsed.version}`;
+  const classifierSuffix = parsed.classifier ? `-${parsed.classifier}` : "";
+  const preferredSourceNames = [
+    `${base}${classifierSuffix}-sources.jar`,
+    ...(classifierSuffix ? [`${base}-sources.jar`] : [])
+  ];
+  const preferredBinaryNames = [
+    `${base}${classifierSuffix}.jar`,
+    ...(classifierSuffix ? [`${base}.jar`] : [])
+  ];
+
+  let discoveredFiles: string[] = [];
+  try {
+    const hashes = readdirSync(baseDir);
+    for (const hashDir of hashes) {
+      const fullDir = join(baseDir, hashDir);
+      for (const entry of readdirSync(fullDir)) {
+        discoveredFiles.push(join(fullDir, entry));
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  discoveredFiles = discoveredFiles.filter((entry) => hasExistingJar(entry)).sort((left, right) => left.localeCompare(right));
+  const pickFirst = (candidates: string[]): string | undefined => {
+    for (const fileName of candidates) {
+      const match = discoveredFiles.find((entry) => basename(entry) === fileName);
+      if (match) {
+        return match;
+      }
+    }
+    return undefined;
+  };
+
+  const sourceJarPath = pickFirst(preferredSourceNames);
+  const binaryJarPath = pickFirst(preferredBinaryNames);
+  if (!sourceJarPath && !binaryJarPath) {
+    return undefined;
+  }
+
+  return { sourceJarPath, binaryJarPath };
 }
 
 function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): string[] {
@@ -125,11 +217,15 @@ export async function resolveSourceTarget(
       adjacentSourceCandidates.length > 0 ? adjacentSourceCandidates : undefined;
 
     if (await hasJavaSources(resolvedJarPath)) {
+      const siblingBinaryJarPath = resolveSiblingBinaryJarCandidate(resolvedJarPath);
+      const binaryJarPath =
+        siblingBinaryJarPath ??
+        (basename(resolvedJarPath).endsWith("-sources.jar") ? undefined : resolvedJarPath);
       return {
         artifactId: artifactIdForJar("jar", resolvedJarPath, binarySignature),
         artifactSignature: binarySignature,
         origin: "local-jar",
-        binaryJarPath: resolvedJarPath,
+        binaryJarPath,
         sourceJarPath: resolvedJarPath,
         adjacentSourceCandidates: maybeAdjacentSourceCandidates,
         isDecompiled: false,
@@ -193,11 +289,27 @@ export async function resolveSourceTarget(
         artifactSignature: signature,
         origin: "local-m2",
         sourceJarPath: candidate,
+        binaryJarPath: resolveLocalCoordinateBinaryCandidate(explicitConfig.localM2Path, coordinate),
         coordinate,
         isDecompiled: false,
         resolvedAt: resolvedAtNow()
       };
     }
+  }
+
+  const gradleCacheCandidate = resolveGradleCacheCoordinateCandidate(coordinate);
+  if (gradleCacheCandidate?.sourceJarPath && (await hasJavaSources(gradleCacheCandidate.sourceJarPath))) {
+    const signature = readStatsSignature(gradleCacheCandidate.sourceJarPath);
+    return {
+      artifactId: artifactIdForCoordinate(coordinate, "local-m2", signature),
+      artifactSignature: signature,
+      origin: "local-m2",
+      sourceJarPath: gradleCacheCandidate.sourceJarPath,
+      binaryJarPath: gradleCacheCandidate.binaryJarPath,
+      coordinate,
+      isDecompiled: false,
+      resolvedAt: resolvedAtNow()
+    };
   }
 
   const remoteSourceUrls = buildRemoteSourceUrls(repos, coordinate);

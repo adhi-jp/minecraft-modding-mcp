@@ -254,6 +254,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 `get-class-source` requires either `artifactId` or `targetKind`+`targetValue`. Supplying both is rejected.
 `get-class-members` requires either `artifactId` or `targetKind`+`targetValue`, and needs a binary jar (`binaryJarPath`) to read `.class` entries.
+Positive integer tool parameters accept numeric strings such as `"10"` in addition to JSON numbers.
 `validate-mixin` requires exactly one of `source`, `sourcePath`, `sourcePaths`, or `mixinConfigPath`. `sourcePath`/`sourcePaths[]` are normalized for host/WSL path formats before file reads. `mixinConfigPath` reads a mixin config JSON and auto-discovers source files for batch validation (`sourceRoots[]` or `sourceRoot` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
 `validate-mixin` single-file responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
@@ -267,8 +268,11 @@ Tools for querying generated registry data and inspecting server runtime state.
 `validate-mixin` batch `summary` uses `processingErrors` (exception count), `totalValidationErrors`, and `totalValidationWarnings` instead of the ambiguous `errors` field.
 `resolve-artifact` with `targetKind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `targetValue` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `targetKind=version`.
+`resolve-artifact` with `targetKind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
+`resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` will then fall back to the sibling binary artifact when possible.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
+`find-class` returns an explanatory warning when an `official` artifact is queried with names that look like deobfuscated Mojang classes.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
@@ -276,9 +280,11 @@ Tools for querying generated registry data and inspecting server runtime state.
 `get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.
+`get-class-source` now falls back to the sibling binary artifact when a source-backed artifact is only partial (for example, merged Loom sources without `net.minecraft` entries).
 `get-class-source` mode defaults to `metadata` (symbol outline only); `mode=snippet` auto-sets `maxLines=200` when no line range/max is provided; `mode=full` returns the entire source. `outputFile` writes the selected text and returns the file path in `outputFile`.
 Decompile fallback for `resolve-artifact`/`get-class-source` now invokes Vineflower with flags before positional `<input-jar> <output-dir>` arguments to avoid false `ERR_DECOMPILER_FAILED` outcomes on valid jars.
 `resolve-artifact` with `targetKind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
+When a resolved artifact comes from a `*-sources.jar`, `get-class-members` now keeps the sibling binary jar (for example `minecraft-merged-<version>.jar`) instead of treating the source jar as bytecode.
 For `targetKind=coordinate` with a classifier (`group:artifact:version:classifier`), local Maven source lookup checks `<artifact>-<version>-<classifier>-sources.jar` first and then `<artifact>-<version>-sources.jar`.
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
@@ -801,6 +807,8 @@ Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 - `intermediary` / `yarn` require a resolvable Minecraft version context (for example `targetKind=version` or a versioned coordinate).
 - for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `official` with a warning.
 - `mojang` requires source-backed artifacts; decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
+
+If `find-class` or `get-class-source` returns no hit on an `official` artifact for names like `net.minecraft.world.item.Item`, the tool now warns that `official` means Mojang's obfuscated runtime names and recommends retrying with `mapping="mojang"` or translating via `find-mapping`.
 
 Method descriptor precision is best on Tiny-backed paths (`intermediary`/`yarn`). For `official <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fallback to name matching and emit a warning.
 

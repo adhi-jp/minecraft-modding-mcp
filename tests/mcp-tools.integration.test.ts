@@ -74,6 +74,17 @@ test("index.ts accepts expanded mapping enum in tool inputs", async () => {
   assert.match(source, /sourceMapping:/);
 });
 
+test("index.ts coerces numeric string inputs for positive integer params", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /const optionalPositiveInt = z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\);/);
+  assert.match(source, /const POSITIVE_INT_FIELD_NAMES = new Set\(\[/);
+  assert.match(source, /function coerceKnownNumericStrings\(value: unknown\): unknown/);
+  assert.match(source, /typeof entry === "string" && POSITIVE_INT_FIELD_NAMES\.has\(key\)/);
+  assert.match(source, /Number\.parseInt\(trimmed, 10\)/);
+  assert.match(source, /schema\.parse\(coerceKnownNumericStrings\(rawInput\)\)/);
+});
+
 test("index.ts accepts mapping source priority override inputs", async () => {
   const source = await readFile("src/index.ts", "utf8");
 

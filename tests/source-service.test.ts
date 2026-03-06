@@ -259,6 +259,98 @@ test("SourceService getArtifactFile truncation preserves UTF-8 boundaries", asyn
   assert.equal(Buffer.from(truncated.content, "utf8").toString("utf8"), truncated.content);
 });
 
+test("SourceService getClassMembers uses sibling binary jar when artifact is resolved from a source jar input", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-source-input-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "net/minecraft/world/item/Item.java": [
+      "package net.minecraft.world.item;",
+      "public class Item {}"
+    ].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "official"
+  });
+
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { jarPath: string; fqn: string }) {
+      assert.equal(input.jarPath, binaryJarPath);
+      assert.equal(input.fqn, "net.minecraft.world.item.Item");
+      return {
+        constructors: [],
+        fields: [],
+        methods: [
+          {
+            ownerFqn: "net.minecraft.world.item.Item",
+            name: "use",
+            javaSignature: "public void use()",
+            jvmDescriptor: "()V",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const result = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "official"
+  });
+
+  assert.equal(result.members.methods[0]?.name, "use");
+});
+
+test("SourceService getClassSource falls back to sibling binary artifact when source jar coverage is partial", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-fallback-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "dhl.java": [
+      "public class dhl {}"
+    ].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.java": [
+      "package net.minecraft.world.item;",
+      "public class Item {",
+      "  public void use() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "mojang"
+  });
+
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "mojang"
+  });
+
+  assert.match(source.sourceText, /class Item/);
+  assert.ok(source.warnings.some((warning) => warning.includes("Falling back to binary artifact")));
+});
+
 test("SourceService targetKind=jar does not adopt unrelated *-sources.jar files", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-jar-unrelated-sources-"));
@@ -1279,6 +1371,32 @@ test("SourceService findClass resolves qualified names even with many same-name 
   assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
+test("SourceService findClass warns when official mapping is queried with deobfuscated class names", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-findclass-namespace-warning-"));
+  const sourceJarPath = join(root, "official-sources.jar");
+
+  await createJar(sourceJarPath, {
+    "dhl.java": "public class dhl {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "official"
+  });
+
+  const result = service.findClass({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    limit: 10
+  });
+
+  assert.equal(result.matches.length, 0);
+  assert.ok(result.warnings.some((warning) => warning.includes("official (obfuscated) names")));
+  assert.ok(result.warnings.some((warning) => warning.includes("mapping=\"mojang\"")));
+});
+
 test("SourceService rejects invalid class source line range", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-range-invalid-"));
@@ -1702,6 +1820,16 @@ test("SourceService resolves mojang mapping for version target using workspace L
       "public class Blocks {}"
     ].join("\n")
   });
+  const loomBinaryJarPath = join(
+    projectPath,
+    ".gradle",
+    "loom-cache",
+    "1.21.10",
+    "minecraft-merged-1.21.10.jar"
+  );
+  await createJar(loomBinaryJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
 
   const remoteJarPath = join(root, "remote-1.21.10.jar");
   await createJar(remoteJarPath, {
@@ -1760,6 +1888,7 @@ test("SourceService resolves mojang mapping for version target using workspace L
 
     assert.equal(resolved.requestedMapping, "mojang");
     assert.equal(resolved.mappingApplied, "mojang");
+    assert.equal(resolved.binaryJarPath, loomBinaryJarPath);
     assert.ok(resolved.qualityFlags.includes("source-backed"));
     assert.ok(resolved.qualityFlags.includes("source-jar-validated"));
 
@@ -1776,6 +1905,52 @@ test("SourceService resolves mojang mapping for version target using workspace L
       process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
     }
   }
+});
+
+test("SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-mojang-partial-"));
+  const projectPath = join(root, "workspace");
+  const loomCacheDir = join(projectPath, ".gradle", "loom-cache", "1.21.10");
+  const loomSourceJarPath = join(loomCacheDir, "minecraft-merged-1.21.10-sources.jar");
+  const loomBinaryJarPath = join(loomCacheDir, "minecraft-merged-1.21.10.jar");
+
+  await mkdir(loomCacheDir, { recursive: true });
+  await createJar(loomSourceJarPath, {
+    "dhl.java": [
+      "public class dhl {}"
+    ].join("\n")
+  });
+  await createJar(loomBinaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  const resolved = await service.resolveArtifact({
+    target: {
+      kind: "version",
+      value: "1.21.10"
+    },
+    mapping: "mojang",
+    projectPath
+  } as any);
+
+  assert.ok(resolved.qualityFlags.includes("partial-source-no-net-minecraft"));
+  assert.ok(
+    resolved.warnings.some((warning) => warning.includes("Source coverage does not include net.minecraft"))
+  );
+  assert.equal(resolved.binaryJarPath, loomBinaryJarPath);
 });
 
 test("SourceService ignores projectPath Loom source discovery for official mapping", async () => {

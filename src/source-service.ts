@@ -661,6 +661,7 @@ type VersionSourceDiscovery = {
   searchedPaths: string[];
   candidateArtifacts: string[];
   selectedSourceJarPath?: string;
+  selectedHasMinecraftNamespace?: boolean;
 };
 
 function normalizePathStyle(path: string): string {
@@ -683,6 +684,22 @@ function hasExactVersionToken(path: string, version: string): boolean {
     "i"
   );
   return pattern.test(normalizedPath);
+}
+
+function looksLikeDeobfuscatedClassName(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith("net.minecraft.") || trimmed.startsWith("com.mojang.")) {
+    return true;
+  }
+  const simpleName = trimmed.split(/[.$]/).at(-1) ?? trimmed;
+  return /^[A-Z][A-Za-z0-9_$]{2,}$/.test(simpleName);
+}
+
+function officialNamespaceHint(className: string): string {
+  return `Artifact is indexed in official (obfuscated) names. Deobfuscated names like "${className}" usually require mapping="mojang" or a find-mapping lookup to official names.`;
 }
 
 function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
@@ -1445,12 +1462,13 @@ export class SourceService {
       candidates.find((candidate) => candidate.hasMinecraftNamespace) ?? candidates[0];
     const candidateArtifacts = candidates
       .slice(0, 20)
-      .map((candidate) => `${candidate.jarPath}#java=${candidate.javaEntryCount}`);
+      .map((candidate) => `${candidate.jarPath}#java=${candidate.javaEntryCount}#net_minecraft=${candidate.hasMinecraftNamespace ? 1 : 0}`);
 
     return {
       searchedPaths,
       candidateArtifacts,
-      selectedSourceJarPath: selected?.jarPath
+      selectedSourceJarPath: selected?.jarPath,
+      selectedHasMinecraftNamespace: selected?.hasMinecraftNamespace
     };
   }
 
@@ -1665,6 +1683,12 @@ export class SourceService {
       }
       if (versionSourceDiscovery?.selectedSourceJarPath) {
         resolved.qualityFlags.push("source-jar-validated");
+        if (versionSourceDiscovery.selectedHasMinecraftNamespace === false) {
+          resolved.qualityFlags.push("partial-source-no-net-minecraft");
+          warnings.push(
+            `Source coverage does not include net.minecraft for ${versionSourceDiscovery.selectedSourceJarPath}; class lookups may fall back to the binary artifact.`
+          );
+        }
         if (kind === "version" && !hasExactVersionToken(versionSourceDiscovery.selectedSourceJarPath, value)) {
           if (input.strictVersion) {
             throw createError({
@@ -2834,7 +2858,7 @@ export class SourceService {
       });
     }
     // Verify artifact exists
-    this.getArtifact(artifactId);
+    const artifact = this.getArtifact(artifactId);
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 200));
     const warnings: string[] = [];
@@ -2865,6 +2889,9 @@ export class SourceService {
           symbolKind: row.symbolKind
         }))
         .slice(0, limit);
+      if (matches.length === 0 && artifact.mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
+        warnings.push(`No exact class symbol matched "${className}". ${officialNamespaceHint(className)}`);
+      }
       return { matches, total: matches.length, warnings };
     }
 
@@ -2887,6 +2914,9 @@ export class SourceService {
         line: row.line,
         symbolKind: row.symbolKind
       });
+    }
+    if (matches.length === 0 && artifact.mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
+      warnings.push(`No exact class symbol matched "${className}". ${officialNamespaceHint(className)}`);
     }
     return { matches, total: matches.length, warnings };
   }
@@ -2943,6 +2973,10 @@ export class SourceService {
     let mappingApplied: SourceMapping = requestedMapping;
     let provenance: ArtifactProvenance | undefined;
     let qualityFlags: string[] = [];
+    let sourceJarPath: string | undefined;
+    let binaryJarPath: string | undefined;
+    let version: string | undefined;
+    let coordinate: string | undefined;
     if (!artifactId) {
       if (!input.target) {
         throw createError({
@@ -2968,6 +3002,10 @@ export class SourceService {
       mappingApplied = resolved.mappingApplied;
       provenance = resolved.provenance;
       qualityFlags = [...resolved.qualityFlags];
+      sourceJarPath = resolved.resolvedSourceJarPath;
+      binaryJarPath = resolved.binaryJarPath;
+      version = resolved.version;
+      coordinate = resolved.coordinate;
     } else {
       const artifact = this.getArtifact(artifactId);
       origin = artifact.origin;
@@ -2975,9 +3013,62 @@ export class SourceService {
       mappingApplied = artifact.mappingApplied ?? requestedMapping;
       provenance = artifact.provenance;
       qualityFlags = artifact.qualityFlags;
+      sourceJarPath = artifact.sourceJarPath;
+      binaryJarPath = artifact.binaryJarPath;
+      version = artifact.version;
+      coordinate = artifact.coordinate;
     }
 
-    const filePath = this.resolveClassFilePath(artifactId, className);
+    let activeArtifactId = artifactId;
+    let activeOrigin = origin;
+    let activeProvenance = provenance;
+    let activeQualityFlags = [...qualityFlags];
+    let activeSourceJarPath = sourceJarPath;
+    let attemptedBinaryFallback = false;
+    const tryBinaryFallback = async (): Promise<boolean> => {
+      if (attemptedBinaryFallback) {
+        return false;
+      }
+      attemptedBinaryFallback = true;
+      const normalizedBinaryJarPath = normalizeOptionalString(binaryJarPath);
+      if (!normalizedBinaryJarPath) {
+        return false;
+      }
+      if (
+        activeSourceJarPath &&
+        normalizePathStyle(activeSourceJarPath) === normalizePathStyle(normalizedBinaryJarPath)
+      ) {
+        return false;
+      }
+
+      const fallbackResolved = await this.resolveBinaryFallbackArtifact({
+        binaryJarPath: normalizedBinaryJarPath,
+        version,
+        coordinate,
+        requestedMapping,
+        mappingApplied,
+        provenance: activeProvenance,
+        qualityFlags: activeQualityFlags
+      });
+      if (!fallbackResolved || fallbackResolved.artifactId === activeArtifactId) {
+        return false;
+      }
+
+      activeArtifactId = fallbackResolved.artifactId;
+      activeOrigin = fallbackResolved.origin;
+      activeProvenance = fallbackResolved.provenance ?? activeProvenance;
+      activeQualityFlags = [...new Set([...(fallbackResolved.qualityFlags ?? []), "binary-fallback"])];
+      activeSourceJarPath = fallbackResolved.sourceJarPath;
+      warnings.push(
+        `Falling back to binary artifact "${normalizedBinaryJarPath}" because source coverage for "${className}" was incomplete.`
+      );
+      return true;
+    };
+
+    let filePath = this.resolveClassFilePath(activeArtifactId, className);
+    if (!filePath && (await tryBinaryFallback())) {
+      filePath = this.resolveClassFilePath(activeArtifactId, className);
+    }
     if (!filePath) {
       const simpleName = className.split(/[.$]/).at(-1) ?? className;
       const targetKind = input.target?.kind;
@@ -2991,37 +3082,48 @@ export class SourceService {
         nextAction +=
           ` The class may exist in merged sources; retry with scope: "merged".`;
       }
+      if (mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
+        nextAction += ` ${officialNamespaceHint(className)}`;
+      }
       throw createError({
         code: ERROR_CODES.CLASS_NOT_FOUND,
         message: `Source for class "${className}" was not found.`,
         details: {
-          artifactId,
+          artifactId: activeArtifactId,
           className,
           ...(scope ? { scope } : {}),
           ...(targetKind ? { targetKind } : {}),
           ...(targetValue ? { targetValue } : {}),
           mapping: mappingApplied,
           nextAction,
-          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
+          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId: activeArtifactId } }
         }
       });
     }
 
-    const row = this.filesRepo.getFileContent(artifactId, filePath);
+    let row = this.filesRepo.getFileContent(activeArtifactId, filePath);
+    if (!row && (await tryBinaryFallback())) {
+      filePath = this.resolveClassFilePath(activeArtifactId, className) ?? filePath;
+      row = this.filesRepo.getFileContent(activeArtifactId, filePath);
+    }
     if (!row) {
       const simpleName = className.split(/[.$]/).at(-1) ?? className;
       throw createError({
         code: ERROR_CODES.CLASS_NOT_FOUND,
         message: `Source for class "${className}" was not found.`,
         details: {
-          artifactId,
+          artifactId: activeArtifactId,
           className,
           filePath,
           ...(input.scope ? { scope: input.scope } : {}),
           ...(input.target?.kind ? { targetKind: input.target.kind } : {}),
           ...(input.target?.value ? { targetValue: input.target.value } : {}),
-          nextAction: `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`,
-          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId } }
+          nextAction:
+            `Use find-class to resolve the correct fully-qualified name for "${simpleName}".` +
+            (mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)
+              ? ` ${officialNamespaceHint(className)}`
+              : ""),
+          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId: activeArtifactId } }
         }
       });
     }
@@ -3081,10 +3183,10 @@ export class SourceService {
     }
 
     const normalizedProvenance =
-      provenance ??
+      activeProvenance ??
       this.buildFallbackProvenance({
-        artifactId,
-        origin,
+        artifactId: activeArtifactId,
+        origin: activeOrigin,
         requestedMapping,
         mappingApplied
       });
@@ -3100,12 +3202,12 @@ export class SourceService {
       },
       truncated,
       ...(charsTruncated ? { charsTruncated } : {}),
-      origin,
-      artifactId,
+      origin: activeOrigin,
+      artifactId: activeArtifactId,
       requestedMapping,
       mappingApplied,
       provenance: normalizedProvenance,
-      qualityFlags,
+      qualityFlags: activeQualityFlags,
       ...(resolvedOutputFile ? { outputFile: resolvedOutputFile } : {}),
       warnings
     };
@@ -4651,6 +4753,41 @@ export class SourceService {
       return byName;
     }
     return undefined;
+  }
+
+  private async resolveBinaryFallbackArtifact(input: {
+    binaryJarPath?: string;
+    version?: string;
+    coordinate?: string;
+    requestedMapping: SourceMapping;
+    mappingApplied: SourceMapping;
+    provenance?: ArtifactProvenance;
+    qualityFlags: string[];
+  }): Promise<ResolvedSourceArtifact | undefined> {
+    const binaryJarPath = normalizeOptionalString(input.binaryJarPath);
+    if (!binaryJarPath) {
+      return undefined;
+    }
+
+    try {
+      const fallbackResolved = await resolveSourceTargetInternal(
+        { kind: "jar", value: binaryJarPath },
+        { allowDecompile: true },
+        this.config
+      );
+      fallbackResolved.version = fallbackResolved.version ?? input.version;
+      fallbackResolved.coordinate = fallbackResolved.coordinate ?? input.coordinate;
+      fallbackResolved.requestedMapping = input.requestedMapping;
+      fallbackResolved.mappingApplied = input.mappingApplied;
+      fallbackResolved.provenance = input.provenance;
+      fallbackResolved.qualityFlags = [
+        ...new Set([...(fallbackResolved.qualityFlags ?? []), ...input.qualityFlags, "binary-fallback"])
+      ];
+      await this.ingestIfNeeded(fallbackResolved);
+      return fallbackResolved;
+    } catch {
+      return undefined;
+    }
   }
 
   private findNearestSymbolForLine(
