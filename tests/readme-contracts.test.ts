@@ -24,6 +24,10 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `find-class` \|/);
   assert.match(readme, /\| `get-class-source` \|.*`target`.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
   assert.match(readme, /\| `get-class-members` \|.*`target`.*`mapping\?`.*`access\?`/);
+  assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
   assert.match(
     readme,
     /\| `resolve-method-mapping-exact` \|.*`version`.*`name`.*`owner`.*`descriptor`.*`sourceMapping`.*`targetMapping`/
@@ -32,6 +36,8 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /`get-class-source` mode defaults to `metadata`/);
   assert.match(readme, /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, or `config`/);
   assert.match(readme, /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/);
+  assert.match(readme, /`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`/);
+  assert.match(readme, /Use `get-artifact-file` or `get-class-source` to inspect returned files after search/);
   assert.match(readme, /Replace `resolve-artifact` `targetKind` \+ `targetValue` with `target: \{ kind, value \}`/);
   assert.match(readme, /Replace `get-class-source` \/ `get-class-members` top-level `artifactId` \/ `targetKind` \/ `targetValue`/);
   assert.match(readme, /`resolve-method-mapping-exact` is method-only and no longer accepts `kind`/);

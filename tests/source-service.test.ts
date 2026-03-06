@@ -176,19 +176,15 @@ test("SourceService resolves/searches/reads class source through artifactId flow
     query: "tickServer",
     intent: "symbol",
     match: "exact",
-    include: {
-      snippetLines: 6,
-      includeDefinition: true,
-      includeOneHop: true
-    },
     limit: 5
   });
   assert.ok(searched.hits.length >= 1);
   assert.equal(searched.hits[0]?.symbol?.symbolName, "tickServer");
-  assert.match(searched.hits[0]?.snippet ?? "", /tickServer/);
-  assert.ok((searched.hits[0]?.startLine ?? 0) >= 1);
-  assert.ok((searched.hits[0]?.endLine ?? 0) >= (searched.hits[0]?.startLine ?? 0));
-  assert.ok((searched.relations?.length ?? 0) >= 1);
+  assert.equal("snippet" in (searched.hits[0] ?? {}), false);
+  assert.equal("startLine" in (searched.hits[0] ?? {}), false);
+  assert.equal("endLine" in (searched.hits[0] ?? {}), false);
+  assert.equal("relations" in searched, false);
+  assert.equal("totalApprox" in searched, false);
   assert.equal(searched.mappingApplied, "obfuscated");
 
   const textRegexSearch = await service.searchClassSource({
@@ -196,7 +192,6 @@ test("SourceService resolves/searches/reads class source through artifactId flow
     query: "tick[A-Za-z]+",
     intent: "text",
     match: "regex",
-    include: { snippetLines: 6 },
     limit: 5
   });
   assert.ok(textRegexSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/Main.java"));
@@ -484,7 +479,7 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
   );
 });
 
-test("SourceService uses lightweight search defaults for snippet and one-hop expansion", async () => {
+test("SourceService searchClassSource returns compact hits without snippets or relations", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-search-defaults-"));
   const binaryJarPath = join(root, "server-search-defaults.jar");
@@ -533,8 +528,11 @@ test("SourceService uses lightweight search defaults for snippet and one-hop exp
 
   const tickServerHit = searched.hits.find((hit) => hit.symbol?.symbolName === "tickServer");
   assert.ok(tickServerHit);
-  assert.equal(tickServerHit.endLine - tickServerHit.startLine + 1, 8);
-  assert.equal(searched.relations, undefined);
+  assert.equal("snippet" in tickServerHit, false);
+  assert.equal("startLine" in tickServerHit, false);
+  assert.equal("endLine" in tickServerHit, false);
+  assert.equal("relations" in searched, false);
+  assert.equal("totalApprox" in searched, false);
 });
 
 test("SourceService records list-files duration metric", async () => {
@@ -608,37 +606,31 @@ test("SourceService uses indexed search path for contains text/path queries with
     query: "needleValueToken",
     intent: "text",
     match: "contains",
-    include: {
-      includeDefinition: true,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(textSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/Main.java"));
+  assert.equal(textSearch.hits.every((hit) => !("snippet" in hit)), true);
 
   const pathSearch = await service.searchClassSource({
     artifactId: resolved.artifactId,
     query: "NeedlePath",
     intent: "path",
     match: "contains",
-    include: {
-      includeDefinition: true,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(pathSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
+  assert.equal(pathSearch.hits.every((hit) => !("snippet" in hit)), true);
 
   const metrics = readSearchPathMetrics(service);
   assert.equal(metrics.indexedHits, 2);
   assert.equal(metrics.fallbackHits, 0);
 });
 
-test("SourceService path indexed search falls back to full content when prefix snippet is insufficient", async () => {
+test("SourceService path indexed search avoids file-content hydration for hit construction", async () => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-path-prefix-fallback-"));
-  const binaryJarPath = join(root, "server-indexed-path-fallback.jar");
-  const sourcesJarPath = join(root, "server-indexed-path-fallback-sources.jar");
+  const root = await mkdtemp(join(tmpdir(), "service-indexed-path-compact-"));
+  const binaryJarPath = join(root, "server-indexed-path-compact.jar");
+  const sourcesJarPath = join(root, "server-indexed-path-compact-sources.jar");
 
   await createJar(binaryJarPath, {
     "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
@@ -659,21 +651,20 @@ test("SourceService path indexed search falls back to full content when prefix s
     mapping: "obfuscated"
   });
 
+  const before = readSearchIoMetrics(service);
   const pathSearch = await service.searchClassSource({
     artifactId: resolved.artifactId,
     query: "NeedlePath",
     intent: "path",
     match: "contains",
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
     limit: 10
   });
+  const after = readSearchIoMetrics(service);
 
   const hit = pathSearch.hits.find((entry) => entry.filePath === "net/minecraft/server/NeedlePath.java");
   assert.ok(hit);
-  assert.match(hit.snippet, /4:   void afterLongLine\(\) \{\}/);
+  assert.equal("snippet" in hit, false);
+  assert.equal(after.dbRoundtrips - before.dbRoundtrips, 1);
 });
 
 test("SourceService uses indexed search path for exact and prefix path queries without scope", async () => {
@@ -711,10 +702,6 @@ test("SourceService uses indexed search path for exact and prefix path queries w
     query: "net/minecraft/server/NeedlePath.java",
     intent: "path",
     match: "exact",
-    include: {
-      includeDefinition: true,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(pathExactSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
@@ -724,10 +711,6 @@ test("SourceService uses indexed search path for exact and prefix path queries w
     query: "net/minecraft/server/Needle",
     intent: "path",
     match: "prefix",
-    include: {
-      includeDefinition: true,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(pathPrefixSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
@@ -768,10 +751,6 @@ test("SourceService records search db I/O metrics for indexed searches", async (
     query: "indexedMetricsToken",
     intent: "text",
     match: "contains",
-    include: {
-      includeDefinition: true,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(result.hits.length > 0);
@@ -814,10 +793,6 @@ test("SourceService can disable indexed path via config flag", async () => {
     query: "needleValueToken",
     intent: "text",
     match: "contains",
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(search.hits.length > 0);
@@ -869,7 +844,7 @@ test("SourceService can manually reindex an artifact", async () => {
   assert.ok(result.counts.ftsRows >= 1);
 });
 
-test("SourceService falls back to scan path for regex and non-indexable scoped queries", async () => {
+test("SourceService falls back to scan path for regex queries", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-indexed-fallback-"));
   const binaryJarPath = join(root, "server-fallback.jar");
@@ -899,37 +874,17 @@ test("SourceService falls back to scan path for regex and non-indexable scoped q
     query: "needleValue[A-Za-z]+",
     intent: "text",
     match: "regex",
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
     limit: 10
   });
   assert.ok(regexSearch.hits.length > 0);
 
-  const scopedSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "Main.java",
-    intent: "path",
-    match: "contains",
-    scope: {
-      symbolKind: "class"
-    },
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
-    limit: 10
-  });
-  assert.ok(scopedSearch.hits.length > 0);
-
   const metrics = readSearchPathMetrics(service);
-  // regex always falls back to scan; scoped queries (symbolKind) now use indexed path
-  assert.equal(metrics.indexedHits, 1);
+  // regex always falls back to scan
+  assert.equal(metrics.indexedHits, 0);
   assert.equal(metrics.fallbackHits, 1);
 });
 
-test("SourceService applies symbolKind scope filters to text and path intents", async () => {
+test("SourceService rejects symbolKind scope filters for text and path intents", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-symbolkind-scope-"));
   const binaryJarPath = join(root, "server-scope.jar");
@@ -962,37 +917,43 @@ test("SourceService applies symbolKind scope filters to text and path intents", 
     mapping: "obfuscated"
   });
 
-  const textSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FIELD_TOKEN",
-    intent: "text",
-    match: "contains",
-    scope: {
-      symbolKind: "method"
-    },
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
-    limit: 10
-  });
-  assert.equal(textSearch.hits.length, 0);
+  await assert.rejects(
+    () =>
+      service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: "FIELD_TOKEN",
+        intent: "text",
+        match: "contains",
+        scope: {
+          symbolKind: "method"
+        },
+        limit: 10
+      }),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+  );
 
-  const pathSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "OnlyField.java",
-    intent: "path",
-    match: "contains",
-    scope: {
-      symbolKind: "method"
-    },
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    },
-    limit: 10
-  });
-  assert.equal(pathSearch.hits.length, 0);
+  await assert.rejects(
+    () =>
+      service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: "OnlyField.java",
+        intent: "path",
+        match: "contains",
+        scope: {
+          symbolKind: "method"
+        },
+        limit: 10
+      }),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+  );
 });
 
 test("SourceService ignores cursor when search intent changes", async () => {
@@ -4341,7 +4302,6 @@ test("SourceService text search respects exact (case-sensitive) and prefix (case
     query: "UniqueTestMarker",
     intent: "text",
     match: "exact",
-    include: { includeDefinition: true, includeOneHop: false },
     limit: 10
   });
   assert.ok(exactHit.hits.some((h) => h.filePath === "net/minecraft/server/Main.java"));
@@ -4352,7 +4312,6 @@ test("SourceService text search respects exact (case-sensitive) and prefix (case
     query: "uniquetestmarker",
     intent: "text",
     match: "exact",
-    include: { includeDefinition: true, includeOneHop: false },
     limit: 10
   });
   assert.equal(
@@ -4366,7 +4325,6 @@ test("SourceService text search respects exact (case-sensitive) and prefix (case
     query: "uniquetestmarker",
     intent: "text",
     match: "prefix",
-    include: { includeDefinition: true, includeOneHop: false },
     limit: 10
   });
   assert.ok(prefixHit.hits.some((h) => h.filePath === "net/minecraft/server/Main.java"));
@@ -5002,9 +4960,9 @@ test("B4: resolveArtifact flags version-approximated for prefix-substring versio
 });
 
 // ---------------------------------------------------------------------------
-// B5: totalApprox is 0 when post-filtering eliminates all hits on first page
+// B5: compact search output omits totalApprox
 // ---------------------------------------------------------------------------
-test("B5: searchClassSource returns totalApprox=0 when no hits survive post-filtering", async () => {
+test("B5: searchClassSource omits totalApprox from compact search results", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-b5-totalapprox-"));
   const binaryJarPath = join(root, "server-b5.jar");
@@ -5032,7 +4990,7 @@ test("B5: searchClassSource returns totalApprox=0 when no hits survive post-filt
     limit: 10
   });
   assert.equal(result.hits.length, 0);
-  assert.equal(result.totalApprox, 0);
+  assert.equal("totalApprox" in result, false);
 });
 
 test("SourceService validateMixin normalizes WSL UNC sourcePath inputs", async () => {
@@ -5816,6 +5774,7 @@ test("F-03: search-class-source queryMode=auto falls back to literal for separat
     queryMode: "auto"
   });
   assert.ok(result.hits.length > 0, "auto mode should find separator-containing query via fallback");
+  assert.equal("totalApprox" in result, false);
 });
 
 test("F-03: search-class-source queryMode=token returns 0 hits for separator query", async () => {

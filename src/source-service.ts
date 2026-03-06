@@ -141,12 +141,6 @@ export type SearchScope = {
   symbolKind?: SymbolKind;
 };
 
-export type SearchInclude = {
-  snippetLines?: number;
-  includeDefinition?: boolean;
-  includeOneHop?: boolean;
-};
-
 export type SearchResultSymbol = {
   symbolKind: SymbolKind;
   symbolName: string;
@@ -158,27 +152,8 @@ export type SearchSourceHit = {
   filePath: string;
   score: number;
   matchedIn: "symbol" | "path" | "content";
-  startLine: number;
-  endLine: number;
-  snippet: string;
   reasonCodes: string[];
   symbol?: SearchResultSymbol;
-};
-
-export type SearchRelation = {
-  fromSymbol: {
-    symbolKind: SymbolKind;
-    symbolName: string;
-    filePath: string;
-    line: number;
-  };
-  toSymbol: {
-    symbolKind: SymbolKind;
-    symbolName: string;
-    filePath: string;
-    line: number;
-  };
-  relation: "calls" | "uses-type" | "imports";
 };
 
 export type QueryMode = "auto" | "token" | "literal";
@@ -189,7 +164,6 @@ export type SearchClassSourceInput = {
   intent?: SearchIntent;
   match?: SearchMatch;
   scope?: SearchScope;
-  include?: SearchInclude;
   queryMode?: QueryMode;
   limit?: number;
   cursor?: string;
@@ -197,9 +171,7 @@ export type SearchClassSourceInput = {
 
 export type SearchClassSourceOutput = {
   hits: SearchSourceHit[];
-  relations?: SearchRelation[];
   nextCursor?: string;
-  totalApprox: number;
   mappingApplied: SourceMapping;
 };
 
@@ -629,18 +601,6 @@ interface RebuiltArtifactData {
 
 const INDEX_SCHEMA_VERSION = 1;
 
-type SnippetWindow = {
-  before: number;
-  after: number;
-};
-
-type SnippetBuildResult = {
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  truncated: boolean;
-};
-
 interface IndexedSymbolHit {
   symbol: SymbolRow;
   score: number;
@@ -1036,7 +996,7 @@ function canUseIndexedSearchPath(
     return false;
   }
 
-  // fileGlob and symbolKind are now applied as post-filters on indexed candidates
+  // packagePrefix and fileGlob are applied as post-filters on indexed candidates.
   return true;
 }
 
@@ -1120,15 +1080,6 @@ function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
   return normalizePathStyle(filePath).startsWith(`${normalizedPrefix}/`);
 }
 
-function buildSnippetWindow(lines: number | undefined): SnippetWindow {
-  const totalLines = clampLimit(lines, 8, 80);
-  const before = Math.floor((totalLines - 1) / 2);
-  return {
-    before,
-    after: Math.max(0, totalLines - 1 - before)
-  };
-}
-
 function buildSearchCursorContext(input: {
   artifactId: string;
   query: string;
@@ -1136,7 +1087,6 @@ function buildSearchCursorContext(input: {
   match: SearchMatch;
   queryMode: QueryMode;
   scope: SearchScope | undefined;
-  includeDefinition: boolean;
 }): string {
   return JSON.stringify({
     artifactId: input.artifactId,
@@ -1144,7 +1094,6 @@ function buildSearchCursorContext(input: {
     intent: input.intent,
     match: input.match,
     queryMode: input.queryMode,
-    includeDefinition: input.includeDefinition,
     packagePrefix: input.scope?.packagePrefix ?? "",
     fileGlob: input.scope?.fileGlob ?? "",
     symbolKind: input.scope?.symbolKind ?? ""
@@ -1255,117 +1204,6 @@ function matchRegexIndex(target: string, regex: RegExp): number {
   regex.lastIndex = 0;
   const result = regex.exec(target);
   return result?.index ?? -1;
-}
-
-function indexToLine(content: string, index: number): number {
-  if (index <= 0) {
-    return 1;
-  }
-  const upperBound = Math.min(index, content.length);
-  let line = 1;
-  for (let cursor = 0; cursor < upperBound; cursor += 1) {
-    if (content.charCodeAt(cursor) === 10) {
-      line += 1;
-    }
-  }
-  return line;
-}
-
-function countLines(content: string): number {
-  if (content.length === 0) {
-    return 1;
-  }
-
-  let lines = 1;
-  for (let index = 0; index < content.length; index += 1) {
-    if (content.charCodeAt(index) === 10) {
-      lines += 1;
-    }
-  }
-  return lines;
-}
-
-function pathSnippetRequiredLines(snippetWindow: SnippetWindow): number {
-  return Math.max(1, snippetWindow.after + 1);
-}
-
-function estimatePathSnippetPrefixChars(snippetWindow: SnippetWindow): number {
-  const requiredLines = pathSnippetRequiredLines(snippetWindow);
-  return Math.min(65_536, Math.max(2_048, requiredLines * 512));
-}
-
-function prefixContainsPathSnippet(contentPrefix: string, snippetWindow: SnippetWindow): boolean {
-  return countLines(contentPrefix) >= pathSnippetRequiredLines(snippetWindow);
-}
-
-function lineToSymbol(symbol: SymbolRow): SearchResultSymbol | undefined {
-  if (!isSymbolKind(symbol.symbolKind)) {
-    return undefined;
-  }
-
-  return {
-    symbolKind: symbol.symbolKind,
-    symbolName: symbol.symbolName,
-    qualifiedName: symbol.qualifiedName,
-    line: symbol.line
-  };
-}
-
-function toContextSnippet(
-  content: string,
-  centerLineInput: number,
-  beforeLines: number,
-  afterLines: number,
-  withLineNumbers: boolean
-): SnippetBuildResult {
-  const totalLines = countLines(content);
-  const centerLine = Math.min(Math.max(1, centerLineInput), Math.max(totalLines, 1));
-  const requestedStart = Math.max(1, centerLine - beforeLines);
-  const requestedEnd = centerLine + afterLines;
-  const startLine = Math.min(requestedStart, Math.max(totalLines, 1));
-  const endLine = Math.min(requestedEnd, Math.max(totalLines, 1));
-
-  const snippetLines: string[] = [];
-  let lineStart = 0;
-  let lineNumber = 1;
-  let index = 0;
-  while (index <= content.length) {
-    const charCode = index < content.length ? content.charCodeAt(index) : -1;
-    const isLineBreak = charCode === 10 || charCode === 13;
-    const isTerminator = index === content.length || isLineBreak;
-    if (!isTerminator) {
-      index += 1;
-      continue;
-    }
-
-    if (lineNumber >= startLine && lineNumber <= endLine) {
-      const line = content.slice(lineStart, index);
-      snippetLines.push(withLineNumbers ? `${lineNumber}: ${line}` : line);
-      if (lineNumber === endLine) {
-        break;
-      }
-    }
-
-    if (index === content.length) {
-      break;
-    }
-
-    if (charCode === 13 && content.charCodeAt(index + 1) === 10) {
-      index += 1;
-    }
-    index += 1;
-    lineStart = index;
-    lineNumber += 1;
-  }
-
-  const snippet = snippetLines.join("\n");
-
-  return {
-    startLine,
-    endLine,
-    snippet,
-    truncated: requestedStart !== startLine || requestedEnd !== endLine
-  };
 }
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
@@ -1796,7 +1634,6 @@ export class SourceService {
       if (!query) {
         return {
           hits: [],
-          totalApprox: 0,
           mappingApplied: artifact.mappingApplied ?? "obfuscated"
         };
       }
@@ -1817,12 +1654,15 @@ export class SourceService {
         match === "regex"
           ? Math.max(1, Math.min(this.config.maxSearchHits, MAX_REGEX_RESULT_LIMIT))
           : this.config.maxSearchHits;
-      const limit = clampLimit(input.limit, 20, searchLimitCap);
-      const includeDefinition = input.include?.includeDefinition ?? false;
-      const includeOneHop = input.include?.includeOneHop ?? false;
-      const snippetWindow = buildSnippetWindow(input.include?.snippetLines);
-      const regexPattern = match === "regex" ? compileRegex(query) : undefined;
       const scope = input.scope;
+      if (scope?.symbolKind && intent !== "symbol") {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: 'symbolKind filter is only supported when intent="symbol".'
+        });
+      }
+      const limit = clampLimit(input.limit, 20, searchLimitCap);
+      const regexPattern = match === "regex" ? compileRegex(query) : undefined;
       const queryMode = input.queryMode ?? "auto";
       const cursorContext = buildSearchCursorContext({
         artifactId: artifact.artifactId,
@@ -1830,8 +1670,7 @@ export class SourceService {
         intent,
         match,
         queryMode,
-        scope,
-        includeDefinition
+        scope
       });
       const decodedCursor = decodeSearchCursor(input.cursor);
       const cursor = decodedCursor?.contextKey === cursorContext ? decodedCursor : undefined;
@@ -1848,108 +1687,31 @@ export class SourceService {
       const hasSeparators = /[._$]/.test(query);
       const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
       if (intent === "symbol") {
-        this.searchSymbolIntent(
-          artifact.artifactId,
-          query,
-          match,
-          scope,
-          snippetWindow,
-          regexPattern,
-          recordHit
-        );
-        // WS4: Use repo-level COUNT for symbol totalApprox when not regex
-        if (match !== "regex") {
-          const approxCount = this.symbolsRepo.countScopedSymbols({
-            artifactId: artifact.artifactId,
-            query,
-            match,
-            symbolKind: scope?.symbolKind,
-            packagePrefix: scope?.packagePrefix
-          });
-          accumulator.setTotalApproxOverride(approxCount);
-        }
+        this.searchSymbolIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
       } else if (queryMode === "literal" && intent === "text") {
         // F-03: queryMode=literal forces substring scan for text intent
         this.metrics.recordSearchFallback();
-        this.searchTextIntent(
-          artifact.artifactId,
-          query,
-          match,
-          scope,
-          includeDefinition,
-          snippetWindow,
-          regexPattern,
-          recordHit
-        );
+        this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
       } else if (!indexedSearchEnabled) {
         this.metrics.recordIndexedDisabled();
         if (!tokenOnlyTextIntent) {
           this.metrics.recordSearchFallback();
           if (intent === "path") {
-            this.searchPathIntent(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              regexPattern,
-              recordHit
-            );
+            this.searchPathIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
           } else {
-            this.searchTextIntent(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              regexPattern,
-              recordHit
-            );
+            this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
           }
         }
       } else if (canUseIndexedSearchPath(indexedSearchEnabled, intent, match, scope)) {
         try {
           if (intent === "path") {
-            this.searchPathIntentIndexed(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              recordHit
-            );
-            // WS4: Use repo-level COUNT for totalApprox instead of accumulator count
-            const approxCount = this.filesRepo.countPathCandidates(artifact.artifactId, query);
-            accumulator.setTotalApproxOverride(approxCount);
+            this.searchPathIntentIndexed(artifact.artifactId, query, match, scope, recordHit);
           } else {
-            this.searchTextIntentIndexed(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              recordHit
-            );
-            // WS4: Use repo-level COUNT for totalApprox instead of accumulator count
-            const approxCount = this.filesRepo.countTextCandidates(artifact.artifactId, query);
-            accumulator.setTotalApproxOverride(approxCount);
+            this.searchTextIntentIndexed(artifact.artifactId, query, match, scope, recordHit);
 
             // F-03: queryMode=auto fallback — when indexed returns 0 hits and query has separators, retry with literal scan
             if (queryMode === "auto" && hasSeparators && accumulator.currentCount() === 0) {
-              this.searchTextIntent(
-                artifact.artifactId,
-                query,
-                match,
-                scope,
-                includeDefinition,
-                snippetWindow,
-                regexPattern,
-                recordHit
-              );
+              this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
             }
           }
           this.metrics.recordSearchIndexedHit();
@@ -1964,27 +1726,9 @@ export class SourceService {
           // F-03: queryMode=token suppresses error-path fallback to brute-force scan
           if (!tokenOnlyTextIntent) {
             if (intent === "path") {
-              this.searchPathIntent(
-                artifact.artifactId,
-                query,
-                match,
-                scope,
-                includeDefinition,
-                snippetWindow,
-                regexPattern,
-                recordHit
-              );
+              this.searchPathIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
             } else {
-              this.searchTextIntent(
-                artifact.artifactId,
-                query,
-                match,
-                scope,
-                includeDefinition,
-                snippetWindow,
-                regexPattern,
-                recordHit
-              );
+              this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
             }
           }
         }
@@ -1992,27 +1736,9 @@ export class SourceService {
         if (!tokenOnlyTextIntent) {
           this.metrics.recordSearchFallback();
           if (intent === "path") {
-            this.searchPathIntent(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              regexPattern,
-              recordHit
-            );
+            this.searchPathIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
           } else {
-            this.searchTextIntent(
-              artifact.artifactId,
-              query,
-              match,
-              scope,
-              includeDefinition,
-              snippetWindow,
-              regexPattern,
-              recordHit
-            );
+            this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
           }
         }
       }
@@ -2025,41 +1751,13 @@ export class SourceService {
         ? encodeSearchCursor(finalizedHits.nextCursorHit, cursorContext)
         : undefined;
 
-      const relations = includeOneHop
-        ? this.buildOneHopRelations(
-            artifact.artifactId,
-            page.flatMap((hit) =>
-              hit.symbol && isSymbolKind(hit.symbol.symbolKind)
-                ? [
-                    {
-                      symbolKind: hit.symbol.symbolKind,
-                      symbolName: hit.symbol.symbolName,
-                      filePath: hit.filePath,
-                      line: hit.symbol.line
-                    }
-                  ]
-                : []
-            ),
-            10
-          )
-        : undefined;
-
-      if (relations?.length) {
-        this.metrics.recordOneHopExpansion(relations.length);
-      }
       this.metrics.recordSearchTokenBytesReturned(
-        Buffer.byteLength(JSON.stringify({ hits: page, relations }), "utf8")
+        Buffer.byteLength(JSON.stringify({ hits: page }), "utf8")
       );
-
-      // B5: If post-filtering eliminated all hits on the first page, the SQL-based
-      // totalApprox is misleading — correct it to 0.
-      const totalApprox = page.length === 0 && !cursor ? 0 : finalizedHits.totalApprox;
 
       return {
         hits: page,
-        relations: relations && relations.length > 0 ? relations : undefined,
         nextCursor,
-        totalApprox,
         mappingApplied: artifact.mappingApplied ?? "obfuscated"
       };
     } finally {
@@ -4248,35 +3946,16 @@ export class SourceService {
     query: string,
     match: SearchMatch,
     scope: SearchScope | undefined,
-    snippetWindow: SnippetWindow,
     regexPattern: RegExp | undefined,
     onHit: (hit: SearchSourceHit) => void
   ): void {
     const matchedSymbols = this.findSymbolHits(artifactId, query, match, scope, regexPattern);
-    const filePaths = [...new Set(matchedSymbols.map((item) => item.symbol.filePath))];
-    const rows = this.filesRepo.getFileContentsByPaths(artifactId, filePaths);
-    this.metrics.recordSearchDbRoundtrip();
-    this.metrics.recordSearchRowsScanned(rows.length);
-    const rowsByPath = new Map(rows.map((row) => [row.filePath, row]));
 
     for (const item of matchedSymbols) {
-      const row = rowsByPath.get(item.symbol.filePath);
-      const snippet = row
-        ? toContextSnippet(row.content, item.symbol.line, snippetWindow.before, snippetWindow.after, true)
-        : {
-            startLine: item.symbol.line,
-            endLine: item.symbol.line,
-            snippet: "",
-            truncated: false
-          };
-
       onHit({
         filePath: item.symbol.filePath,
         score: item.score,
         matchedIn: "symbol",
-        startLine: snippet.startLine,
-        endLine: snippet.endLine,
-        snippet: snippet.snippet,
         reasonCodes: [`symbol_${match}`],
         symbol: {
           symbolKind: item.symbol.symbolKind as SymbolKind,
@@ -4293,8 +3972,6 @@ export class SourceService {
     query: string,
     match: SearchMatch,
     scope: SearchScope | undefined,
-    includeDefinition: boolean,
-    snippetWindow: SnippetWindow,
     onHit: (hit: SearchSourceHit) => void
   ): void {
     const candidateLimit = this.indexedCandidateLimitForMatch(match);
@@ -4323,7 +4000,7 @@ export class SourceService {
     this.metrics.recordSearchDbRoundtrip();
     this.metrics.recordSearchRowsScanned(candidateContentRows.length);
 
-    const candidateRows: Array<{ filePath: string; content: string; line: number; contentIndex: number }> = [];
+    const candidateRows: Array<{ filePath: string; contentIndex: number }> = [];
 
     for (const candidate of candidateContentRows) {
       const contentIndex = findContentMatchIndex(candidate.content, query, match);
@@ -4331,51 +4008,18 @@ export class SourceService {
         continue;
       }
 
-      const line = indexToLine(candidate.content, contentIndex);
       candidateRows.push({
         filePath: candidate.filePath,
-        content: candidate.content,
-        line,
         contentIndex
       });
     }
 
-    const needSymbols = includeDefinition || !!scope?.symbolKind;
-    const symbolsByFile = needSymbols
-      ? this.symbolsRepo.listSymbolsForFiles(
-          artifactId,
-          candidateRows.map((candidate) => candidate.filePath),
-          scope?.symbolKind
-        )
-      : new Map<string, SymbolRow[]>();
-    if (needSymbols) {
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(
-        [...symbolsByFile.values()].reduce((acc, symbols) => acc + symbols.length, 0)
-      );
-    }
-
     for (const candidate of candidateRows) {
-      // When symbolKind filter is set, skip files that have no symbols of that kind
-      if (scope?.symbolKind && !symbolsByFile.has(candidate.filePath)) {
-        continue;
-      }
-
-      const snippet = toContextSnippet(candidate.content, candidate.line, snippetWindow.before, snippetWindow.after, true);
-      const definition = includeDefinition
-        ? this.findNearestSymbolFromList(symbolsByFile.get(candidate.filePath) ?? [], candidate.line)
-        : undefined;
-      const resolvedSymbol = definition ? lineToSymbol(definition) : undefined;
-
       onHit({
         filePath: candidate.filePath,
-        score: scoreTextMatch(match, candidate.contentIndex) + (resolvedSymbol ? 20 : 0),
+        score: scoreTextMatch(match, candidate.contentIndex),
         matchedIn: "content",
-        startLine: snippet.startLine,
-        endLine: snippet.endLine,
-        snippet: snippet.snippet,
-        reasonCodes: ["content_match", `text_${match}`, "indexed"],
-        symbol: resolvedSymbol
+        reasonCodes: ["content_match", `text_${match}`, "indexed"]
       });
     }
   }
@@ -4385,8 +4029,6 @@ export class SourceService {
     query: string,
     match: SearchMatch,
     scope: SearchScope | undefined,
-    includeDefinition: boolean,
-    snippetWindow: SnippetWindow,
     onHit: (hit: SearchSourceHit) => void
   ): void {
     const candidateLimit = this.indexedCandidateLimitForMatch(match);
@@ -4430,85 +4072,12 @@ export class SourceService {
         pathIndex
       });
     }
-
-    const needSymbols = includeDefinition || !!scope?.symbolKind;
-    const symbolsByFile = needSymbols
-      ? this.symbolsRepo.listSymbolsForFiles(
-          artifactId,
-          candidateRows.map((candidate) => candidate.filePath),
-          scope?.symbolKind
-        )
-      : new Map<string, SymbolRow[]>();
-    if (needSymbols) {
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(
-        [...symbolsByFile.values()].reduce((acc, symbols) => acc + symbols.length, 0)
-      );
-    }
-
-    const filteredCandidates = scope?.symbolKind
-      ? candidateRows.filter((candidate) => symbolsByFile.has(candidate.filePath))
-      : candidateRows;
-
-    let contentByPath: Map<string, string>;
-    if (!includeDefinition) {
-      const prefixRows = this.filesRepo.getFileContentPrefixesByPaths(
-        artifactId,
-        filteredCandidates.map((candidate) => candidate.filePath),
-        estimatePathSnippetPrefixChars(snippetWindow)
-      );
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(prefixRows.length);
-
-      const fallbackPaths = prefixRows
-        .filter((row) => row.truncated && !prefixContainsPathSnippet(row.contentPrefix, snippetWindow))
-        .map((row) => row.filePath);
-      const fallbackContentRows = this.filesRepo.getFileContentsByPaths(artifactId, fallbackPaths);
-      if (fallbackContentRows.length > 0) {
-        this.metrics.recordSearchDbRoundtrip();
-        this.metrics.recordSearchRowsScanned(fallbackContentRows.length);
-      }
-
-      const fallbackContentByPath = new Map(
-        fallbackContentRows.map((row) => [row.filePath, row.content] as const)
-      );
-      contentByPath = new Map(
-        prefixRows.map((row) => [
-          row.filePath,
-          fallbackContentByPath.get(row.filePath) ?? row.contentPrefix
-        ] as const)
-      );
-    } else {
-      const candidateContentRows = this.filesRepo.getFileContentsByPaths(
-        artifactId,
-        filteredCandidates.map((candidate) => candidate.filePath)
-      );
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(candidateContentRows.length);
-      contentByPath = new Map(candidateContentRows.map((row) => [row.filePath, row.content]));
-    }
-
-    for (const candidate of filteredCandidates) {
-      const content = contentByPath.get(candidate.filePath);
-      if (!content) {
-        continue;
-      }
-      const definition = includeDefinition
-        ? this.findNearestSymbolFromList(symbolsByFile.get(candidate.filePath) ?? [], 1)
-        : undefined;
-      const centerLine = definition?.line ?? 1;
-      const snippet = toContextSnippet(content, centerLine, snippetWindow.before, snippetWindow.after, true);
-      const resolvedSymbol = definition ? lineToSymbol(definition) : undefined;
-
+    for (const candidate of candidateRows) {
       onHit({
         filePath: candidate.filePath,
-        score: scorePathMatch(match, candidate.pathIndex) + (resolvedSymbol ? 10 : 0),
+        score: scorePathMatch(match, candidate.pathIndex),
         matchedIn: "path",
-        startLine: snippet.startLine,
-        endLine: snippet.endLine,
-        snippet: snippet.snippet,
-        reasonCodes: ["path_match", `path_${match}`, "indexed"],
-        symbol: resolvedSymbol
+        reasonCodes: ["path_match", `path_${match}`, "indexed"]
       });
     }
   }
@@ -4518,8 +4087,6 @@ export class SourceService {
     query: string,
     match: SearchMatch,
     scope: SearchScope | undefined,
-    includeDefinition: boolean,
-    snippetWindow: SnippetWindow,
     regexPattern: RegExp | undefined,
     onHit: (hit: SearchSourceHit) => void
   ): void {
@@ -4531,20 +4098,6 @@ export class SourceService {
       this.metrics.recordSearchDbRoundtrip();
       this.metrics.recordSearchRowsScanned(rows.length);
 
-      const symbolsByFile = includeDefinition
-        ? this.symbolsRepo.listSymbolsForFiles(
-            artifactId,
-            rows.map((row) => row.filePath),
-            scope?.symbolKind
-          )
-        : new Map<string, SymbolRow[]>();
-      if (includeDefinition) {
-        this.metrics.recordSearchDbRoundtrip();
-        this.metrics.recordSearchRowsScanned(
-          [...symbolsByFile.values()].reduce((acc, symbols) => acc + symbols.length, 0)
-        );
-      }
-
       for (const row of rows) {
         const contentIndex =
           match === "regex"
@@ -4554,22 +4107,11 @@ export class SourceService {
           continue;
         }
 
-        const line = indexToLine(row.content, contentIndex);
-        const snippet = toContextSnippet(row.content, line, snippetWindow.before, snippetWindow.after, true);
-        const definition = includeDefinition
-          ? this.findNearestSymbolFromList(symbolsByFile.get(row.filePath) ?? [], line)
-          : undefined;
-        const resolvedSymbol = definition ? lineToSymbol(definition) : undefined;
-
         onHit({
           filePath: row.filePath,
-          score: scoreTextMatch(match, contentIndex) + (resolvedSymbol ? 20 : 0),
+          score: scoreTextMatch(match, contentIndex),
           matchedIn: "content",
-          startLine: snippet.startLine,
-          endLine: snippet.endLine,
-          snippet: snippet.snippet,
-          reasonCodes: ["content_match", `text_${match}`],
-          symbol: resolvedSymbol
+          reasonCodes: ["content_match", `text_${match}`]
         });
       }
     }
@@ -4580,8 +4122,6 @@ export class SourceService {
     query: string,
     match: SearchMatch,
     scope: SearchScope | undefined,
-    includeDefinition: boolean,
-    snippetWindow: SnippetWindow,
     regexPattern: RegExp | undefined,
     onHit: (hit: SearchSourceHit) => void
   ): void {
@@ -4599,50 +4139,12 @@ export class SourceService {
     const pageSize = Math.max(1, this.config.searchScanPageSize ?? 250);
 
     for (const chunk of chunkArray(matching, pageSize)) {
-      const rows = this.filesRepo.getFileContentsByPaths(
-        artifactId,
-        chunk.map((item) => item.filePath)
-      );
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(rows.length);
-      const contentByPath = new Map(rows.map((row) => [row.filePath, row.content]));
-
-      const symbolsByFile = includeDefinition
-        ? this.symbolsRepo.listSymbolsForFiles(
-            artifactId,
-            chunk.map((item) => item.filePath),
-            scope?.symbolKind
-          )
-        : new Map<string, SymbolRow[]>();
-      if (includeDefinition) {
-        this.metrics.recordSearchDbRoundtrip();
-        this.metrics.recordSearchRowsScanned(
-          [...symbolsByFile.values()].reduce((acc, symbols) => acc + symbols.length, 0)
-        );
-      }
-
       for (const candidate of chunk) {
-        const content = contentByPath.get(candidate.filePath);
-        if (!content) {
-          continue;
-        }
-
-        const definition = includeDefinition
-          ? this.findNearestSymbolFromList(symbolsByFile.get(candidate.filePath) ?? [], 1)
-          : undefined;
-        const centerLine = definition?.line ?? 1;
-        const snippet = toContextSnippet(content, centerLine, snippetWindow.before, snippetWindow.after, true);
-        const resolvedSymbol = definition ? lineToSymbol(definition) : undefined;
-
         onHit({
           filePath: candidate.filePath,
-          score: scorePathMatch(match, candidate.pathIndex) + (resolvedSymbol ? 10 : 0),
+          score: scorePathMatch(match, candidate.pathIndex),
           matchedIn: "path",
-          startLine: snippet.startLine,
-          endLine: snippet.endLine,
-          snippet: snippet.snippet,
-          reasonCodes: ["path_match", `path_${match}`],
-          symbol: resolvedSymbol
+          reasonCodes: ["path_match", `path_${match}`]
         });
       }
     }
@@ -4731,13 +4233,6 @@ export class SourceService {
     scope: SearchScope | undefined
   ): string[] {
     const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
-    const scopedFilesBySymbolKind = scope?.symbolKind
-      ? new Set(this.symbolsRepo.listDistinctFilePathsByKind(artifactId, scope.symbolKind))
-      : undefined;
-    if (scopedFilesBySymbolKind) {
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(scopedFilesBySymbolKind.size);
-    }
 
     const result: string[] = [];
     let cursor: string | undefined = undefined;
@@ -4753,9 +4248,6 @@ export class SourceService {
           continue;
         }
         if (glob && !glob.test(filePath)) {
-          continue;
-        }
-        if (scopedFilesBySymbolKind && !scopedFilesBySymbolKind.has(filePath)) {
           continue;
         }
         result.push(filePath);
@@ -4887,182 +4379,6 @@ export class SourceService {
     } catch {
       return undefined;
     }
-  }
-
-  private findNearestSymbolForLine(
-    artifactId: string,
-    filePath: string,
-    line: number,
-    symbolKind?: SymbolKind
-  ): SymbolRow | undefined {
-    const symbols = this.symbolsRepo
-      .listSymbolsForFile(artifactId, filePath)
-      .filter((symbol) => (symbolKind ? symbol.symbolKind === symbolKind : true));
-    return this.findNearestSymbolFromList(symbols, line);
-  }
-
-  private findNearestSymbolFromList(symbols: SymbolRow[], line: number): SymbolRow | undefined {
-    let best: SymbolRow | undefined;
-    for (const symbol of symbols) {
-      if (symbol.line > line) {
-        continue;
-      }
-      if (!best || symbol.line >= best.line) {
-        best = symbol;
-      }
-    }
-
-    return best ?? symbols[0];
-  }
-
-  private buildOneHopRelations(
-    artifactId: string,
-    roots: Array<{
-      symbolKind: SymbolKind;
-      symbolName: string;
-      filePath: string;
-      line: number;
-    }>,
-    maxRelations: number
-  ): SearchRelation[] {
-    if (roots.length === 0 || maxRelations <= 0) {
-      return [];
-    }
-
-    const rootRows = this.filesRepo.getFileContentsByPaths(
-      artifactId,
-      roots.map((root) => root.filePath)
-    );
-    this.metrics.recordSearchDbRoundtrip();
-    this.metrics.recordSearchRowsScanned(rootRows.length);
-    const rootRowsByPath = new Map(rootRows.map((row) => [row.filePath, row]));
-
-    const rootTokens = roots.map((root) => {
-      const contentRow = rootRowsByPath.get(root.filePath);
-      if (!contentRow) {
-        return {
-          root,
-          calls: [] as string[],
-          types: [] as string[],
-          imports: [] as string[]
-        };
-      }
-      const aroundRoot = toContextSnippet(contentRow.content, root.line, 2, 3, false).snippet;
-      return {
-        root,
-        calls: Array.from(aroundRoot.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g))
-          .map((match) => match[1])
-          .filter((token): token is string => Boolean(token)),
-        types: Array.from(aroundRoot.matchAll(/\b([A-Z][A-Za-z0-9_$]*)\b/g))
-          .map((match) => match[1])
-          .filter((token): token is string => Boolean(token)),
-        imports: Array.from(aroundRoot.matchAll(/import\s+([\w.$]+);/g))
-          .map((match) => match[1]?.split(".").at(-1))
-          .filter((token): token is string => Boolean(token))
-      };
-    });
-
-    const tokenSet = new Set<string>();
-    for (const entry of rootTokens) {
-      for (const token of entry.calls) {
-        tokenSet.add(toLower(token));
-      }
-      for (const token of entry.types) {
-        tokenSet.add(toLower(token));
-      }
-      for (const token of entry.imports) {
-        tokenSet.add(toLower(token));
-      }
-    }
-
-    const matchedSymbols = this.symbolsRepo
-      .findBySymbolNames(artifactId, [...tokenSet])
-      .filter((symbol) => isSymbolKind(symbol.symbolKind));
-    this.metrics.recordSearchDbRoundtrip();
-    this.metrics.recordSearchRowsScanned(matchedSymbols.length);
-
-    const symbolMap = new Map<string, SymbolRow[]>();
-    for (const symbol of matchedSymbols) {
-      const key = toLower(symbol.symbolName);
-      const bucket = symbolMap.get(key) ?? [];
-      bucket.push(symbol);
-      symbolMap.set(key, bucket);
-    }
-
-    const dedupe = new Set<string>();
-    const relations: SearchRelation[] = [];
-
-    for (const entry of rootTokens) {
-      const root = entry.root;
-      const attach = (
-        token: string,
-        relationKind: SearchRelation["relation"]
-      ): void => {
-        const matches = symbolMap.get(toLower(token)) ?? [];
-        for (const target of matches) {
-          if (!isSymbolKind(target.symbolKind)) {
-            continue;
-          }
-          if (
-            target.filePath === root.filePath &&
-            target.line === root.line &&
-            target.symbolName === root.symbolName &&
-            target.symbolKind === root.symbolKind
-          ) {
-            continue;
-          }
-
-          const key = `${root.symbolKind}:${root.symbolName}:${root.filePath}:${root.line}->${target.symbolKind}:${target.symbolName}:${target.filePath}:${target.line}:${relationKind}`;
-          if (dedupe.has(key)) {
-            continue;
-          }
-          dedupe.add(key);
-
-          relations.push({
-            fromSymbol: {
-              symbolKind: root.symbolKind,
-              symbolName: root.symbolName,
-              filePath: root.filePath,
-              line: root.line
-            },
-            toSymbol: {
-              symbolKind: target.symbolKind,
-              symbolName: target.symbolName,
-              filePath: target.filePath,
-              line: target.line
-            },
-            relation: relationKind
-          });
-
-          if (relations.length >= maxRelations) {
-            return;
-          }
-        }
-      };
-
-      for (const token of entry.calls) {
-        attach(token, "calls");
-        if (relations.length >= maxRelations) {
-          return relations;
-        }
-      }
-
-      for (const token of entry.types) {
-        attach(token, "uses-type");
-        if (relations.length >= maxRelations) {
-          return relations;
-        }
-      }
-
-      for (const token of entry.imports) {
-        attach(token, "imports");
-        if (relations.length >= maxRelations) {
-          return relations;
-        }
-      }
-    }
-
-    return relations;
   }
 
   private buildProvenance(input: {

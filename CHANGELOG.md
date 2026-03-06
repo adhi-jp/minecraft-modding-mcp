@@ -13,6 +13,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Breaking change: `resolve-method-mapping-exact` is now method-only and no longer accepts `kind`; callers must send `owner` and `descriptor`.
 - Breaking change: `validate-mixin` replaced the mutually exclusive top-level source selector fields (`source`, `sourcePath`, `sourcePaths`, `mixinConfigPath`, `sourceRoot`) with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`.
 - Breaking change: `validate-mixin` now always returns normalized batch-style output with `mode`, `results[]`, and `summary`. The deprecated `summary.errors` field was removed; use `summary.processingErrors` instead.
+- Breaking change: `search-class-source` now returns compact hits only. The removed `snippetLines`, `includeDefinition`, and `includeOneHop` inputs no longer trigger snippet/definition/relation expansion, `totalApprox` was removed from responses, and `symbolKind` is only valid with `intent=symbol`.
 - MCP resources: JSON resources now return structured `{ result, meta }` success envelopes and `{ error, meta }` failures. Text resources (`class-source`, `artifact-file`) still return raw text on success, but now also use structured JSON errors on failure.
 
 ### Fixed
@@ -23,7 +24,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Tool input parsing: positive integer parameters now accept numeric strings such as `"10"` instead of failing validation immediately.
 
 ### Performance
-- `search-class-source`: reduce `intent=path` heap growth on large source files by loading bounded top-of-file snippets during indexed path search and falling back to full content only when needed to preserve exact snippet output.
+- `search-class-source`: reduce search latency, heap growth, and DB round-trips by returning compact hits only and skipping snippet hydration, relation expansion, and `totalApprox` count queries.
 
 ## [1.2.1] - 2026-03-05
 

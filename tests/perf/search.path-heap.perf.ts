@@ -72,11 +72,7 @@ test("path-intent indexed search keeps heap growth bounded for large files", asy
     query: "NeedlePath",
     intent: "path" as const,
     match: "contains" as const,
-    limit: 120,
-    include: {
-      includeDefinition: false,
-      includeOneHop: false
-    }
+    limit: 120
   };
 
   for (let i = 0; i < 2; i += 1) {

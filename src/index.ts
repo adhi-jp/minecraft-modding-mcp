@@ -102,7 +102,6 @@ const POSITIVE_INT_FIELD_NAMES = new Set([
   "maxChars",
   "maxMembers",
   "maxBytes",
-  "snippetLines",
   "maxVersions",
   "maxClassResults"
 ]);
@@ -221,14 +220,19 @@ const searchClassSourceShape = {
   packagePrefix: optionalNonEmptyString,
   fileGlob: optionalNonEmptyString,
   symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
-  snippetLines: optionalPositiveInt.describe("default 8, clamp 1..80"),
-  includeDefinition: z.boolean().optional().describe("default false"),
-  includeOneHop: z.boolean().optional().describe("default false"),
   queryMode: z.enum(["auto", "token", "literal"]).optional().describe("auto (default): FTS5 with literal fallback for separator queries; token: FTS5 only; literal: substring scan only"),
   limit: optionalPositiveInt.describe("default 20"),
   cursor: optionalNonEmptyString
 };
-const searchClassSourceSchema = z.object(searchClassSourceShape);
+const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
+  if (value.symbolKind && value.intent && value.intent !== "symbol") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["symbolKind"],
+      message: 'symbolKind filter is only supported when intent="symbol".'
+    });
+  }
+});
 
 const getArtifactFileShape = {
   artifactId: nonEmptyString,
@@ -1252,7 +1256,7 @@ server.tool("get-class-members",
 );
 
 server.tool("search-class-source",
-  "Search indexed class source files for one artifact with symbol/text/path intent and optional one-hop relation expansion.",
+  "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output.",
   searchClassSourceShape,
   { readOnlyHint: true },
   async (args) => runTool("search-class-source", args, searchClassSourceSchema, async (input) => {
@@ -1262,17 +1266,6 @@ server.tool("search-class-source",
               packagePrefix: input.packagePrefix,
               fileGlob: input.fileGlob,
               symbolKind: input.symbolKind
-            }
-          : undefined;
-
-      const include =
-        input.snippetLines !== undefined ||
-        input.includeDefinition !== undefined ||
-        input.includeOneHop !== undefined
-          ? {
-              snippetLines: input.snippetLines,
-              includeDefinition: input.includeDefinition,
-              includeOneHop: input.includeOneHop
             }
           : undefined;
 
@@ -1288,7 +1281,6 @@ server.tool("search-class-source",
               symbolKind?: SearchSymbolKind;
             }
           | undefined,
-        include,
         queryMode: input.queryMode,
         limit: input.limit,
         cursor: input.cursor

@@ -183,7 +183,7 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | `find-class` | Resolve simple or fully-qualified class names inside an artifact | `className`, `artifactId`, `limit?` | `matches[]`, `total`, `warnings[]` |
 | `get-class-source` | Get class source by artifact target or resolve target on demand (`mode=metadata` by default) | `className`, `target`, `mode?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `strictVersion?`, `startLine?`, `endLine?`, `maxLines?`, `maxChars?`, `outputFile?` | `mode`, `sourceText`, `returnedRange`, `truncated`, `charsTruncated?`, `outputFile?`, `artifactId`, mapping/provenance metadata |
 | `get-class-members` | Get class fields/methods/constructors from bytecode | `className`, `target`, `mapping?`, `access?`, `includeInherited?`, `maxMembers?`, `strictVersion?` | `members.{constructors,fields,methods}`, `counts`, `truncated`, `context`, `warnings[]` |
-| `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `snippetLines?`, `includeDefinition?`, `includeOneHop?`, `queryMode?`, `limit?`, `cursor?` | `hits[]`, `relations?`, `nextCursor?`, `totalApprox`, `mappingApplied` |
+| `search-class-source` | Search indexed class source for symbols/text/path | `artifactId`, `query`, `intent?`, `match?`, `packagePrefix?`, `fileGlob?`, `symbolKind?`, `queryMode?`, `limit?`, `cursor?` | `hits[]`, `nextCursor?`, `mappingApplied` |
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied` |
 | `list-artifact-files` | List indexed source file paths with cursor pagination | `artifactId`, `prefix?`, `limit?`, `cursor?` | `items[]`, `nextCursor?`, `mappingApplied` |
 | `index-artifact` | Rebuild index metadata for an existing artifact | `artifactId`, `force?` | `reindexed`, `reason`, `counts`, `indexedAt`, `durationMs` |
@@ -275,10 +275,12 @@ Positive integer tool parameters accept numeric strings such as `"10"` in additi
 `resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` will then fall back to the sibling binary artifact when possible.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `find-class` returns an explanatory warning when an `obfuscated` artifact is queried with names that look like deobfuscated Mojang classes.
-`search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
+`search-class-source` uses `limit: 20` by default.
 `search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
-`search-class-source` keeps `intent=path` indexed searches memory-bounded on large files by reading only the top-of-file snippet region when `includeDefinition=false`, with automatic full-content fallback when longer lines would otherwise change the returned snippet.
+`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`.
+Use `get-artifact-file` or `get-class-source` to inspect returned files after search.
+`search-class-source` `symbolKind` is only supported when `intent=symbol`.
 `get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.
@@ -302,6 +304,7 @@ Migration notes:
 - Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
 - `resolve-method-mapping-exact` is method-only and no longer accepts `kind`.
 - Replace `validate-mixin` `source` / `sourcePath` / `sourcePaths` / `mixinConfigPath` / `sourceRoot` with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`. Use `summary.processingErrors` instead of `summary.errors`.
+- `search-class-source` removed `snippetLines`, `includeDefinition`, and `includeOneHop`; responses now contain compact `hits[]` plus `nextCursor?` only, and `symbolKind` may only be used with `intent=symbol`.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
 
 ## Resources
@@ -382,8 +385,7 @@ JSON resources follow the same `result/error/meta` pattern. Text resources retur
     "artifactId": "<artifact-id>",
     "query": "tickServer",
     "intent": "symbol",
-    "match": "exact",
-    "includeOneHop": true
+    "match": "exact"
   }
 }
 ```

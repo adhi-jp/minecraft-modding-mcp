@@ -17,9 +17,6 @@ function makeHit(
     filePath,
     score,
     matchedIn: "content",
-    startLine: line,
-    endLine: line,
-    snippet: "x",
     reasonCodes: [],
     symbol: symbolName
       ? {

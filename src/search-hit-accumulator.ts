@@ -11,9 +11,6 @@ export type SearchSourceHit = {
   filePath: string;
   score: number;
   matchedIn: "symbol" | "path" | "content";
-  startLine: number;
-  endLine: number;
-  snippet: string;
   reasonCodes: string[];
   symbol?: SearchResultSymbol;
 };
@@ -54,8 +51,8 @@ export function scoreHitOrder(left: SearchSourceHit, right: SearchSourceHit): nu
     return symbolCompare;
   }
 
-  const leftLine = left.symbol?.line ?? left.startLine;
-  const rightLine = right.symbol?.line ?? right.startLine;
+  const leftLine = left.symbol?.line ?? 0;
+  const rightLine = right.symbol?.line ?? 0;
   return leftLine - rightLine;
 }
 
@@ -65,7 +62,7 @@ export function encodeSearchCursor(hit: SearchSourceHit, contextKey?: string): s
       score: hit.score,
       filePath: hit.filePath,
       symbolName: hit.symbol?.symbolName ?? "",
-      line: hit.symbol?.line ?? hit.startLine,
+      line: hit.symbol?.line ?? 0,
       contextKey
     } as SearchCursorPayload),
     "utf8"
@@ -119,7 +116,7 @@ export function isAfterSearchCursor(hit: SearchSourceHit, cursor: SearchCursorPa
     return false;
   }
 
-  const hitLine = hit.symbol?.line ?? hit.startLine;
+  const hitLine = hit.symbol?.line ?? 0;
   return hitLine > cursor.line;
 }
 

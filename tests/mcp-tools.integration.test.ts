@@ -129,6 +129,22 @@ test("index.ts uses unified target objects for source resolution tools", async (
   assert.doesNotMatch(classMembersBlock, /targetKind:/);
 });
 
+test("index.ts reshapes search-class-source around compact file hits", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+  const block = source.match(/const searchClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+
+  assert.match(block, /artifactId:\s*nonEmptyString/);
+  assert.match(block, /query:\s*nonEmptyString/);
+  assert.match(block, /intent:\s*searchIntentSchema\.optional\(\)/);
+  assert.match(block, /symbolKind:\s*searchSymbolKindSchema\.optional\(\)/);
+  assert.match(block, /queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.optional\(\)/);
+  assert.doesNotMatch(block, /snippetLines:/);
+  assert.doesNotMatch(block, /includeDefinition:/);
+  assert.doesNotMatch(block, /includeOneHop:/);
+  assert.match(source, /symbolKind filter is only supported when intent="symbol"/);
+  assert.doesNotMatch(source, /optional one-hop relation expansion/);
+});
+
 test("index.ts removes kind from resolve-method-mapping-exact contract", async () => {
   const source = await readFile("src/index.ts", "utf8");
   const block = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";

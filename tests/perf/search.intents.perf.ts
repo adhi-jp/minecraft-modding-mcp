@@ -257,10 +257,6 @@ async function runSearchBenchmark(
       query: request.query,
       intent: request.intent,
       match: request.match,
-      include: {
-        includeDefinition: false,
-        includeOneHop: false
-      },
       limit: 200
     });
 
