@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-03-07
+
 ### Changed
 - Breaking change: the public mapping namespace `official` was removed and replaced with `obfuscated` across tool inputs, outputs, API matrix keys, diagnostics, and examples. Requests that still send `official` now fail with `ERR_INVALID_INPUT` and should be updated to `obfuscated`.
 - Breaking change: `resolve-artifact` now accepts `target: { kind, value }` instead of top-level `targetKind` / `targetValue`. `get-class-source` and `get-class-members` now require `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }` instead of top-level `artifactId` / `targetKind` / `targetValue`.

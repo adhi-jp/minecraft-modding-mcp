@@ -49,6 +49,39 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /failures also set `isError=true`/);
 });
 
+test("Japanese README documents the current public contract", async () => {
+  const readme = await readFile("docs/README-ja.md", "utf8");
+
+  assert.match(readme, /4つの命名空間（`obfuscated`、`mojang`、`intermediary`、`yarn`）/);
+  assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
+  assert.match(
+    readme,
+    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`/
+  );
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
+  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`mixinConfigPath\?`/);
+  assert.match(readme, /\| `get-class-source` \|.*`target`.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`/);
+  assert.match(readme, /\| `get-class-members` \|.*`target`.*`mapping\?`.*`access\?`/);
+  assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
+  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
+  assert.match(
+    readme,
+    /\| `resolve-method-mapping-exact` \|.*`version`.*`name`.*`owner`.*`descriptor`.*`sourceMapping`.*`targetMapping`/
+  );
+  assert.doesNotMatch(readme, /\| `resolve-method-mapping-exact` \|.*`kind`/);
+  assert.match(readme, /`resolve-artifact` は `target: \{ kind, value \}` を受け取ります。/);
+  assert.match(readme, /`validate-mixin` は `input\.mode` が `inline` \/ `path` \/ `paths` \/ `config` のいずれか/);
+  assert.match(readme, /`validate-mixin` は常に `mode`、`results\[\]`、`summary` を返し/);
+  assert.match(readme, /`summary\.errors` は削除されました/);
+  assert.match(readme, /`search-class-source` は snippets、行ウィンドウ、relation expansion、`totalApprox` を含まない/);
+  assert.match(readme, /`structuredContent`/);
+  assert.match(readme, /`isError=true`/);
+  assert.match(readme, /旧来の公開名前空間名 `official` は削除されました/);
+});
+
 test("README documents CLI agent MCP quick start commands", async () => {
   const readme = await readFile("README.md", "utf8");
 
