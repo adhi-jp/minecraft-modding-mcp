@@ -39,6 +39,9 @@
   ],
   "author": "adhi-jp",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": "github:adhi-jp/minecraft-modding-mcp",
   "bugs": "https://github.com/adhi-jp/minecraft-modding-mcp/issues",
   "homepage": "https://github.com/adhi-jp/minecraft-modding-mcp#readme",

@@ -7,6 +7,7 @@ type PackageJson = {
   types?: unknown;
   bin?: unknown;
   files?: unknown;
+  publishConfig?: Record<string, unknown>;
   engines?: Record<string, unknown>;
   scripts?: Record<string, unknown>;
 };
@@ -20,6 +21,7 @@ test("package.json declares distribution entrypoints and include list", async ()
     "minecraft-modding-mcp": "dist/cli.js"
   });
   assert.deepEqual(packageJson.files, ["dist/**/*.js", "dist/**/*.d.ts", "README.md", "LICENSE", "CHANGELOG.md"]);
+  assert.deepEqual(packageJson.publishConfig, { access: "public" });
   assert.deepEqual(packageJson.engines, { node: ">=22" });
   assert.equal(packageJson.scripts?.clean, "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"");
   assert.equal(packageJson.scripts?.build, "npm run clean && tsc -p tsconfig.json");
