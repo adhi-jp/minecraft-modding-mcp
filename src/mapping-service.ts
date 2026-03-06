@@ -11,7 +11,7 @@ import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
 import { VersionService, isUnobfuscatedVersion, type ResolvedVersionMappings } from "./version-service.js";
 
 const SUPPORTED_MAPPINGS: ReadonlySet<SourceMapping> = new Set([
-  "official",
+  "obfuscated",
   "mojang",
   "intermediary",
   "yarn"
@@ -186,7 +186,7 @@ export type ClassApiMatrixEntry = {
 export type ClassApiMatrixRow = {
   kind: ClassApiMatrixKind;
   descriptor?: string;
-  official?: ClassApiMatrixEntry;
+  obfuscated?: ClassApiMatrixEntry;
   mojang?: ClassApiMatrixEntry;
   intermediary?: ClassApiMatrixEntry;
   yarn?: ClassApiMatrixEntry;
@@ -490,7 +490,7 @@ const PROGUARD_PRIMITIVES: Record<string, string> = {
 /**
  * Convert a single proguard type (e.g. "int", "net.minecraft.Foo", "int[][]")
  * to JVM notation (e.g. "I", "Lnet/minecraft/Foo;", "[[I").
- * `classLookup` maps mojang class names → official class names (for the official descriptor).
+ * `classLookup` maps mojang class names → obfuscated class names (for the obfuscated descriptor).
  * Pass `undefined` to skip class name translation (for mojang descriptors).
  */
 function proguardTypeToJvm(type: string, classLookup: Map<string, string> | undefined): string {
@@ -535,14 +535,14 @@ function parseProguardMethod(
 }
 
 function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
-  const officialToMojang = createDirectionIndex();
-  const mojangToOfficial = createDirectionIndex();
+  const obfuscatedToMojang = createDirectionIndex();
+  const mojangToObfuscated = createDirectionIndex();
 
   // Two-pass parsing: first collect class name mappings, then parse members with descriptors.
   const lines = text.split(/\r?\n/);
 
-  // Pass 1: collect class name mappings (mojang → official)
-  const mojangToOfficialClass = new Map<string, string>();
+  // Pass 1: collect class name mappings (mojang → obfuscated)
+  const mojangToObfuscatedClass = new Map<string, string>();
   let classCount = 0;
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -552,9 +552,9 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
     const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
     if (classMatch) {
       const mojangClass = classMatch[1]?.trim() ?? "";
-      const officialClass = classMatch[2]?.trim() ?? "";
-      if (mojangClass && officialClass) {
-        mojangToOfficialClass.set(mojangClass, officialClass);
+      const obfuscatedClass = classMatch[2]?.trim() ?? "";
+      if (mojangClass && obfuscatedClass) {
+        mojangToObfuscatedClass.set(mojangClass, obfuscatedClass);
         classCount += 1;
       }
     }
@@ -568,7 +568,7 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
   }
 
   // Pass 2: build full index with descriptors
-  let currentClass: { official: string; mojang: string } | undefined;
+  let currentClass: { obfuscated: string; mojang: string } | undefined;
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
@@ -578,26 +578,26 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
     const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
     if (classMatch) {
       const mojangClass = classMatch[1]?.trim() ?? "";
-      const officialClass = classMatch[2]?.trim() ?? "";
-      if (!mojangClass || !officialClass) {
+      const obfuscatedClass = classMatch[2]?.trim() ?? "";
+      if (!mojangClass || !obfuscatedClass) {
         currentClass = undefined;
         continue;
       }
 
       currentClass = {
-        official: officialClass,
+        obfuscated: obfuscatedClass,
         mojang: mojangClass
       };
 
       addLookupEntries(
-        officialToMojang,
-        createClassSymbolRecord(officialClass),
+        obfuscatedToMojang,
+        createClassSymbolRecord(obfuscatedClass),
         createClassSymbolRecord(mojangClass)
       );
       addLookupEntries(
-        mojangToOfficial,
+        mojangToObfuscated,
         createClassSymbolRecord(mojangClass),
-        createClassSymbolRecord(officialClass)
+        createClassSymbolRecord(obfuscatedClass)
       );
       continue;
     }
@@ -619,21 +619,21 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
     const mojangMemberSignature = stripLineInfo(leftRaw);
 
     // Try method parsing with JVM descriptor
-    const officialMethod = parseProguardMethod(mojangMemberSignature, mojangToOfficialClass);
-    if (officialMethod) {
+    const obfuscatedMethod = parseProguardMethod(mojangMemberSignature, mojangToObfuscatedClass);
+    if (obfuscatedMethod) {
       const mojangMethod = parseProguardMethod(mojangMemberSignature, undefined);
-      const officialDescriptor = officialMethod.descriptor;
+      const obfuscatedDescriptor = obfuscatedMethod.descriptor;
       const mojangDescriptor = mojangMethod?.descriptor;
 
       addLookupEntries(
-        officialToMojang,
-        createMethodSymbolRecord(currentClass.official, rightRaw, officialDescriptor),
-        createMethodSymbolRecord(currentClass.mojang, officialMethod.name, mojangDescriptor)
+        obfuscatedToMojang,
+        createMethodSymbolRecord(currentClass.obfuscated, rightRaw, obfuscatedDescriptor),
+        createMethodSymbolRecord(currentClass.mojang, obfuscatedMethod.name, mojangDescriptor)
       );
       addLookupEntries(
-        mojangToOfficial,
-        createMethodSymbolRecord(currentClass.mojang, officialMethod.name, mojangDescriptor),
-        createMethodSymbolRecord(currentClass.official, rightRaw, officialDescriptor)
+        mojangToObfuscated,
+        createMethodSymbolRecord(currentClass.mojang, obfuscatedMethod.name, mojangDescriptor),
+        createMethodSymbolRecord(currentClass.obfuscated, rightRaw, obfuscatedDescriptor)
       );
       continue;
     }
@@ -643,27 +643,27 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
       continue;
     }
     addLookupEntries(
-      officialToMojang,
-      createFieldSymbolRecord(currentClass.official, rightRaw),
+      obfuscatedToMojang,
+      createFieldSymbolRecord(currentClass.obfuscated, rightRaw),
       createFieldSymbolRecord(currentClass.mojang, fieldName)
     );
     addLookupEntries(
-      mojangToOfficial,
+      mojangToObfuscated,
       createFieldSymbolRecord(currentClass.mojang, fieldName),
-      createFieldSymbolRecord(currentClass.official, rightRaw)
+      createFieldSymbolRecord(currentClass.obfuscated, rightRaw)
     );
   }
 
   const result = new Map<PairKey, DirectionIndex>();
-  result.set(pairKey("official", "mojang"), officialToMojang);
-  result.set(pairKey("mojang", "official"), mojangToOfficial);
+  result.set(pairKey("obfuscated", "mojang"), obfuscatedToMojang);
+  result.set(pairKey("mojang", "obfuscated"), mojangToObfuscated);
   return result;
 }
 
 function normalizeTinyNamespace(namespace: string): SourceMapping | undefined {
   const normalized = namespace.trim().toLowerCase();
-  if (normalized === "official") {
-    return "official";
+  if (normalized === "obfuscated") {
+    return "obfuscated";
   }
   if (normalized === "mojang") {
     return "mojang";
@@ -1393,8 +1393,8 @@ export class MappingService {
           sourceMapping,
           targetMapping,
           sourcePriority: priority,
-          nextAction: "Try mapping=official which is always available.",
-          suggestedCall: { tool: "resolve-artifact", params: { mapping: "official" } }
+          nextAction: "Try mapping=obfuscated which is always available.",
+          suggestedCall: { tool: "resolve-artifact", params: { mapping: "obfuscated" } }
         }
       });
     }
@@ -1607,7 +1607,7 @@ export class MappingService {
       }
     }
 
-    const baseMapping: SourceMapping = classByMapping.official ? "official" : classNameMapping;
+    const baseMapping: SourceMapping = classByMapping.obfuscated ? "obfuscated" : classNameMapping;
     const baseClass = classByMapping[baseMapping];
     if (!baseClass) {
       return {
@@ -1615,7 +1615,7 @@ export class MappingService {
         className,
         classNameMapping,
         classIdentity: {
-          official: classByMapping.official?.symbol,
+          obfuscated: classByMapping.obfuscated?.symbol,
           mojang: classByMapping.mojang?.symbol,
           intermediary: classByMapping.intermediary?.symbol,
           yarn: classByMapping.yarn?.symbol
@@ -1714,7 +1714,7 @@ export class MappingService {
         row[mapping] = entry;
       }
 
-      row.completeness = Boolean(row.official && row.mojang && row.intermediary && row.yarn);
+      row.completeness = Boolean(row.obfuscated && row.mojang && row.intermediary && row.yarn);
       rows.push(row);
       if (rowHadAmbiguity) {
         ambiguousRowCount += 1;
@@ -1726,7 +1726,7 @@ export class MappingService {
       className,
       classNameMapping,
       classIdentity: {
-        official: classByMapping.official?.symbol,
+        obfuscated: classByMapping.obfuscated?.symbol,
         mojang: classByMapping.mojang?.symbol,
         intermediary: classByMapping.intermediary?.symbol,
         yarn: classByMapping.yarn?.symbol
@@ -2116,15 +2116,15 @@ export class MappingService {
       degradations.push("No intermediary/yarn tiny mappings were found for this version.");
     }
 
-    // Check if member remap path exists (requestedMapping → official)
+    // Check if member remap path exists (requestedMapping → obfuscated)
     let memberRemapAvailable = false;
-    if (input.requestedMapping === "official") {
+    if (input.requestedMapping === "obfuscated") {
       memberRemapAvailable = true;
     } else {
-      const path = namespacePath(graph.pairs, input.requestedMapping, "official");
+      const path = namespacePath(graph.pairs, input.requestedMapping, "obfuscated");
       memberRemapAvailable = path != null && path.length > 1;
       if (!memberRemapAvailable) {
-        degradations.push(`No mapping path from ${input.requestedMapping} to official; member remap will fail.`);
+        degradations.push(`No mapping path from ${input.requestedMapping} to obfuscated; member remap will fail.`);
       }
     }
 
@@ -2169,7 +2169,7 @@ export class MappingService {
         priority,
         pairs: new Map(),
         warnings: [
-          `Version ${version} is unobfuscated; mapping graph is empty (official names are final).`
+          `Version ${version} is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names.`
         ]
       };
     }

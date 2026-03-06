@@ -10,13 +10,13 @@ import { type ResolvedVersionMappings, VersionService } from "./version-service.
 
 interface RawClassMapping {
   mojangFqn: string;
-  officialInternal: string;
+  obfuscatedInternal: string;
 }
 
 interface RawMemberMapping {
   ownerMojangFqn: string;
   leftSignature: string;
-  officialName: string;
+  obfuscatedName: string;
 }
 
 interface ParsedProguardMappings {
@@ -27,7 +27,7 @@ interface ParsedProguardMappings {
 interface TinyMemberRecord {
   kind: "f" | "m";
   descriptor: string;
-  officialName: string;
+  obfuscatedName: string;
   mojangName: string;
 }
 
@@ -73,13 +73,13 @@ function parseProguardMappings(text: string): ParsedProguardMappings {
     const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
     if (classMatch) {
       const mojangFqn = normalizeFqn(classMatch[1] ?? "");
-      const officialInternal = normalizeInternalName(classMatch[2] ?? "");
-      if (!mojangFqn || !officialInternal) {
+      const obfuscatedInternal = normalizeInternalName(classMatch[2] ?? "");
+      if (!mojangFqn || !obfuscatedInternal) {
         currentClass = undefined;
         continue;
       }
       currentClass = mojangFqn;
-      classes.push({ mojangFqn, officialInternal });
+      classes.push({ mojangFqn, obfuscatedInternal });
       continue;
     }
 
@@ -92,14 +92,14 @@ function parseProguardMappings(text: string): ParsedProguardMappings {
       continue;
     }
     const leftRaw = stripLineInfo(line.slice(0, arrowIndex));
-    const officialName = line.slice(arrowIndex + 4).trim();
-    if (!leftRaw || !officialName) {
+    const obfuscatedName = line.slice(arrowIndex + 4).trim();
+    if (!leftRaw || !obfuscatedName) {
       continue;
     }
     members.push({
       ownerMojangFqn: currentClass,
       leftSignature: leftRaw,
-      officialName
+      obfuscatedName
     });
   }
 
@@ -231,8 +231,8 @@ function normalizeMemberMappings(
 
   for (const mapping of rawMappings) {
     for (const member of mapping.members) {
-      const ownerOfficial = classMap.get(normalizeFqn(member.ownerMojangFqn));
-      if (!ownerOfficial) {
+      const ownerObfuscated = classMap.get(normalizeFqn(member.ownerMojangFqn));
+      if (!ownerObfuscated) {
         warnings.push(
           `Skipping member mapping for "${member.ownerMojangFqn}" because class mapping is missing.`
         );
@@ -255,7 +255,7 @@ function normalizeMemberMappings(
         record = {
           kind: "m",
           descriptor,
-          officialName: member.officialName,
+          obfuscatedName: member.obfuscatedName,
           mojangName
         };
       } else {
@@ -276,22 +276,22 @@ function normalizeMemberMappings(
         record = {
           kind: "f",
           descriptor,
-          officialName: member.officialName,
+          obfuscatedName: member.obfuscatedName,
           mojangName
         };
       }
 
       const dedupeKey =
-        `${ownerOfficial}|${record.kind}|${record.officialName}|` +
+        `${ownerObfuscated}|${record.kind}|${record.obfuscatedName}|` +
         `${record.mojangName}|${record.descriptor}`;
       if (seen.has(dedupeKey)) {
         continue;
       }
       seen.add(dedupeKey);
 
-      const list = membersByOwner.get(ownerOfficial) ?? [];
+      const list = membersByOwner.get(ownerObfuscated) ?? [];
       list.push(record);
-      membersByOwner.set(ownerOfficial, list);
+      membersByOwner.set(ownerObfuscated, list);
     }
   }
 
@@ -306,15 +306,15 @@ function mergeClasses(
   for (const mapping of rawMappings) {
     for (const clazz of mapping.classes) {
       const mojang = normalizeFqn(clazz.mojangFqn);
-      const official = normalizeInternalName(clazz.officialInternal);
+      const obfuscated = normalizeInternalName(clazz.obfuscatedInternal);
       const existing = classMap.get(mojang);
-      if (existing && existing !== official) {
+      if (existing && existing !== obfuscated) {
         warnings.push(
-          `Conflicting class mapping for "${mojang}" (${existing} vs ${official}); keeping first.`
+          `Conflicting class mapping for "${mojang}" (${existing} vs ${obfuscated}); keeping first.`
         );
         continue;
       }
-      classMap.set(mojang, official);
+      classMap.set(mojang, obfuscated);
     }
   }
   return classMap;
@@ -325,28 +325,28 @@ function renderTinyV2(
   membersByOwner: Map<string, TinyMemberRecord[]>
 ): string {
   const classEntries = [...classMap.entries()]
-    .map(([mojangFqn, officialInternal]) => ({
-      officialInternal,
+    .map(([mojangFqn, obfuscatedInternal]) => ({
+      obfuscatedInternal,
       mojangInternal: mojangFqn.replace(/\./g, "/")
     }))
-    .sort((left, right) => left.officialInternal.localeCompare(right.officialInternal));
+    .sort((left, right) => left.obfuscatedInternal.localeCompare(right.obfuscatedInternal));
 
-  const lines: string[] = ["tiny\t2\t0\tofficial\tmojang"];
+  const lines: string[] = ["tiny\t2\t0\tobfuscated\tmojang"];
 
   for (const entry of classEntries) {
-    lines.push(`c\t${entry.officialInternal}\t${entry.mojangInternal}`);
-    const members = [...(membersByOwner.get(entry.officialInternal) ?? [])].sort((left, right) => {
+    lines.push(`c\t${entry.obfuscatedInternal}\t${entry.mojangInternal}`);
+    const members = [...(membersByOwner.get(entry.obfuscatedInternal) ?? [])].sort((left, right) => {
       if (left.kind !== right.kind) {
         return left.kind.localeCompare(right.kind);
       }
-      if (left.officialName !== right.officialName) {
-        return left.officialName.localeCompare(right.officialName);
+      if (left.obfuscatedName !== right.obfuscatedName) {
+        return left.obfuscatedName.localeCompare(right.obfuscatedName);
       }
       return left.descriptor.localeCompare(right.descriptor);
     });
     for (const member of members) {
       lines.push(
-        `\t${member.kind}\t${member.descriptor}\t${member.officialName}\t${member.mojangName}`
+        `\t${member.kind}\t${member.descriptor}\t${member.obfuscatedName}\t${member.mojangName}`
       );
     }
   }

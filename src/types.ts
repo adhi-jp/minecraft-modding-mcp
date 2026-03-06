@@ -1,5 +1,5 @@
 export type SourceOrigin = "local-jar" | "local-m2" | "remote-repo" | "decompiled";
-export type SourceMapping = "official" | "mojang" | "intermediary" | "yarn";
+export type SourceMapping = "obfuscated" | "mojang" | "intermediary" | "yarn";
 export type MappingSourcePriority = "loom-first" | "maven-first";
 
 export type ArtifactTargetKind = "version" | "jar" | "coordinate";

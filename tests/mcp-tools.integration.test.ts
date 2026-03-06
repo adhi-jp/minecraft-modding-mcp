@@ -68,9 +68,10 @@ test("index.ts accepts expanded mapping enum in tool inputs", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
   const mappingDescriptionMatches =
-    source.match(/\.describe\("official \| mojang \| intermediary \| yarn/g) ?? [];
+    source.match(/\.describe\("obfuscated \| mojang \| intermediary \| yarn/g) ?? [];
   assert.ok(mappingDescriptionMatches.length >= 4);
-  assert.match(source, /const SOURCE_MAPPINGS = \["official", "mojang", "intermediary", "yarn"\] as const;/);
+  assert.match(source, /const SOURCE_MAPPINGS = \["obfuscated", "mojang", "intermediary", "yarn"\] as const;/);
+  assert.doesNotMatch(source, /const SOURCE_MAPPINGS = \["official", "mojang", "intermediary", "yarn"\] as const;/);
   assert.match(source, /sourceMapping:/);
 });
 
@@ -82,7 +83,17 @@ test("index.ts coerces numeric string inputs for positive integer params", async
   assert.match(source, /function coerceKnownNumericStrings\(value: unknown\): unknown/);
   assert.match(source, /typeof entry === "string" && POSITIVE_INT_FIELD_NAMES\.has\(key\)/);
   assert.match(source, /Number\.parseInt\(trimmed, 10\)/);
-  assert.match(source, /schema\.parse\(coerceKnownNumericStrings\(rawInput\)\)/);
+  assert.match(source, /const normalizedInput = coerceKnownNumericStrings\(rawInput\);/);
+  assert.match(source, /schema\.parse\(normalizedInput\)/);
+});
+
+test("index.ts rejects removed official mapping namespace with obfuscated replacement hint", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /const MAPPING_FIELD_NAMES = new Set\(\["mapping", "sourceMapping", "targetMapping", "classNameMapping"\]\);/);
+  assert.match(source, /function collectRemovedOfficialNamespacePaths\(/);
+  assert.match(source, /The "official" mapping namespace was removed\. Use "obfuscated" instead\./);
+  assert.match(source, /"official" is no longer supported for this field\. Use "obfuscated"\./);
 });
 
 test("index.ts accepts mapping source priority override inputs", async () => {

@@ -64,7 +64,7 @@ test("path-intent indexed search keeps heap growth bounded for large files", asy
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const request = {

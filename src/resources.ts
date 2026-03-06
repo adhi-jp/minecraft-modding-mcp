@@ -103,8 +103,8 @@ export function registerResources(
           version: params.version as string,
           kind: params.kind as "class" | "field" | "method",
           name: decodeTemplateParam(params as Record<string, string>, "name"),
-          sourceMapping: params.sourceMapping as "official" | "mojang" | "intermediary" | "yarn",
-          targetMapping: params.targetMapping as "official" | "mojang" | "intermediary" | "yarn"
+          sourceMapping: params.sourceMapping as "obfuscated" | "mojang" | "intermediary" | "yarn",
+          targetMapping: params.targetMapping as "obfuscated" | "mojang" | "intermediary" | "yarn"
         });
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {

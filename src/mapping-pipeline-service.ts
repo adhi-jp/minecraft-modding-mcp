@@ -16,22 +16,22 @@ export interface MappingPipelineResult {
 /**
  * Mapping pipeline for v0.3.
  * Current implementation enforces explicit guarantees:
- * - official: always pass-through
+ * - obfuscated: always pass-through
  * - mojang: requires source-backed artifact; decompile-only artifacts are rejected
  */
 export function applyMappingPipeline(input: MappingPipelineInput): MappingPipelineResult {
   const transformChain: string[] = [];
   const qualityFlags: string[] = [];
 
-  if (input.requestedMapping === "official") {
-    transformChain.push("mapping:official-pass-through");
+  if (input.requestedMapping === "obfuscated") {
+    transformChain.push("mapping:obfuscated-pass-through");
     if (input.resolved.isDecompiled) {
       qualityFlags.push("decompiled");
     } else {
       qualityFlags.push("source-backed");
     }
     return {
-      mappingApplied: "official",
+      mappingApplied: "obfuscated",
       qualityFlags,
       transformChain
     };
@@ -64,7 +64,7 @@ export function applyMappingPipeline(input: MappingPipelineInput): MappingPipeli
         origin: input.resolved.origin,
         binaryJarPath: input.resolved.binaryJarPath,
         sourceJarPath: input.resolved.sourceJarPath,
-        nextAction: "Provide a source-backed artifact (source jar) or use mapping=official."
+        nextAction: "Provide a source-backed artifact (source jar) or use mapping=obfuscated."
       }
     });
   }

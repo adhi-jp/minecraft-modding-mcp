@@ -50,7 +50,7 @@ const TEST_MOJANG_CLIENT_MAPPINGS = [
 ].join("\n");
 
 const TEST_TINY = [
-  "tiny\t2\t0\tofficial\tintermediary\tnamed",
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tintermediary/pkg/InterClass\tyarn/pkg/NamedClass",
   "\tf\tI\td\tinterField\tnamedField",
   "\tm\t(I)V\te\tinterMethod\tnamedMethod",
@@ -102,7 +102,7 @@ function queryFromSymbol(symbol: string): SymbolQueryInput {
   };
 }
 
-test("MappingService maps official -> mojang and caches repeated lookups", async () => {
+test("MappingService maps obfuscated -> mojang and caches repeated lookups", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-"));
   const config = buildTestConfig(root);
@@ -132,25 +132,25 @@ test("MappingService maps official -> mojang and caches repeated lookups", async
   const first = await service.findMapping({
     version: "1.21.10",
     ...queryFromSymbol("a.b.C"),
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
   assert.equal(first.candidates[0]?.symbol, "com.mojang.NamedClass");
-  assert.equal(first.mappingContext.sourceMapping, "official");
+  assert.equal(first.mappingContext.sourceMapping, "obfuscated");
   assert.equal(first.mappingContext.targetMapping, "mojang");
 
   const second = await service.findMapping({
     version: "1.21.10",
     ...queryFromSymbol("a.b.C"),
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
   assert.equal(second.candidates[0]?.symbol, "com.mojang.NamedClass");
   assert.equal(fetchCalls.filter((url) => url === "https://example.test/mappings/client.txt").length, 1);
 });
 
-test("MappingService maps official -> yarn from Loom tiny cache", async () => {
+test("MappingService maps obfuscated -> yarn from Loom tiny cache", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-loom-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
@@ -174,7 +174,7 @@ test("MappingService maps official -> yarn from Loom tiny cache", async () => {
     service.findMapping({
       version: "1.21.10",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "yarn"
     })
   );
@@ -232,7 +232,7 @@ test("MappingService falls back to Maven tiny when Loom cache is unavailable", a
     service.findMapping({
       version: "1.21.10",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -253,7 +253,7 @@ test("MappingService supports sourcePriority override over config default", asyn
   await writeFile(
     loomTinyPath,
     [
-      "tiny\t2\t0\tofficial\tintermediary",
+      "tiny\t2\t0\tobfuscated\tintermediary",
       "c\ta/b/C\tloom/pkg/InterClass"
     ].join("\n"),
     "utf8"
@@ -262,7 +262,7 @@ test("MappingService supports sourcePriority override over config default", asyn
   const mavenTinyJar = join(root, "maven-tiny.jar");
   await createJar(mavenTinyJar, {
     "mappings/mappings.tiny": [
-      "tiny\t2\t0\tofficial\tintermediary",
+      "tiny\t2\t0\tobfuscated\tintermediary",
       "c\ta/b/C\tmaven/pkg/InterClass"
     ].join("\n")
   });
@@ -297,7 +297,7 @@ test("MappingService supports sourcePriority override over config default", asyn
     service.findMapping({
       version: "1.21.10",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary",
       sourcePriority: "maven-first"
     })
@@ -334,7 +334,7 @@ test("MappingService maps field symbols and returns structured candidate metadat
   const result = await service.findMapping({
     version: "1.21.10",
     ...queryFromSymbol("a.b.C.d"),
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
@@ -370,7 +370,7 @@ test("MappingService maps descriptor-qualified methods through tiny mappings", a
     service.findMapping({
       version: "1.21.10",
       ...queryFromSymbol("a.b.C.e(I)V"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -410,7 +410,7 @@ test("MappingService resolves exact method descriptor through mojang client mapp
   const result = await service.findMapping({
     version: "1.21.10",
     ...queryFromSymbol("a.b.C.e(I)V"),
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
@@ -500,7 +500,7 @@ test("MappingService resolves exact method mapping when descriptor path is prese
       owner: "a.b.C",
       name: "e",
       descriptor: "(I)V",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -556,7 +556,7 @@ test("MappingService returns explicit not_found for exact method lookup misses",
       owner: "a.b.C",
       name: "missing",
       descriptor: "(I)V",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -612,7 +612,7 @@ test("MappingService returns mapping_unavailable when exact lookup crosses mojan
     owner: "a.b.C",
     name: "f",
     descriptor: "(I)V",
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
@@ -625,7 +625,7 @@ test("MappingService returns ambiguous for exact method lookup when tiny data ha
   const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-ambiguous-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
   const ambiguousTiny = [
-    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
     "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
     "\tm\t(I)V\te\tinterMethod\tnamedMethod",
     "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod"
@@ -669,7 +669,7 @@ test("MappingService returns ambiguous for exact method lookup when tiny data ha
       owner: "a.b.C",
       name: "e",
       descriptor: "(I)V",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -719,7 +719,7 @@ test("MappingService builds class API matrix across mappings", async () => {
           rows: Array<{
             kind: string;
             descriptor?: string;
-            official?: { name: string };
+            obfuscated?: { name: string };
             intermediary?: { name: string };
             yarn?: { name: string };
             mojang?: { name: string };
@@ -729,17 +729,17 @@ test("MappingService builds class API matrix across mappings", async () => {
     ).getClassApiMatrix({
       version: "1.21.10",
       className: "a.b.C",
-      classNameMapping: "official"
+      classNameMapping: "obfuscated"
     })
   );
 
-  assert.equal(result.classIdentity.official, "a.b.C");
+  assert.equal(result.classIdentity.obfuscated, "a.b.C");
   assert.equal(result.classIdentity.intermediary, "intermediary.pkg.InterClass");
   assert.equal(result.classIdentity.yarn, "yarn.pkg.NamedClass");
   assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
 
   const row = result.rows.find(
-    (entry) => entry.kind === "method" && entry.descriptor === "(I)V" && entry.official?.name === "e"
+    (entry) => entry.kind === "method" && entry.descriptor === "(I)V" && entry.obfuscated?.name === "e"
   );
   assert.ok(row);
   assert.equal(row?.intermediary?.name, "interMethod");
@@ -782,7 +782,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
       version: "1.21.10",
       kind: "class",
       name: "a.b.C",
-      sourceMapping: "official"
+      sourceMapping: "obfuscated"
     })
   );
   assert.equal(classExists.resolved, true);
@@ -807,7 +807,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
           kind: "method",
           owner: "a.b.C",
           name: "f",
-          sourceMapping: "official"
+          sourceMapping: "obfuscated"
         })
       ),
     (error: unknown) =>
@@ -835,7 +835,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
       owner: "a.b.C",
       name: "f",
       descriptor: "(I)V",
-      sourceMapping: "official"
+      sourceMapping: "obfuscated"
     })
   );
   assert.equal(methodExists.resolved, true);
@@ -859,7 +859,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
       kind: "method",
       owner: "a.b.C",
       name: "f",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       signatureMode: "name-only"
     })
   );
@@ -885,7 +885,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
       kind: "method",
       owner: "a.b.C",
       name: "e",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       signatureMode: "name-only"
     })
   );
@@ -929,7 +929,7 @@ test("MappingService supports short class name checks when nameMode=auto", async
       version: "1.21.10",
       kind: "class",
       name: "C",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       nameMode: "auto"
     })
   );
@@ -944,7 +944,7 @@ test("MappingService returns ambiguous for short class names when multiple FQCNs
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-ambiguous-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
   const tiny = [
-    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
     "c\ta/b/C\tinter/one/C\tyarn/one/C",
     "c\tx/y/C\tinter/two/C\tyarn/two/C"
   ].join("\n");
@@ -979,7 +979,7 @@ test("MappingService returns ambiguous for short class names when multiple FQCNs
       version: "1.21.10",
       kind: "class",
       name: "C",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       nameMode: "auto"
     })
   );
@@ -995,7 +995,7 @@ test("MappingService findMapping adds ambiguity reason and supports disambiguati
   const root = await mkdtemp(join(tmpdir(), "mapping-service-find-disambiguation-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
   const tiny = [
-    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
     "c\ta/b/C\tinter/one/C\tyarn/one/C",
     "c\ta/b/C\tinter/two/C\tyarn/two/C"
   ].join("\n");
@@ -1020,7 +1020,7 @@ test("MappingService findMapping adds ambiguity reason and supports disambiguati
       version: "1.21.10",
       kind: "class",
       name: "a.b.C",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -1043,7 +1043,7 @@ test("MappingService findMapping adds ambiguity reason and supports disambiguati
       version: "1.21.10",
       kind: "class",
       name: "a.b.C",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary",
       disambiguation: { ownerHint: "inter.two" }
     })
@@ -1106,7 +1106,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
         kind: "method",
         owner: "a.b.C",
         name: "f",
-        sourceMapping: "official"
+        sourceMapping: "obfuscated"
       }),
     (error: unknown) =>
       typeof error === "object" &&
@@ -1132,7 +1132,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
         kind: "class",
         owner: "a.b.C",
         name: "a.b.C",
-        sourceMapping: "official"
+        sourceMapping: "obfuscated"
       }),
     (error: unknown) =>
       typeof error === "object" &&
@@ -1170,7 +1170,7 @@ test("MappingService returns empty graph for unobfuscated version (26.1)", async
     version: "26.1",
     kind: "class",
     name: "a.b.C",
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "yarn"
   });
 
@@ -1183,7 +1183,7 @@ test("MappingService returns empty graph for unobfuscated version (26.1)", async
 });
 
 const TEST_TINY_V1 = [
-  "tiny\t2\t0\tofficial\tintermediary\tnamed",
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tintermediary/pkg/InterClass\tv1/pkg/VersionOneClass",
   "\tf\tI\td\tinterField\tnamedField",
   "\tm\t(I)V\te\tinterMethod\tnamedMethod",
@@ -1225,7 +1225,7 @@ test("MappingService Loom cache version filter does not match version prefix col
     service.findMapping({
       version: "1.21.1",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "yarn"
     })
   );
@@ -1263,7 +1263,7 @@ test("MappingService Loom cache version filter handles backslash separated candi
     const result = await service.findMapping({
       version: "1.21.1",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "yarn"
     });
 
@@ -1297,7 +1297,7 @@ test("MappingService rejects class queries that include owner", async () => {
         kind: "class",
         name: "a.b.C",
         owner: "a.b",
-        sourceMapping: "official",
+        sourceMapping: "obfuscated",
         targetMapping: "mojang"
       }),
     (error: unknown) =>
@@ -1313,7 +1313,7 @@ test("MappingService findMapping includes ambiguityReasons when multiple owners 
   const root = await mkdtemp(join(tmpdir(), "mapping-service-ambiguity-reasons-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
   const tiny = [
-    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
     "c\ta/b/C\tinter/one/C\tyarn/one/C",
     "c\ta/b/C\tinter/two/C\tyarn/two/C"
   ].join("\n");
@@ -1338,7 +1338,7 @@ test("MappingService findMapping includes ambiguityReasons when multiple owners 
       version: "1.21.10",
       kind: "class",
       name: "a.b.C",
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -1372,7 +1372,7 @@ test("MappingService findMapping omits ambiguityReasons for single candidate", a
     service.findMapping({
       version: "1.21.10",
       ...queryFromSymbol("a.b.C"),
-      sourceMapping: "official",
+      sourceMapping: "obfuscated",
       targetMapping: "intermediary"
     })
   );
@@ -1386,9 +1386,9 @@ test("MappingService getClassApiMatrix includes competing candidates in ambiguit
   const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-"));
   const config = buildTestConfig(root, { sourceRepos: [] });
 
-  // Create ambiguous tiny data: two intermediary mappings for the same official method
+  // Create ambiguous tiny data: two intermediary mappings for the same obfuscated method
   const ambiguousTiny = [
-    "tiny\t2\t0\tofficial\tintermediary\tnamed",
+    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
     "c\ta/b/C\tinter/pkg/C\tyarn/pkg/C",
     "\tm\t(I)V\te\tinterMethod1\tnamedMethod",
     "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
@@ -1430,7 +1430,7 @@ test("MappingService getClassApiMatrix includes competing candidates in ambiguit
     ).getClassApiMatrix({
       version: "1.21.10",
       className: "a.b.C",
-      classNameMapping: "official"
+      classNameMapping: "obfuscated"
     })
   );
 

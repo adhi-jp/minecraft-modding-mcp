@@ -377,14 +377,14 @@ async function main(): Promise<void> {
       arguments: {
         targetKind: "jar",
         targetValue: binaryJarPath,
-        mapping: "official",
+        mapping: "obfuscated",
         allowDecompile: false
       }
     });
 
     const resolved = requireToolOk<Record<string, unknown>>("resolve-artifact", resolveResult as never);
     const artifactId = asString(resolved.artifactId, "artifactId");
-    assert.equal(asString(resolved.mappingApplied, "mappingApplied"), "official");
+    assert.equal(asString(resolved.mappingApplied, "mappingApplied"), "obfuscated");
 
     const classSourceResult = await client.callTool({
       name: "get-class-source",
@@ -430,8 +430,8 @@ async function main(): Promise<void> {
         version: "1.21.10",
         kind: "class",
         name: "a.b.C",
-        sourceMapping: "official",
-        targetMapping: "official"
+        sourceMapping: "obfuscated",
+        targetMapping: "obfuscated"
       }
     });
 

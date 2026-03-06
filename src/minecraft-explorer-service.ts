@@ -4,7 +4,7 @@ import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js"
 import { readJarEntryAsBuffer } from "./source-jar-reader.js";
 import type { Config } from "./types.js";
 
-export type MappingNamespace = "official" | "mojang" | "yarn";
+export type MappingNamespace = "obfuscated" | "mojang" | "yarn";
 
 type SignatureAccess = "public" | "all";
 
@@ -681,7 +681,7 @@ export class MinecraftExplorerService {
     return {
       minecraftVersion: extractVersionFromPath(jarPath) ?? "unknown",
       mappingType: "unknown",
-      mappingNamespace: "official",
+      mappingNamespace: "obfuscated",
       jarHash: artifactSignatureFromFile(jarPath).sourceArtifactId,
       generatedAt: new Date().toISOString()
     };

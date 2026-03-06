@@ -161,13 +161,13 @@ test("SourceService resolves/searches/reads class source through artifactId flow
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.equal(resolved.isDecompiled, false);
   assert.equal(resolved.origin, "local-jar");
-  assert.equal(resolved.requestedMapping, "official");
-  assert.equal(resolved.mappingApplied, "official");
+  assert.equal(resolved.requestedMapping, "obfuscated");
+  assert.equal(resolved.mappingApplied, "obfuscated");
   assert.equal(resolved.provenance.target.kind, "jar");
   assert.equal(resolved.provenance.target.value, binaryJarPath);
 
@@ -189,7 +189,7 @@ test("SourceService resolves/searches/reads class source through artifactId flow
   assert.ok((searched.hits[0]?.startLine ?? 0) >= 1);
   assert.ok((searched.hits[0]?.endLine ?? 0) >= (searched.hits[0]?.startLine ?? 0));
   assert.ok((searched.relations?.length ?? 0) >= 1);
-  assert.equal(searched.mappingApplied, "official");
+  assert.equal(searched.mappingApplied, "obfuscated");
 
   const textRegexSearch = await service.searchClassSource({
     artifactId: resolved.artifactId,
@@ -200,21 +200,21 @@ test("SourceService resolves/searches/reads class source through artifactId flow
     limit: 5
   });
   assert.ok(textRegexSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/Main.java"));
-  assert.equal(textRegexSearch.mappingApplied, "official");
+  assert.equal(textRegexSearch.mappingApplied, "obfuscated");
 
   const file = await service.getArtifactFile({
     artifactId: resolved.artifactId,
     filePath: "net/minecraft/server/Main.java"
   });
   assert.match(file.content, /class Main/);
-  assert.equal(file.mappingApplied, "official");
+  assert.equal(file.mappingApplied, "obfuscated");
 
   const classSource = await service.getClassSource({
     artifactId: resolved.artifactId,
     className: "net.minecraft.server.Main"
   });
   assert.equal(classSource.mode, "metadata");
-  assert.equal(classSource.mappingApplied, "official");
+  assert.equal(classSource.mappingApplied, "obfuscated");
   assert.match(classSource.sourceText, /tickServer/);
   assert.equal(classSource.provenance.target.kind, "jar");
 });
@@ -278,7 +278,7 @@ test("SourceService getClassMembers uses sibling binary jar when artifact is res
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: sourceJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.equal(resolved.binaryJarPath, binaryJarPath);
@@ -309,7 +309,7 @@ test("SourceService getClassMembers uses sibling binary jar when artifact is res
   const result = await service.getClassMembers({
     artifactId: resolved.artifactId,
     className: "net.minecraft.world.item.Item",
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.equal(result.members.methods[0]?.name, "use");
@@ -520,7 +520,7 @@ test("SourceService uses lightweight search defaults for snippet and one-hop exp
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const searched = await service.searchClassSource({
@@ -558,7 +558,7 @@ test("SourceService records list-files duration metric", async () => {
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const listed = await service.listArtifactFiles({
@@ -600,7 +600,7 @@ test("SourceService uses indexed search path for contains text/path queries with
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const textSearch = await service.searchClassSource({
@@ -656,7 +656,7 @@ test("SourceService path indexed search falls back to full content when prefix s
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const pathSearch = await service.searchClassSource({
@@ -703,7 +703,7 @@ test("SourceService uses indexed search path for exact and prefix path queries w
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const pathExactSearch = await service.searchClassSource({
@@ -760,7 +760,7 @@ test("SourceService records search db I/O metrics for indexed searches", async (
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const result = await service.searchClassSource({
@@ -848,7 +848,7 @@ test("SourceService can manually reindex an artifact", async () => {
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const result = await (service as { indexArtifact: (input: { artifactId: string; force?: boolean }) => Promise<{
@@ -959,7 +959,7 @@ test("SourceService applies symbolKind scope filters to text and path intents", 
   const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const textSearch = await service.searchClassSource({
@@ -1024,7 +1024,7 @@ test("SourceService ignores cursor when search intent changes", async () => {
   const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const textPage = await service.searchClassSource({
@@ -1086,7 +1086,7 @@ test("SourceService ignores cursor when queryMode changes", async () => {
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const literalPage = await service.searchClassSource({
@@ -1357,7 +1357,7 @@ test("SourceService findClass resolves qualified names even with many same-name 
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const found = service.findClass({
@@ -1371,10 +1371,10 @@ test("SourceService findClass resolves qualified names even with many same-name 
   assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
-test("SourceService findClass warns when official mapping is queried with deobfuscated class names", async () => {
+test("SourceService findClass warns when obfuscated mapping is queried with deobfuscated class names", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-findclass-namespace-warning-"));
-  const sourceJarPath = join(root, "official-sources.jar");
+  const sourceJarPath = join(root, "obfuscated-sources.jar");
 
   await createJar(sourceJarPath, {
     "dhl.java": "public class dhl {}"
@@ -1383,7 +1383,7 @@ test("SourceService findClass warns when official mapping is queried with deobfu
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: sourceJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const result = service.findClass({
@@ -1393,7 +1393,7 @@ test("SourceService findClass warns when official mapping is queried with deobfu
   });
 
   assert.equal(result.matches.length, 0);
-  assert.ok(result.warnings.some((warning) => warning.includes("official (obfuscated) names")));
+  assert.ok(result.warnings.some((warning) => warning.includes("obfuscated runtime names")));
   assert.ok(result.warnings.some((warning) => warning.includes("mapping=\"mojang\"")));
 });
 
@@ -1473,7 +1473,7 @@ test("SourceService rejects getClassSource when artifactId and target are both p
   );
 });
 
-test("SourceService getClassMembers rejects non-official mapping without version", async () => {
+test("SourceService getClassMembers rejects non-obfuscated mapping without version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-map-"));
   const binaryJarPath = join(root, "server-members.jar");
@@ -1494,7 +1494,7 @@ test("SourceService getClassMembers rejects non-official mapping without version
     }
   });
 
-  // Artifact from jar has no version, so non-official mapping should fail with MAPPING_NOT_APPLIED
+  // Artifact from jar has no version, so non-obfuscated mapping should fail with MAPPING_NOT_APPLIED
   await assert.rejects(
     () =>
       (service as unknown as {
@@ -1637,7 +1637,7 @@ test("SourceService getClassMembers delegates to explorer and returns member pay
         context: {
           minecraftVersion: "1.0.0",
           mappingType: "unknown",
-          mappingNamespace: "official",
+          mappingNamespace: "obfuscated",
           jarHash: "fake",
           generatedAt: new Date().toISOString()
         }
@@ -1776,12 +1776,12 @@ test("SourceService resolves version target through manifest and downloads clien
         kind: "version",
         value: "1.21.10"
       },
-      mapping: "official"
+      mapping: "obfuscated"
     });
 
     assert.equal(resolved.version, "1.21.10");
-    assert.equal(resolved.requestedMapping, "official");
-    assert.equal(resolved.mappingApplied, "official");
+    assert.equal(resolved.requestedMapping, "obfuscated");
+    assert.equal(resolved.mappingApplied, "obfuscated");
     assert.equal(resolved.origin, "local-jar");
     assert.equal(resolved.isDecompiled, false);
     assert.equal(resolved.provenance.target.kind, "version");
@@ -1953,9 +1953,9 @@ test("SourceService resolveArtifact marks merged mojang sources without net.mine
   assert.equal(resolved.binaryJarPath, loomBinaryJarPath);
 });
 
-test("SourceService ignores projectPath Loom source discovery for official mapping", async () => {
+test("SourceService ignores projectPath Loom source discovery for obfuscated mapping", async () => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-version-official-project-path-"));
+  const root = await mkdtemp(join(tmpdir(), "service-version-obfuscated-project-path-"));
   const projectPath = join(root, "workspace");
   await mkdir(projectPath, { recursive: true });
 
@@ -2030,11 +2030,11 @@ test("SourceService ignores projectPath Loom source discovery for official mappi
         kind: "version",
         value: "1.21.10"
       },
-      mapping: "official",
+      mapping: "obfuscated",
       projectPath
     } as any);
 
-    assert.equal(resolved.mappingApplied, "official");
+    assert.equal(resolved.mappingApplied, "obfuscated");
     assert.equal(discoverCalls.length, 0);
     assert.equal(
       resolved.warnings.some((warning) => warning.includes("Loom cache candidate")),
@@ -2208,8 +2208,8 @@ test("SourceService resolves intermediary mapping for source-backed coordinate a
   const mappingStub = {
     async ensureMappingAvailable(input: {
       version: string;
-      sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
-      targetMapping: "official" | "mojang" | "intermediary" | "yarn";
+      sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+      targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     }) {
       mappingCalls.push({ version: input.version, mapping: input.targetMapping });
       return {
@@ -2303,8 +2303,8 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
       name: string;
       owner?: string;
       descriptor?: string;
-      sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
-      targetMapping: "official" | "mojang" | "intermediary" | "yarn";
+      sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+      targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       sourcePriority?: "loom-first" | "maven-first";
     }) {
       return {
@@ -2351,8 +2351,8 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
         name: string;
         owner?: string;
         descriptor?: string;
-        sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
-        targetMapping: "official" | "mojang" | "intermediary" | "yarn";
+        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
         sourcePriority?: "loom-first" | "maven-first";
       }) => Promise<{ candidates: Array<{ symbol: string }> }>;
     }
@@ -2360,7 +2360,7 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
     version: "1.21.10",
     kind: "class",
     name: "a.b.C",
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
@@ -2384,7 +2384,7 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
         },
         mappingContext: {
           version: "1.21.10",
-          sourceMapping: "official",
+          sourceMapping: "obfuscated",
           targetMapping: "mojang",
           sourcePriorityApplied: "loom-first"
         },
@@ -2421,8 +2421,8 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
         name: string;
         owner: string;
         descriptor: string;
-        sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
-        targetMapping: "official" | "mojang" | "intermediary" | "yarn";
+        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       }) => Promise<{ resolved: boolean; resolvedSymbol?: { name: string } }>;
     }
   ).resolveMethodMappingExact({
@@ -2431,7 +2431,7 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
     owner: "a.b.C",
     name: "f",
     descriptor: "(Ljava/lang/String;)V",
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     targetMapping: "mojang"
   });
 
@@ -2448,7 +2448,7 @@ test("SourceService getClassApiMatrix delegates to MappingService", async () => 
     async getClassApiMatrix() {
       return {
         classIdentity: {
-          official: "a.b.C",
+          obfuscated: "a.b.C",
           mojang: "com.example.ValueOutput",
           intermediary: "intermediary/pkg/ValueOutput",
           yarn: "net/minecraft/nbt/visitors/StringNbtWriter$ValueOutput"
@@ -2464,13 +2464,13 @@ test("SourceService getClassApiMatrix delegates to MappingService", async () => 
       getClassApiMatrix: (input: {
         version: string;
         className: string;
-        classNameMapping: "official" | "mojang" | "intermediary" | "yarn";
+        classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       }) => Promise<{ classIdentity: Record<string, string | undefined> }>;
     }
   ).getClassApiMatrix({
     version: "1.21.10",
     className: "a.b.C",
-    classNameMapping: "official"
+    classNameMapping: "obfuscated"
   });
 
   assert.equal(result.classIdentity.mojang, "com.example.ValueOutput");
@@ -2499,7 +2499,7 @@ test("SourceService checkSymbolExists delegates to MappingService", async () => 
         owner: string;
         name: string;
         descriptor?: string;
-        sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
+        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       }) => Promise<{ resolved: boolean; status: string }>;
     }
   ).checkSymbolExists({
@@ -2508,7 +2508,7 @@ test("SourceService checkSymbolExists delegates to MappingService", async () => 
     owner: "a.b.C",
     name: "f",
     descriptor: "(I)V",
-    sourceMapping: "official"
+    sourceMapping: "obfuscated"
   });
 
   assert.equal(result.resolved, true);
@@ -2530,7 +2530,7 @@ test("SourceService resolveWorkspaceSymbol rejects owner for class input", async
             kind: "class" | "field" | "method";
             owner?: string;
             name: string;
-            sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
+            sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
           }) => Promise<unknown>;
         }
       ).resolveWorkspaceSymbol({
@@ -2539,7 +2539,7 @@ test("SourceService resolveWorkspaceSymbol rejects owner for class input", async
         kind: "class",
         owner: "a.b",
         name: "a.b.C",
-        sourceMapping: "official"
+        sourceMapping: "obfuscated"
       }),
     (error: unknown) =>
       typeof error === "object" &&
@@ -2573,7 +2573,7 @@ test("SourceService resolveWorkspaceSymbol applies workspace mapping and returns
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async resolveMethodMappingExact(input: {
-      targetMapping: "official" | "mojang" | "intermediary" | "yarn";
+      targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     }) {
       assert.equal(input.targetMapping, "mojang");
       return {
@@ -2586,7 +2586,7 @@ test("SourceService resolveWorkspaceSymbol applies workspace mapping and returns
         },
         mappingContext: {
           version: "1.21.10",
-          sourceMapping: "official",
+          sourceMapping: "obfuscated",
           targetMapping: "mojang",
           sourcePriorityApplied: "loom-first"
         },
@@ -2624,7 +2624,7 @@ test("SourceService resolveWorkspaceSymbol applies workspace mapping and returns
         owner: string;
         name: string;
         descriptor?: string;
-        sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
+        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       }) => Promise<{
         resolved: boolean;
         mappingContext: { targetMapping?: string };
@@ -2638,7 +2638,7 @@ test("SourceService resolveWorkspaceSymbol applies workspace mapping and returns
     owner: "a.b.C",
     name: "f",
     descriptor: "(Ljava/lang/String;)V",
-    sourceMapping: "official"
+    sourceMapping: "obfuscated"
   });
 
   assert.equal(result.resolved, true);
@@ -2673,15 +2673,15 @@ test("SourceService resolveWorkspaceSymbol resolves class via class identity map
   (service as unknown as { mappingService: unknown }).mappingService = {
     async getClassApiMatrix(input: {
       className: string;
-      classNameMapping: "official" | "mojang" | "intermediary" | "yarn";
+      classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
       sourcePriority?: "loom-first" | "maven-first";
     }) {
       assert.equal(input.className, "a.b.c");
-      assert.equal(input.classNameMapping, "official");
+      assert.equal(input.classNameMapping, "obfuscated");
       assert.equal(input.sourcePriority, "loom-first");
       return {
         classIdentity: {
-          official: "a.b.c",
+          obfuscated: "a.b.c",
           mojang: "com.example.valueoutput"
         },
         rows: [],
@@ -2702,7 +2702,7 @@ test("SourceService resolveWorkspaceSymbol resolves class via class identity map
         owner?: string;
         name: string;
         descriptor?: string;
-        sourceMapping: "official" | "mojang" | "intermediary" | "yarn";
+        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
         sourcePriority?: "loom-first" | "maven-first";
       }) => Promise<{
         resolved: boolean;
@@ -2717,7 +2717,7 @@ test("SourceService resolveWorkspaceSymbol resolves class via class identity map
     version: "1.21.10",
     kind: "class",
     name: "a.b.c",
-    sourceMapping: "official",
+    sourceMapping: "obfuscated",
     sourcePriority: "loom-first"
   });
 
@@ -2728,7 +2728,7 @@ test("SourceService resolveWorkspaceSymbol resolves class via class identity map
   assert.deepEqual(result.warnings, ["workspace warning", "matrix warning"]);
 });
 
-test("SourceService resolveArtifact falls back to official mapping for unobfuscated version with yarn", async () => {
+test("SourceService resolveArtifact falls back to obfuscated mapping for unobfuscated version with yarn", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-unobfuscated-yarn-"));
 
@@ -2765,14 +2765,14 @@ test("SourceService resolveArtifact falls back to official mapping for unobfusca
     mapping: "yarn"
   });
 
-  assert.equal(result.requestedMapping, "official");
-  assert.equal(result.mappingApplied, "official");
+  assert.equal(result.requestedMapping, "obfuscated");
+  assert.equal(result.mappingApplied, "obfuscated");
   assert.ok(result.warnings.some((w) => w.includes("unobfuscated") && w.includes("yarn")));
 });
 
-test("SourceService resolveArtifact with official mapping on unobfuscated version has no fallback warning", async () => {
+test("SourceService resolveArtifact with obfuscated mapping on unobfuscated version has no fallback warning", async () => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-unobfuscated-official-"));
+  const root = await mkdtemp(join(tmpdir(), "service-unobfuscated-obfuscated-"));
 
   const binaryJarPath = join(root, "client-26.1.jar");
   const sourcesJarPath = join(root, "client-26.1-sources.jar");
@@ -2804,10 +2804,10 @@ test("SourceService resolveArtifact with official mapping on unobfuscated versio
 
   const result = await service.resolveArtifact({
     target: { kind: "version", value: "26.1" },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
-  assert.equal(result.mappingApplied, "official");
+  assert.equal(result.mappingApplied, "obfuscated");
   assert.ok(!result.warnings.some((w) => w.includes("unobfuscated")));
 });
 
@@ -2859,8 +2859,8 @@ test("SourceService traces symbol lifecycle across versions and reports gaps", a
         })),
         context: {
           minecraftVersion: version,
-          mappingType: "official",
-          mappingNamespace: "official",
+          mappingType: "obfuscated",
+          mappingNamespace: "obfuscated",
           jarHash: "fake",
           generatedAt: new Date().toISOString()
         }
@@ -2912,7 +2912,7 @@ test("SourceService traces symbol lifecycle across versions and reports gaps", a
   );
 });
 
-test("SourceService traceSymbolLifecycle with non-official mapping resolves symbol to official", async () => {
+test("SourceService traceSymbolLifecycle with non-obfuscated mapping resolves symbol to obfuscated", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-map-"));
   const service = new SourceService(buildTestConfig(root));
@@ -2958,7 +2958,7 @@ test("SourceService traceSymbolLifecycle with non-official mapping resolves symb
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
       mappingCalls.push({ name: input.name, sourceMapping: input.sourceMapping, targetMapping: input.targetMapping });
-      // Simulate mapping: yarn name -> official name
+      // Simulate mapping: yarn name -> obfuscated name
       if (input.kind === "class" && input.name === "net.minecraft.server.YarnMain") {
         return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" }, warnings: [] };
       }
@@ -2986,14 +2986,14 @@ test("SourceService traceSymbolLifecycle with non-official mapping resolves symb
   assert.equal(result.query.className, "net.minecraft.server.YarnMain");
   assert.equal(result.query.methodName, "yarnTick");
   assert.equal(result.query.mapping, "yarn");
-  // Method should be found because it was resolved to official name
+  // Method should be found because it was resolved to obfuscated name
   assert.equal(result.presence.existsNow, true);
   // Verify mapping was called for both class and method
-  assert.ok(mappingCalls.some((c) => c.name === "net.minecraft.server.YarnMain" && c.targetMapping === "official"));
-  assert.ok(mappingCalls.some((c) => c.name === "yarnTick" && c.targetMapping === "official"));
+  assert.ok(mappingCalls.some((c) => c.name === "net.minecraft.server.YarnMain" && c.targetMapping === "obfuscated"));
+  assert.ok(mappingCalls.some((c) => c.name === "yarnTick" && c.targetMapping === "obfuscated"));
 });
 
-test("SourceService traceSymbolLifecycle remaps non-official symbol per scanned version", async () => {
+test("SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanned version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-versioned-map-"));
   const service = new SourceService(buildTestConfig(root));
@@ -3117,7 +3117,7 @@ test("SourceService traceSymbolLifecycle remaps non-official symbol per scanned 
   );
 });
 
-test("SourceService traceSymbolLifecycle with non-official mapping remaps descriptor before matching", async () => {
+test("SourceService traceSymbolLifecycle with non-obfuscated mapping remaps descriptor before matching", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-descriptor-remap-"));
   const service = new SourceService(buildTestConfig(root));
@@ -3286,7 +3286,7 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
           context: {
             minecraftVersion: "1.0.0",
             mappingType: "unknown",
-            mappingNamespace: "official",
+            mappingNamespace: "obfuscated",
             jarHash: "fake",
             generatedAt: new Date().toISOString()
           }
@@ -3360,7 +3360,7 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
         context: {
           minecraftVersion: "1.0.1",
           mappingType: "unknown",
-          mappingNamespace: "official",
+          mappingNamespace: "obfuscated",
           jarHash: "fake",
           generatedAt: new Date().toISOString()
         }
@@ -3496,7 +3496,7 @@ test("SourceService diffClassSignatures reports class added and absent_in_both s
         context: {
           minecraftVersion: "1.0.1",
           mappingType: "unknown",
-          mappingNamespace: "official",
+          mappingNamespace: "obfuscated",
           jarHash: "fake",
           generatedAt: new Date().toISOString()
         }
@@ -3737,7 +3737,7 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string }) {
-      // Should receive official name after mapping
+      // Should receive obfuscated name after mapping
       assert.equal(input.fqn, "net.minecraft.server.Main");
       return {
         constructors: [],
@@ -3769,19 +3769,19 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
-      // Class mapping: mojang -> official
-      if (input.kind === "class" && input.name === "net.minecraft.server.MojangMain" && input.targetMapping === "official") {
+      // Class mapping: mojang -> obfuscated
+      if (input.kind === "class" && input.name === "net.minecraft.server.MojangMain" && input.targetMapping === "obfuscated") {
         return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" }, warnings: [] };
       }
-      // Field mapping: official -> mojang
+      // Field mapping: obfuscated -> mojang
       if (input.kind === "field" && input.name === "f_1234" && input.targetMapping === "mojang") {
         return { resolved: true, resolvedSymbol: { name: "serverPort" }, warnings: [] };
       }
-      // Method mapping: official -> mojang
+      // Method mapping: obfuscated -> mojang
       if (input.kind === "method" && input.name === "m_5678" && input.targetMapping === "mojang") {
         return { resolved: true, resolvedSymbol: { name: "tickServer" }, warnings: [] };
       }
-      // Owner class mapping: official -> mojang
+      // Owner class mapping: obfuscated -> mojang
       if (input.kind === "class" && input.name === "net.minecraft.server.Main" && input.targetMapping === "mojang") {
         return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.MojangMain" }, warnings: [] };
       }
@@ -3802,7 +3802,7 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
       binaryJarPath: join(root, "1.21.4.jar"),
       version: "1.21.4",
       requestedMapping: "mojang" as const,
-      mappingApplied: "official" as const,
+      mappingApplied: "obfuscated" as const,
       provenance: {
         target: { kind: "version" as const, value: "1.21.4" },
         resolvedAt: new Date().toISOString(),
@@ -3835,7 +3835,7 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
 
   // className should echo user's original input
   assert.equal(result.className, "net.minecraft.server.MojangMain");
-  assert.equal(result.mappingApplied, "official");
+  assert.equal(result.mappingApplied, "obfuscated");
   // Member names should be remapped to mojang
   assert.equal(result.members.fields[0].name, "serverPort");
   assert.equal(result.members.fields[0].ownerFqn, "net.minecraft.server.MojangMain");
@@ -3843,7 +3843,7 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
   assert.equal(result.members.methods[0].ownerFqn, "net.minecraft.server.MojangMain");
 });
 
-test("SourceService getClassMembers with non-official mapping applies memberPattern post-remap", async () => {
+test("SourceService getClassMembers with non-obfuscated mapping applies memberPattern post-remap", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-pattern-remap-"));
   const service = new SourceService(buildTestConfig(root));
@@ -3861,7 +3861,7 @@ test("SourceService getClassMembers with non-official mapping applies memberPatt
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { memberPattern?: string }) {
-      // memberPattern should NOT be passed for non-official mapping
+      // memberPattern should NOT be passed for non-obfuscated mapping
       assert.equal(input.memberPattern, undefined);
       return {
         constructors: [],
@@ -3912,7 +3912,7 @@ test("SourceService getClassMembers with non-official mapping applies memberPatt
     binaryJarPath: join(root, "1.21.4.jar"),
     version: "1.21.4",
     requestedMapping: "mojang" as const,
-    mappingApplied: "official" as const,
+    mappingApplied: "obfuscated" as const,
     provenance: {
       target: { kind: "version" as const, value: "1.21.4" },
       resolvedAt: new Date().toISOString(),
@@ -3947,7 +3947,7 @@ test("SourceService getClassMembers with non-official mapping applies memberPatt
   assert.equal(result.counts.total, 1);
 });
 
-test("SourceService diffClassSignatures with non-official mapping remaps member deltas", async () => {
+test("SourceService diffClassSignatures with non-obfuscated mapping remaps member deltas", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-diff-remap-"));
   const service = new SourceService(buildTestConfig(root));
@@ -3970,7 +3970,7 @@ test("SourceService diffClassSignatures with non-official mapping remaps member 
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string; jarPath: string }) {
-      // Should receive official name
+      // Should receive obfuscated name
       assert.equal(input.fqn, "net.minecraft.server.Main");
       const version = input.jarPath.includes("1.0.0") ? "1.0.0" : "1.0.1";
       if (version === "1.0.0") {
@@ -4010,7 +4010,7 @@ test("SourceService diffClassSignatures with non-official mapping remaps member 
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
-      if (input.kind === "class" && input.name === "net.minecraft.server.IntermediaryMain" && input.targetMapping === "official") {
+      if (input.kind === "class" && input.name === "net.minecraft.server.IntermediaryMain" && input.targetMapping === "obfuscated") {
         return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" }, warnings: [] };
       }
       if (input.kind === "class" && input.name === "net.minecraft.server.Main" && input.targetMapping === "intermediary") {
@@ -4059,7 +4059,7 @@ test("SourceService diffClassSignatures with non-official mapping remaps member 
   assert.equal(result.fields.removed[0].ownerFqn, "net.minecraft.server.IntermediaryMain");
 });
 
-test("SourceService diffClassSignatures remaps non-official class per endpoint version", async () => {
+test("SourceService diffClassSignatures remaps non-obfuscated class per endpoint version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-diff-versioned-map-"));
   const service = new SourceService(buildTestConfig(root));
@@ -4113,7 +4113,7 @@ test("SourceService diffClassSignatures remaps non-official class per endpoint v
       });
       if (
         input.sourceMapping === "intermediary" &&
-        input.targetMapping === "official" &&
+        input.targetMapping === "obfuscated" &&
         input.name === "net.minecraft.server.InterMain" &&
         input.version === "1.0.0"
       ) {
@@ -4121,7 +4121,7 @@ test("SourceService diffClassSignatures remaps non-official class per endpoint v
       }
       if (
         input.sourceMapping === "intermediary" &&
-        input.targetMapping === "official" &&
+        input.targetMapping === "obfuscated" &&
         input.name === "net.minecraft.server.InterMain" &&
         input.version === "1.0.1"
       ) {
@@ -4155,7 +4155,7 @@ test("SourceService diffClassSignatures remaps non-official class per endpoint v
       (call) =>
         call.version === "1.0.0" &&
         call.sourceMapping === "intermediary" &&
-        call.targetMapping === "official" &&
+        call.targetMapping === "obfuscated" &&
         call.name === "net.minecraft.server.InterMain"
     )
   );
@@ -4164,20 +4164,20 @@ test("SourceService diffClassSignatures remaps non-official class per endpoint v
       (call) =>
         call.version === "1.0.1" &&
         call.sourceMapping === "intermediary" &&
-        call.targetMapping === "official" &&
+        call.targetMapping === "obfuscated" &&
         call.name === "net.minecraft.server.InterMain"
     )
   );
 });
 
-test("SourceService getClassMembers with official mapping is unchanged (regression)", async () => {
+test("SourceService getClassMembers with obfuscated mapping is unchanged (regression)", async () => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-members-official-regression-"));
+  const root = await mkdtemp(join(tmpdir(), "service-members-obfuscated-regression-"));
   const service = new SourceService(buildTestConfig(root));
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string; memberPattern?: string }) {
-      // For official mapping, memberPattern should be passed through
+      // For obfuscated mapping, memberPattern should be passed through
       assert.equal(input.memberPattern, "tick");
       return {
         constructors: [],
@@ -4199,13 +4199,13 @@ test("SourceService getClassMembers with official mapping is unchanged (regressi
   };
 
   (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async () => ({
-    artifactId: "test-official",
+    artifactId: "test-obfuscated",
     origin: "local-jar" as const,
     isDecompiled: false,
     binaryJarPath: join(root, "1.21.4.jar"),
     version: "1.21.4",
-    requestedMapping: "official" as const,
-    mappingApplied: "official" as const,
+    requestedMapping: "obfuscated" as const,
+    mappingApplied: "obfuscated" as const,
     provenance: {
       target: { kind: "version" as const, value: "1.21.4" },
       resolvedAt: new Date().toISOString(),
@@ -4233,7 +4233,7 @@ test("SourceService getClassMembers with official mapping is unchanged (regressi
   });
 
   assert.equal(result.className, "net.minecraft.server.Main");
-  assert.equal(result.mappingApplied, "official");
+  assert.equal(result.mappingApplied, "obfuscated");
   assert.equal(result.members.methods.length, 1);
   assert.equal(result.members.methods[0].name, "tick");
 });
@@ -4278,7 +4278,7 @@ test("SourceService getClassMembers mapping fallback keeps original name and emi
     binaryJarPath: join(root, "1.21.4.jar"),
     version: "1.21.4",
     requestedMapping: "yarn" as const,
-    mappingApplied: "official" as const,
+    mappingApplied: "obfuscated" as const,
     provenance: {
       target: { kind: "version" as const, value: "1.21.4" },
       resolvedAt: new Date().toISOString(),
@@ -4332,7 +4332,7 @@ test("SourceService text search respects exact (case-sensitive) and prefix (case
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   // exact match with correct case → hit
@@ -4393,7 +4393,7 @@ test("SourceService rejects regex queries longer than guard limit", async () => 
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   await assert.rejects(
@@ -4451,7 +4451,7 @@ test("SourceService searchClassSource with ** glob pattern does not crash", asyn
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   // ** glob should not throw (previously caused SyntaxError: Nothing to repeat)
@@ -4502,7 +4502,7 @@ test("SourceService getClassSource rejects package-incompatible fallback matches
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   // Requesting a class from a completely different package should fail with
@@ -4548,7 +4548,7 @@ test("SourceService getClassSource accepts canonical inner-class dot notation", 
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const source = await service.getClassSource({
@@ -4577,7 +4577,7 @@ test("SourceService resolveArtifact returns sampleEntries for source JAR", async
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.ok(resolved.sampleEntries);
@@ -4723,9 +4723,9 @@ test("B3: resolveArtifact vanilla+mojang with projectPath suggests scope=merged"
 });
 
 // ---------------------------------------------------------------------------
-// B3: vanilla + mojang without projectPath suggests mapping=official
+// B3: vanilla + mojang without projectPath suggests mapping=obfuscated
 // ---------------------------------------------------------------------------
-test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=official", async () => {
+test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=obfuscated", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-b3-no-project-"));
   const binaryJarPath = join(root, "server-b3np.jar");
@@ -4751,10 +4751,10 @@ test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=of
       const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
       return (
         suggested != null &&
-        suggested.params.mapping === "official" &&
+        suggested.params.mapping === "obfuscated" &&
         suggested.params.scope === "vanilla" &&
         typeof details.nextAction === "string" &&
-        (details.nextAction as string).includes("mapping=official")
+        (details.nextAction as string).includes("mapping=obfuscated")
       );
     }
   );
@@ -4779,7 +4779,7 @@ test("B1: getClassSource CLASS_NOT_FOUND includes scope and target context", asy
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   await assert.rejects(
@@ -4795,7 +4795,7 @@ test("B1: getClassSource CLASS_NOT_FOUND includes scope and target context", asy
       const details = (error as { details?: Record<string, unknown> }).details ?? {};
       return (
         details.artifactId === resolved.artifactId &&
-        details.mapping === "official" &&
+        details.mapping === "obfuscated" &&
         typeof details.nextAction === "string" &&
         details.suggestedCall != null
       );
@@ -5020,7 +5020,7 @@ test("B5: searchClassSource returns totalApprox=0 when no hits survive post-filt
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   // Query that won't match anything in the content
@@ -5084,7 +5084,7 @@ test("SourceService validateMixin normalizes WSL UNC sourcePath inputs", async (
     const result = await service.validateMixin({
       sourcePath: uncSourcePath,
       version: "1.21",
-      mapping: "official"
+      mapping: "obfuscated"
     });
 
     assert.equal(result.valid, true);
@@ -5116,11 +5116,11 @@ test("SourceService validateMixin applies resolveArtifact mapping fallback metad
     artifactId: "artifact:test",
     origin: "loom-cache",
     warnings: ["Resolve artifact warning from Loom cache."],
-    mappingApplied: "official",
+    mappingApplied: "obfuscated",
     provenance: {
       target: { kind: "version", value: "1.21" },
       requestedMapping: "mojang",
-      mappingApplied: "official"
+      mappingApplied: "obfuscated"
     },
     qualityFlags: [],
     binaryJarPath: mergedJarPath,
@@ -5170,7 +5170,7 @@ test("SourceService validateMixin applies resolveArtifact mapping fallback metad
     projectPath: root
   });
 
-  assert.equal(result.provenance?.mappingApplied, "official");
+  assert.equal(result.provenance?.mappingApplied, "obfuscated");
   assert.equal(result.summary.definiteErrors, 0);
   assert.equal(result.summary.uncertainErrors, 1);
   assert.equal(result.valid, true);
@@ -5281,7 +5281,7 @@ test("SourceService validateMixin falls back to vanilla when scope=merged resolu
       "public abstract class MainMixin {}"
     ].join("\n"),
     version: "1.21",
-    mapping: "official",
+    mapping: "obfuscated",
     scope: "merged",
     projectPath: root
   });
@@ -5332,7 +5332,7 @@ test("SourceService validateMixin hideUncertain recomputes parseWarnings summary
       "}"
     ].join("\n"),
     version: "1.21",
-    mapping: "official",
+    mapping: "obfuscated",
     hideUncertain: true
   });
 
@@ -5412,7 +5412,7 @@ test("SourceService validateMixin mixinConfigPath auto-detect finds multiple mod
     mixinConfigPath,
     projectPath: root,
     version: "1.21",
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.ok("results" in result);
@@ -5493,7 +5493,7 @@ test("SourceService validateMixin mixinConfigPath auto-detect finds client sourc
     mixinConfigPath,
     projectPath: root,
     version: "1.21",
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.ok("results" in result);
@@ -5581,7 +5581,7 @@ test("SourceService validateMixin mixinConfigPath finds mixins in both main and 
     mixinConfigPath,
     projectPath: root,
     version: "1.21",
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   assert.ok("results" in result);

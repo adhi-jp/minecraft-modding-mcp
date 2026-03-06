@@ -332,7 +332,7 @@ function validateInjection(
       const isSigFailed = signatureFailedTargets?.has(targetName);
       const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
       const issueConfidenceReason = isRemapFailed
-        ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+        ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
         : confidenceReason;
       const resolutionPath: ResolutionPath | undefined = isRemapFailed
         ? "member-remap-failed"
@@ -390,7 +390,7 @@ function validateShadow(
     const isSigFailed = signatureFailedTargets?.has(targetName);
     const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
     const issueConfidenceReason = isRemapFailed
-      ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+      ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
       : confidenceReason;
     const resolutionPath: ResolutionPath | undefined = isRemapFailed
       ? "member-remap-failed"
@@ -468,7 +468,7 @@ function validateAccessor(
       const isSigFailed = signatureFailedTargets?.has(targetName);
       const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
       const issueConfidenceReason = isRemapFailed
-        ? `Member remap from official→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+        ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
         : confidenceReason;
       const resolutionPath: ResolutionPath | undefined = isRemapFailed
         ? "member-remap-failed"
@@ -535,9 +535,9 @@ export function validateParsedMixin(
           kind: "target-mapping-failed",
           annotation: "@Mixin",
           target: target.className,
-          message: `Could not map target class "${target.className}" to official namespace; class may still exist under a different mapping.`,
+          message: `Could not map target class "${target.className}" to obfuscated namespace; class may still exist under a different mapping.`,
           confidence: "uncertain",
-          confidenceReason: `Mapping from "${provenance?.requestedMapping}" to official failed for this class.`,
+          confidenceReason: `Mapping from "${provenance?.requestedMapping}" to obfuscated failed for this class.`,
           category: "mapping",
           resolutionPath: "target-mapping-failed",
           falsePositiveRisk: healthReport?.overallHealthy === false ? "high" : "medium"

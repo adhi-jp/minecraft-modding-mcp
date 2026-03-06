@@ -157,3 +157,11 @@ export const SCHEMA_V1_STATEMENTS: string[] = [
        );
    END`
 ];
+
+export const SCHEMA_V2_STATEMENTS: string[] = [
+  `DELETE FROM symbols`,
+  `DELETE FROM files`,
+  `DELETE FROM artifact_content_bytes`,
+  `DELETE FROM artifact_index_meta`,
+  `DELETE FROM artifacts`
+];

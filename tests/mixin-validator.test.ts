@@ -293,12 +293,12 @@ test("validateParsedMixin provenance reflects mapping fallback", () => {
     version: "1.21",
     jarPath: "/path/to/client.jar",
     requestedMapping: "yarn",
-    mappingApplied: "official"
+    mappingApplied: "obfuscated"
   };
 
   const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
   assert.equal(result.provenance?.requestedMapping, "yarn");
-  assert.equal(result.provenance?.mappingApplied, "official");
+  assert.equal(result.provenance?.mappingApplied, "obfuscated");
 });
 
 /* ------------------------------------------------------------------ */
@@ -685,7 +685,7 @@ test("validateParsedMixin structuredWarnings have category", () => {
     ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
   ]);
   const warnings: string[] = [
-    "Could not remap field from yarn to official.",
+    "Could not remap field from yarn to obfuscated.",
     "Overriding version with project version from gradle.properties.",
     "Some generic info."
   ];
@@ -928,8 +928,8 @@ test("validateParsedMixin provenance includes resolutionNotes when present", () 
     version: "1.21",
     jarPath: "/path/to/client.jar",
     requestedMapping: "yarn",
-    mappingApplied: "official",
-    resolutionNotes: ["Mapping fallback: requested \"yarn\" but applied \"official\" due to remapping failure."]
+    mappingApplied: "obfuscated",
+    resolutionNotes: ["Mapping fallback: requested \"yarn\" but applied \"obfuscated\" due to remapping failure."]
   };
 
   const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
@@ -948,7 +948,7 @@ test("validateParsedMixin includes structuredWarnings classified by severity", (
     ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
   ]);
   const warnings: string[] = [
-    "Could not map class \"Foo\" from yarn to official.",
+    "Could not map class \"Foo\" from yarn to obfuscated.",
     "Some info message."
   ];
 
@@ -1008,7 +1008,7 @@ test("validateParsedMixin with uncertain confidence marks issues as uncertain", 
     version: "1.21",
     jarPath: "/path/to/client.jar",
     requestedMapping: "yarn",
-    mappingApplied: "official"
+    mappingApplied: "obfuscated"
   };
 
   const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, "uncertain");
@@ -1046,13 +1046,13 @@ test("validateParsedMixin provenance supports enriched fields", () => {
     requestedMapping: "mojang",
     mappingApplied: "mojang",
     jarType: "vanilla-client",
-    mappingChain: ["mojang → official"],
+    mappingChain: ["mojang → obfuscated"],
     remapFailures: 3
   };
 
   const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
   assert.equal(result.provenance?.jarType, "vanilla-client");
-  assert.deepEqual(result.provenance?.mappingChain, ["mojang → official"]);
+  assert.deepEqual(result.provenance?.mappingChain, ["mojang → obfuscated"]);
   assert.equal(result.provenance?.remapFailures, 3);
 });
 
@@ -1566,7 +1566,7 @@ test("P6: confidenceScore accounts for scopeFallback and mapping mismatch", () =
     version: "1.21.1",
     jarPath: "/fake/jar.jar",
     requestedMapping: "mojang",
-    mappingApplied: "official",
+    mappingApplied: "obfuscated",
     scopeFallback: { requested: "merged", applied: "vanilla", reason: "test" }
   };
   const warnings: string[] = [];
@@ -1614,7 +1614,7 @@ test("P6: confidenceScore clamps at 0", () => {
     version: "1.21.1",
     jarPath: "/fake/jar.jar",
     requestedMapping: "mojang",
-    mappingApplied: "official",
+    mappingApplied: "obfuscated",
     remapFailures: 20,
     scopeFallback: { requested: "merged", applied: "vanilla", reason: "test" }
   };

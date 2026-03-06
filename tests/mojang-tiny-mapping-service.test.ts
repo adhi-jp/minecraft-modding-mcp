@@ -84,7 +84,7 @@ test("resolveMojangTinyFile builds merged tiny v2 from client+server mappings", 
 
   assert.equal(result.warnings.length, 0);
   const tiny = await readFile(result.path, "utf8");
-  assert.match(tiny, /^tiny\t2\t0\tofficial\tmojang/m);
+  assert.match(tiny, /^tiny\t2\t0\tobfuscated\tmojang/m);
   assert.match(tiny, /^c\ta\/b\/C\tcom\/example\/ClientClass$/m);
   assert.match(tiny, /^c\tx\/y\/Z\tcom\/example\/ServerClass$/m);
   assert.match(tiny, /^\tf\tI\td\tnamedField$/m);

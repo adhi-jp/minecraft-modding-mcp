@@ -10,7 +10,7 @@ import { runMigrations } from "../src/storage/migrations.ts";
 import Database from "../src/storage/sqlite.ts";
 import type { Config } from "../src/types.ts";
 
-const LATEST_SCHEMA_VERSION = 1;
+const LATEST_SCHEMA_VERSION = 2;
 
 function readTrackedContentBytes(db: Database, artifactId: string): number {
   const row = db

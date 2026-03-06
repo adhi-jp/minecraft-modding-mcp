@@ -532,7 +532,7 @@ test("search perf intents honor locked KPIs and baseline guardrails", async () =
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "official"
+    mapping: "obfuscated"
   });
 
   const indexedRequests: Record<IntentName, SearchRequest> = {

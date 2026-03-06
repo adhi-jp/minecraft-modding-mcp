@@ -698,8 +698,8 @@ function looksLikeDeobfuscatedClassName(value: string): boolean {
   return /^[A-Z][A-Za-z0-9_$]{2,}$/.test(simpleName);
 }
 
-function officialNamespaceHint(className: string): string {
-  return `Artifact is indexed in official (obfuscated) names. Deobfuscated names like "${className}" usually require mapping="mojang" or a find-mapping lookup to official names.`;
+function obfuscatedNamespaceHint(className: string): string {
+  return `Artifact is indexed in obfuscated runtime names. Deobfuscated names like "${className}" usually require mapping="mojang" or a find-mapping lookup to obfuscated names.`;
 }
 
 function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
@@ -803,10 +803,10 @@ const COMMON_SOURCE_ROOTS = [
 
 function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   if (mapping == null) {
-    return "official";
+    return "obfuscated";
   }
   if (
-    mapping === "official" ||
+    mapping === "obfuscated" ||
     mapping === "mojang" ||
     mapping === "intermediary" ||
     mapping === "yarn"
@@ -818,8 +818,8 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
     message: `Unsupported mapping "${mapping}".`,
     details: {
       mapping,
-      nextAction: "Try mapping=official which is always available.",
-      suggestedCall: { tool: "resolve-artifact", params: { mapping: "official" } }
+      nextAction: "Try mapping=obfuscated which is always available.",
+      suggestedCall: { tool: "resolve-artifact", params: { mapping: "obfuscated" } }
     }
   });
 }
@@ -833,7 +833,7 @@ function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceM
     return "yarn";
   }
   if (
-    normalized === "official" ||
+    normalized === "obfuscated" ||
     normalized === "mojang" ||
     normalized === "intermediary" ||
     normalized === "yarn"
@@ -1539,7 +1539,7 @@ export class SourceService {
         }
       }
 
-      // Unobfuscated versions (MC 26.1+) ship with official names; intermediary/yarn are not applicable.
+      // Unobfuscated versions (MC 26.1+) ship with deobfuscated runtime names; intermediary/yarn are not applicable.
       let effectiveMapping: SourceMapping = mapping;
       if (
         (mapping === "intermediary" || mapping === "yarn") &&
@@ -1547,9 +1547,9 @@ export class SourceService {
         isUnobfuscatedVersion(resolvedVersion)
       ) {
         warnings.push(
-          `Version ${resolvedVersion} is unobfuscated; ${mapping} mappings are not applicable. Using official names.`
+          `Version ${resolvedVersion} is unobfuscated; ${mapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
         );
-        effectiveMapping = "official";
+        effectiveMapping = "obfuscated";
       }
 
       if (kind === "version" && resolvedVersion && effectiveMapping === "mojang" && scope !== "vanilla") {
@@ -1613,17 +1613,17 @@ export class SourceService {
           } else if (isVanillaMojang) {
             suggestedCall = {
               tool: "resolve-artifact",
-              params: { targetKind: kind, targetValue: value, mapping: "official", scope: "vanilla" }
+              params: { targetKind: kind, targetValue: value, mapping: "obfuscated", scope: "vanilla" }
             };
             nextAction =
               "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
-              "Without a projectPath, use mapping=official to read vanilla obfuscated names.";
+              "Without a projectPath, use mapping=obfuscated to read vanilla runtime names directly.";
           } else {
             suggestedCall = {
               tool: "resolve-artifact",
-              params: { targetKind: kind, targetValue: value, mapping: "official", ...(scope ? { scope } : {}) }
+              params: { targetKind: kind, targetValue: value, mapping: "obfuscated", ...(scope ? { scope } : {}) }
             };
-            nextAction = "Retry with mapping=official to use obfuscated names.";
+            nextAction = "Retry with mapping=obfuscated to use the runtime obfuscated namespace.";
           }
           throw createError({
             code: ERROR_CODES.MAPPING_NOT_APPLIED,
@@ -1659,7 +1659,7 @@ export class SourceService {
 
         const mappingAvailability = await this.mappingService.ensureMappingAvailable({
           version: resolved.version,
-          sourceMapping: "official",
+          sourceMapping: "obfuscated",
           targetMapping: effectiveMapping,
           sourcePriority: input.sourcePriority
         });
@@ -1770,7 +1770,7 @@ export class SourceService {
         return {
           hits: [],
           totalApprox: 0,
-          mappingApplied: artifact.mappingApplied ?? "official"
+          mappingApplied: artifact.mappingApplied ?? "obfuscated"
         };
       }
 
@@ -2033,7 +2033,7 @@ export class SourceService {
         relations: relations && relations.length > 0 ? relations : undefined,
         nextCursor,
         totalApprox,
-        mappingApplied: artifact.mappingApplied ?? "official"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated"
       };
     } finally {
       this.metrics.recordDuration("search_duration_ms", Date.now() - startedAt);
@@ -2073,7 +2073,7 @@ export class SourceService {
         content,
         contentBytes: fullBytes,
         truncated,
-        mappingApplied: artifact.mappingApplied ?? "official"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated"
       };
     } finally {
       this.metrics.recordDuration("get_file_duration_ms", Date.now() - startedAt);
@@ -2093,7 +2093,7 @@ export class SourceService {
       return {
         items: page.items,
         nextCursor: page.nextCursor,
-        mappingApplied: artifact.mappingApplied ?? "official"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated"
       };
     } finally {
       this.metrics.recordDuration("list_files_duration_ms", Date.now() - startedAt);
@@ -2441,15 +2441,15 @@ export class SourceService {
       try {
         let resolvedSymbols = resolvedSymbolsByVersion.get(version);
         if (!resolvedSymbols) {
-          const [officialClassName, officialMethod] = await Promise.all([
-            this.resolveToOfficialClassName(
+          const [obfuscatedClassName, obfuscatedMethod] = await Promise.all([
+            this.resolveToObfuscatedClassName(
               userClassName,
               version,
               mapping,
               input.sourcePriority,
               warnings
             ),
-            this.resolveToOfficialMemberName(
+            this.resolveToObfuscatedMemberName(
               userMethodName,
               userClassName,
               descriptor,
@@ -2461,9 +2461,9 @@ export class SourceService {
             )
           ]);
           resolvedSymbols = {
-            className: officialClassName,
-            methodName: officialMethod.name,
-            methodDescriptor: officialMethod.descriptor
+            className: obfuscatedClassName,
+            methodName: obfuscatedMethod.name,
+            methodDescriptor: obfuscatedMethod.descriptor
           };
           resolvedSymbolsByVersion.set(version, resolvedSymbols);
         }
@@ -2630,17 +2630,17 @@ export class SourceService {
     }
 
     const mappingWarnings: string[] = [];
-    const officialFromClassName = await this.resolveToOfficialClassName(
+    const obfuscatedFromClassName = await this.resolveToObfuscatedClassName(
       className,
       fromVersion,
       mapping,
       input.sourcePriority,
       mappingWarnings
     );
-    const officialToClassName =
+    const obfuscatedToClassName =
       fromVersion === toVersion
-        ? officialFromClassName
-        : await this.resolveToOfficialClassName(
+        ? obfuscatedFromClassName
+        : await this.resolveToObfuscatedClassName(
             className,
             toVersion,
             mapping,
@@ -2656,11 +2656,11 @@ export class SourceService {
     const loadSignature = async (
       version: string,
       jarPath: string,
-      officialClassName: string
+      obfuscatedClassName: string
     ): Promise<SignatureSnapshot | undefined> => {
       try {
         const signature = await this.explorerService.getSignature({
-          fqn: officialClassName,
+          fqn: obfuscatedClassName,
           jarPath,
           access: "all",
           includeSynthetic: false,
@@ -2681,8 +2681,8 @@ export class SourceService {
     };
 
     const [fromSignature, toSignature] = await Promise.all([
-      loadSignature(fromVersion, fromResolved.jarPath, officialFromClassName),
-      loadSignature(toVersion, toResolved.jarPath, officialToClassName)
+      loadSignature(fromVersion, fromResolved.jarPath, obfuscatedFromClassName),
+      loadSignature(toVersion, toResolved.jarPath, obfuscatedToClassName)
     ]);
 
     const warnings: string[] = [...mappingWarnings];
@@ -2772,7 +2772,7 @@ export class SourceService {
             ? emptyDiffDelta()
             : diffMembersByKey(fromMembers.fields, toMembers.fields, (member) => member.name, true);
 
-    // Remap diff delta members for non-official mappings
+    // Remap diff delta members for non-obfuscated mappings
     const remapDelta = async (
       delta: DiffClassMemberDelta,
       kind: "field" | "method"
@@ -2889,8 +2889,8 @@ export class SourceService {
           symbolKind: row.symbolKind
         }))
         .slice(0, limit);
-      if (matches.length === 0 && artifact.mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
-        warnings.push(`No exact class symbol matched "${className}". ${officialNamespaceHint(className)}`);
+      if (matches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+        warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
       }
       return { matches, total: matches.length, warnings };
     }
@@ -2915,8 +2915,8 @@ export class SourceService {
         symbolKind: row.symbolKind
       });
     }
-    if (matches.length === 0 && artifact.mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
-      warnings.push(`No exact class symbol matched "${className}". ${officialNamespaceHint(className)}`);
+    if (matches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+      warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
     }
     return { matches, total: matches.length, warnings };
   }
@@ -3082,8 +3082,8 @@ export class SourceService {
         nextAction +=
           ` The class may exist in merged sources; retry with scope: "merged".`;
       }
-      if (mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)) {
-        nextAction += ` ${officialNamespaceHint(className)}`;
+      if (mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+        nextAction += ` ${obfuscatedNamespaceHint(className)}`;
       }
       throw createError({
         code: ERROR_CODES.CLASS_NOT_FOUND,
@@ -3120,8 +3120,8 @@ export class SourceService {
           ...(input.target?.value ? { targetValue: input.target.value } : {}),
           nextAction:
             `Use find-class to resolve the correct fully-qualified name for "${simpleName}".` +
-            (mappingApplied === "official" && looksLikeDeobfuscatedClassName(className)
-              ? ` ${officialNamespaceHint(className)}`
+            (mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)
+              ? ` ${obfuscatedNamespaceHint(className)}`
               : ""),
           suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId: activeArtifactId } }
         }
@@ -3293,10 +3293,10 @@ export class SourceService {
       version = artifact.version;
     }
 
-    if (requestedMapping !== "official" && !version) {
+    if (requestedMapping !== "obfuscated" && !version) {
       throw createError({
         code: ERROR_CODES.MAPPING_NOT_APPLIED,
-        message: `Non-official mapping "${requestedMapping}" requires a version, but none was resolved.`,
+        message: `Non-obfuscated mapping "${requestedMapping}" requires a version, but none was resolved.`,
         details: {
           mapping: requestedMapping,
           nextAction: "Resolve with targetKind=version or specify a versioned coordinate.",
@@ -3318,18 +3318,18 @@ export class SourceService {
       });
     }
 
-    const officialClassName =
+    const obfuscatedClassName =
       version != null
-        ? await this.resolveToOfficialClassName(className, version, requestedMapping, input.sourcePriority, warnings)
+        ? await this.resolveToObfuscatedClassName(className, version, requestedMapping, input.sourcePriority, warnings)
         : className;
 
     const signature = await this.explorerService.getSignature({
-      fqn: officialClassName,
+      fqn: obfuscatedClassName,
       jarPath: binaryJarPath,
       access,
       includeSynthetic,
       includeInherited,
-      memberPattern: requestedMapping === "official" ? memberPattern : undefined
+      memberPattern: requestedMapping === "obfuscated" ? memberPattern : undefined
     });
     warnings.push(...signature.warnings);
 
@@ -3346,8 +3346,8 @@ export class SourceService {
         ? (await this.remapSignatureMembers(signature.methods, "method", version, requestedMapping, input.sourcePriority, warnings)).members
         : signature.methods;
 
-    // Apply memberPattern post-remap for non-official mappings
-    if (requestedMapping !== "official" && memberPattern) {
+    // Apply memberPattern post-remap for non-obfuscated mappings
+    if (requestedMapping !== "obfuscated" && memberPattern) {
       const lowerPattern = memberPattern.toLowerCase();
       remappedConstructors = remappedConstructors.filter((m) => m.name.toLowerCase().includes(lowerPattern));
       remappedFields = remappedFields.filter((m) => m.name.toLowerCase().includes(lowerPattern));
@@ -3658,48 +3658,48 @@ export class SourceService {
         }
       }
 
-      let officialName = resolvedClassName;
+      let obfuscatedName = resolvedClassName;
 
-      if (requestedMapping !== "official") {
+      if (requestedMapping !== "obfuscated") {
         try {
           const mapped = await this.mappingService.findMapping({
             version,
             kind: "class",
             name: resolvedClassName,
             sourceMapping: requestedMapping,
-            targetMapping: "official",
+            targetMapping: "obfuscated",
             sourcePriority: input.sourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
-            officialName = mapped.resolvedSymbol.name;
-            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: true });
+            obfuscatedName = mapped.resolvedSymbol.name;
+            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: true });
           } else {
-            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to official; using "${officialName}" for lookup.`);
+            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to obfuscated; using "${obfuscatedName}" for lookup.`);
             mappingFailedTargets.add(target.className);
-            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: false, detail: "No mapping found" });
+            resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: "No mapping found" });
           }
         } catch (mapErr) {
-          warnings.push(`Mapping lookup failed for class "${resolvedClassName}"; using "${officialName}" for lookup.`);
+          warnings.push(`Mapping lookup failed for class "${resolvedClassName}"; using "${obfuscatedName}" for lookup.`);
           mappingFailedTargets.add(target.className);
-          resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: officialName, success: false, detail: mapErr instanceof Error ? mapErr.message : String(mapErr) });
+          resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: mapErr instanceof Error ? mapErr.message : String(mapErr) });
         }
       }
 
       try {
         const sig = await this.explorerService.getSignature({
-          fqn: officialName,
+          fqn: obfuscatedName,
           jarPath,
           access: "all"
         });
         warnings.push(...sig.warnings);
-        resolutionTrace?.push({ target: target.className, step: "signature", input: officialName, output: `${sig.methods.length} methods, ${sig.fields.length} fields`, success: true });
+        resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: `${sig.methods.length} methods, ${sig.fields.length} fields`, success: true });
 
         // Bug 2 fix: remap signature members to requested mapping
         let constructors = sig.constructors;
         let methods = sig.methods;
         let fields = sig.fields;
 
-        if (requestedMapping !== "official") {
+        if (requestedMapping !== "obfuscated") {
           try {
             const [ctorResult, methodResult, fieldResult] = await Promise.all([
               this.remapSignatureMembers(sig.constructors, "method", version, requestedMapping, input.sourcePriority, warnings),
@@ -3722,9 +3722,9 @@ export class SourceService {
               resolutionTrace?.push({ target: target.className, step: "remap", input: `${methods.length + fields.length} members`, output: "remapped", success: true });
             }
           } catch (remapErr) {
-            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to official names. Member names shown may be in official (obfuscated) namespace.`);
-            mappingApplied = "official";
-            resolutionTrace?.push({ target: target.className, step: "remap", input: resolvedClassName, output: "official fallback", success: false, detail: remapErr instanceof Error ? remapErr.message : String(remapErr) });
+            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to obfuscated names. Member names shown may be in the obfuscated runtime namespace.`);
+            mappingApplied = "obfuscated";
+            resolutionTrace?.push({ target: target.className, step: "remap", input: resolvedClassName, output: "obfuscated fallback", success: false, detail: remapErr instanceof Error ? remapErr.message : String(remapErr) });
           }
         }
 
@@ -3735,9 +3735,9 @@ export class SourceService {
           fields
         });
       } catch (sigErr) {
-        warnings.push(`Could not load signature for class "${resolvedClassName}" (official: "${officialName}").`);
+        warnings.push(`Could not load signature for class "${resolvedClassName}" (obfuscated: "${obfuscatedName}").`);
         signatureFailedTargets.add(target.className);
-        resolutionTrace?.push({ target: target.className, step: "signature", input: officialName, output: "CLASS_NOT_FOUND", success: false, detail: sigErr instanceof Error ? sigErr.message : String(sigErr) });
+        resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: "CLASS_NOT_FOUND", success: false, detail: sigErr instanceof Error ? sigErr.message : String(sigErr) });
 
         // Fallback: check if the symbol exists in the mapping graph even though getSignature failed
         try {
@@ -3791,8 +3791,8 @@ export class SourceService {
 
     // Build mapping chain description
     const mappingChain: string[] = [];
-    if (requestedMapping !== "official") {
-      mappingChain.push(`${requestedMapping} → official`);
+    if (requestedMapping !== "obfuscated") {
+      mappingChain.push(`${requestedMapping} → obfuscated`);
       if (mappingApplied !== requestedMapping) {
         mappingChain.push(`fallback to ${mappingApplied}`);
       }
@@ -4029,7 +4029,7 @@ export class SourceService {
         `Using mapping override "${overrideMapping}" instead of header namespace "${headerNamespaceRaw}".`
       );
     }
-    const needsMapping = awNamespace !== "official";
+    const needsMapping = awNamespace !== "obfuscated";
 
     // Collect unique class FQNs from entries
     const classFqns = new Set<string>();
@@ -4040,7 +4040,7 @@ export class SourceService {
 
     const membersByClass = new Map<string, ResolvedTargetMembers>();
     for (const fqn of classFqns) {
-      let officialFqn = fqn;
+      let obfuscatedFqn = fqn;
 
       if (needsMapping) {
         try {
@@ -4049,13 +4049,13 @@ export class SourceService {
             kind: "class",
             name: fqn,
             sourceMapping: awNamespace,
-            targetMapping: "official",
+            targetMapping: "obfuscated",
             sourcePriority: input.sourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
-            officialFqn = mapped.resolvedSymbol.name;
+            obfuscatedFqn = mapped.resolvedSymbol.name;
           } else {
-            warnings.push(`Could not map class "${fqn}" from ${awNamespace} to official.`);
+            warnings.push(`Could not map class "${fqn}" from ${awNamespace} to obfuscated.`);
           }
         } catch {
           warnings.push(`Mapping lookup failed for class "${fqn}".`);
@@ -4064,7 +4064,7 @@ export class SourceService {
 
       try {
         const sig = await this.explorerService.getSignature({
-          fqn: officialFqn,
+          fqn: obfuscatedFqn,
           jarPath,
           access: "all"
         });
@@ -4076,7 +4076,7 @@ export class SourceService {
           fields: sig.fields
         });
       } catch {
-        warnings.push(`Could not load signature for class "${officialFqn}".`);
+        warnings.push(`Could not load signature for class "${obfuscatedFqn}".`);
       }
     }
 
@@ -4122,7 +4122,7 @@ export class SourceService {
         },
         indexedAt: currentMeta.indexedAt,
         durationMs: 0,
-        mappingApplied: artifact.mappingApplied ?? "official"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated"
       };
     }
 
@@ -4140,7 +4140,7 @@ export class SourceService {
       },
       indexedAt: rebuilt.indexedAt,
       durationMs: rebuilt.indexDurationMs,
-      mappingApplied: artifact.mappingApplied ?? "official"
+      mappingApplied: artifact.mappingApplied ?? "obfuscated"
     };
   }
 
@@ -5032,14 +5032,14 @@ export class SourceService {
     };
   }
 
-  private async resolveToOfficialClassName(
+  private async resolveToObfuscatedClassName(
     className: string,
     version: string,
     mapping: SourceMapping,
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[]
   ): Promise<string> {
-    if (mapping === "official") {
+    if (mapping === "obfuscated") {
       return className;
     }
     try {
@@ -5048,20 +5048,20 @@ export class SourceService {
         kind: "class",
         name: className,
         sourceMapping: mapping,
-        targetMapping: "official",
+        targetMapping: "obfuscated",
         sourcePriority
       });
       if (mapped.resolved && mapped.resolvedSymbol) {
         return mapped.resolvedSymbol.name;
       }
-      warnings.push(`Could not map class "${className}" from ${mapping} to official.`);
+      warnings.push(`Could not map class "${className}" from ${mapping} to obfuscated.`);
     } catch {
       warnings.push(`Mapping lookup failed for class "${className}".`);
     }
     return className;
   }
 
-  private async resolveToOfficialMemberName(
+  private async resolveToObfuscatedMemberName(
     name: string,
     ownerInSourceMapping: string,
     descriptor: string | undefined,
@@ -5071,7 +5071,7 @@ export class SourceService {
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[]
   ): Promise<{ name: string; descriptor?: string }> {
-    if (mapping === "official") {
+    if (mapping === "obfuscated") {
       return {
         name,
         descriptor: kind === "method" ? descriptor : undefined
@@ -5085,7 +5085,7 @@ export class SourceService {
         owner: ownerInSourceMapping,
         descriptor,
         sourceMapping: mapping,
-        targetMapping: "official",
+        targetMapping: "obfuscated",
         sourcePriority
       });
       if (mapped.resolved && mapped.resolvedSymbol) {
@@ -5094,7 +5094,7 @@ export class SourceService {
           descriptor: kind === "method" ? mapped.resolvedSymbol.descriptor ?? descriptor : undefined
         };
       }
-      warnings.push(`Could not map ${kind} "${name}" from ${mapping} to official.`);
+      warnings.push(`Could not map ${kind} "${name}" from ${mapping} to obfuscated.`);
     } catch {
       warnings.push(`Mapping lookup failed for ${kind} "${name}".`);
     }
@@ -5113,7 +5113,7 @@ export class SourceService {
     warnings: string[]
   ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
     const failedNames = new Set<string>();
-    if (mapping === "official") {
+    if (mapping === "obfuscated") {
       return { members, failedNames };
     }
 
@@ -5124,31 +5124,31 @@ export class SourceService {
     for (const member of members) {
       const memberKey = `${member.ownerFqn}\0${member.name}\0${member.jvmDescriptor}`;
       if (!memberKeyToRemapped.has(memberKey)) {
-        memberKeyToRemapped.set(memberKey, member.name); // default = official name
+        memberKeyToRemapped.set(memberKey, member.name); // default = obfuscated name
       }
       if (!ownerToRemapped.has(member.ownerFqn)) {
-        ownerToRemapped.set(member.ownerFqn, member.ownerFqn); // default = official FQN
+        ownerToRemapped.set(member.ownerFqn, member.ownerFqn); // default = obfuscated FQN
       }
     }
 
     // Phase 1: Remap owner FQNs first (needed for member disambiguation)
     const ownerEntries = [...ownerToRemapped.entries()];
     await Promise.all(
-      ownerEntries.map(async ([officialFqn]) => {
+      ownerEntries.map(async ([obfuscatedFqn]) => {
         try {
           const mapped = await this.mappingService.findMapping({
             version,
             kind: "class",
-            name: officialFqn,
-            sourceMapping: "official",
+            name: obfuscatedFqn,
+            sourceMapping: "obfuscated",
             targetMapping: mapping,
             sourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
-            ownerToRemapped.set(officialFqn, mapped.resolvedSymbol.name);
+            ownerToRemapped.set(obfuscatedFqn, mapped.resolvedSymbol.name);
           }
         } catch {
-          // keep official FQN as fallback
+          // keep obfuscated FQN as fallback
         }
       })
     );
@@ -5156,7 +5156,7 @@ export class SourceService {
     // Phase 2: Remap member names using resolved owners for disambiguation
     const memberEntries = [...memberKeyToRemapped.entries()];
     await Promise.all(
-      memberEntries.map(async ([key, _officialName]) => {
+      memberEntries.map(async ([key, _obfuscatedName]) => {
         const [ownerFqn, name, descriptor] = key.split("\0");
         try {
           const targetOwner = ownerToRemapped.get(ownerFqn!) ?? ownerFqn;
@@ -5166,7 +5166,7 @@ export class SourceService {
             name,
             owner: ownerFqn,
             descriptor: kind === "method" ? descriptor : undefined,
-            sourceMapping: "official",
+            sourceMapping: "obfuscated",
             targetMapping: mapping,
             sourcePriority,
             disambiguation: { ownerHint: targetOwner }

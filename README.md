@@ -11,14 +11,14 @@
 
 `@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants deep access to Minecraft's source code, mappings, and mod tooling.
 
-It lets you explore decompiled Minecraft source, convert symbol names across four naming namespaces (`official`, `mojang`, `intermediary`, `yarn`), analyze and decompile Fabric/Forge/NeoForge mod JARs, validate Mixin and Access Widener files, read and patch NBT data, and query generated registry snapshots — all through a structured tool and resource interface designed for Claude Desktop, VS Code, and other MCP-capable clients.
+It lets you explore decompiled Minecraft source, convert symbol names across four naming namespaces (`obfuscated`, `mojang`, `intermediary`, `yarn`), analyze and decompile Fabric/Forge/NeoForge mod JARs, validate Mixin and Access Widener files, read and patch NBT data, and query generated registry snapshots — all through a structured tool and resource interface designed for Claude Desktop, VS Code, and other MCP-capable clients.
 
 **29 tools** | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 
 - **Source Exploration** — Browse and search decompiled Minecraft source code with line-level precision and cursor-paginated file listing
-- **Multi-Mapping Conversion** — Translate class, field, and method names between `official`, `mojang`, `intermediary`, and `yarn` namespaces
+- **Multi-Mapping Conversion** — Translate class, field, and method names between `obfuscated`, `mojang`, `intermediary`, and `yarn` namespaces
 - **Symbol Lifecycle Tracking** — Trace when a method or field first appeared, disappeared, or changed across Minecraft versions
 - **Mod JAR Analysis** — Extract metadata, dependencies, entrypoints, and Mixin configs from Fabric/Forge/NeoForge mod JARs
 - **Mixin & Access Widener Validation** — Parse and validate Mixin source and `.accesswidener` files against a target Minecraft version
@@ -206,7 +206,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | --- | --- | --- | --- |
 | `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `ambiguityReasons?`, `provenance?`, `meta.warnings[]` |
 | `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `kind` (`method`), `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
-| `get-class-api-matrix` | Show one class API as a mapping matrix (`official/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `ambiguousRowCount?`, `meta.warnings[]` |
+| `get-class-api-matrix` | Show one class API as a mapping matrix (`obfuscated/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `ambiguousRowCount?`, `meta.warnings[]` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
 | `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
 
@@ -272,7 +272,7 @@ Positive integer tool parameters accept numeric strings such as `"10"` in additi
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
 `resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` will then fall back to the sibling binary artifact when possible.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
-`find-class` returns an explanatory warning when an `official` artifact is queried with names that look like deobfuscated Mojang classes.
+`find-class` returns an explanatory warning when an `obfuscated` artifact is queried with names that look like deobfuscated Mojang classes.
 `search-class-source` uses `limit: 20` by default; `snippetLines` defaults to `8` and is clamped to `1..80`; `includeDefinition` and `includeOneHop` default to `false`.
 `search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
@@ -336,7 +336,7 @@ All tools return exactly one of:
   "arguments": {
     "targetKind": "version",
     "targetValue": "1.21.10",
-    "mapping": "official",
+    "mapping": "obfuscated",
     "allowDecompile": true,
     "projectPath": "/path/to/mod/workspace"
   }
@@ -378,7 +378,7 @@ All tools return exactly one of:
   "arguments": {
     "artifactId": "<artifact-id>",
     "className": "net.minecraft.server.Main",
-    "mapping": "official",
+    "mapping": "obfuscated",
     "access": "all",
     "includeInherited": true,
     "maxMembers": 300
@@ -425,7 +425,7 @@ List source files under a specific package to understand project structure:
     "className": "net.minecraft.server.Main",
     "fromVersion": "1.20.1",
     "toVersion": "1.21.10",
-    "mapping": "official"
+    "mapping": "obfuscated"
   }
 }
 ```
@@ -457,7 +457,7 @@ Get a high-level summary of what changed between two releases, including class a
     "version": "1.21.10",
     "kind": "class",
     "name": "a.b.C",
-    "sourceMapping": "official",
+    "sourceMapping": "obfuscated",
     "targetMapping": "mojang",
     "sourcePriority": "loom-first",
     "disambiguation": {
@@ -477,7 +477,7 @@ Get a high-level summary of what changed between two releases, including class a
     "name": "tick",
     "owner": "a.b.C",
     "descriptor": "(I)V",
-    "sourceMapping": "official",
+    "sourceMapping": "obfuscated",
     "targetMapping": "intermediary"
   }
 }
@@ -493,7 +493,7 @@ Get a high-level summary of what changed between two releases, including class a
     "name": "f",
     "owner": "a.b.C",
     "descriptor": "(Ljava/lang/String;)V",
-    "sourceMapping": "official",
+    "sourceMapping": "obfuscated",
     "targetMapping": "mojang"
   }
 }
@@ -506,7 +506,7 @@ Get a high-level summary of what changed between two releases, including class a
   "arguments": {
     "version": "1.21.10",
     "className": "a.b.C",
-    "classNameMapping": "official",
+    "classNameMapping": "obfuscated",
     "includeKinds": "class,field,method"
   }
 }
@@ -523,7 +523,7 @@ Get a high-level summary of what changed between two releases, including class a
     "name": "f",
     "owner": "a.b.C",
     "descriptor": "(Ljava/lang/String;)V",
-    "sourceMapping": "official"
+    "sourceMapping": "obfuscated"
   }
 }
 ```
@@ -538,7 +538,7 @@ Get a high-level summary of what changed between two releases, including class a
     "name": "f",
     "owner": "a.b.C",
     "descriptor": "(I)V",
-    "sourceMapping": "official"
+    "sourceMapping": "obfuscated"
   }
 }
 ```
@@ -787,14 +787,16 @@ Check server performance counters, cache sizes, and latency snapshots:
 
 | Namespace | Description |
 | --- | --- |
-| `official` | Mojang obfuscated names (e.g. `a`, `b`, `c`) |
+| `obfuscated` | Mojang obfuscated names (e.g. `a`, `b`, `c`) |
 | `mojang` | Mojang deobfuscated names from `client_mappings.txt` (e.g. `net.minecraft.server.Main`) |
 | `intermediary` | Fabric stable intermediary names (e.g. `net.minecraft.class_1234`, `method_5678`) |
 | `yarn` | Fabric community human-readable names (e.g. `net.minecraft.server.MinecraftServer`, `tick`) |
 
+The legacy public namespace name `official` was removed. Requests that still send `official` now fail validation and should be updated to `obfuscated`.
+
 ### Lookup Rules
 
-`find-mapping` supports lookup across `official`, `mojang`, `intermediary`, and `yarn`.
+`find-mapping` supports lookup across `obfuscated`, `mojang`, `intermediary`, and `yarn`.
 
 Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 - class: `kind=class`, `name=a.b.C` (default FQCN). For existence checks only, `nameMode=auto` allows short names like `C`.
@@ -803,14 +805,14 @@ Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 
 `mapping: "mojang"` requires a source-backed artifact. If only decompile path is available, the server returns `ERR_MAPPING_NOT_APPLIED`.
 
-`resolve-artifact`, `get-class-members`, `trace-symbol-lifecycle`, and `diff-class-signatures` accept `official | mojang | intermediary | yarn` with constraints:
+`resolve-artifact`, `get-class-members`, `trace-symbol-lifecycle`, and `diff-class-signatures` accept `obfuscated | mojang | intermediary | yarn` with constraints:
 - `intermediary` / `yarn` require a resolvable Minecraft version context (for example `targetKind=version` or a versioned coordinate).
-- for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `official` with a warning.
+- for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `obfuscated` with a warning.
 - `mojang` requires source-backed artifacts; decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
 
-If `find-class` or `get-class-source` returns no hit on an `official` artifact for names like `net.minecraft.world.item.Item`, the tool now warns that `official` means Mojang's obfuscated runtime names and recommends retrying with `mapping="mojang"` or translating via `find-mapping`.
+If `find-class` or `get-class-source` returns no hit on an `obfuscated` artifact for names like `net.minecraft.world.item.Item`, the tool now warns that `obfuscated` means Mojang's obfuscated runtime names and recommends retrying with `mapping="mojang"` or translating via `find-mapping`.
 
-Method descriptor precision is best on Tiny-backed paths (`intermediary`/`yarn`). For `official <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fallback to name matching and emit a warning.
+Method descriptor precision is best on Tiny-backed paths (`intermediary`/`yarn`). For `obfuscated <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fallback to name matching and emit a warning.
 
 Use `resolve-method-mapping-exact` when candidate ranking is not enough and the workflow needs strict `owner+name+descriptor` certainty.
 Use `find-mapping` `disambiguation.ownerHint` / `disambiguation.descriptorHint` to narrow ambiguous candidate sets.

@@ -8,7 +8,7 @@ import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 import { objectResult } from "./mcp-helpers.js";
 
 import { loadConfig } from "./config.js";
-import { ERROR_CODES, isAppError } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { log } from "./logger.js";
 import {
   applyNbtJsonPatch,
@@ -63,7 +63,7 @@ type ToolMeta = {
   warnings: string[];
 };
 
-const SOURCE_MAPPINGS = ["official", "mojang", "intermediary", "yarn"] as const;
+const SOURCE_MAPPINGS = ["obfuscated", "mojang", "intermediary", "yarn"] as const;
 const SOURCE_PRIORITIES = ["loom-first", "maven-first"] as const;
 const TARGET_KINDS = ["version", "jar", "coordinate"] as const;
 const SEARCH_INTENTS = ["symbol", "text", "path"] as const;
@@ -106,6 +106,7 @@ const POSITIVE_INT_FIELD_NAMES = new Set([
   "maxVersions",
   "maxClassResults"
 ]);
+const MAPPING_FIELD_NAMES = new Set(["mapping", "sourceMapping", "targetMapping", "classNameMapping"]);
 
 function validateTargetPair(
   value: {
@@ -155,7 +156,7 @@ const listVersionsSchema = z.object(listVersionsShape);
 const resolveArtifactShape = {
   targetKind: targetKindSchema.describe("version | jar | coordinate"),
   targetValue: nonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
@@ -171,7 +172,7 @@ const getClassSourceShape = {
   artifactId: optionalNonEmptyString,
   targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
   targetValue: optionalNonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
@@ -214,7 +215,7 @@ const getClassMembersShape = {
   artifactId: optionalNonEmptyString,
   targetKind: targetKindSchema.optional().describe("version | jar | coordinate"),
   targetValue: optionalNonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   access: memberAccessSchema.optional().describe("public | all (default public)"),
@@ -277,7 +278,7 @@ const traceSymbolLifecycleShape = {
   descriptor: optionalNonEmptyString.describe('optional JVM descriptor, e.g. "(I)V"'),
   fromVersion: optionalNonEmptyString,
   toVersion: optionalNonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   includeSnapshots: z.boolean().optional().describe("default false"),
   maxVersions: optionalPositiveInt.describe("default 120, max 400"),
@@ -289,7 +290,7 @@ const diffClassSignaturesShape = {
   className: nonEmptyString,
   fromVersion: nonEmptyString,
   toVersion: nonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn (default official)"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
 };
 const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
@@ -300,8 +301,8 @@ const findMappingShape = {
   name: nonEmptyString,
   owner: optionalNonEmptyString,
   descriptor: optionalNonEmptyString,
-  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
-  targetMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
+  targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   disambiguation: z
     .object({
@@ -378,8 +379,8 @@ const resolveMethodMappingExactShape = {
   name: nonEmptyString,
   owner: optionalNonEmptyString,
   descriptor: optionalNonEmptyString.describe("required for kind=method"),
-  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
-  targetMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
+  targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
 };
 const resolveMethodMappingExactSchema = z
@@ -443,7 +444,7 @@ const classApiKindsSchema = z.string().superRefine((value, ctx) => {
 const getClassApiMatrixShape = {
   version: nonEmptyString,
   className: nonEmptyString,
-  classNameMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  classNameMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   includeKinds: classApiKindsSchema.optional().describe("comma-separated: class,field,method"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
 };
@@ -456,7 +457,7 @@ const resolveWorkspaceSymbolShape = {
   name: nonEmptyString,
   owner: optionalNonEmptyString,
   descriptor: optionalNonEmptyString,
-  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
 };
 const resolveWorkspaceSymbolSchema = z
@@ -525,7 +526,7 @@ const checkSymbolExistsShape = {
   owner: optionalNonEmptyString,
   name: nonEmptyString,
   descriptor: optionalNonEmptyString.describe("required for kind=method unless signatureMode=name-only"),
-  sourceMapping: sourceMappingSchema.describe("official | mojang | intermediary | yarn"),
+  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)"),
   signatureMode: z.enum(["exact", "name-only"]).optional()
@@ -631,7 +632,7 @@ const validateMixinShape = {
   sourceRoots: z.array(z.string().min(1)).optional()
     .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
   version: nonEmptyString.describe("Minecraft version"),
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
@@ -668,7 +669,7 @@ const validateMixinSchema = z.object(validateMixinShape).refine(
 const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),
   version: nonEmptyString.describe("Minecraft version"),
-  mapping: sourceMappingSchema.optional().describe("official | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
 };
 const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
@@ -1005,6 +1006,29 @@ function coerceKnownNumericStrings(value: unknown): unknown {
   return output;
 }
 
+function collectRemovedOfficialNamespacePaths(
+  value: unknown,
+  path: string[] = []
+): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => collectRemovedOfficialNamespacePaths(entry, [...path, String(index)]));
+  }
+  if (typeof value !== "object" || value == null) {
+    return [];
+  }
+
+  const matches: string[] = [];
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const nextPath = [...path, key];
+    if (typeof entry === "string" && MAPPING_FIELD_NAMES.has(key) && entry.trim() === "official") {
+      matches.push(nextPath.join("."));
+      continue;
+    }
+    matches.push(...collectRemovedOfficialNamespacePaths(entry, nextPath));
+  }
+  return matches;
+}
+
 function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDetails {
   if (caughtError instanceof ZodError) {
     return {
@@ -1076,7 +1100,33 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   const startedAt = Date.now();
 
   try {
-    const parsedInput = schema.parse(coerceKnownNumericStrings(rawInput));
+    const normalizedInput = coerceKnownNumericStrings(rawInput);
+    const removedOfficialPaths = collectRemovedOfficialNamespacePaths(normalizedInput);
+    if (removedOfficialPaths.length > 0) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `The "official" mapping namespace was removed. Use "obfuscated" instead.`,
+        details: {
+          fieldErrors: removedOfficialPaths.map((path) => ({
+            path,
+            message: `"official" is no longer supported for this field. Use "obfuscated".`,
+            code: "invalid_enum_value"
+          })),
+          nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
+          suggestedCall:
+            typeof normalizedInput === "object" && normalizedInput != null
+              ? {
+                  tool,
+                  params: JSON.parse(
+                    JSON.stringify(normalizedInput).replace(/"official"/g, "\"obfuscated\"")
+                  ) as Record<string, unknown>
+                }
+              : undefined
+        }
+      });
+    }
+
+    const parsedInput = schema.parse(normalizedInput);
     const payload = await action(parsedInput);
     const { result, warnings } = splitWarnings(payload);
 
@@ -1377,7 +1427,7 @@ server.tool("resolve-method-mapping-exact",
 );
 
 server.tool("get-class-api-matrix",
-  "List class/member API rows across official/mojang/intermediary/yarn mappings for one class and Minecraft version.",
+  "List class/member API rows across obfuscated/mojang/intermediary/yarn mappings for one class and Minecraft version.",
   getClassApiMatrixShape,
   { readOnlyHint: true },
   async (args) => runTool("get-class-api-matrix", args, getClassApiMatrixSchema, async (input) =>
