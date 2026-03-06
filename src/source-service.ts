@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
 
-import { createError, ERROR_CODES, isAppError } from "./errors.js";
+import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
@@ -687,6 +687,10 @@ function looksLikeDeobfuscatedClassName(value: string): boolean {
 
 function obfuscatedNamespaceHint(className: string): string {
   return `Artifact is indexed in obfuscated runtime names. Deobfuscated names like "${className}" usually require mapping="mojang" or a find-mapping lookup to obfuscated names.`;
+}
+
+function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
+  return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
 function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
@@ -2504,14 +2508,14 @@ export class SourceService {
       kind: "field" | "method"
     ): Promise<DiffClassMemberDelta> => {
       const [addedResult, removedResult] = await Promise.all([
-        this.remapSignatureMembers(delta.added, kind, toVersion, mapping, input.sourcePriority, warnings),
-        this.remapSignatureMembers(delta.removed, kind, fromVersion, mapping, input.sourcePriority, warnings)
+        this.remapSignatureMembers(delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings),
+        this.remapSignatureMembers(delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings)
       ]);
       const remappedModified = await Promise.all(
         delta.modified.map(async (change) => {
           const [fromResult, toResult] = await Promise.all([
-            this.remapSignatureMembers([change.from], kind, fromVersion, mapping, input.sourcePriority, warnings),
-            this.remapSignatureMembers([change.to], kind, toVersion, mapping, input.sourcePriority, warnings)
+            this.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings),
+            this.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings)
           ]);
           return { ...change, from: fromResult.members[0], to: toResult.members[0] };
         })
@@ -2615,10 +2619,23 @@ export class SourceService {
           symbolKind: row.symbolKind
         }))
         .slice(0, limit);
-      if (matches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+      const partialVanillaLookup =
+        hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
+      const filteredMatches =
+        partialVanillaLookup && matches.every((match) =>
+          !match.qualifiedName.startsWith("net.minecraft.") && !match.qualifiedName.startsWith("com.mojang.")
+        )
+          ? []
+          : matches;
+      if (filteredMatches.length === 0 && partialVanillaLookup) {
+        warnings.push(
+          `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
+        );
+      }
+      if (filteredMatches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
         warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
       }
-      return { matches, total: matches.length, warnings };
+      return { matches: filteredMatches, total: filteredMatches.length, warnings };
     }
 
     // Simple name: search for exact symbol name match among type symbols
@@ -2641,10 +2658,23 @@ export class SourceService {
         symbolKind: row.symbolKind
       });
     }
-    if (matches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+    const partialVanillaLookup =
+      hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
+    const filteredMatches =
+      partialVanillaLookup && matches.every((match) =>
+        !match.qualifiedName.startsWith("net.minecraft.") && !match.qualifiedName.startsWith("com.mojang.")
+      )
+        ? []
+        : matches;
+    if (filteredMatches.length === 0 && partialVanillaLookup) {
+      warnings.push(
+        `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
+      );
+    }
+    if (filteredMatches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
       warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
     }
-    return { matches, total: matches.length, warnings };
+    return { matches: filteredMatches, total: filteredMatches.length, warnings };
   }
 
   async getClassSource(input: GetClassSourceInput): Promise<GetClassSourceOutput> {
@@ -2749,6 +2779,7 @@ export class SourceService {
     let activeOrigin = origin;
     let activeProvenance = provenance;
     let activeQualityFlags = [...qualityFlags];
+    let activeMappingApplied = mappingApplied;
     let activeSourceJarPath = sourceJarPath;
     let attemptedBinaryFallback = false;
     const tryBinaryFallback = async (): Promise<boolean> => {
@@ -2782,75 +2813,89 @@ export class SourceService {
 
       activeArtifactId = fallbackResolved.artifactId;
       activeOrigin = fallbackResolved.origin;
+      activeMappingApplied = fallbackResolved.mappingApplied ?? activeMappingApplied;
       activeProvenance = fallbackResolved.provenance ?? activeProvenance;
       activeQualityFlags = [...new Set([...(fallbackResolved.qualityFlags ?? []), "binary-fallback"])];
       activeSourceJarPath = fallbackResolved.sourceJarPath;
       warnings.push(
         `Falling back to binary artifact "${normalizedBinaryJarPath}" because source coverage for "${className}" was incomplete.`
       );
+      if (activeMappingApplied !== requestedMapping) {
+        warnings.push(
+          `Fallback source text is indexed in ${activeMappingApplied} names; returned source is not remapped to ${requestedMapping}.`
+        );
+      }
       return true;
     };
 
-    let filePath = this.resolveClassFilePath(activeArtifactId, className);
+    let activeLookupClassName = await this.resolveClassNameForLookup({
+      className,
+      version,
+      sourceMapping: requestedMapping,
+      targetMapping: activeMappingApplied,
+      sourcePriority: input.sourcePriority,
+      warnings,
+      context: "source lookup"
+    });
+    let filePath = this.resolveClassFilePath(activeArtifactId, activeLookupClassName);
     if (!filePath && (await tryBinaryFallback())) {
-      filePath = this.resolveClassFilePath(activeArtifactId, className);
+      activeLookupClassName = await this.resolveClassNameForLookup({
+        className,
+        version,
+        sourceMapping: requestedMapping,
+        targetMapping: activeMappingApplied,
+        sourcePriority: input.sourcePriority,
+        warnings,
+        context: "source lookup"
+      });
+      filePath = this.resolveClassFilePath(activeArtifactId, activeLookupClassName);
     }
     if (!filePath) {
-      const simpleName = className.split(/[.$]/).at(-1) ?? className;
-      const targetKind = input.target?.kind;
-      const targetValue = input.target?.value;
-      const scope = input.scope;
-      let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
-      if (targetKind === "version" && scope && scope !== "merged" && !input.projectPath) {
-        nextAction +=
-          ` If the class exists in a modded environment, retry with scope: "merged" and projectPath pointing to your mod project.`;
-      } else if (targetKind === "version" && scope && scope !== "merged" && input.projectPath) {
-        nextAction +=
-          ` The class may exist in merged sources; retry with scope: "merged".`;
-      }
-      if (mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
-        nextAction += ` ${obfuscatedNamespaceHint(className)}`;
-      }
-      throw createError({
-        code: ERROR_CODES.CLASS_NOT_FOUND,
-        message: `Source for class "${className}" was not found.`,
-        details: {
-          artifactId: activeArtifactId,
-          className,
-          ...(scope ? { scope } : {}),
-          ...(targetKind ? { targetKind } : {}),
-          ...(targetValue ? { targetValue } : {}),
-          mapping: mappingApplied,
-          nextAction,
-          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId: activeArtifactId } }
-        }
+      throw this.buildClassSourceNotFoundError({
+        artifactId: activeArtifactId,
+        className,
+        lookupClassName: activeLookupClassName,
+        mappingApplied: activeMappingApplied,
+        requestedMapping,
+        qualityFlags: activeQualityFlags,
+        attemptedBinaryFallback,
+        targetKind: input.target?.kind,
+        targetValue: input.target?.value,
+        scope: input.scope,
+        projectPath: input.projectPath,
+        version
       });
     }
 
     let row = this.filesRepo.getFileContent(activeArtifactId, filePath);
     if (!row && (await tryBinaryFallback())) {
-      filePath = this.resolveClassFilePath(activeArtifactId, className) ?? filePath;
+      activeLookupClassName = await this.resolveClassNameForLookup({
+        className,
+        version,
+        sourceMapping: requestedMapping,
+        targetMapping: activeMappingApplied,
+        sourcePriority: input.sourcePriority,
+        warnings,
+        context: "source lookup"
+      });
+      filePath = this.resolveClassFilePath(activeArtifactId, activeLookupClassName) ?? filePath;
       row = this.filesRepo.getFileContent(activeArtifactId, filePath);
     }
     if (!row) {
-      const simpleName = className.split(/[.$]/).at(-1) ?? className;
-      throw createError({
-        code: ERROR_CODES.CLASS_NOT_FOUND,
-        message: `Source for class "${className}" was not found.`,
-        details: {
-          artifactId: activeArtifactId,
-          className,
-          filePath,
-          ...(input.scope ? { scope: input.scope } : {}),
-          ...(input.target?.kind ? { targetKind: input.target.kind } : {}),
-          ...(input.target?.value ? { targetValue: input.target.value } : {}),
-          nextAction:
-            `Use find-class to resolve the correct fully-qualified name for "${simpleName}".` +
-            (mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)
-              ? ` ${obfuscatedNamespaceHint(className)}`
-              : ""),
-          suggestedCall: { tool: "find-class", params: { className: simpleName, artifactId: activeArtifactId } }
-        }
+      throw this.buildClassSourceNotFoundError({
+        artifactId: activeArtifactId,
+        className,
+        lookupClassName: activeLookupClassName,
+        mappingApplied: activeMappingApplied,
+        requestedMapping,
+        qualityFlags: activeQualityFlags,
+        attemptedBinaryFallback,
+        filePath,
+        targetKind: input.target?.kind,
+        targetValue: input.target?.value,
+        scope: input.scope,
+        projectPath: input.projectPath,
+        version
       });
     }
 
@@ -2914,7 +2959,7 @@ export class SourceService {
         artifactId: activeArtifactId,
         origin: activeOrigin,
         requestedMapping,
-        mappingApplied
+        mappingApplied: activeMappingApplied
       });
 
     return {
@@ -2931,7 +2976,7 @@ export class SourceService {
       origin: activeOrigin,
       artifactId: activeArtifactId,
       requestedMapping,
-      mappingApplied,
+      mappingApplied: activeMappingApplied,
       provenance: normalizedProvenance,
       qualityFlags: activeQualityFlags,
       ...(resolvedOutputFile ? { outputFile: resolvedOutputFile } : {}),
@@ -3044,36 +3089,71 @@ export class SourceService {
       });
     }
 
-    const obfuscatedClassName =
-      version != null
-        ? await this.resolveToObfuscatedClassName(className, version, requestedMapping, input.sourcePriority, warnings)
-        : className;
+    const lookupClassName = await this.resolveClassNameForLookup({
+      className,
+      version,
+      sourceMapping: requestedMapping,
+      targetMapping: mappingApplied,
+      sourcePriority: input.sourcePriority,
+      warnings,
+      context: "binary lookup"
+    });
 
     const signature = await this.explorerService.getSignature({
-      fqn: obfuscatedClassName,
+      fqn: lookupClassName,
       jarPath: binaryJarPath,
       access,
       includeSynthetic,
       includeInherited,
-      memberPattern: requestedMapping === "obfuscated" ? memberPattern : undefined
+      memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined
     });
     warnings.push(...signature.warnings);
 
     let remappedConstructors =
       version != null
-        ? (await this.remapSignatureMembers(signature.constructors, "method", version, requestedMapping, input.sourcePriority, warnings)).members
+        ? (
+            await this.remapSignatureMembers(
+              signature.constructors,
+              "method",
+              version,
+              mappingApplied,
+              requestedMapping,
+              input.sourcePriority,
+              warnings
+            )
+          ).members
         : signature.constructors;
     let remappedFields =
       version != null
-        ? (await this.remapSignatureMembers(signature.fields, "field", version, requestedMapping, input.sourcePriority, warnings)).members
+        ? (
+            await this.remapSignatureMembers(
+              signature.fields,
+              "field",
+              version,
+              mappingApplied,
+              requestedMapping,
+              input.sourcePriority,
+              warnings
+            )
+          ).members
         : signature.fields;
     let remappedMethods =
       version != null
-        ? (await this.remapSignatureMembers(signature.methods, "method", version, requestedMapping, input.sourcePriority, warnings)).members
+        ? (
+            await this.remapSignatureMembers(
+              signature.methods,
+              "method",
+              version,
+              mappingApplied,
+              requestedMapping,
+              input.sourcePriority,
+              warnings
+            )
+          ).members
         : signature.methods;
 
-    // Apply memberPattern post-remap for non-obfuscated mappings
-    if (requestedMapping !== "obfuscated" && memberPattern) {
+    // Apply memberPattern after remap when the lookup namespace differs from the requested namespace.
+    if (requestedMapping !== mappingApplied && memberPattern) {
       const lowerPattern = memberPattern.toLowerCase();
       remappedConstructors = remappedConstructors.filter((m) => m.name.toLowerCase().includes(lowerPattern));
       remappedFields = remappedFields.filter((m) => m.name.toLowerCase().includes(lowerPattern));
@@ -3417,9 +3497,9 @@ export class SourceService {
         if (requestedMapping !== "obfuscated") {
           try {
             const [ctorResult, methodResult, fieldResult] = await Promise.all([
-              this.remapSignatureMembers(sig.constructors, "method", version, requestedMapping, input.sourcePriority, warnings),
-              this.remapSignatureMembers(sig.methods, "method", version, requestedMapping, input.sourcePriority, warnings),
-              this.remapSignatureMembers(sig.fields, "field", version, requestedMapping, input.sourcePriority, warnings)
+              this.remapSignatureMembers(sig.constructors, "method", version, "obfuscated", requestedMapping, input.sourcePriority, warnings),
+              this.remapSignatureMembers(sig.methods, "method", version, "obfuscated", requestedMapping, input.sourcePriority, warnings),
+              this.remapSignatureMembers(sig.fields, "field", version, "obfuscated", requestedMapping, input.sourcePriority, warnings)
             ]);
             constructors = ctorResult.members;
             methods = methodResult.members;
@@ -4363,7 +4443,7 @@ export class SourceService {
     try {
       const fallbackResolved = await resolveSourceTargetInternal(
         { kind: "jar", value: binaryJarPath },
-        { allowDecompile: true },
+        { allowDecompile: true, preferBinaryOnly: true },
         this.config
       );
       fallbackResolved.version = fallbackResolved.version ?? input.version;
@@ -4447,6 +4527,127 @@ export class SourceService {
     };
   }
 
+  private async resolveClassNameForLookup(input: {
+    className: string;
+    version?: string;
+    sourceMapping: SourceMapping;
+    targetMapping: SourceMapping;
+    sourcePriority: MappingSourcePriority | undefined;
+    warnings: string[];
+    context: string;
+  }): Promise<string> {
+    if (input.sourceMapping === input.targetMapping) {
+      return input.className;
+    }
+    if (!input.version) {
+      input.warnings.push(
+        `Could not map class "${input.className}" from ${input.sourceMapping} to ${input.targetMapping} for ${input.context} because version is unavailable.`
+      );
+      return input.className;
+    }
+    try {
+      const mapped = await this.mappingService.findMapping({
+        version: input.version,
+        kind: "class",
+        name: input.className,
+        sourceMapping: input.sourceMapping,
+        targetMapping: input.targetMapping,
+        sourcePriority: input.sourcePriority
+      });
+      if (mapped.resolved && mapped.resolvedSymbol) {
+        return mapped.resolvedSymbol.name;
+      }
+      input.warnings.push(
+        `Could not map class "${input.className}" from ${input.sourceMapping} to ${input.targetMapping} for ${input.context}.`
+      );
+    } catch {
+      input.warnings.push(
+        `Mapping lookup failed for class "${input.className}" while preparing ${input.context} in ${input.targetMapping}.`
+      );
+    }
+    return input.className;
+  }
+
+  private buildClassSourceNotFoundError(input: {
+    className: string;
+    lookupClassName: string;
+    artifactId: string;
+    mappingApplied: SourceMapping;
+    requestedMapping: SourceMapping;
+    qualityFlags: string[];
+    attemptedBinaryFallback: boolean;
+    filePath?: string;
+    targetKind?: string;
+    targetValue?: string;
+    scope?: ArtifactScope;
+    projectPath?: string;
+    version?: string;
+  }): AppError {
+    const simpleName = input.className.split(/[.$]/).at(-1) ?? input.className;
+    const details: Record<string, unknown> = {
+      artifactId: input.artifactId,
+      className: input.className,
+      mapping: input.mappingApplied,
+      qualityFlags: input.qualityFlags,
+      ...(input.lookupClassName !== input.className ? { lookupClassName: input.lookupClassName } : {}),
+      ...(input.filePath ? { filePath: input.filePath } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(input.targetKind ? { targetKind: input.targetKind } : {}),
+      ...(input.targetValue ? { targetValue: input.targetValue } : {}),
+      ...(input.attemptedBinaryFallback ? { binaryFallbackAttempted: true } : {})
+    };
+
+    let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
+    let suggestedCall: { tool: string; params: Record<string, unknown> } = {
+      tool: "find-class",
+      params: { className: simpleName, artifactId: input.artifactId }
+    };
+
+    if (input.targetKind === "version" && input.scope && input.scope !== "merged" && !input.projectPath) {
+      nextAction +=
+        ` If the class exists in a modded environment, retry with scope: "merged" and projectPath pointing to your mod project.`;
+    } else if (input.targetKind === "version" && input.scope && input.scope !== "merged" && input.projectPath) {
+      nextAction += ` The class may exist in merged sources; retry with scope: "merged".`;
+    }
+
+    if (hasPartialNetMinecraftCoverage(input.qualityFlags)) {
+      nextAction =
+        `Resolved source coverage does not include net.minecraft for "${input.className}",` +
+        (input.attemptedBinaryFallback
+          ? " and binary fallback did not produce source for that class."
+          : " and a binary fallback has not produced source for that class.") +
+        " Use get-class-api-matrix or find-mapping instead of find-class for vanilla API discovery.";
+      if (input.version) {
+        suggestedCall = {
+          tool: "get-class-api-matrix",
+          params: {
+            version: input.version,
+            className: input.className,
+            classNameMapping: input.requestedMapping
+          }
+        };
+      } else {
+        suggestedCall = {
+          tool: "find-class",
+          params: { className: simpleName, artifactId: input.artifactId }
+        };
+      }
+    }
+
+    if (input.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(input.className)) {
+      nextAction += ` ${obfuscatedNamespaceHint(input.className)}`;
+    }
+
+    details.nextAction = nextAction;
+    details.suggestedCall = suggestedCall;
+
+    return createError({
+      code: ERROR_CODES.CLASS_NOT_FOUND,
+      message: `Source for class "${input.className}" was not found.`,
+      details
+    });
+  }
+
   private async resolveToObfuscatedClassName(
     className: string,
     version: string,
@@ -4454,26 +4655,15 @@ export class SourceService {
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[]
   ): Promise<string> {
-    if (mapping === "obfuscated") {
-      return className;
-    }
-    try {
-      const mapped = await this.mappingService.findMapping({
-        version,
-        kind: "class",
-        name: className,
-        sourceMapping: mapping,
-        targetMapping: "obfuscated",
-        sourcePriority
-      });
-      if (mapped.resolved && mapped.resolvedSymbol) {
-        return mapped.resolvedSymbol.name;
-      }
-      warnings.push(`Could not map class "${className}" from ${mapping} to obfuscated.`);
-    } catch {
-      warnings.push(`Mapping lookup failed for class "${className}".`);
-    }
-    return className;
+    return this.resolveClassNameForLookup({
+      className,
+      version,
+      sourceMapping: mapping,
+      targetMapping: "obfuscated",
+      sourcePriority,
+      warnings,
+      context: "bytecode lookup"
+    });
   }
 
   private async resolveToObfuscatedMemberName(
@@ -4523,12 +4713,13 @@ export class SourceService {
     members: SignatureMember[],
     kind: "field" | "method",
     version: string,
-    mapping: SourceMapping,
+    sourceMapping: SourceMapping,
+    targetMapping: SourceMapping,
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[]
   ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
     const failedNames = new Set<string>();
-    if (mapping === "obfuscated") {
+    if (sourceMapping === targetMapping) {
       return { members, failedNames };
     }
 
@@ -4555,8 +4746,8 @@ export class SourceService {
             version,
             kind: "class",
             name: obfuscatedFqn,
-            sourceMapping: "obfuscated",
-            targetMapping: mapping,
+            sourceMapping,
+            targetMapping,
             sourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
@@ -4581,8 +4772,8 @@ export class SourceService {
             name,
             owner: ownerFqn,
             descriptor: kind === "method" ? descriptor : undefined,
-            sourceMapping: "obfuscated",
-            targetMapping: mapping,
+            sourceMapping,
+            targetMapping,
             sourcePriority,
             disambiguation: { ownerHint: targetOwner }
           });
@@ -4601,15 +4792,15 @@ export class SourceService {
                 failedNames.add(name!);
               }
             } else {
-              warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
+              warnings.push(`Could not remap ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
               failedNames.add(name!);
             }
           } else {
-            warnings.push(`Could not remap ${kind} "${name}" to ${mapping}.`);
+            warnings.push(`Could not remap ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
             failedNames.add(name!);
           }
         } catch {
-          warnings.push(`Remap failed for ${kind} "${name}".`);
+          warnings.push(`Remap failed for ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
           failedNames.add(name!);
         }
       })

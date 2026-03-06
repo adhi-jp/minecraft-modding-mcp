@@ -95,6 +95,33 @@ test("resolveSourceTarget(targetKind=jar) adopts exact <basename>-sources.jar wh
   assert.deepEqual(resolved.adjacentSourceCandidates, [unrelatedSourcesJarPath]);
 });
 
+test("resolveSourceTarget(targetKind=jar) can bypass exact sibling sources when binary fallback is required", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-binary-only-"));
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const exactSourcesJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "dhl.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(exactSourcesJarPath, {
+    "net/neoforged/neoforge/capabilities/Capabilities.java": [
+      "package net.neoforged.neoforge.capabilities;",
+      "public class Capabilities {}"
+    ].join("\n")
+  });
+
+  const resolved = await resolveSourceTarget(
+    { kind: "jar", value: binaryJarPath },
+    { allowDecompile: true, preferBinaryOnly: true },
+    buildTestConfig(root)
+  );
+
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(resolved.isDecompiled, true);
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.equal(resolved.sourceJarPath, undefined);
+});
+
 test("resolveSourceTarget(targetKind=jar) adopts sibling binary jar when input is a sources jar", async () => {
   const root = await mkdtemp(join(tmpdir(), "resolver-jar-source-input-"));
   const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");

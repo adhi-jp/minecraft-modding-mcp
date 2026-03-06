@@ -130,6 +130,92 @@ function readCacheAccountingMetrics(service: { getRuntimeMetrics: () => unknown 
   };
 }
 
+function seedIndexedArtifact(
+  service: unknown,
+  input: {
+    artifactId: string;
+    origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
+    requestedMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mappingApplied: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    qualityFlags: string[];
+    files: Array<{ filePath: string; content: string }>;
+    symbols: Array<{
+      filePath: string;
+      symbolKind: string;
+      symbolName: string;
+      qualifiedName?: string;
+      line: number;
+    }>;
+    version?: string;
+    sourceJarPath?: string;
+    binaryJarPath?: string;
+    provenance?: Record<string, unknown>;
+    isDecompiled?: boolean;
+  }
+): void {
+  const repos = service as {
+    artifactsRepo: {
+      upsertArtifact: (value: {
+        artifactId: string;
+        origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
+        requestedMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        mappingApplied: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        qualityFlags: string[];
+        artifactSignature: string;
+        isDecompiled: boolean;
+        timestamp: string;
+        version?: string;
+        sourceJarPath?: string;
+        binaryJarPath?: string;
+        provenance?: Record<string, unknown>;
+      }) => void;
+    };
+    filesRepo: {
+      insertFilesForArtifact: (
+        artifactId: string,
+        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
+      ) => void;
+    };
+    symbolsRepo: {
+      insertSymbolsForArtifact: (
+        artifactId: string,
+        symbols: Array<{
+          filePath: string;
+          symbolKind: string;
+          symbolName: string;
+          qualifiedName?: string;
+          line: number;
+        }>
+      ) => void;
+    };
+  };
+  const timestamp = new Date().toISOString();
+  repos.artifactsRepo.upsertArtifact({
+    artifactId: input.artifactId,
+    origin: input.origin,
+    version: input.version,
+    sourceJarPath: input.sourceJarPath,
+    binaryJarPath: input.binaryJarPath,
+    requestedMapping: input.requestedMapping,
+    mappingApplied: input.mappingApplied,
+    provenance: input.provenance,
+    qualityFlags: input.qualityFlags,
+    artifactSignature: `${input.artifactId}-sig`,
+    isDecompiled: input.isDecompiled ?? false,
+    timestamp
+  });
+  repos.filesRepo.insertFilesForArtifact(
+    input.artifactId,
+    input.files.map((file) => ({
+      filePath: file.filePath,
+      content: file.content,
+      contentBytes: Buffer.byteLength(file.content, "utf8"),
+      contentHash: `${input.artifactId}:${file.filePath}`
+    }))
+  );
+  repos.symbolsRepo.insertSymbolsForArtifact(input.artifactId, input.symbols);
+}
+
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-main-"));
@@ -1912,6 +1998,262 @@ test("SourceService resolveArtifact marks merged mojang sources without net.mine
     resolved.warnings.some((warning) => warning.includes("Source coverage does not include net.minecraft"))
   );
   assert.equal(resolved.binaryJarPath, loomBinaryJarPath);
+});
+
+test("SourceService getClassSource remaps partial-source binary fallback lookups to the fallback artifact namespace", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-partial-fallback-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        content: [
+          "package net.neoforged.neoforge.capabilities;",
+          "public class Capabilities {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        symbolKind: "class",
+        symbolName: "Capabilities",
+        qualifiedName: "net.neoforged.neoforge.capabilities.Capabilities",
+        line: 2
+      }
+    ]
+  });
+
+  seedIndexedArtifact(service, {
+    artifactId: "binary-fallback",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "obfuscated",
+    qualityFlags: ["decompiled", "binary-fallback"],
+    version: "1.21.10",
+    binaryJarPath,
+    provenance,
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "dhl.java",
+        content: [
+          "public class dhl {",
+          "  void use() {}",
+          "}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "dhl.java",
+        symbolKind: "class",
+        symbolName: "dhl",
+        qualifiedName: "dhl",
+        line: 1
+      }
+    ]
+  });
+
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact = async () => ({
+    artifactId: "binary-fallback",
+    artifactSignature: "binary-fallback-sig",
+    origin: "decompiled" as const,
+    binaryJarPath,
+    version: "1.21.10",
+    requestedMapping: "mojang" as const,
+    mappingApplied: "obfuscated" as const,
+    provenance,
+    qualityFlags: ["decompiled", "binary-fallback"],
+    isDecompiled: true,
+    resolvedAt: new Date().toISOString()
+  });
+
+  const mappingCalls: Array<Record<string, unknown>> = [];
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: Record<string, unknown>) {
+      mappingCalls.push(input);
+      if (
+        input.kind === "class" &&
+        input.name === "net.minecraft.world.item.Item" &&
+        input.sourceMapping === "mojang" &&
+        input.targetMapping === "obfuscated"
+      ) {
+        return {
+          resolved: true,
+          status: "resolved",
+          resolvedSymbol: { name: "dhl" },
+          candidates: [],
+          warnings: []
+        };
+      }
+      return { resolved: false, status: "not_found", candidates: [], warnings: [] };
+    }
+  };
+
+  const result = await service.getClassSource({
+    artifactId: "partial-source",
+    className: "net.minecraft.world.item.Item"
+  });
+
+  assert.equal(result.artifactId, "binary-fallback");
+  assert.match(result.sourceText, /class dhl/);
+  assert.ok(result.qualityFlags.includes("binary-fallback"));
+  assert.ok(result.warnings.some((warning) => warning.includes("Falling back to binary artifact")));
+  assert.ok(mappingCalls.some((call) => call.name === "net.minecraft.world.item.Item"));
+});
+
+test("SourceService getClassSource reports partial-source fallback failures without redirecting to find-class", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-partial-failure-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        content: [
+          "package net.neoforged.neoforge.capabilities;",
+          "public class Capabilities {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        symbolKind: "class",
+        symbolName: "Capabilities",
+        qualifiedName: "net.neoforged.neoforge.capabilities.Capabilities",
+        line: 2
+      }
+    ]
+  });
+
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact = async () => undefined;
+
+  await assert.rejects(
+    service.getClassSource({
+      artifactId: "partial-source",
+      className: "net.minecraft.world.item.Item"
+    }),
+    (error: unknown) => {
+      assert.equal(typeof error, "object");
+      assert.equal(error !== null && "code" in error ? (error as { code: string }).code : undefined, ERROR_CODES.CLASS_NOT_FOUND);
+      const details = error && typeof error === "object" && "details" in error
+        ? (error as { details?: Record<string, unknown> }).details
+        : undefined;
+      assert.equal(details?.suggestedCall && typeof details.suggestedCall === "object"
+        ? (details.suggestedCall as { tool?: string }).tool
+        : undefined, "get-class-api-matrix");
+      assert.match(String(details?.nextAction ?? ""), /binary fallback/i);
+      assert.ok(Array.isArray(details?.qualityFlags));
+      assert.ok((details?.qualityFlags as unknown[]).includes("partial-source-no-net-minecraft"));
+      return true;
+    }
+  );
+});
+
+test("SourceService findClass suppresses misleading non-vanilla matches for partial-source vanilla lookups", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-findclass-partial-vanilla-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance: {
+      target: { kind: "version", value: "1.21.10" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: {
+        origin: "local-jar",
+        sourceJarPath,
+        binaryJarPath,
+        version: "1.21.10"
+      },
+      transformChain: ["mapping:mojang-source-backed"]
+    },
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        content: [
+          "package net.neoforged.neoforge.items;",
+          "public class Item {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.neoforged.neoforge.items.Item",
+        line: 2
+      }
+    ]
+  });
+
+  const result = service.findClass({
+    artifactId: "partial-source",
+    className: "Item",
+    limit: 10
+  });
+
+  assert.equal(result.total, 0);
+  assert.ok(result.warnings.some((warning) => warning.includes("partial") && warning.includes("net.minecraft")));
 });
 
 test("SourceService ignores projectPath Loom source discovery for obfuscated mapping", async () => {
@@ -4197,6 +4539,79 @@ test("SourceService getClassMembers with obfuscated mapping is unchanged (regres
   assert.equal(result.mappingApplied, "obfuscated");
   assert.equal(result.members.methods.length, 1);
   assert.equal(result.members.methods[0].name, "tick");
+});
+
+test("SourceService getClassMembers looks up bytecode using the resolved artifact namespace", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-lookup-namespace-"));
+  const service = new SourceService(buildTestConfig(root));
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async () => ({
+    artifactId: "merged-mojang",
+    origin: "local-jar" as const,
+    isDecompiled: false,
+    binaryJarPath,
+    version: "1.21.10",
+    requestedMapping: "mojang" as const,
+    mappingApplied: "mojang" as const,
+    provenance: {
+      target: { kind: "version" as const, value: "1.21.10" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: { origin: "local-jar" as const, binaryJarPath, version: "1.21.10" },
+      transformChain: ["mapping:mojang-source-backed"]
+    },
+    qualityFlags: ["source-backed"],
+    warnings: []
+  });
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { sourceMapping: string; targetMapping: string; name: string }) {
+      if (
+        input.sourceMapping === "mojang" &&
+        input.targetMapping === "obfuscated" &&
+        input.name === "net.minecraft.world.item.Item"
+      ) {
+        return {
+          resolved: true,
+          status: "resolved",
+          resolvedSymbol: { name: "dhl" },
+          candidates: [],
+          warnings: []
+        };
+      }
+      return { resolved: false, status: "not_found", candidates: [], warnings: [] };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string; jarPath: string }) {
+      assert.equal(input.jarPath, binaryJarPath);
+      assert.equal(input.fqn, "net.minecraft.world.item.Item");
+      return {
+        constructors: [],
+        fields: [],
+        methods: [],
+        warnings: [],
+        context: {
+          minecraftVersion: "1.21.10",
+          mappingType: "mojang",
+          mappingNamespace: "mojang",
+          jarHash: "hash",
+          generatedAt: new Date().toISOString()
+        }
+      };
+    }
+  };
+
+  const result = await service.getClassMembers({
+    className: "net.minecraft.world.item.Item",
+    target: { kind: "version", value: "1.21.10" },
+    mapping: "mojang"
+  });
+
+  assert.equal(result.mappingApplied, "mojang");
+  assert.equal(result.className, "net.minecraft.world.item.Item");
 });
 
 test("SourceService getClassMembers mapping fallback keeps original name and emits warning", async () => {

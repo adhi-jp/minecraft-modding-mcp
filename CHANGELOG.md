@@ -21,7 +21,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `resolve-artifact`: `targetKind=coordinate` now reuses the local Gradle `modules-2` cache in addition to the local Maven repository and configured source repos, so cached third-party libraries such as Architectury can resolve without manual cache spelunking.
 - `resolve-artifact`: `mapping=mojang` + Loom merged source discovery now flags partial source coverage with `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when the selected source jar does not actually contain `net.minecraft` entries.
 - `get-class-source` / `get-class-members`: when an artifact is resolved from a `*-sources.jar`, the server now keeps the sibling binary jar and automatically falls back to it when source coverage is incomplete instead of treating the source jar as bytecode.
+- `get-class-source`: partial-source binary fallback now bypasses the same sibling `*-sources.jar` that triggered the miss, and fallback failures for vanilla classes point to `get-class-api-matrix` instead of misleading `find-class` recovery.
+- `get-class-members`: bytecode lookup now follows the resolved artifact namespace (`mappingApplied`) before remapping members back to the requested namespace, fixing merged Mojang artifacts that were incorrectly forced through obfuscated class names.
 - `find-class`: zero-hit lookups against `mapping=obfuscated` now warn when the query looks like a deobfuscated Mojang class name.
+- `find-class`: partial-source artifacts now suppress non-vanilla matches for vanilla-looking queries (for example `Item`) and return a warning instead of misleading modded classes.
 - Tool input parsing: positive integer parameters now accept numeric strings such as `"10"` instead of failing validation immediately.
 - Tool input parsing now leaves nested `typedJson` and JSON Patch `value` payload fields untouched, even when their keys happen to match top-level numeric option names such as `limit` or `maxLines`.
 

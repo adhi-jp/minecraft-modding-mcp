@@ -273,9 +273,10 @@ This numeric-string coercion only applies to documented top-level tool arguments
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `target.value` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `target.kind=version`.
 `resolve-artifact` with `target.kind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
-`resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` will then fall back to the sibling binary artifact when possible.
+`resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` now bypasses that sibling `*-sources.jar` during binary fallback so the fallback can actually reach the binary artifact.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `find-class` returns an explanatory warning when an `obfuscated` artifact is queried with names that look like deobfuscated Mojang classes.
+`find-class` suppresses non-vanilla matches for vanilla-looking queries on artifacts flagged with `partial-source-no-net-minecraft`; in that situation it returns a warning instead of unrelated modded classes.
 `search-class-source` uses `limit: 20` by default.
 `search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
@@ -285,11 +286,12 @@ Use `get-artifact-file` or `get-class-source` to inspect returned files after se
 `get-artifact-file` byte truncation now preserves UTF-8 character boundaries, preventing replacement-character (`�`) corruption when `maxBytes` cuts through multibyte text.
 `search-class-source` `fileGlob` supports `*`, `**`, and `?`; recursive patterns such as `net/minecraft/**/*.java` are supported.
 `get-class-source` fallback matching enforces package compatibility and returns `ERR_CLASS_NOT_FOUND` when only name-colliding classes from other packages exist.
-`get-class-source` now falls back to the sibling binary artifact when a source-backed artifact is only partial (for example, merged Loom sources without `net.minecraft` entries).
+`get-class-source` now falls back to the sibling binary artifact when a source-backed artifact is only partial (for example, merged Loom sources without `net.minecraft` entries); if that fallback still cannot produce source, the error now carries the partial-source context and suggests `get-class-api-matrix` instead of `find-class`.
+`get-class-source` warns when fallback source text is returned in a different namespace than the requested mapping; the source text itself is not remapped.
 `get-class-source` mode defaults to `metadata` (symbol outline only); `mode=snippet` auto-sets `maxLines=200` when no line range/max is provided; `mode=full` returns the entire source. `outputFile` writes the selected text and returns the file path in `outputFile`.
 Decompile fallback for `resolve-artifact`/`get-class-source` now invokes Vineflower with flags before positional `<input-jar> <output-dir>` arguments to avoid false `ERR_DECOMPILER_FAILED` outcomes on valid jars.
 `resolve-artifact` with `target.kind=jar` only auto-adopts the exact sibling `"<jar-basename>-sources.jar"`. Other adjacent `*-sources.jar` files are returned as `adjacentSourceCandidates` info only and are never auto-selected.
-When a resolved artifact comes from a `*-sources.jar`, `get-class-members` now keeps the sibling binary jar (for example `minecraft-merged-<version>.jar`) instead of treating the source jar as bytecode.
+When a resolved artifact comes from a `*-sources.jar`, `get-class-members` now keeps the sibling binary jar (for example `minecraft-merged-<version>.jar`) instead of treating the source jar as bytecode, and it now looks up the class in the resolved artifact namespace before remapping member names back to the requested mapping.
 For `target.kind=coordinate` with a classifier (`group:artifact:version:classifier`), local Maven source lookup checks `<artifact>-<version>-<classifier>-sources.jar` first and then `<artifact>-<version>-sources.jar`.
 Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path before existence checks, cache keying, and processing.
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.

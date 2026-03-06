@@ -189,6 +189,7 @@ function resolvedAtNow(): string {
 
 export interface ResolveSourceTargetOptions {
   allowDecompile: boolean;
+  preferBinaryOnly?: boolean;
   preferredRepos?: string[];
   onRepoFailover?: (event: {
     stage: "source" | "binary";
@@ -215,6 +216,7 @@ export async function resolveSourceTarget(
     const adjacentSourceCandidates = listAdjacentJarSourceCandidates(resolvedJarPath);
     const maybeAdjacentSourceCandidates =
       adjacentSourceCandidates.length > 0 ? adjacentSourceCandidates : undefined;
+    const preferBinaryOnly = options.preferBinaryOnly ?? false;
 
     if (await hasJavaSources(resolvedJarPath)) {
       const siblingBinaryJarPath = resolveSiblingBinaryJarCandidate(resolvedJarPath);
@@ -233,7 +235,7 @@ export async function resolveSourceTarget(
       };
     }
 
-    if (await hasJavaSources(exactSourceJarPath)) {
+    if (!preferBinaryOnly && await hasJavaSources(exactSourceJarPath)) {
       const sourceSignature = readStatsSignature(exactSourceJarPath);
       return {
         artifactId: artifactIdForJar("jar", exactSourceJarPath, sourceSignature),
