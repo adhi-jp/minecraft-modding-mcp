@@ -74,3 +74,33 @@ test("WorkspaceMappingService reports unresolved when modules disagree on mappin
   assert.equal(result.mappingApplied, undefined);
   assert.ok(result.warnings.some((warning) => warning.includes("Multiple compile mappings")));
 });
+
+test("WorkspaceMappingService detects mojang mapping from NeoForge ModDevGradle workspace", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "workspace-mapping-neoforge-"));
+  await writeFile(
+    join(root, "build.gradle"),
+    [
+      "plugins {",
+      "  id 'java-library'",
+      "  id 'net.neoforged.moddev' version '2.0.140'",
+      "}",
+      "",
+      "neoForge {",
+      "  version = project.neo_version",
+      "  parchment {",
+      "    mappingsVersion = project.parchment_mappings_version",
+      "    minecraftVersion = project.parchment_minecraft_version",
+      "  }",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const service = new WorkspaceMappingService();
+  const result = await service.detectCompileMapping({ projectPath: root });
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.mappingApplied, "mojang");
+  assert.ok(result.evidence.some((entry) => entry.reason.includes("net.neoforged.moddev")));
+});

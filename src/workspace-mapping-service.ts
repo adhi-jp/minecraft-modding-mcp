@@ -48,6 +48,18 @@ function detectMappingsFromContent(content: string): MappingDetection[] {
       reason: "mappings net.fabricmc:intermediary"
     });
   }
+  if (/\bid\s*(?:\(\s*)?["']net\.neoforged\.moddev["']\s*\)?/i.test(content)) {
+    detections.push({
+      mapping: "mojang",
+      reason: "net.neoforged.moddev plugin"
+    });
+  }
+  if (/\bneoForge\s*\{[\s\S]*?\bparchment\s*\{/i.test(content)) {
+    detections.push({
+      mapping: "mojang",
+      reason: "neoForge parchment block"
+    });
+  }
   return detections;
 }
 

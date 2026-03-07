@@ -17,6 +17,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `get-class-source` / `get-class-members` now infer a missing artifact version from `projectPath` when `preferProjectVersion=true`, making project-aware lookups more consistent for previously resolved artifacts.
 - Error recovery payloads (`suggestedCall`) now use the current `target` object schema instead of deprecated `targetKind` / `targetValue` fields.
 - `list-artifact-files` now warns when callers probe `assets/` or `data/` prefixes against the Java-source index, instead of silently returning an unexplained empty result.
+- `resolve-artifact` now searches project-local and Gradle user-home Loom caches without auto-selecting unrelated mod/library source jars just because their filenames contain the requested Minecraft version.
+- `resolve-workspace-symbol` now recognizes NeoForge ModDevGradle workspaces as `mojang` compile mappings instead of returning `mapping_unavailable`.
+
+### Documentation
+- Corrected the `compare-versions` README contract to document registry results under `result.registry`.
 
 ## [2.0.0] - 2026-03-07
 

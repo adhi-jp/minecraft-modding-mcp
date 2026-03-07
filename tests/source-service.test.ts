@@ -35,6 +35,20 @@ function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config 
   };
 }
 
+async function withGradleUserHome<T>(gradleUserHome: string, fn: () => Promise<T>): Promise<T> {
+  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = gradleUserHome;
+  try {
+    return await fn();
+  } finally {
+    if (previousGradleUserHome === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previousGradleUserHome;
+    }
+  }
+}
+
 function readSearchPathMetrics(service: { getRuntimeMetrics: () => unknown }): {
   indexedHits: number;
   fallbackHits: number;
@@ -1954,15 +1968,17 @@ test("SourceService resolves mojang mapping for version target using workspace L
   }
 });
 
-test("SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial", async () => {
+test("SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial", { concurrency: false }, async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-version-mojang-partial-"));
   const projectPath = join(root, "workspace");
+  const gradleUserHome = join(root, "gradle-user-home");
   const loomCacheDir = join(projectPath, ".gradle", "loom-cache", "1.21.10");
   const loomSourceJarPath = join(loomCacheDir, "minecraft-merged-1.21.10-sources.jar");
   const loomBinaryJarPath = join(loomCacheDir, "minecraft-merged-1.21.10.jar");
 
   await mkdir(loomCacheDir, { recursive: true });
+  await mkdir(gradleUserHome, { recursive: true });
   await createJar(loomSourceJarPath, {
     "dhl.java": [
       "public class dhl {}"
@@ -1984,14 +2000,16 @@ test("SourceService resolveArtifact marks merged mojang sources without net.mine
     }
   };
 
-  const resolved = await service.resolveArtifact({
-    target: {
-      kind: "version",
-      value: "1.21.10"
-    },
-    mapping: "mojang",
-    projectPath
-  } as any);
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    service.resolveArtifact({
+      target: {
+        kind: "version",
+        value: "1.21.10"
+      },
+      mapping: "mojang",
+      projectPath
+    } as any)
+  );
 
   assert.ok(resolved.qualityFlags.includes("partial-source-no-net-minecraft"));
   assert.ok(
@@ -2353,11 +2371,13 @@ test("SourceService ignores projectPath Loom source discovery for obfuscated map
   }
 });
 
-test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot be applied for version target", async () => {
+test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot be applied for version target", { concurrency: false }, async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-version-mojang-diagnostics-"));
   const projectPath = join(root, "workspace");
+  const gradleUserHome = join(root, "gradle-user-home");
   await mkdir(projectPath, { recursive: true });
+  await mkdir(gradleUserHome, { recursive: true });
 
   const remoteJarPath = join(root, "remote-1.21.10.jar");
   await createJar(remoteJarPath, {
@@ -2405,12 +2425,187 @@ test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot
 
   try {
     const service = new SourceService(buildTestConfig(root));
-    await assert.rejects(
+    await withGradleUserHome(gradleUserHome, () =>
+      assert.rejects(
+        () =>
+          service.resolveArtifact({
+            target: {
+              kind: "version",
+              value: "1.21.10"
+            },
+            mapping: "mojang",
+            projectPath
+          } as any),
+        (error: unknown) => {
+          if (typeof error !== "object" || error === null || !("code" in error)) {
+            return false;
+          }
+          if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) {
+            return false;
+          }
+          const details = (error as { details?: Record<string, unknown> }).details ?? {};
+          return (
+            Array.isArray(details.searchedPaths) &&
+            Array.isArray(details.candidateArtifacts) &&
+            typeof details.recommendedCommand === "string"
+          );
+        }
+      )
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+});
+
+test("SourceService resolveArtifact prefers Minecraft source jars from sibling Gradle user home over project remapped mod sources", { concurrency: false }, async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-mojang-gradle-home-"));
+  const projectPath = join(root, "workspace");
+  const projectRemappedDir = join(
+    projectPath,
+    ".gradle",
+    "loom-cache",
+    "remapped_mods",
+    "remapped",
+    "net",
+    "fabricmc",
+    "fabric-api",
+    "fabric-api-4abd26ae-common",
+    "0.139.4+1.21.11"
+  );
+  const projectPartialSourceJarPath = join(
+    projectRemappedDir,
+    "fabric-api-4abd26ae-common-0.139.4+1.21.11-sources.jar"
+  );
+  const projectPartialBinaryJarPath = join(
+    projectRemappedDir,
+    "fabric-api-4abd26ae-common-0.139.4+1.21.11.jar"
+  );
+  const gradleUserHome = join(root, "gradle-user-home");
+  const gradleHomeLoomDir = join(gradleUserHome, "loom-cache", "1.21.11");
+  const minecraftSourceJarPath = join(gradleHomeLoomDir, "minecraft-merged-1.21.11-sources.jar");
+  const minecraftBinaryJarPath = join(gradleHomeLoomDir, "minecraft-merged-1.21.11.jar");
+  const versionJarPath = join(root, "client-1.21.11.jar");
+
+  await mkdir(projectRemappedDir, { recursive: true });
+  await mkdir(gradleHomeLoomDir, { recursive: true });
+  await createJar(projectPartialSourceJarPath, {
+    "net/fabricmc/fabric/api/item/v1/FabricItemApi.java": [
+      "package net.fabricmc.fabric.api.item.v1;",
+      "public final class FabricItemApi {}"
+    ].join("\n")
+  });
+  await createJar(projectPartialBinaryJarPath, {
+    "net/fabricmc/fabric/api/item/v1/FabricItemApi.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(minecraftSourceJarPath, {
+    "net/minecraft/world/item/Item.java": [
+      "package net.minecraft.world.item;",
+      "public class Item {}"
+    ].join("\n")
+  });
+  await createJar(minecraftBinaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(versionJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: versionJarPath,
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    service.resolveArtifact({
+      target: {
+        kind: "version",
+        value: "1.21.11"
+      },
+      mapping: "mojang",
+      projectPath
+    } as any)
+  );
+
+  assert.equal(resolved.resolvedSourceJarPath, minecraftSourceJarPath);
+  assert.equal(resolved.binaryJarPath, minecraftBinaryJarPath);
+  assert.equal(resolved.mappingApplied, "mojang");
+  assert.equal(resolved.qualityFlags.includes("partial-source-no-net-minecraft"), false);
+});
+
+test("SourceService resolveArtifact does not treat version-matching mod source jars as Minecraft merged sources", { concurrency: false }, async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-version-mojang-false-positive-"));
+  const projectPath = join(root, "workspace");
+  const gradleUserHome = join(root, "gradle-user-home");
+  const projectRemappedDir = join(
+    projectPath,
+    ".gradle",
+    "loom-cache",
+    "remapped_mods",
+    "remapped",
+    "net",
+    "fabricmc",
+    "fabric-api",
+    "fabric-api-4abd26ae-common",
+    "0.139.4+1.21.11"
+  );
+  const projectPartialSourceJarPath = join(
+    projectRemappedDir,
+    "fabric-api-4abd26ae-common-0.139.4+1.21.11-sources.jar"
+  );
+  const projectPartialBinaryJarPath = join(
+    projectRemappedDir,
+    "fabric-api-4abd26ae-common-0.139.4+1.21.11.jar"
+  );
+  const versionJarPath = join(root, "client-1.21.11.jar");
+
+  await mkdir(projectRemappedDir, { recursive: true });
+  await createJar(projectPartialSourceJarPath, {
+    "net/fabricmc/fabric/api/item/v1/FabricItemApi.java": [
+      "package net.fabricmc.fabric.api.item.v1;",
+      "public final class FabricItemApi {}"
+    ].join("\n")
+  });
+  await createJar(projectPartialBinaryJarPath, {
+    "net/fabricmc/fabric/api/item/v1/FabricItemApi.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(versionJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
+  });
+  await mkdir(gradleUserHome, { recursive: true });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: versionJarPath,
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  await withGradleUserHome(gradleUserHome, () =>
+    assert.rejects(
       () =>
         service.resolveArtifact({
           target: {
             kind: "version",
-            value: "1.21.10"
+            value: "1.21.11"
           },
           mapping: "mojang",
           projectPath
@@ -2424,20 +2619,14 @@ test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot
         }
         const details = (error as { details?: Record<string, unknown> }).details ?? {};
         return (
-          Array.isArray(details.searchedPaths) &&
           Array.isArray(details.candidateArtifacts) &&
-          typeof details.recommendedCommand === "string"
+          (details.candidateArtifacts as string[]).some((candidate) =>
+            candidate.includes("fabric-api-4abd26ae-common-0.139.4+1.21.11-sources.jar")
+          )
         );
       }
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+    )
+  );
 });
 
 test("SourceService source code does not expose legacy compatibility methods", async () => {

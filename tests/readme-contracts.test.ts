@@ -28,6 +28,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `get-artifact-file` \|.*`artifactId`.*`filePath`.*`maxBytes\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `list-artifact-files` \|.*`artifactId`.*`prefix\?`.*`cursor\?`.*`artifactContents`.*`warnings\[\]`/);
+  assert.match(readme, /\| `compare-versions` \|.*`classes`, `registry`, `summary`, `warnings\[\]` \|/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
@@ -44,6 +45,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /Heavy analysis tools .* are serialized inside the server/);
   assert.match(readme, /CLI stdio entrypoint now runs a supervised worker process/);
   assert.match(readme, /replays MCP initialization for the current session/);
+  assert.match(readme, /Registry deltas are returned under `result\.registry` \(not `registryDiff`\)\./);
   assert.match(readme, /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, or `config`/);
   assert.match(readme, /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/);
   assert.match(readme, /`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`/);

@@ -659,6 +659,7 @@ type VersionSourceCandidate = {
   jarPath: string;
   javaEntryCount: number;
   hasMinecraftNamespace: boolean;
+  looksLikeMinecraftArtifact: boolean;
   score: number;
 };
 
@@ -736,18 +737,47 @@ function normalizeOptionalProjectPath(projectPath: string | undefined): string |
   return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
 }
 
+function resolveGradleUserHomePath(): string {
+  const configured = process.env.GRADLE_USER_HOME?.trim();
+  if (!configured) {
+    return resolvePath(homedir(), ".gradle");
+  }
+  const normalized = normalizePathForHost(configured, undefined, "GRADLE_USER_HOME");
+  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+}
+
 function buildVersionSourceSearchRoots(projectPath: string | undefined): string[] {
   const roots = new Set<string>();
   if (projectPath) {
     roots.add(resolvePath(projectPath, ".gradle", "loom-cache"));
     roots.add(resolvePath(projectPath, ".gradle-user", "caches", "fabric-loom"));
     roots.add(resolvePath(projectPath, ".gradle", "caches", "fabric-loom"));
-    return [...roots];
+    const projectParent = dirname(projectPath);
+    roots.add(resolvePath(projectParent, ".gradle-user-home", "loom-cache"));
+    roots.add(resolvePath(projectParent, ".gradle-user-home", "caches", "fabric-loom"));
   }
-  const homeGradle = resolvePath(homedir(), ".gradle");
+  const homeGradle = resolveGradleUserHomePath();
   roots.add(resolvePath(homeGradle, "loom-cache"));
   roots.add(resolvePath(homeGradle, "caches", "fabric-loom"));
   return [...roots];
+}
+
+function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: boolean): boolean {
+  if (hasMinecraftNamespace) {
+    return true;
+  }
+
+  const normalizedPath = normalizePathStyle(path).toLowerCase();
+  return (
+    normalizedPath.includes("/minecraftmaven/") ||
+    normalizedPath.includes("/net/minecraft/") ||
+    /(?:^|\/)minecraft(?:-[a-z0-9._+]+)*-sources\.jar$/i.test(normalizedPath) ||
+    normalizedPath.includes("minecraft-merged") ||
+    normalizedPath.includes("minecraft-common") ||
+    normalizedPath.includes("minecraft-clientonly") ||
+    normalizedPath.includes("minecraft-client") ||
+    normalizedPath.includes("minecraft-server")
+  );
 }
 
 function parseQualifiedMethodSymbol(symbol: string): { className: string; methodName: string } {
@@ -1337,15 +1367,22 @@ export class SourceService {
         const hasMinecraftNamespace = javaEntries.some((entry) =>
           normalizePathStyle(entry).startsWith("net/minecraft/")
         );
+        const looksLikeMinecraftArtifact = looksLikeMinecraftSourceArtifact(
+          normalizedPath,
+          hasMinecraftNamespace
+        );
+        const exactVersionMatch = hasExactVersionToken(normalizedPath, input.version);
         const score =
+          (looksLikeMinecraftArtifact ? 20_000 : 0) +
           (hasMinecraftNamespace ? 10_000 : 0) +
           (lower.includes("minecraft-merged") ? 2_000 : 0) +
-          (lower.includes(input.version.toLowerCase()) ? 1_000 : 0) +
+          (exactVersionMatch ? 1_000 : 0) +
           Math.min(javaEntries.length, 500);
         candidates.push({
           jarPath: normalizedPath,
           javaEntryCount: javaEntries.length,
           hasMinecraftNamespace,
+          looksLikeMinecraftArtifact,
           score
         });
       }
@@ -1359,7 +1396,8 @@ export class SourceService {
     });
 
     const selected =
-      candidates.find((candidate) => candidate.hasMinecraftNamespace) ?? candidates[0];
+      candidates.find((candidate) => candidate.looksLikeMinecraftArtifact && candidate.hasMinecraftNamespace) ??
+      candidates.find((candidate) => candidate.looksLikeMinecraftArtifact);
     const candidateArtifacts = candidates
       .slice(0, 20)
       .map((candidate) => `${candidate.jarPath}#java=${candidate.javaEntryCount}#net_minecraft=${candidate.hasMinecraftNamespace ? 1 : 0}`);

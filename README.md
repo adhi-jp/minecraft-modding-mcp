@@ -196,7 +196,7 @@ Tools for comparing class/registry changes across Minecraft versions and tracing
 | --- | --- | --- | --- |
 | `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
 | `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `summary`, `warnings[]` |
-| `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classesDiff`, `registryDiff`, `summary`, `warnings[]` |
+| `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classes`, `registry`, `summary`, `warnings[]` |
 
 ### Mapping & Symbols
 
@@ -280,7 +280,7 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `target.value` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `target.kind=version`.
 `resolve-artifact` with `target.kind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
-`resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; `get-class-source` now bypasses that sibling `*-sources.jar` during binary fallback so the fallback can actually reach the binary artifact.
+`resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; only candidates that still look like Minecraft source artifacts are auto-selected, while version-matching mod/library source jars remain diagnostics only. `get-class-source` now bypasses that sibling `*-sources.jar` during binary fallback so the fallback can actually reach the binary artifact.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
 `find-class` returns an explanatory warning when an `obfuscated` artifact is queried with names that look like deobfuscated Mojang classes.
 `find-class` suppresses non-vanilla matches for vanilla-looking queries on artifacts flagged with `partial-source-no-net-minecraft`; in that situation it returns a warning instead of unrelated modded classes.
@@ -476,6 +476,8 @@ Get a high-level summary of what changed between two releases, including class a
   }
 }
 ```
+
+Registry deltas are returned under `result.registry` (not `registryDiff`).
 
 ### Mapping & Symbols
 
