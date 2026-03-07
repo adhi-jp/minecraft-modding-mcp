@@ -22,7 +22,7 @@
 - Before claiming completion for production changes, run:
   - `pnpm check`
   - `pnpm test`
-- When MCP transport/tool registration or manual workflows change, also run `pnpm test:manual:mcp-use-smoke` when environment permits.
+- When MCP transport/tool registration or manual workflows change, also run `pnpm test:manual:stdio-smoke` when environment permits.
 - For search/index/performance-sensitive changes, run the repository performance validation suite.
 - Do not claim "done", "fixed", or "passing" without fresh command output evidence.
 

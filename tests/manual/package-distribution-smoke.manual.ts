@@ -7,6 +7,8 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
+import { findPackedTarball } from "../helpers/package-smoke.ts";
+
 const execFileAsync = promisify(execFile);
 const STARTUP_STABILITY_MS = 2_000;
 const FORBIDDEN_PREFIXES = ["package/src/", "package/tests/", "package/.plans/", "package/.reference/", "package/.agents/"] as const;
@@ -14,10 +16,6 @@ const FORBIDDEN_PREFIXES = ["package/src/", "package/tests/", "package/.plans/",
 type PackageJson = {
   name: string;
   version: string;
-};
-
-type PackManifestEntry = {
-  filename: string;
 };
 
 async function runNpm(args: string[], npmCache: string): Promise<void> {
@@ -30,15 +28,36 @@ async function runNpm(args: string[], npmCache: string): Promise<void> {
   });
 }
 
-async function runNpmJson<T>(args: string[], npmCache: string): Promise<T> {
-  const { stdout } = await execFileAsync("npm", args, {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      NPM_CONFIG_CACHE: npmCache
-    }
+async function canUseStdioPipeReliably(): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        [
+          "process.stdin.resume();",
+          "process.stdin.once('end', () => process.exit(42));",
+          "setTimeout(() => process.exit(0), 150);"
+        ].join("")
+      ],
+      {
+        stdio: ["pipe", "ignore", "ignore"]
+      }
+    );
+
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve(true);
+        return;
+      }
+      if (code === 42) {
+        resolve(false);
+        return;
+      }
+      reject(new Error(`stdio preflight exited unexpectedly with code ${code ?? "null"}.`));
+    });
   });
-  return JSON.parse(stdout) as T;
 }
 
 async function waitForStartupStability(child: ReturnType<typeof spawn>): Promise<void> {
@@ -63,16 +82,16 @@ async function waitForStartupStability(child: ReturnType<typeof spawn>): Promise
 async function main(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "package-smoke-"));
   const npmCache = join(root, "npm-cache");
+  const packDir = join(root, "pack");
   const extractDir = join(root, "extract");
   const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
   let tarballPath = "";
 
   try {
-    await runNpm(["pack", "--dry-run"], npmCache);
-    const packEntries = await runNpmJson<PackManifestEntry[]>(["pack", "--json"], npmCache);
-    const tarballName = packEntries[0]?.filename;
-    assert.ok(tarballName, `npm pack --json did not return a filename for ${packageJson.name}@${packageJson.version}.`);
-    tarballPath = join(process.cwd(), tarballName);
+    await mkdir(packDir, { recursive: true });
+    await runNpm(["pack", "--dry-run", "--pack-destination", packDir], npmCache);
+    await runNpm(["pack", "--pack-destination", packDir], npmCache);
+    tarballPath = await findPackedTarball(packDir, packageJson);
 
     const { stdout: tarListRaw } = await execFileAsync("tar", ["-tf", tarballPath], {
       cwd: process.cwd()
@@ -99,6 +118,14 @@ async function main(): Promise<void> {
 
     await lstat(workspaceNodeModules);
     await symlink(workspaceNodeModules, packageNodeModules, "dir");
+
+    const stdioReady = await canUseStdioPipeReliably();
+    if (!stdioReady) {
+      console.log(
+        "Package distribution smoke: tarball contents validated; CLI startup skipped because stdin pipe closes immediately in this runtime."
+      );
+      return;
+    }
 
     const child = spawn("node", [cliPath], {
       cwd: packageRoot,

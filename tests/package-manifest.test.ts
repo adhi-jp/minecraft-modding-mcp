@@ -44,4 +44,19 @@ test("package.json declares distribution entrypoints and include list", async ()
     packageJson.scripts?.["test:manual:package-smoke"],
     "node --import tsx tests/manual/package-distribution-smoke.manual.ts"
   );
+  assert.equal(packageJson.scripts?.["test:manual:mcp-use-smoke"], undefined);
+});
+
+test("package distribution smoke guards CLI startup when stdio pipes close immediately", async () => {
+  const source = await readFile("tests/manual/package-distribution-smoke.manual.ts", "utf8");
+
+  assert.match(source, /async function canUseStdioPipeReliably\(\): Promise<boolean>/);
+  assert.match(source, /Package distribution smoke: tarball contents validated; CLI startup skipped because stdin pipe closes immediately in this runtime\./);
+});
+
+test("AGENTS verification gate references the concrete stdio smoke command", async () => {
+  const agents = await readFile("AGENTS.md", "utf8");
+
+  assert.match(agents, /pnpm test:manual:stdio-smoke/);
+  assert.doesNotMatch(agents, /pnpm test:manual:mcp-use-smoke/);
 });
