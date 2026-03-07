@@ -6012,6 +6012,100 @@ test("SourceService validateMixin applies resolveArtifact mapping fallback metad
   assert.ok(single?.warnings.some((w) => w.includes("Resolve artifact warning from Loom cache.")));
 });
 
+test("SourceService validateMixin uses applied mapping namespace for merged scope bytecode lookup", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-merged-mojang-"));
+  const mergedJarPath = join(root, "minecraft-merged.jar");
+  await createJar(mergedJarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+  const signatureLookups: string[] = [];
+
+  (service as any).resolveArtifact = async () => ({
+    artifactId: "artifact:test",
+    origin: "loom-cache",
+    warnings: [],
+    mappingApplied: "mojang",
+    requestedMapping: "mojang",
+    resolvedSourceJarPath: join(root, "minecraft-merged-sources.jar"),
+    binaryJarPath: mergedJarPath,
+    provenance: {
+      target: { kind: "version", value: "1.21" }
+    },
+    qualityFlags: [],
+    version: "1.21"
+  });
+  (service as any).workspaceMappingService = {
+    async detectCompileMapping() {
+      return { resolved: false, evidence: [], warnings: [] };
+    },
+    async detectProjectMinecraftVersion() {
+      return undefined;
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    },
+    async findMapping() {
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: { name: "a" },
+        candidates: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature(input: { fqn: string }) {
+      signatureLookups.push(input.fqn);
+      if (input.fqn !== "net.minecraft.server.Main") {
+        throw new Error(`missing bytecode for ${input.fqn}`);
+      }
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [{ ownerFqn: "net.minecraft.server.Main", name: "tick", javaSignature: "void tick()", jvmDescriptor: "()V", accessFlags: 1, isSynthetic: false }],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "inline",
+      source: [
+        "import net.minecraft.server.Main;",
+        "import org.spongepowered.asm.mixin.Mixin;",
+        "import org.spongepowered.asm.mixin.injection.Inject;",
+        "import org.spongepowered.asm.mixin.injection.At;",
+        "",
+        "@Mixin(Main.class)",
+        "public abstract class MainMixin {",
+        "  @Inject(method = \"tick\", at = @At(\"HEAD\"))",
+        "  private void onTick() {}",
+        "}"
+      ].join("\n")
+    },
+    version: "1.21",
+    mapping: "mojang",
+    scope: "merged",
+    projectPath: root
+  });
+
+  const single = result.results[0]?.result;
+  assert.equal(single?.validationStatus, "full");
+  assert.equal(single?.summary.membersValidated, 1);
+  assert.deepEqual(signatureLookups, ["net.minecraft.server.Main"]);
+});
+
 test("SourceService validateMixin retries with maven-first after loom-first partial validation", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-priority-retry-"));

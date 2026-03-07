@@ -276,6 +276,7 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `validate-mixin` batch `summary` now includes `partial` so callers can distinguish fully clean results from tool-limited-but-non-failing results.
 `validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` provenance now exposes `requestedScope` / `appliedScope` and `requestedSourcePriority` / `appliedSourcePriority` so fallback and retry behavior is explicit.
+For non-vanilla scopes such as `scope="merged"`, `validate-mixin` now performs bytecode lookup in the resolved artifact namespace before remapping members back to the requested namespace, so Mojang-mapped Loom workspaces validate against merged class names instead of reporting false partial results.
 `validate-mixin` automatically retries with `sourcePriority="maven-first"` after a partial `loom-first` validation caused by mapping/signature resolution limits, and records that retry in warnings plus provenance notes.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.

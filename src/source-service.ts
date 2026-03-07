@@ -3773,6 +3773,7 @@ export class SourceService {
     // Resolve jar: use Loom cache for non-vanilla scope with projectPath
     let jarPath: string;
     let resolvedArtifact: ResolveArtifactOutput | undefined;
+    let signatureLookupMapping: SourceMapping = "obfuscated";
     let scopeFallback: { requested: string; applied: string; reason: string } | undefined;
     if (input.scope && input.scope !== "vanilla" && input.projectPath) {
       try {
@@ -3787,6 +3788,7 @@ export class SourceService {
         jarPath = resolvedArtifact.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
         warnings.push(...resolvedArtifact.warnings);
         mappingApplied = resolvedArtifact.mappingApplied;
+        signatureLookupMapping = resolvedArtifact.mappingApplied;
         if (resolvedArtifact.version) {
           version = resolvedArtifact.version;
         }
@@ -3808,6 +3810,7 @@ export class SourceService {
     if (jarPath.includes("-sources.jar")) {
       warnings.push(`Resolved jar appears to be a sources jar. Falling back to vanilla client jar.`);
       jarPath = (await this.versionService.resolveVersionJar(version)).jarPath;
+      signatureLookupMapping = "obfuscated";
       scopeFallback = {
         requested: input.scope ?? "vanilla",
         applied: "vanilla",
@@ -3872,26 +3875,30 @@ export class SourceService {
 
       let obfuscatedName = resolvedClassName;
 
-      if (requestedMapping !== "obfuscated") {
+      if (requestedMapping !== signatureLookupMapping) {
         try {
           const mapped = await this.mappingService.findMapping({
             version,
             kind: "class",
             name: resolvedClassName,
             sourceMapping: requestedMapping,
-            targetMapping: "obfuscated",
+            targetMapping: signatureLookupMapping,
             sourcePriority: currentSourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             obfuscatedName = mapped.resolvedSymbol.name;
             resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: true });
           } else {
-            warnings.push(`Could not map class "${resolvedClassName}" from ${requestedMapping} to obfuscated; using "${obfuscatedName}" for lookup.`);
+            warnings.push(
+              `Could not map class "${resolvedClassName}" from ${requestedMapping} to ${signatureLookupMapping}; using "${obfuscatedName}" for lookup.`
+            );
             mappingFailedTargets.add(target.className);
             resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: "No mapping found" });
           }
         } catch (mapErr) {
-          warnings.push(`Mapping lookup failed for class "${resolvedClassName}"; using "${obfuscatedName}" for lookup.`);
+          warnings.push(
+            `Mapping lookup failed for class "${resolvedClassName}" while preparing ${signatureLookupMapping} lookup; using "${obfuscatedName}" for lookup.`
+          );
           mappingFailedTargets.add(target.className);
           resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: mapErr instanceof Error ? mapErr.message : String(mapErr) });
         }
@@ -3911,12 +3918,36 @@ export class SourceService {
         let methods = sig.methods;
         let fields = sig.fields;
 
-        if (requestedMapping !== "obfuscated") {
+        if (requestedMapping !== signatureLookupMapping) {
           try {
             const [ctorResult, methodResult, fieldResult] = await Promise.all([
-              this.remapSignatureMembers(sig.constructors, "method", version, "obfuscated", requestedMapping, currentSourcePriority, warnings),
-              this.remapSignatureMembers(sig.methods, "method", version, "obfuscated", requestedMapping, currentSourcePriority, warnings),
-              this.remapSignatureMembers(sig.fields, "field", version, "obfuscated", requestedMapping, currentSourcePriority, warnings)
+              this.remapSignatureMembers(
+                sig.constructors,
+                "method",
+                version,
+                signatureLookupMapping,
+                requestedMapping,
+                currentSourcePriority,
+                warnings
+              ),
+              this.remapSignatureMembers(
+                sig.methods,
+                "method",
+                version,
+                signatureLookupMapping,
+                requestedMapping,
+                currentSourcePriority,
+                warnings
+              ),
+              this.remapSignatureMembers(
+                sig.fields,
+                "field",
+                version,
+                signatureLookupMapping,
+                requestedMapping,
+                currentSourcePriority,
+                warnings
+              )
             ]);
             constructors = ctorResult.members;
             methods = methodResult.members;
@@ -3934,9 +3965,19 @@ export class SourceService {
               resolutionTrace?.push({ target: target.className, step: "remap", input: `${methods.length + fields.length} members`, output: "remapped", success: true });
             }
           } catch (remapErr) {
-            warnings.push(`Member remapping failed for "${resolvedClassName}"; falling back to obfuscated names. Member names shown may be in the obfuscated runtime namespace.`);
-            mappingApplied = "obfuscated";
-            resolutionTrace?.push({ target: target.className, step: "remap", input: resolvedClassName, output: "obfuscated fallback", success: false, detail: remapErr instanceof Error ? remapErr.message : String(remapErr) });
+            warnings.push(
+              `Member remapping failed for "${resolvedClassName}"; falling back to ${signatureLookupMapping} names. ` +
+              `Member names shown may be in the ${signatureLookupMapping} runtime namespace.`
+            );
+            mappingApplied = signatureLookupMapping;
+            resolutionTrace?.push({
+              target: target.className,
+              step: "remap",
+              input: resolvedClassName,
+              output: `${signatureLookupMapping} fallback`,
+              success: false,
+              detail: remapErr instanceof Error ? remapErr.message : String(remapErr)
+            });
           }
         }
 
@@ -4017,11 +4058,11 @@ export class SourceService {
 
     // Build mapping chain description
     const mappingChain: string[] = [];
-    if (requestedMapping !== "obfuscated") {
-      mappingChain.push(`${requestedMapping} → obfuscated`);
-      if (mappingApplied !== requestedMapping) {
-        mappingChain.push(`fallback to ${mappingApplied}`);
-      }
+    if (requestedMapping !== signatureLookupMapping) {
+      mappingChain.push(`${requestedMapping} → ${signatureLookupMapping}`);
+    }
+    if (mappingApplied !== signatureLookupMapping) {
+      mappingChain.push(`fallback to ${mappingApplied}`);
     }
 
     const provenance: MixinValidationProvenance = {

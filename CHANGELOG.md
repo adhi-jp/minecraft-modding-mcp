@@ -30,6 +30,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` now retries with `sourcePriority="maven-first"` after a partial `loom-first` validation caused by mapping/signature resolution limits, reducing false warnings from Loom-only resolution paths.
 - `validate-mixin` no longer emits schema-invalid `check-symbol-exists` recovery payloads in `suggestedCall`; unsupported parameters such as `scope` and `projectPath` are omitted from those calls.
 - `validate-mixin` now lowers confidence for skipped member validation and exposes requested-vs-applied scope/source-priority details instead of making partial results look fully verified.
+- `validate-mixin` now follows the resolved artifact namespace during bytecode lookup for non-vanilla scopes, so `scope="merged"` on Mojang-mapped Loom workspaces validates against merged class names instead of falling back to false partial results and retry-driven timeouts.
 - Invalid `validate-mixin` requests now return the standard `ERR_INVALID_INPUT` envelope with `fieldErrors`, `hints`, and a mode-correct `suggestedCall` instead of the SDK's generic pre-validation text error.
 - `check-symbol-exists` no longer repeats raw Loom tiny-cache miss warnings when Maven tiny mappings successfully satisfy the lookup; successful fallback now emits concise fallback context instead.
 
