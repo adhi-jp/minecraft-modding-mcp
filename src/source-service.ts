@@ -136,7 +136,7 @@ export type ArtifactContentsSummary = {
   sourceKind: "source-jar" | "decompiled-binary";
   indexedContentKinds: string[];
   resourcesIncluded: boolean;
-  sourceCoverage: "full" | "partial" | "unknown";
+  sourceCoverage: "full" | "partial";
 };
 
 type SymbolKind = "class" | "interface" | "enum" | "record" | "method" | "field";
@@ -1428,11 +1428,7 @@ export class SourceService {
       input.isDecompiled || input.origin === "decompiled" || !normalizeOptionalString(input.sourceJarPath)
         ? "decompiled-binary"
         : "source-jar";
-    const sourceCoverage = hasPartialNetMinecraftCoverage(input.qualityFlags)
-      ? "partial"
-      : input.qualityFlags.length > 0 || sourceKind === "source-jar" || sourceKind === "decompiled-binary"
-        ? "full"
-        : "unknown";
+    const sourceCoverage = hasPartialNetMinecraftCoverage(input.qualityFlags) ? "partial" : "full";
 
     return {
       sourceKind,

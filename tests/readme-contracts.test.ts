@@ -120,3 +120,13 @@ test("README documents CLI agent MCP quick start commands", async () => {
   assert.match(readme, /~\/\.gemini\/settings\.json/);
   assert.match(readme, /\/mcp list/);
 });
+
+test("ArtifactContentsSummary sourceCoverage contract only allows full or partial", async () => {
+  const sourceService = await readFile("src/source-service.ts", "utf8");
+
+  assert.match(
+    sourceService,
+    /export type ArtifactContentsSummary = \{[\s\S]*sourceCoverage: "full" \| "partial";/
+  );
+  assert.doesNotMatch(sourceService, /sourceCoverage: "full" \| "partial" \| "unknown";/);
+});

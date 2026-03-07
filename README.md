@@ -258,7 +258,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 Error `suggestedCall` payloads now use the same `target` object schema instead of legacy `targetKind` / `targetValue` fields.
 Positive integer tool parameters accept numeric strings such as `"10"` in addition to JSON numbers.
 This numeric-string coercion only applies to documented top-level tool arguments; nested `typedJson` payloads and JSON Patch `value` objects are preserved verbatim.
-`resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, and `list-artifact-files` include `artifactContents` so clients can see whether the backing artifact is `source-jar` or `decompiled-binary`, whether resources are indexed (`resourcesIncluded=false` today), and whether source coverage is `full` or `partial`.
+`resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, and `list-artifact-files` include `artifactContents` so clients can see whether the backing artifact is `source-jar` or `decompiled-binary`, whether resources are indexed (`resourcesIncluded=false` today), and whether source coverage is always `full` or `partial`.
 `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` include `returnedNamespace`; compare it with `mappingApplied` when a tool returns remapped symbols instead of raw indexed source text.
 `list-artifact-files` warns when you probe `assets/` or `data/` prefixes because the current index stores Java source only, not non-Java resources.
 `get-class-source` and `get-class-members` can infer a missing artifact version from `projectPath` when `preferProjectVersion=true` and artifact metadata does not already contain a version.
