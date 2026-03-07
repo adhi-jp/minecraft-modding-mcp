@@ -274,6 +274,23 @@ test("MinecraftExplorerService rejects malformed method descriptors", async () =
   );
 });
 
+test("MinecraftExplorerService reports void method arguments as invalid method descriptors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-void-method-arg-"));
+  const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
+    "com/example/VoidMethodArg.class": buildClassFile({
+      internalName: "com/example/VoidMethodArg",
+      methods: [{ name: "broken", descriptor: "([V)I", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const service = createService(root);
+
+  await expectAppError(
+    service.getSignature({ jarPath, fqn: "com.example.VoidMethodArg", access: "all" }),
+    ERROR_CODES.INVALID_INPUT,
+    /Invalid method descriptor/
+  );
+});
+
 test("MinecraftExplorerService renders arrays, objects, primitives, and void signatures", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-descriptor-rendering-"));
   const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
@@ -315,6 +332,7 @@ test("MinecraftExplorerService renders arrays, objects, primitives, and void sig
 test("MinecraftExplorerService expands inherited superclass and interface members", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-inherited-members-"));
   const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
+    "java/lang/Object.class": buildClassFile({ internalName: "java/lang/Object" }),
     "com/example/Child.class": buildClassFile({
       internalName: "com/example/Child",
       superInternalName: "com/example/Parent",
@@ -324,19 +342,16 @@ test("MinecraftExplorerService expands inherited superclass and interface member
     }),
     "com/example/Parent.class": buildClassFile({
       internalName: "com/example/Parent",
-      superInternalName: undefined,
       interfaceInternalNames: ["com/example/Secondary"],
       fields: [{ name: "parentValue", descriptor: "I", accessFlags: ACC_PROTECTED }],
       methods: [{ name: "inheritedMethod", descriptor: "()V", accessFlags: ACC_PUBLIC }]
     }),
     "com/example/Primary.class": buildClassFile({
       internalName: "com/example/Primary",
-      superInternalName: undefined,
       methods: [{ name: "primaryMethod", descriptor: "()V", accessFlags: ACC_PUBLIC }]
     }),
     "com/example/Secondary.class": buildClassFile({
       internalName: "com/example/Secondary",
-      superInternalName: undefined,
       fields: [{ name: "secondaryFlag", descriptor: "Z", accessFlags: ACC_PUBLIC }]
     })
   });
@@ -419,7 +434,7 @@ test("MinecraftExplorerService stops inherited expansion at max depth", async ()
     const superInternalName = index === 65 ? undefined : `com/example/Depth${index + 1}`;
     entries[`${internalName}.class`] = buildClassFile({
       internalName,
-      superInternalName,
+      ...(superInternalName ? { superInternalName } : {}),
       methods: index === 0 ? [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }] : []
     });
   }

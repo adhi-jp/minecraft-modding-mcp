@@ -127,7 +127,7 @@ function modifierPrefix(flags: number, category: "method" | "field"): string {
 function parseFieldType(
   descriptor: string,
   position = 0,
-  options: { allowVoid?: boolean } = {}
+  options: { allowVoid?: boolean; invalidVoidMessage?: string } = {}
 ): { type: string; next: number } {
   if (position >= descriptor.length) {
     throw createError({
@@ -159,7 +159,7 @@ function parseFieldType(
       if (!options.allowVoid) {
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
-          message: `Invalid field descriptor "${descriptor}".`,
+          message: options.invalidVoidMessage ?? `Invalid field descriptor "${descriptor}".`,
           details: { descriptor, position }
         });
       }
@@ -177,7 +177,7 @@ function parseFieldType(
       return { type, next: end + 1 };
     }
     case "[": {
-      const inner = parseFieldType(descriptor, position + 1);
+      const inner = parseFieldType(descriptor, position + 1, options);
       return { type: `${inner.type}[]`, next: inner.next };
     }
     default:
@@ -201,7 +201,10 @@ function parseMethodDescriptor(descriptor: string): { args: string[]; returnType
   const args: string[] = [];
   let cursor = 1;
   while (cursor < descriptor.length && descriptor[cursor] !== ")") {
-    const parsed = parseFieldType(descriptor, cursor, { allowVoid: false });
+    const parsed = parseFieldType(descriptor, cursor, {
+      allowVoid: false,
+      invalidVoidMessage: `Invalid method descriptor "${descriptor}": void is not allowed in this position.`
+    });
     args.push(parsed.type);
     cursor = parsed.next;
   }
