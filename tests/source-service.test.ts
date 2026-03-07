@@ -6606,3 +6606,42 @@ test("F-03: search-class-source queryMode=literal forces substring scan", async 
   });
   assert.ok(result.hits.length > 0, "literal mode should find via substring scan");
 });
+
+test("resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-missing-jar-resolve-"));
+  const service = new SourceService(buildTestConfig(root));
+  const missingJarPath = join(root, "missing.jar");
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: { kind: "jar", value: missingJarPath }
+      } as any),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, ERROR_CODES.JAR_NOT_FOUND);
+      assert.match(String((error as { message?: string }).message), /missing\.jar/);
+      return true;
+    }
+  );
+});
+
+test("getClassSource preserves ERR_JAR_NOT_FOUND for missing target.kind=jar paths", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-missing-jar-source-"));
+  const service = new SourceService(buildTestConfig(root));
+  const missingJarPath = join(root, "missing.jar");
+
+  await assert.rejects(
+    () =>
+      service.getClassSource({
+        className: "net.minecraft.world.level.block.Block",
+        target: { kind: "jar", value: missingJarPath }
+      } as any),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, ERROR_CODES.JAR_NOT_FOUND);
+      assert.match(String((error as { message?: string }).message), /missing\.jar/);
+      return true;
+    }
+  );
+});

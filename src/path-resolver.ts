@@ -3,7 +3,7 @@ import { extname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import type { ArtifactSignature } from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 
 export interface ResolvedJarInfo {
   originalPath: string;
@@ -15,7 +15,31 @@ const INVALID_ENTRY = /(^|\/|\\)\.\.(\/|\\|$)/;
 export function normalizeJarPath(jarPath: string): string {
   const normalizedInput = normalizePathForHost(jarPath, undefined, "jarPath");
   const absolute = resolve(normalizedInput);
-  const stats = statSync(absolute);
+  let stats: ReturnType<typeof statSync> | undefined;
+  try {
+    stats = statSync(absolute, { throwIfNoEntry: false });
+  } catch (cause) {
+    if (isAppError(cause)) {
+      throw cause;
+    }
+    throw createError({
+      code: ERROR_CODES.JAR_NOT_FOUND,
+      message: `Could not access jar "${normalizedInput}".`,
+      details: {
+        jarPath: normalizedInput,
+        reason: cause instanceof Error ? cause.message : String(cause)
+      }
+    });
+  }
+
+  if (!stats) {
+    throw createError({
+      code: ERROR_CODES.JAR_NOT_FOUND,
+      message: `Jar not found: "${normalizedInput}".`,
+      details: { jarPath: normalizedInput }
+    });
+  }
+
   if (!stats.isFile()) {
     throw createError({
       code: ERROR_CODES.JAR_NOT_FOUND,
@@ -32,8 +56,21 @@ export function normalizeJarPath(jarPath: string): string {
     });
   }
 
-  const resolved = realpathSync(absolute);
-  return resolved;
+  try {
+    return realpathSync(absolute);
+  } catch (cause) {
+    if (isAppError(cause)) {
+      throw cause;
+    }
+    throw createError({
+      code: ERROR_CODES.JAR_NOT_FOUND,
+      message: `Could not resolve jar "${normalizedInput}".`,
+      details: {
+        jarPath: normalizedInput,
+        reason: cause instanceof Error ? cause.message : String(cause)
+      }
+    });
+  }
 }
 
 export function resolveJarPathWithSymlinkCheck(jarPath: string): ResolvedJarInfo {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -52,6 +52,37 @@ function findRegistryFile(registryDir: string): string | undefined {
     if (existsSync(candidate)) return candidate;
   }
   return undefined;
+}
+
+function parseRegistrySnapshot(
+  raw: string,
+  version: string,
+  registryFile: string
+): Record<string, RegistryData> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw createError({
+      code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
+      message: `Failed to parse registries.json for version "${version}".`,
+      details: {
+        version,
+        registryFile,
+        reason: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw createError({
+      code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
+      message: `registries.json for version "${version}" has invalid structure.`,
+      details: { version, registryFile }
+    });
+  }
+
+  return parsed as Record<string, RegistryData>;
 }
 
 function runDataGen(
@@ -230,36 +261,97 @@ export class RegistryService {
 
     const registryDir = join(this.config.cacheDir, "registries", version);
 
-    // Check if we already have generated data
-    let registryFile = findRegistryFile(registryDir);
-    if (!registryFile) {
-      await mkdir(registryDir, { recursive: true });
-
-      const serverJar = await this.versionService.resolveServerJar(version);
-      await runDataGen(serverJar.jarPath, registryDir, version);
-
-      registryFile = findRegistryFile(registryDir);
-      if (!registryFile) {
-        throw createError({
-          code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
-          message: `Registry data generation did not produce registries.json for version "${version}".`,
-          details: { version, registryDir }
-        });
-      }
+    const cachedRegistries = this.loadExistingRegistries(registryDir, version, warnings);
+    if (cachedRegistries) {
+      this.cacheRegistries(version, cachedRegistries);
+      return cachedRegistries;
     }
 
-    const raw = readFileSync(registryFile, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, RegistryData>;
+    await mkdir(registryDir, { recursive: true });
 
-    // Validate structure
-    if (typeof parsed !== "object" || parsed === null) {
+    const serverJar = await this.versionService.resolveServerJar(version);
+    await runDataGen(serverJar.jarPath, registryDir, version);
+
+    const registryFile = findRegistryFile(registryDir);
+    if (!registryFile) {
       throw createError({
         code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
-        message: `registries.json for version "${version}" has invalid structure.`,
-        details: { version }
+        message: `Registry data generation did not produce registries.json for version "${version}".`,
+        details: { version, registryDir }
       });
     }
 
+    const parsed = this.readRegistryFileOrThrow(registryFile, version);
+    this.cacheRegistries(version, parsed);
+    return parsed;
+  }
+
+  private loadExistingRegistries(
+    registryDir: string,
+    version: string,
+    warnings: string[]
+  ): Record<string, RegistryData> | undefined {
+    for (const candidate of resolveRegistryPaths(registryDir)) {
+      if (!existsSync(candidate)) {
+        continue;
+      }
+
+      try {
+        return this.readRegistryFileOrThrow(candidate, version);
+      } catch (error) {
+        if (!this.isInvalidRegistrySnapshot(error)) {
+          throw error;
+        }
+
+        warnings.push(`Ignored corrupt cached registry snapshot and regenerated it: ${candidate}`);
+        log("warn", "registry.cache.invalidated", {
+          version,
+          registryFile: candidate,
+          reason: error.message
+        });
+        try {
+          rmSync(candidate, { force: true });
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private readRegistryFileOrThrow(
+    registryFile: string,
+    version: string
+  ): Record<string, RegistryData> {
+    let raw: string;
+    try {
+      raw = readFileSync(registryFile, "utf8");
+    } catch (error) {
+      throw createError({
+        code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
+        message: `Failed to read registries.json for version "${version}".`,
+        details: {
+          version,
+          registryFile,
+          reason: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+
+    return parseRegistrySnapshot(raw, version, registryFile);
+  }
+
+  private isInvalidRegistrySnapshot(error: unknown): error is Error & { code?: string } {
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === ERROR_CODES.REGISTRY_GENERATION_FAILED
+    );
+  }
+
+  private cacheRegistries(version: string, parsed: Record<string, RegistryData>): void {
     this.registryCache.set(version, parsed);
 
     // Trim cache to avoid unbounded growth
@@ -267,8 +359,6 @@ export class RegistryService {
       const oldest = this.registryCache.keys().next().value;
       if (oldest !== undefined) this.registryCache.delete(oldest);
     }
-
-    return parsed;
   }
 }
 

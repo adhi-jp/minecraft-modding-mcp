@@ -279,6 +279,7 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `resolve-artifact` with `target.kind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `target.value` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `target.kind=version`.
 `resolve-artifact` with `target.kind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.
+`resolve-artifact`, `get-class-source`, and `get-class-members` now preserve `ERR_JAR_NOT_FOUND` for missing or inaccessible `target.kind=jar` paths instead of surfacing raw filesystem exceptions.
 `resolve-artifact` includes `sampleEntries` only when a source JAR is resolved; decompile-only paths leave it unset.
 `resolve-artifact` adds `qualityFlags=["partial-source-no-net-minecraft"]` and a warning when a merged Loom source candidate does not contain `net.minecraft` sources; only candidates that still look like Minecraft source artifacts are auto-selected, while version-matching mod/library source jars remain diagnostics only. `get-class-source` now bypasses that sibling `*-sources.jar` during binary fallback so the fallback can actually reach the binary artifact.
 `find-class` returns type symbols (`class`/`interface`/`enum`/`record`) only; fully-qualified lookups are filtered by exact FQCN/file path to avoid false negatives when many classes share the same simple name.
@@ -309,6 +310,7 @@ Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path b
 `check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).
 `check-symbol-exists` supports `signatureMode=name-only` to match methods by owner+name without requiring a descriptor. Single match returns `resolved`; multiple overloads return `ambiguous` with all candidates.
 `check-symbol-exists` always validates input shape first and returns `ERR_INVALID_INPUT` for invalid symbol combinations, even when mapping data is unavailable.
+`get-registry-data` now discards corrupt cached `registries.json` files, regenerates them when possible, and returns `ERR_REGISTRY_GENERATION_FAILED` if the regenerated snapshot is still unreadable.
 Migration notes:
 - Replace `resolve-artifact` `targetKind` + `targetValue` with `target: { kind, value }`.
 - Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
