@@ -219,6 +219,20 @@ test("index.ts maps NBT parse failures to bad request status", async () => {
   assert.match(source, /code === ERROR_CODES\.NBT_PARSE_FAILED/);
 });
 
+test("index.ts serializes heavy analysis tools to protect MCP transport stability", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /import\s+\{\s*ToolExecutionGate\s*\}\s+from\s+"\.\/tool-execution-gate\.js"/);
+  assert.match(source, /const HEAVY_TOOL_NAMES = new Set\(\[/);
+  assert.match(source, /"trace-symbol-lifecycle"/);
+  assert.match(source, /"diff-class-signatures"/);
+  assert.match(source, /"compare-versions"/);
+  assert.match(source, /"find-mapping"/);
+  assert.match(source, /const heavyToolExecutionGate = new ToolExecutionGate\(/);
+  assert.match(source, /HEAVY_TOOL_NAMES\.has\(tool\)/);
+  assert.match(source, /heavyToolExecutionGate\.run\(tool,\s*\(\)\s*=>\s*action\(parsedInput\)\)/s);
+});
+
 test("index.ts remap target enum includes yarn and mojang", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
@@ -288,15 +302,22 @@ test("get-class-members contract preserves actual mappingApplied metadata", asyn
   );
 });
 
-test("CLI entrypoint delegates startup to async startServer export", async () => {
-  const indexSource = await readFile("src/index.ts", "utf8");
+test("CLI entrypoint runs a supervised worker wrapper around startServer", async () => {
   const cliSource = await readFile("src/cli.ts", "utf8");
+  const supervisorSource = await readFile("src/stdio-supervisor.ts", "utf8");
 
-  assert.match(indexSource, /export async function startServer\(\): Promise<void>/);
   assert.match(cliSource, /^#!\/usr\/bin\/env node/m);
   assert.match(cliSource, /import\s+\{\s*startServer\s*\}\s+from\s+"\.\/index\.js"/);
-  assert.match(cliSource, /startServer\(\)\s*\.then/);
-  assert.match(cliSource, /\.catch\(\(err\)\s*=>/);
+  assert.match(cliSource, /import\s+\{\s*STDIO_WORKER_MODE_ENV,\s*StdioSupervisor\s*\}\s+from\s+"\.\/stdio-supervisor\.js"/);
+  assert.match(cliSource, /if\s*\(process\.env\[STDIO_WORKER_MODE_ENV\]\s*===\s*"1"\)/);
+  assert.match(cliSource, /const keepAliveTimer = setInterval\(\(\) => undefined,\s*60_000\)/);
+  assert.match(cliSource, /process\.stderr\.write\(`\$\{WORKER_READY_MARKER\}\\n`\)/);
+  assert.match(cliSource, /new StdioSupervisor\(/);
+  assert.match(supervisorSource, /const WORKER_READY_MARKER = "__MCP_STDIO_WORKER_READY__"/);
+  assert.match(supervisorSource, /handleWorkerReady\(\)/);
+  assert.match(supervisorSource, /this\.queuedMessages\.push\(message\)/);
+  assert.match(supervisorSource, /this\.forwardToWorker\(this\.initializeRequest\)/);
+  assert.match(supervisorSource, /buildWorkerRestartError/);
 });
 
 test("startServer installs process-level error handlers", async () => {

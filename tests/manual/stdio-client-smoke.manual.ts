@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -125,6 +125,25 @@ function asString(value: unknown, field: string): string {
     throw new Error(`Missing string field: ${field}`);
   }
   return value;
+}
+
+async function waitForChildPid(pidFile: string, previousPid?: number): Promise<number> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const raw = (await readFile(pidFile, "utf8")).trim();
+      const pid = Number.parseInt(raw, 10);
+      if (Number.isFinite(pid) && pid > 0 && pid !== previousPid) {
+        return pid;
+      }
+    } catch {
+      // Wait for the supervisor to publish the current worker pid.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error(`Timed out waiting for worker pid file: ${pidFile}`);
 }
 
 async function ensureSqliteAvailable(): Promise<void> {
@@ -317,6 +336,7 @@ async function main(): Promise<void> {
   const sqlitePath = join(cacheDir, "source-cache.db");
   const binaryJarPath = join(root, "minecraft-client.jar");
   const sourcesJarPath = join(root, "minecraft-client-sources.jar");
+  const workerPidFile = join(root, "worker.pid");
 
   await mkdir(cacheDir, { recursive: true });
   await assertContentLengthInitializeHandshake({
@@ -356,7 +376,8 @@ async function main(): Promise<void> {
       ...process.env,
       NODE_ENV: "production",
       MCP_CACHE_DIR: cacheDir,
-      MCP_SQLITE_PATH: sqlitePath
+      MCP_SQLITE_PATH: sqlitePath,
+      MCP_SUPERVISOR_CHILD_PID_FILE: workerPidFile
     }
   });
 
@@ -364,6 +385,7 @@ async function main(): Promise<void> {
 
   try {
     await client.connect(transport);
+    const initialWorkerPid = await waitForChildPid(workerPidFile);
 
     const { tools } = await client.listTools();
     const toolNames = tools.map((tool) => tool.name);
@@ -453,7 +475,23 @@ async function main(): Promise<void> {
     const reindexed = requireToolOk<Record<string, unknown>>("index-artifact", indexResult as never);
     assert.equal(typeof reindexed.reindexed, "boolean");
 
-    console.log("Manual stdio client smoke passed: source tools validated.");
+    process.kill(initialWorkerPid, "SIGKILL");
+    const restartedWorkerPid = await waitForChildPid(workerPidFile, initialWorkerPid);
+    assert.notEqual(restartedWorkerPid, initialWorkerPid);
+
+    const versionsAfterRestartResult = await client.callTool({
+      name: "list-versions",
+      arguments: {
+        limit: 1
+      }
+    });
+    const versionsAfterRestart = requireToolOk<Record<string, unknown>>(
+      "list-versions-after-restart",
+      versionsAfterRestartResult as never
+    );
+    assert.ok(Array.isArray(versionsAfterRestart.items), "Expected versions list after worker restart.");
+
+    console.log("Manual stdio client smoke passed: source tools and worker auto-restart validated.");
   } finally {
     await client.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });

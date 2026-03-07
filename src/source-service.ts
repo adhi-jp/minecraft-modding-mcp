@@ -127,8 +127,16 @@ export type ResolveArtifactOutput = {
   provenance: ArtifactProvenance;
   qualityFlags: string[];
   repoUrl?: string;
+  artifactContents: ArtifactContentsSummary;
   warnings: string[];
   sampleEntries?: string[];
+};
+
+export type ArtifactContentsSummary = {
+  sourceKind: "source-jar" | "decompiled-binary";
+  indexedContentKinds: string[];
+  resourcesIncluded: boolean;
+  sourceCoverage: "full" | "partial" | "unknown";
 };
 
 type SymbolKind = "class" | "interface" | "enum" | "record" | "method" | "field";
@@ -173,6 +181,8 @@ export type SearchClassSourceOutput = {
   hits: SearchSourceHit[];
   nextCursor?: string;
   mappingApplied: SourceMapping;
+  returnedNamespace: SourceMapping;
+  artifactContents: ArtifactContentsSummary;
 };
 
 export type GetArtifactFileInput = {
@@ -187,6 +197,8 @@ export type GetArtifactFileOutput = {
   contentBytes: number;
   truncated: boolean;
   mappingApplied: SourceMapping;
+  returnedNamespace: SourceMapping;
+  artifactContents: ArtifactContentsSummary;
 };
 
 export type ListArtifactFilesInput = {
@@ -200,6 +212,8 @@ export type ListArtifactFilesOutput = {
   items: string[];
   nextCursor?: string;
   mappingApplied: SourceMapping;
+  artifactContents: ArtifactContentsSummary;
+  warnings: string[];
 };
 
 export type FindMappingInput = MappingFindMappingInput;
@@ -285,8 +299,10 @@ export type GetClassSourceOutput = {
   artifactId: string;
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
+  returnedNamespace: SourceMapping;
   provenance: ArtifactProvenance;
   qualityFlags: string[];
+  artifactContents: ArtifactContentsSummary;
   outputFile?: string;
   warnings: string[];
 };
@@ -349,8 +365,10 @@ export type GetClassMembersOutput = {
   artifactId: string;
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
+  returnedNamespace: SourceMapping;
   provenance: ArtifactProvenance;
   qualityFlags: string[];
+  artifactContents: ArtifactContentsSummary;
   warnings: string[];
 };
 
@@ -691,6 +709,19 @@ function obfuscatedNamespaceHint(className: string): string {
 
 function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
+}
+
+function buildResolveArtifactParams(
+  target: SourceTargetInput,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    target: {
+      kind: target.kind,
+      value: target.value
+    },
+    ...extra
+  };
 }
 
 function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
@@ -1349,6 +1380,90 @@ export class SourceService {
     return `${prefix}./gradlew genSources --no-daemon`;
   }
 
+  private buildArtifactContentsSummary(input: {
+    origin: ResolvedSourceArtifact["origin"];
+    sourceJarPath?: string;
+    isDecompiled?: boolean;
+    qualityFlags: string[];
+  }): ArtifactContentsSummary {
+    const sourceKind =
+      input.isDecompiled || input.origin === "decompiled" || !normalizeOptionalString(input.sourceJarPath)
+        ? "decompiled-binary"
+        : "source-jar";
+    const sourceCoverage = hasPartialNetMinecraftCoverage(input.qualityFlags)
+      ? "partial"
+      : input.qualityFlags.length > 0 || sourceKind === "source-jar" || sourceKind === "decompiled-binary"
+        ? "full"
+        : "unknown";
+
+    return {
+      sourceKind,
+      indexedContentKinds: ["java-source"],
+      resourcesIncluded: false,
+      sourceCoverage
+    };
+  }
+
+  private inferVersionFromContext(input: {
+    version?: string;
+    provenance?: ArtifactProvenance;
+    coordinate?: string;
+  }): string | undefined {
+    const direct = normalizeOptionalString(input.version);
+    if (direct) {
+      return direct;
+    }
+
+    const resolvedFromVersion = normalizeOptionalString(input.provenance?.resolvedFrom.version);
+    if (resolvedFromVersion) {
+      return resolvedFromVersion;
+    }
+
+    if (input.provenance?.target.kind === "version") {
+      const targetVersion = normalizeOptionalString(input.provenance.target.value);
+      if (targetVersion) {
+        return targetVersion;
+      }
+    }
+
+    const coordinate = normalizeOptionalString(input.coordinate);
+    if (coordinate) {
+      try {
+        return parseCoordinate(coordinate).version;
+      } catch {
+        return undefined;
+      }
+    }
+
+    return undefined;
+  }
+
+  private async resolveVersionContext(input: {
+    version?: string;
+    provenance?: ArtifactProvenance;
+    coordinate?: string;
+    projectPath?: string;
+    preferProjectVersion?: boolean;
+    warnings: string[];
+  }): Promise<string | undefined> {
+    const inferredVersion = this.inferVersionFromContext(input);
+    if (inferredVersion) {
+      return inferredVersion;
+    }
+
+    if (!input.preferProjectVersion || !input.projectPath) {
+      return undefined;
+    }
+
+    const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+    if (detected) {
+      input.warnings.push(
+        `Using project version "${detected}" from gradle.properties because the artifact metadata did not include a version.`
+      );
+    }
+    return detected;
+  }
+
   async resolveArtifact(input: ResolveArtifactInput): Promise<ResolveArtifactOutput> {
     const kind = input.target.kind;
     let value = input.target.value?.trim();
@@ -1474,7 +1589,10 @@ export class SourceService {
           if (isVanillaMojang && input.projectPath) {
             suggestedCall = {
               tool: "resolve-artifact",
-              params: { targetKind: kind, targetValue: value, mapping: "mojang", scope: "merged", projectPath: input.projectPath }
+              params: buildResolveArtifactParams(
+                { kind, value },
+                { mapping: "mojang", scope: "merged", projectPath: input.projectPath }
+              )
             };
             nextAction =
               "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
@@ -1482,7 +1600,10 @@ export class SourceService {
           } else if (isVanillaMojang) {
             suggestedCall = {
               tool: "resolve-artifact",
-              params: { targetKind: kind, targetValue: value, mapping: "obfuscated", scope: "vanilla" }
+              params: buildResolveArtifactParams(
+                { kind, value },
+                { mapping: "obfuscated", scope: "vanilla" }
+              )
             };
             nextAction =
               "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
@@ -1490,7 +1611,10 @@ export class SourceService {
           } else {
             suggestedCall = {
               tool: "resolve-artifact",
-              params: { targetKind: kind, targetValue: value, mapping: "obfuscated", ...(scope ? { scope } : {}) }
+              params: buildResolveArtifactParams(
+                { kind, value },
+                { mapping: "obfuscated", ...(scope ? { scope } : {}) }
+              )
             };
             nextAction = "Retry with mapping=obfuscated to use the runtime obfuscated namespace.";
           }
@@ -1520,8 +1644,14 @@ export class SourceService {
               mapping: effectiveMapping,
               target: { kind, value },
               nextAction:
-                "Use targetKind=version or a versioned Maven coordinate so mapping artifacts can be resolved.",
-              suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value, ...(scope ? { scope } : {}) } }
+                "Use target: { kind: \"version\", value } or a versioned Maven coordinate so mapping artifacts can be resolved.",
+              suggestedCall: {
+                tool: "resolve-artifact",
+                params: buildResolveArtifactParams(
+                  { kind: "version", value },
+                  { ...(scope ? { scope } : {}) }
+                )
+              }
             }
           });
         }
@@ -1568,7 +1698,10 @@ export class SourceService {
                 selectedSourceJar: versionSourceDiscovery.selectedSourceJarPath,
                 candidateArtifacts: versionSourceDiscovery.candidateArtifacts,
                 nextAction: "Use strictVersion=false (default) to allow approximation, or ensure the exact version source jar is in the Loom cache.",
-                suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: value, strictVersion: false } }
+                suggestedCall: {
+                  tool: "resolve-artifact",
+                  params: buildResolveArtifactParams({ kind: "version", value }, { strictVersion: false })
+                }
               }
             });
           }
@@ -1609,6 +1742,12 @@ export class SourceService {
         provenance,
         qualityFlags: resolved.qualityFlags,
         repoUrl: resolved.repoUrl,
+        artifactContents: this.buildArtifactContentsSummary({
+          origin: resolved.origin,
+          sourceJarPath: resolved.sourceJarPath,
+          isDecompiled: resolved.isDecompiled,
+          qualityFlags: resolved.qualityFlags
+        }),
         warnings,
         sampleEntries
       };
@@ -1638,7 +1777,14 @@ export class SourceService {
       if (!query) {
         return {
           hits: [],
-          mappingApplied: artifact.mappingApplied ?? "obfuscated"
+          mappingApplied: artifact.mappingApplied ?? "obfuscated",
+          returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+          artifactContents: this.buildArtifactContentsSummary({
+            origin: artifact.origin,
+            sourceJarPath: artifact.sourceJarPath,
+            isDecompiled: artifact.isDecompiled,
+            qualityFlags: artifact.qualityFlags
+          })
         };
       }
 
@@ -1762,7 +1908,14 @@ export class SourceService {
       return {
         hits: page,
         nextCursor,
-        mappingApplied: artifact.mappingApplied ?? "obfuscated"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated",
+        returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+        artifactContents: this.buildArtifactContentsSummary({
+          origin: artifact.origin,
+          sourceJarPath: artifact.sourceJarPath,
+          isDecompiled: artifact.isDecompiled,
+          qualityFlags: artifact.qualityFlags
+        })
       };
     } finally {
       this.metrics.recordDuration("search_duration_ms", Date.now() - startedAt);
@@ -1802,7 +1955,14 @@ export class SourceService {
         content,
         contentBytes: fullBytes,
         truncated,
-        mappingApplied: artifact.mappingApplied ?? "obfuscated"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated",
+        returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+        artifactContents: this.buildArtifactContentsSummary({
+          origin: artifact.origin,
+          sourceJarPath: artifact.sourceJarPath,
+          isDecompiled: artifact.isDecompiled,
+          qualityFlags: artifact.qualityFlags
+        })
       };
     } finally {
       this.metrics.recordDuration("get_file_duration_ms", Date.now() - startedAt);
@@ -1814,15 +1974,33 @@ export class SourceService {
     try {
       const artifact = this.getArtifact(input.artifactId);
       const limit = clampLimit(input.limit, 200, 2000);
+      const warnings: string[] = [];
       const page = this.filesRepo.listFiles(artifact.artifactId, {
         limit,
         cursor: input.cursor,
         prefix: input.prefix
       });
+      const normalizedPrefix = normalizeOptionalString(input.prefix);
+      if (
+        normalizedPrefix &&
+        page.items.length === 0 &&
+        (normalizedPrefix.startsWith("assets/") || normalizedPrefix.startsWith("data/"))
+      ) {
+        warnings.push(
+          "Indexed artifacts currently include Java source only; non-Java resources are not indexed. Inspect the original jar on disk if you need assets or data files."
+        );
+      }
       return {
         items: page.items,
         nextCursor: page.nextCursor,
-        mappingApplied: artifact.mappingApplied ?? "obfuscated"
+        mappingApplied: artifact.mappingApplied ?? "obfuscated",
+        artifactContents: this.buildArtifactContentsSummary({
+          origin: artifact.origin,
+          sourceJarPath: artifact.sourceJarPath,
+          isDecompiled: artifact.isDecompiled,
+          qualityFlags: artifact.qualityFlags
+        }),
+        warnings
       };
     } finally {
       this.metrics.recordDuration("list_files_duration_ms", Date.now() - startedAt);
@@ -2714,7 +2892,7 @@ export class SourceService {
     if (normalizedArtifactId && input.target) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
-        message: "artifactId and targetKind/targetValue are mutually exclusive.",
+        message: "artifactId and target are mutually exclusive.",
         details: {
           artifactId: normalizedArtifactId,
           target: input.target
@@ -2774,6 +2952,15 @@ export class SourceService {
       version = artifact.version;
       coordinate = artifact.coordinate;
     }
+
+    version = await this.resolveVersionContext({
+      version,
+      provenance,
+      coordinate,
+      projectPath: input.projectPath,
+      preferProjectVersion: input.preferProjectVersion,
+      warnings
+    });
 
     let activeArtifactId = artifactId;
     let activeOrigin = origin;
@@ -2977,8 +3164,15 @@ export class SourceService {
       artifactId: activeArtifactId,
       requestedMapping,
       mappingApplied: activeMappingApplied,
+      returnedNamespace: activeMappingApplied,
       provenance: normalizedProvenance,
       qualityFlags: activeQualityFlags,
+      artifactContents: this.buildArtifactContentsSummary({
+        origin: activeOrigin,
+        sourceJarPath: activeSourceJarPath,
+        isDecompiled: activeOrigin === "decompiled",
+        qualityFlags: activeQualityFlags
+      }),
       ...(resolvedOutputFile ? { outputFile: resolvedOutputFile } : {}),
       warnings
     };
@@ -3006,7 +3200,7 @@ export class SourceService {
     if (normalizedArtifactId && input.target) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
-        message: "artifactId and targetKind/targetValue are mutually exclusive.",
+        message: "artifactId and target are mutually exclusive.",
         details: {
           artifactId: normalizedArtifactId,
           target: input.target
@@ -3021,6 +3215,8 @@ export class SourceService {
     let provenance: ArtifactProvenance | undefined;
     let qualityFlags: string[] = [];
     let binaryJarPath: string | undefined;
+    let sourceJarPath: string | undefined;
+    let coordinate: string | undefined;
 
     if (parsedMaxMembers != null && parsedMaxMembers > 5000) {
       warnings.push(`maxMembers was clamped to 5000 from ${parsedMaxMembers}.`);
@@ -3053,7 +3249,9 @@ export class SourceService {
       provenance = resolved.provenance;
       qualityFlags = [...resolved.qualityFlags];
       binaryJarPath = resolved.binaryJarPath;
+      sourceJarPath = resolved.resolvedSourceJarPath;
       version = resolved.version;
+      coordinate = resolved.coordinate;
     } else {
       const artifact = this.getArtifact(artifactId);
       origin = artifact.origin;
@@ -3061,8 +3259,19 @@ export class SourceService {
       provenance = artifact.provenance;
       qualityFlags = artifact.qualityFlags;
       binaryJarPath = artifact.binaryJarPath;
+      sourceJarPath = artifact.sourceJarPath;
       version = artifact.version;
+      coordinate = artifact.coordinate;
     }
+
+    version = await this.resolveVersionContext({
+      version,
+      provenance,
+      coordinate,
+      projectPath: input.projectPath,
+      preferProjectVersion: input.preferProjectVersion,
+      warnings
+    });
 
     if (requestedMapping !== "obfuscated" && !version) {
       throw createError({
@@ -3070,8 +3279,12 @@ export class SourceService {
         message: `Non-obfuscated mapping "${requestedMapping}" requires a version, but none was resolved.`,
         details: {
           mapping: requestedMapping,
-          nextAction: "Resolve with targetKind=version or specify a versioned coordinate.",
-          suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: "latest" } }
+          nextAction:
+            "Resolve with target: { kind: \"version\", value: ... } or specify a versioned coordinate.",
+          suggestedCall: {
+            tool: "resolve-artifact",
+            params: buildResolveArtifactParams({ kind: "version", value: "latest" })
+          }
         }
       });
     }
@@ -3084,7 +3297,7 @@ export class SourceService {
           artifactId,
           className,
           nextAction:
-            "Resolve with targetKind=jar or targetKind=version, or use an artifact that has a binary jar."
+            "Resolve with target: { kind: \"jar\" | \"version\", value: ... } or use an artifact that has a binary jar."
         }
       });
     }
@@ -3209,8 +3422,15 @@ export class SourceService {
       artifactId,
       requestedMapping,
       mappingApplied,
+      returnedNamespace: requestedMapping,
       provenance: normalizedProvenance,
       qualityFlags,
+      artifactContents: this.buildArtifactContentsSummary({
+        origin,
+        sourceJarPath,
+        isDecompiled: origin === "decompiled",
+        qualityFlags
+      }),
       warnings
     };
   }
@@ -5015,7 +5235,10 @@ export class SourceService {
         details: {
           artifactId,
           nextAction: "Use resolve-artifact to resolve a source artifact first.",
-          suggestedCall: { tool: "resolve-artifact", params: { targetKind: "version", targetValue: "latest" } }
+          suggestedCall: {
+            tool: "resolve-artifact",
+            params: buildResolveArtifactParams({ kind: "version", value: "latest" })
+          }
         }
       });
     }

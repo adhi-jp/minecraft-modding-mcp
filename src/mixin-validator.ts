@@ -722,7 +722,13 @@ export function validateParsedMixin(
           if (version) {
             issue.suggestedCall = {
               tool: "get-class-source",
-              params: { className, targetKind: "version" as const, targetValue: version, ...(mapping ? { mapping } : {}), mode: "metadata", ...ctx }
+              params: {
+                className,
+                target: { type: "resolve" as const, kind: "version" as const, value: version },
+                ...(mapping ? { mapping } : {}),
+                mode: "metadata",
+                ...ctx
+              }
             };
           }
           break;

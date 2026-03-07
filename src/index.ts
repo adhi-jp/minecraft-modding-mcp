@@ -22,6 +22,7 @@ import { analyzeModJar } from "./mod-analyzer.js";
 import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
+import { ToolExecutionGate } from "./tool-execution-gate.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
 
 if (!process.env.NODE_ENV) {
@@ -77,6 +78,16 @@ const SOURCE_MODES = ["metadata", "snippet", "full"] as const;
 const ARTIFACT_SCOPES = ["vanilla", "merged", "loader"] as const;
 const DECODE_COMPRESSIONS = ["none", "gzip", "auto"] as const;
 const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
+const HEAVY_TOOL_NAMES = new Set([
+  "trace-symbol-lifecycle",
+  "diff-class-signatures",
+  "compare-versions",
+  "find-mapping",
+  "resolve-method-mapping-exact",
+  "get-class-api-matrix",
+  "get-registry-data"
+]);
+const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = z.string().trim().min(1).optional();
@@ -1032,7 +1043,11 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
     }
 
     const parsedInput = schema.parse(normalizedInput);
-    const payload = await action(parsedInput);
+    const payload = await (
+      HEAVY_TOOL_NAMES.has(tool)
+        ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
+        : action(parsedInput)
+    );
     const { result, warnings } = splitWarnings(payload);
 
     return objectResult({

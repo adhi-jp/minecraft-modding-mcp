@@ -601,8 +601,13 @@ test("validateParsedMixin explain=true adds suggestedCall for method-not-found",
   assert.ok(issue.suggestedCall);
   assert.equal(issue.suggestedCall!.tool, "get-class-source");
   assert.equal(issue.suggestedCall!.params.mode, "metadata");
-  assert.equal(issue.suggestedCall!.params.targetKind, "version");
-  assert.equal(issue.suggestedCall!.params.targetValue, "1.21");
+  assert.deepEqual(issue.suggestedCall!.params.target, {
+    type: "resolve",
+    kind: "version",
+    value: "1.21"
+  });
+  assert.equal(issue.suggestedCall!.params.targetKind, undefined);
+  assert.equal(issue.suggestedCall!.params.targetValue, undefined);
   assert.equal(issue.suggestedCall!.params.version, undefined);
 });
 

@@ -2586,7 +2586,10 @@ test("SourceService rejects intermediary and yarn mappings when artifact version
         return (
           details?.mapping === mapping &&
           typeof details?.nextAction === "string" &&
-          details.nextAction.includes("targetKind=version")
+          details.nextAction.includes("target: { kind: \"version\", value") &&
+          typeof details?.suggestedCall === "object" &&
+          details.suggestedCall !== null &&
+          (details.suggestedCall as { params?: Record<string, unknown> }).params?.target !== undefined
         );
       }
     );
@@ -4614,6 +4617,135 @@ test("SourceService getClassMembers looks up bytecode using the resolved artifac
   assert.equal(result.className, "net.minecraft.world.item.Item");
 });
 
+test("SourceService getClassMembers infers missing artifact version from projectPath when preferred", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-project-version-"));
+  const service = new SourceService(buildTestConfig(root));
+  const binaryJarPath = join(root, "minecraft-merged.jar");
+
+  seedIndexedArtifact(service, {
+    artifactId: "artifact-without-version",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    binaryJarPath,
+    files: [],
+    symbols: []
+  });
+
+  let detectedProjectPath: string | undefined;
+  (service as unknown as { workspaceMappingService: unknown }).workspaceMappingService = {
+    async detectProjectMinecraftVersion(projectPath: string) {
+      detectedProjectPath = projectPath;
+      return "1.21.10";
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { sourceMapping: string; targetMapping: string; name: string; version: string }) {
+      assert.equal(input.version, "1.21.10");
+      assert.equal(input.sourceMapping, "mojang");
+      assert.equal(input.targetMapping, "obfuscated");
+      assert.equal(input.name, "net.minecraft.world.item.Item");
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: { name: "dhl" },
+        candidates: [],
+        warnings: []
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string; jarPath: string }) {
+      assert.equal(input.fqn, "dhl");
+      assert.equal(input.jarPath, binaryJarPath);
+      return {
+        constructors: [],
+        fields: [],
+        methods: [],
+        warnings: [],
+        context: {
+          minecraftVersion: "1.21.10",
+          mappingType: "obfuscated",
+          mappingNamespace: "obfuscated",
+          jarHash: "hash",
+          generatedAt: new Date().toISOString()
+        }
+      };
+    }
+  };
+
+  const result = await service.getClassMembers({
+    artifactId: "artifact-without-version",
+    className: "net.minecraft.world.item.Item",
+    mapping: "mojang",
+    projectPath: root,
+    preferProjectVersion: true
+  });
+
+  assert.equal(detectedProjectPath, root);
+  assert.equal(result.counts.total, 0);
+  assert.equal(result.requestedMapping, "mojang");
+});
+
+test("SourceService listArtifactFiles explains that indexed artifacts do not include resources", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-list-files-diagnostics-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  seedIndexedArtifact(service, {
+    artifactId: "source-only-artifact",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed"],
+    files: [
+      {
+        filePath: "net/minecraft/world/item/Item.java",
+        content: "package net.minecraft.world.item;\npublic class Item {}"
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/world/item/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.minecraft.world.item.Item",
+        line: 2
+      }
+    ],
+    sourceJarPath: join(root, "minecraft-sources.jar"),
+    binaryJarPath: join(root, "minecraft.jar"),
+    provenance: {
+      target: { kind: "version", value: "1.21.10" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: {
+        origin: "local-jar",
+        sourceJarPath: join(root, "minecraft-sources.jar"),
+        binaryJarPath: join(root, "minecraft.jar"),
+        version: "1.21.10"
+      },
+      transformChain: ["mapping:mojang-source-backed"]
+    }
+  });
+
+  const result = await service.listArtifactFiles({
+    artifactId: "source-only-artifact",
+    prefix: "assets/minecraft/"
+  });
+
+  assert.deepEqual(result.items, []);
+  assert.equal(result.mappingApplied, "mojang");
+  assert.equal(result.artifactContents.resourcesIncluded, false);
+  assert.equal(result.artifactContents.sourceKind, "source-jar");
+  assert.equal(result.artifactContents.sourceCoverage, "full");
+  assert.ok(result.artifactContents.indexedContentKinds.includes("java-source"));
+  assert.ok(result.warnings.some((warning) => warning.includes("resources") && warning.includes("not indexed")));
+});
+
 test("SourceService getClassMembers mapping fallback keeps original name and emits warning", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-fallback-"));
@@ -5049,7 +5181,12 @@ test("B2: resolveArtifact preserves scope in intermediary no-version suggestedCa
       const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
       return (
         suggested != null &&
-        suggested.params.scope === "merged"
+        suggested.params.scope === "merged" &&
+        typeof suggested.params.target === "object" &&
+        suggested.params.target !== null &&
+        (suggested.params.target as { kind?: string }).kind === "version" &&
+        !("targetKind" in suggested.params) &&
+        !("targetValue" in suggested.params)
       );
     }
   );
@@ -5087,6 +5224,12 @@ test("B3: resolveArtifact vanilla+mojang with projectPath suggests scope=merged"
         suggested != null &&
         suggested.params.scope === "merged" &&
         suggested.params.mapping === "mojang" &&
+        typeof suggested.params.target === "object" &&
+        suggested.params.target !== null &&
+        (suggested.params.target as { kind?: string; value?: string }).kind === "jar" &&
+        (suggested.params.target as { kind?: string; value?: string }).value === binaryJarPath &&
+        !("targetKind" in suggested.params) &&
+        !("targetValue" in suggested.params) &&
         typeof suggested.params.projectPath === "string" &&
         typeof details.nextAction === "string" &&
         (details.nextAction as string).includes("scope=vanilla blocks Loom")
@@ -5126,6 +5269,12 @@ test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=ob
         suggested != null &&
         suggested.params.mapping === "obfuscated" &&
         suggested.params.scope === "vanilla" &&
+        typeof suggested.params.target === "object" &&
+        suggested.params.target !== null &&
+        (suggested.params.target as { kind?: string; value?: string }).kind === "jar" &&
+        (suggested.params.target as { kind?: string; value?: string }).value === binaryJarPath &&
+        !("targetKind" in suggested.params) &&
+        !("targetValue" in suggested.params) &&
         typeof details.nextAction === "string" &&
         (details.nextAction as string).includes("mapping=obfuscated")
       );
