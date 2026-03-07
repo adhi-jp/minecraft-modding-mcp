@@ -13,6 +13,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Token-efficient response shaping options: `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` now accept `maxCandidates`; `get-class-api-matrix` accepts `maxRows`; `diff-class-signatures` accepts `includeFullDiff`; `decompile-mod-jar` accepts `includeFiles` / `maxFiles`; `get-registry-data` accepts `includeData` / `maxEntriesPerRegistry`; `validate-mixin` accepts `includeIssues`.
 - `validate-mixin` now reports per-result `validationStatus` (`full` / `partial` / `invalid`), member coverage counters (`summary.membersValidated` / `membersSkipped` / `membersMissing`), batch `summary.partial`, and scope/source-priority provenance fields (`requestedScope` / `appliedScope`, `requestedSourcePriority` / `appliedSourcePriority`) so partial validation is explicit.
 - `validate-mixin` now supports `input.mode="project"` to recursively discover `*.mixins.json` under a workspace root and validate every referenced Mixin in one call.
+- `validate-mixin` now adds `confidenceBreakdown` and `reportMode="summary-first"` so callers can see why confidence dropped and consume batch-oriented output without repeated per-result provenance/warning payloads.
 
 ### Fixed
 - `compare-versions` now applies `packageFilter` consistently to `classes.addedCount`, `removedCount`, and `unchanged`, so class summary counts reflect the same filtered package scope as the returned class lists.
@@ -32,11 +33,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` now lowers confidence for skipped member validation and exposes requested-vs-applied scope/source-priority details instead of making partial results look fully verified.
 - `validate-mixin` now follows the resolved artifact namespace during bytecode lookup for non-vanilla scopes, so `scope="merged"` on Mojang-mapped Loom workspaces validates against merged class names instead of falling back to false partial results and retry-driven timeouts.
 - Invalid `validate-mixin` requests now return the standard `ERR_INVALID_INPUT` envelope with `fieldErrors`, `hints`, and a mode-correct `suggestedCall` instead of the SDK's generic pre-validation text error.
+- Bare string `target` inputs for `resolve-artifact`, `get-class-source`, and `get-class-members` now return `ERR_INVALID_INPUT` with schema-correct wrapper suggestions instead of generic object-schema failures.
+- `validate-mixin` now classifies signature-loading/tool-limited target failures as `validation-incomplete` warnings instead of reporting them as missing classes.
 - `check-symbol-exists` no longer repeats raw Loom tiny-cache miss warnings when Maven tiny mappings successfully satisfy the lookup; successful fallback now emits concise fallback context instead.
 
 ### Documentation
 - Corrected the `compare-versions` README contract to document registry results under `result.registry`.
-- Documented the new compact-response options and updated token-efficient examples in both READMEs.
+- Documented the new compact-response options, `summary-first` validate-mixin mode, bare-string `target` recovery guidance, and updated token-efficient examples in both READMEs.
 
 ## [2.0.0] - 2026-03-07
 

@@ -6417,6 +6417,171 @@ test("SourceService validateMixin reports requested loader scope separately from
   assert.equal(single?.provenance?.jarType, "merged");
 });
 
+test("SourceService validateMixin summary-first hoists shared provenance and incomplete reasons", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-summary-first-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const sharedProvenance = {
+    version: "1.21",
+    jarPath: join(root, "client.jar"),
+    requestedMapping: "mojang" as const,
+    mappingApplied: "mojang" as const,
+    requestedScope: "vanilla" as const,
+    appliedScope: "vanilla" as const,
+    requestedSourcePriority: "loom-first" as const,
+    appliedSourcePriority: "loom-first" as const,
+    resolutionTrace: [
+      {
+        target: "net.minecraft.server.Main",
+        step: "signature" as const,
+        input: "net.minecraft.server.Main",
+        output: "missing metadata",
+        success: false
+      }
+    ]
+  };
+
+  (service as any).validateMixinSingle = async ({ sourcePath }: { sourcePath?: string }) => ({
+    className: sourcePath?.includes("World") ? "WorldMixin" : "PlayerMixin",
+    targets: ["net.minecraft.server.Main"],
+    valid: true,
+    validationStatus: "partial",
+    issues: [
+      {
+        severity: "warning",
+        kind: "validation-incomplete",
+        annotation: "@Mixin",
+        target: "net.minecraft.server.Main",
+        message: "Target metadata could not be loaded completely; member validation was skipped.",
+        confidence: "uncertain",
+        category: "resolution",
+        resolutionPath: "source-signature-unavailable",
+        issueOrigin: "tool_issue",
+        falsePositiveRisk: "high"
+      }
+    ],
+    summary: {
+      injections: 1,
+      shadows: 0,
+      accessors: 0,
+      total: 1,
+      membersValidated: 0,
+      membersSkipped: 1,
+      membersMissing: 0,
+      errors: 0,
+      warnings: 1,
+      definiteErrors: 0,
+      uncertainErrors: 0,
+      resolutionErrors: 1,
+      parseWarnings: 0
+    },
+    provenance: sharedProvenance,
+    warnings: ["Shared validation warning"],
+    confidenceScore: 80,
+    confidenceBreakdown: {
+      baseScore: 100,
+      score: 80,
+      penalties: [{ reason: "members-skipped", points: 20 }]
+    },
+    quickSummary: "0 error(s), 0 uncertain, 1 warning(s). 0 validated, 1 member(s) skipped, 0 member(s) missing."
+  });
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "paths",
+      paths: ["PlayerMixin.java", "WorldMixin.java"]
+    },
+    version: "1.21",
+    mapping: "mojang",
+    reportMode: "summary-first"
+  });
+
+  assert.equal(result.summary.total, 2);
+  assert.equal(result.provenance?.version, "1.21");
+  assert.equal(result.provenance?.resolutionTrace?.length, 1);
+  assert.equal(result.incompleteReasons?.length, 1);
+  assert.ok(result.incompleteReasons?.[0]?.includes("validation-incomplete"));
+  assert.deepEqual(result.warnings, ["Shared validation warning"]);
+  assert.equal(result.results[0]?.result?.provenance, undefined);
+  assert.equal(result.results[0]?.result?.warnings.length, 0);
+  assert.equal(result.results[0]?.result?.confidenceBreakdown, undefined);
+});
+
+test("SourceService validateMixin summary-first preserves per-result provenance when batch provenance differs", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-summary-first-mixed-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).validateMixinSingle = async ({ sourcePath }: { sourcePath?: string }) => {
+    const isWorld = sourcePath?.includes("World");
+    return {
+      className: isWorld ? "WorldMixin" : "PlayerMixin",
+      targets: ["net.minecraft.server.Main"],
+      valid: true,
+      validationStatus: "partial",
+      issues: [
+        {
+          severity: "warning",
+          kind: "validation-incomplete",
+          annotation: "@Mixin",
+          target: "net.minecraft.server.Main",
+          message: "Target metadata could not be loaded completely; member validation was skipped.",
+          confidence: "uncertain",
+          category: "resolution",
+          resolutionPath: "source-signature-unavailable",
+          issueOrigin: "tool_issue",
+          falsePositiveRisk: "high"
+        }
+      ],
+      summary: {
+        injections: 1,
+        shadows: 0,
+        accessors: 0,
+        total: 1,
+        membersValidated: 0,
+        membersSkipped: 1,
+        membersMissing: 0,
+        errors: 0,
+        warnings: 1,
+        definiteErrors: 0,
+        uncertainErrors: 0,
+        resolutionErrors: 1,
+        parseWarnings: 0
+      },
+      provenance: {
+        version: "1.21",
+        jarPath: join(root, "client.jar"),
+        requestedMapping: "mojang" as const,
+        mappingApplied: "mojang" as const,
+        requestedScope: "vanilla" as const,
+        appliedScope: "vanilla" as const,
+        requestedSourcePriority: "loom-first" as const,
+        appliedSourcePriority: isWorld ? "maven-first" as const : "loom-first" as const
+      },
+      warnings: [isWorld ? "World validation warning" : "Player validation warning"],
+      confidenceScore: 80,
+      quickSummary: "0 error(s), 0 uncertain, 1 warning(s). 0 validated, 1 member(s) skipped, 0 member(s) missing."
+    };
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "paths",
+      paths: ["PlayerMixin.java", "WorldMixin.java"]
+    },
+    version: "1.21",
+    mapping: "mojang",
+    reportMode: "summary-first"
+  });
+
+  assert.equal(result.provenance, undefined);
+  assert.equal(result.results[0]?.result?.provenance?.appliedSourcePriority, "loom-first");
+  assert.equal(result.results[1]?.result?.provenance?.appliedSourcePriority, "maven-first");
+  assert.deepEqual(result.results[0]?.result?.warnings, ["Player validation warning"]);
+  assert.deepEqual(result.results[1]?.result?.warnings, ["World validation warning"]);
+});
+
 test("SourceService validateMixin hideUncertain recomputes parseWarnings summary", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-hide-uncertain-"));

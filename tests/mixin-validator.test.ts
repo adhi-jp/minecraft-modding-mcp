@@ -1475,8 +1475,9 @@ test("P2: target-not-found via signatureFailedTargets downgrades to warning when
 
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].kind, "validation-incomplete");
   assert.equal(result.issues[0].confidence, "uncertain");
-  assert.ok(result.issues[0].message.includes("infrastructure degraded"));
+  assert.ok(result.issues[0].message.includes("could not load enough target metadata"));
   assert.equal(result.issues[0].falsePositiveRisk, "high");
   assert.equal(result.valid, true); // No definite errors
 });
@@ -1494,8 +1495,9 @@ test("P2: target-not-found stays error when healthy", () => {
   );
 
   assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].severity, "error");
-  assert.equal(result.issues[0].confidence, "definite");
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].kind, "validation-incomplete");
+  assert.equal(result.issues[0].confidence, "uncertain");
 });
 
 test("P2: method-not-found downgrades to warning when memberRemapAvailable=false and remap failed", () => {
@@ -1795,7 +1797,7 @@ test("symbolExistsButSignatureFailed produces tool_issue warning and skipped mem
   assert.equal(result.validationStatus, "partial");
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].severity, "warning");
-  assert.equal(result.issues[0].kind, "target-not-found");
+  assert.equal(result.issues[0].kind, "validation-incomplete");
   assert.equal(result.issues[0].issueOrigin, "tool_issue");
   assert.equal(result.issues[0].falsePositiveRisk, "high");
   assert.ok(result.issues[0].message.includes("exists in mapping data"));
@@ -1917,6 +1919,49 @@ test("quickSummary reports error counts when issues exist", () => {
   assert.ok(result.quickSummary);
   assert.ok(result.quickSummary!.includes("error(s)"));
   assert.ok(result.quickSummary!.includes("1 member(s) missing"));
+});
+
+test("P6: confidenceBreakdown captures base score and applied penalties", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 10 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.1",
+    jarPath: "/fake/jar.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "obfuscated",
+    remapFailures: 5,
+    scopeFallback: { requested: "merged", applied: "vanilla", reason: "test" }
+  };
+  const warnings: string[] = [];
+  const health = makeHealthReport({
+    overallHealthy: false,
+    tinyMappingsAvailable: false,
+    memberRemapAvailable: false
+  });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+
+  assert.equal(result.confidenceScore, 0);
+  assert.equal(result.confidenceBreakdown?.baseScore, 100);
+  assert.equal(result.confidenceBreakdown?.score, result.confidenceScore);
+  assert.deepEqual(
+    result.confidenceBreakdown?.penalties.map((penalty) => penalty.reason),
+    [
+      "mapping-health",
+      "tiny-mappings-unavailable",
+      "member-remap-unavailable",
+      "scope-fallback",
+      "mapping-mismatch",
+      "remap-failures"
+    ]
+  );
 });
 
 /* ------------------------------------------------------------------ */

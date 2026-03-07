@@ -35,6 +35,7 @@ export type ValidationIssue = {
   severity: "error" | "warning";
   kind:
     | "target-not-found"
+    | "validation-incomplete"
     | "target-mapping-failed"
     | "method-not-found"
     | "field-not-found"
@@ -119,11 +120,24 @@ export type AggregatedWarningGroup = {
   samples: string[];
 };
 
+export type ConfidencePenalty = {
+  reason: string;
+  points: number;
+};
+
+export type ConfidenceBreakdown = {
+  baseScore: number;
+  score: number;
+  penalties: ConfidencePenalty[];
+};
+
 export type MixinValidationResult = {
   className: string;
   targets: string[];
   priority?: number;
+  /** Legacy coarse pass/fail flag. Prefer validationStatus for the primary outcome. */
   valid: boolean;
+  /** full = fully validated, partial = tool-limited/incomplete, invalid = definite validation errors. */
   validationStatus: ValidationStatus;
   issues: ValidationIssue[];
   summary: ValidationSummary;
@@ -135,6 +149,7 @@ export type MixinValidationResult = {
   resolvedMembers?: ResolvedMember[];
   toolHealth?: MappingHealthReport;
   confidenceScore?: number;
+  confidenceBreakdown?: ConfidenceBreakdown;
   quickSummary?: string;
 };
 
@@ -295,23 +310,51 @@ function computeFalsePositiveRisk(
   return undefined;
 }
 
-function computeConfidenceScore(
+function computeConfidenceBreakdown(
   healthReport: MappingHealthReport | undefined,
   provenance: MixinValidationProvenance | undefined,
   remapFailureCount: number,
   skippedMemberCount: number
-): number {
-  let score = 100;
+): ConfidenceBreakdown {
+  const baseScore = 100;
+  const penalties: ConfidencePenalty[] = [];
+  let score = baseScore;
   if (healthReport) {
-    if (!healthReport.overallHealthy) score -= 30;
-    if (!healthReport.tinyMappingsAvailable) score -= 20;
-    if (!healthReport.memberRemapAvailable) score -= 15;
+    if (!healthReport.overallHealthy) {
+      penalties.push({ reason: "mapping-health", points: 30 });
+      score -= 30;
+    }
+    if (!healthReport.tinyMappingsAvailable) {
+      penalties.push({ reason: "tiny-mappings-unavailable", points: 20 });
+      score -= 20;
+    }
+    if (!healthReport.memberRemapAvailable) {
+      penalties.push({ reason: "member-remap-unavailable", points: 15 });
+      score -= 15;
+    }
   }
-  if (provenance?.scopeFallback) score -= 10;
-  if (provenance && provenance.requestedMapping !== provenance.mappingApplied) score -= 15;
-  if (skippedMemberCount > 0) score -= 25;
-  score -= Math.min(remapFailureCount * 2, 20);
-  return Math.max(score, 0);
+  if (provenance?.scopeFallback) {
+    penalties.push({ reason: "scope-fallback", points: 10 });
+    score -= 10;
+  }
+  if (provenance && provenance.requestedMapping !== provenance.mappingApplied) {
+    penalties.push({ reason: "mapping-mismatch", points: 15 });
+    score -= 15;
+  }
+  if (skippedMemberCount > 0) {
+    penalties.push({ reason: "members-skipped", points: 25 });
+    score -= 25;
+  }
+  const remapPenalty = Math.min(remapFailureCount * 2, 20);
+  if (remapPenalty > 0) {
+    penalties.push({ reason: "remap-failures", points: remapPenalty });
+    score -= remapPenalty;
+  }
+  return {
+    baseScore,
+    score: Math.max(score, 0),
+    penalties
+  };
 }
 
 function summarizeResolvedMembers(resolvedMembers: ResolvedMember[]): Pick<
@@ -345,6 +388,35 @@ function buildQuickSummary(
     return `${summary.membersValidated} member(s) validated successfully.`;
   }
   return `${summary.definiteErrors} error(s), ${summary.uncertainErrors} uncertain, ${summary.warnings} warning(s). ${summary.membersValidated} validated, ${summary.membersSkipped} member(s) skipped, ${summary.membersMissing} member(s) missing.`;
+}
+
+function addSkippedMembers(parsed: ParsedMixin, resolvedMembers: ResolvedMember[]): void {
+  for (const inj of parsed.injections) {
+    resolvedMembers.push({
+      annotation: `@${inj.annotation}`,
+      name: extractMethodName(inj.method),
+      line: inj.line,
+      status: "skipped"
+    });
+  }
+
+  for (const shadow of parsed.shadows) {
+    resolvedMembers.push({
+      annotation: "@Shadow",
+      name: shadow.name,
+      line: shadow.line,
+      status: "skipped"
+    });
+  }
+
+  for (const accessor of parsed.accessors) {
+    resolvedMembers.push({
+      annotation: `@${accessor.annotation}`,
+      name: accessor.targetName,
+      line: accessor.line,
+      status: "skipped"
+    });
+  }
 }
 
 export function refreshMixinValidationOutcome(result: MixinValidationResult): MixinValidationResult {
@@ -608,7 +680,7 @@ export function validateParsedMixin(
         // Symbol exists in mapping graph but getSignature failed — tool limitation, not code issue
         issues.push({
           severity: "warning",
-          kind: "target-not-found",
+          kind: "validation-incomplete",
           annotation: "@Mixin",
           target: target.className,
           message: `Target class "${target.className}" exists in mapping data but could not be loaded from game jar (tool limitation). Members not validated.`,
@@ -619,48 +691,22 @@ export function validateParsedMixin(
           issueOrigin: "tool_issue",
           falsePositiveRisk: "high"
         });
-        // Skip member validation for this target — add skipped entries for each declared member
-        for (const inj of parsed.injections) {
-          const methodName = extractMethodName(inj.method);
-          resolvedMembers.push({
-            annotation: `@${inj.annotation}`,
-            name: methodName,
-            line: inj.line,
-            status: "skipped"
-          });
-        }
-        for (const shadow of parsed.shadows) {
-          resolvedMembers.push({
-            annotation: "@Shadow",
-            name: shadow.name,
-            line: shadow.line,
-            status: "skipped"
-          });
-        }
-        for (const accessor of parsed.accessors) {
-          resolvedMembers.push({
-            annotation: `@${accessor.annotation}`,
-            name: accessor.targetName,
-            line: accessor.line,
-            status: "skipped"
-          });
-        }
+        addSkippedMembers(parsed, resolvedMembers);
       } else if (signatureFailedTargets?.has(target.className)) {
-        const degraded = healthReport?.overallHealthy === false;
         issues.push({
-          severity: degraded ? "warning" : "error",
-          kind: "target-not-found",
+          severity: "warning",
+          kind: "validation-incomplete",
           annotation: "@Mixin",
           target: target.className,
-          message: `Target class "${target.className}" not found in game jar.${degraded ? " (infrastructure degraded; may be false positive)" : ""}`,
-          confidence: degraded ? "uncertain" : confidence,
-          confidenceReason: degraded
-            ? "Mapping infrastructure is degraded; result may be inaccurate."
-            : confidenceReason,
+          message: `Target class "${target.className}" could not load enough target metadata for reliable validation. Members were not validated.`,
+          confidence: "uncertain",
+          confidenceReason: "Target bytecode could not be loaded and fallback existence checks were unavailable.",
           category: "resolution",
           resolutionPath: "source-signature-unavailable",
-          falsePositiveRisk: degraded ? "high" : undefined
+          issueOrigin: "tool_issue",
+          falsePositiveRisk: "high"
         });
+        addSkippedMembers(parsed, resolvedMembers);
       } else {
         issues.push({
           severity: "error",
@@ -771,6 +817,21 @@ export function validateParsedMixin(
             };
           }
           break;
+        case "validation-incomplete":
+          issue.explanation = `Target metadata for "${issue.target}" could not be loaded reliably, so validation was only partial. This usually indicates a tool or environment limitation rather than a confirmed code error.`;
+          if (version) {
+            issue.suggestedCall = {
+              tool: "get-class-source",
+              params: {
+                className: issue.target,
+                target: { type: "resolve" as const, kind: "version" as const, value: version },
+                ...(mapping ? { mapping } : {}),
+                mode: "metadata",
+                ...classSourceContext
+              }
+            };
+          }
+          break;
         case "target-mapping-failed":
           issue.explanation = `Mapping lookup failed for "${issue.target}". The class may exist under a different name in the target namespace.`;
           if (version && mapping) {
@@ -859,9 +920,10 @@ export function validateParsedMixin(
   // Compute confidence score
   const remapFailureCount = provenance?.remapFailures ?? 0;
   const memberSummary = summarizeResolvedMembers(resolvedMembers);
-  const confidenceScore = healthReport
-    ? computeConfidenceScore(healthReport, provenance, remapFailureCount, memberSummary.membersSkipped)
+  const confidenceBreakdown = healthReport
+    ? computeConfidenceBreakdown(healthReport, provenance, remapFailureCount, memberSummary.membersSkipped)
     : undefined;
+  const confidenceScore = confidenceBreakdown?.score;
   const total = parsed.injections.length + parsed.shadows.length + parsed.accessors.length;
   const summary: ValidationSummary = {
     injections: parsed.injections.length,
@@ -894,6 +956,7 @@ export function validateParsedMixin(
     resolvedMembers: resolvedMembers.length > 0 ? resolvedMembers : undefined,
     toolHealth: healthReport,
     confidenceScore,
+    confidenceBreakdown,
     quickSummary
   };
 }

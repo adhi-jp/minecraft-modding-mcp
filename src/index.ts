@@ -140,6 +140,13 @@ const sourceLookupTargetSchema = z.discriminatedUnion("type", [
   })
 ]);
 
+const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
+  "Object with kind and value. Example: {\"kind\":\"version\",\"value\":\"1.21.10\"}. Must be an object, not a string.";
+const SOURCE_LOOKUP_TARGET_DESCRIPTION =
+  "Object: {\"type\":\"resolve\",\"kind\":\"version\",\"value\":\"1.21.10\"} or {\"type\":\"artifact\",\"artifactId\":\"...\"}. Must be an object, not a string.";
+const SOURCE_SCOPE_DESCRIPTION =
+  'vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = currently behaves the same as "merged".';
+
 const listVersionsShape = {
   includeSnapshots: z.boolean().optional().describe("default false"),
   limit: optionalPositiveInt.describe("default 20, max 200")
@@ -150,12 +157,12 @@ const resolveArtifactShape = {
   target: z.object({
     kind: targetKindSchema,
     value: nonEmptyString
-  }).describe("Resolve target: { kind: version|jar|coordinate, value }"),
+  }).describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
-  scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
@@ -164,12 +171,12 @@ const resolveArtifactSchema = z.object(resolveArtifactShape);
 const getClassSourceShape = {
   className: nonEmptyString,
   mode: sourceModeSchema.optional().describe("metadata (default) = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
-  target: sourceLookupTargetSchema.describe("Either { type: 'artifact', artifactId } or { type: 'resolve', kind, value }"),
+  target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
-  scope: artifactScopeSchema.optional().describe("vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = loader-specific"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
   startLine: optionalPositiveInt,
@@ -196,7 +203,7 @@ const getClassSourceSchema = z
 
 const getClassMembersShape = {
   className: nonEmptyString,
-  target: sourceLookupTargetSchema.describe("Either { type: 'artifact', artifactId } or { type: 'resolve', kind, value }"),
+  target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().optional().describe("default true"),
@@ -206,7 +213,7 @@ const getClassMembersShape = {
   memberPattern: optionalNonEmptyString,
   maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
   projectPath: optionalNonEmptyString,
-  scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
@@ -611,7 +618,7 @@ const validateMixinShape = {
   version: nonEmptyString.describe("Minecraft version"),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  scope: artifactScopeSchema.optional().describe("vanilla | merged | loader"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
   minSeverity: z.enum(["error", "warning", "all"]).optional()
@@ -624,8 +631,8 @@ const validateMixinShape = {
     .describe("'full'=all warnings (default), 'aggregated'=group warnings by category with counts and samples"),
   preferProjectMapping: z.boolean().optional()
     .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
-  reportMode: z.enum(["compact", "full"]).optional()
-    .describe("'compact' omits resolvedMembers/structuredWarnings/toolHealth details, 'full'=everything (default)"),
+  reportMode: z.enum(["compact", "full", "summary-first"]).optional()
+    .describe("'compact' omits heavy per-result detail, 'summary-first' hoists shared provenance/warnings/incomplete reasons, 'full'=everything (default)"),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
     .describe("Only include warnings/issues matching these categories (default: all)"),
   treatInfoAsWarning: z.boolean().optional()
@@ -988,6 +995,74 @@ function asStringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
+function truncateSuggestionText(value: string, maxLength = 500): string {
+  return value.length > maxLength
+    ? `${value.slice(0, maxLength)}...`
+    : value;
+}
+
+function parseJsonObjectString(value: string): Record<string, unknown> | undefined {
+  if (!value.trim().startsWith("{")) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return asObjectRecord(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function inferTargetKindFromString(value: string): SourceTargetInput["kind"] {
+  if (/[\\/]/.test(value) || /\.jar$/i.test(value)) {
+    return "jar";
+  }
+  if (value.split(":").length >= 3) {
+    return "coordinate";
+  }
+  return "version";
+}
+
+function copySourceLookupSuggestionFields(
+  tool: "get-class-source" | "get-class-members",
+  source: Record<string, unknown>
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  const stringFields = tool === "get-class-source"
+    ? ["className", "mode", "mapping", "sourcePriority", "projectPath", "scope", "outputFile"] as const
+    : ["className", "mapping", "sourcePriority", "projectPath", "scope", "access", "memberPattern"] as const;
+  for (const field of stringFields) {
+    const value = source[field];
+    if (typeof value === "string" && value.trim()) {
+      result[field] = value;
+    }
+  }
+
+  const numericFields = tool === "get-class-source"
+    ? ["startLine", "endLine", "maxLines", "maxChars"] as const
+    : ["maxMembers"] as const;
+  for (const field of numericFields) {
+    const value = source[field];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      result[field] = value;
+    }
+  }
+
+  const booleanFields = tool === "get-class-source"
+    ? ["allowDecompile", "preferProjectVersion", "strictVersion"] as const
+    : ["allowDecompile", "preferProjectVersion", "strictVersion", "includeSynthetic", "includeInherited"] as const;
+  for (const field of booleanFields) {
+    const value = source[field];
+    if (typeof value === "boolean") {
+      result[field] = value;
+    }
+  }
+
+  return result;
+}
+
 function copyValidateMixinSharedParams(source: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
@@ -1057,11 +1132,20 @@ function buildValidateMixinSuggestedParams(normalizedInput: unknown): Record<str
     asNonEmptyString(inputRecord?.source) ??
     asNonEmptyString(record.source);
   if (inlineSource) {
+    const parsedInlineObject = parseJsonObjectString(inlineSource);
+    if (parsedInlineObject && typeof parsedInlineObject.mode === "string") {
+      return {
+        ...shared,
+        input: parsedInlineObject,
+        version
+      };
+    }
+
     return {
       ...shared,
       input: {
         mode: "inline",
-        source: inlineSource
+        source: truncateSuggestionText(inlineSource)
       },
       version
     };
@@ -1133,27 +1217,123 @@ function buildValidateMixinSuggestedParams(normalizedInput: unknown): Record<str
   };
 }
 
+function buildResolveArtifactSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+  const record = asObjectRecord(normalizedInput);
+  if (!record) {
+    return {
+      target: {
+        kind: "version",
+        value: "<minecraft-version>"
+      }
+    };
+  }
+
+  const targetValue = asNonEmptyString(record.target);
+  const result: Record<string, unknown> = {
+    target: targetValue
+      ? {
+          kind: inferTargetKindFromString(targetValue),
+          value: targetValue
+        }
+      : {
+          kind: "version",
+          value: "<minecraft-version>"
+        }
+  };
+
+  const stringFields = ["mapping", "sourcePriority", "projectPath", "scope"] as const;
+  for (const field of stringFields) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      result[field] = value;
+    }
+  }
+
+  const booleanFields = ["allowDecompile", "preferProjectVersion", "strictVersion"] as const;
+  for (const field of booleanFields) {
+    const value = record[field];
+    if (typeof value === "boolean") {
+      result[field] = value;
+    }
+  }
+
+  return result;
+}
+
+function buildSourceLookupSuggestedParams(
+  tool: "get-class-source" | "get-class-members",
+  normalizedInput: unknown
+): Record<string, unknown> {
+  const record = asObjectRecord(normalizedInput);
+  const result = record ? copySourceLookupSuggestionFields(tool, record) : {};
+  const targetValue = asNonEmptyString(record?.target);
+
+  result.target = targetValue
+    ? {
+        type: "resolve",
+        kind: inferTargetKindFromString(targetValue),
+        value: targetValue
+      }
+    : {
+        type: "resolve",
+        kind: "version",
+        value: "<minecraft-version>"
+      };
+
+  if (!asNonEmptyString(result.className)) {
+    result.className = "<fully-qualified-class-name>";
+  }
+
+  return result;
+}
+
 function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
   hints?: string[];
   suggestedCall?: SuggestedCall;
 } | undefined {
-  if (tool !== "validate-mixin") {
-    return undefined;
+  if (tool === "validate-mixin") {
+    const hints = [
+      "validate-mixin.input must be an object with input.mode = \"inline\" | \"path\" | \"paths\" | \"config\" | \"project\".",
+      "Whole-project example: {\"input\":{\"mode\":\"project\",\"path\":\"/workspace\"},\"version\":\"1.21.10\",\"preferProjectVersion\":true,\"preferProjectMapping\":true}.",
+      "Legacy top-level source/sourcePath/sourcePaths/mixinConfigPath fields are no longer accepted; wrap them under input.mode instead."
+    ];
+
+    return {
+      hints,
+      suggestedCall: {
+        tool,
+        params: buildValidateMixinSuggestedParams(normalizedInput)
+      }
+    };
   }
 
-  const hints = [
-    "validate-mixin.input must be an object with input.mode = \"inline\" | \"path\" | \"paths\" | \"config\" | \"project\".",
-    "Whole-project example: {\"input\":{\"mode\":\"project\",\"path\":\"/workspace\"},\"version\":\"1.21.10\",\"preferProjectVersion\":true,\"preferProjectMapping\":true}.",
-    "Legacy top-level source/sourcePath/sourcePaths/mixinConfigPath fields are no longer accepted; wrap them under input.mode instead."
-  ];
+  if (tool === "resolve-artifact") {
+    return {
+      hints: [
+        "resolve-artifact.target must be an object: {\"kind\":\"version|jar|coordinate\",\"value\":\"...\"}.",
+        "Bare string targets are not accepted; wrap the value under target.kind and target.value."
+      ],
+      suggestedCall: {
+        tool,
+        params: buildResolveArtifactSuggestedParams(normalizedInput)
+      }
+    };
+  }
 
-  return {
-    hints,
-    suggestedCall: {
-      tool,
-      params: buildValidateMixinSuggestedParams(normalizedInput)
-    }
-  };
+  if (tool === "get-class-source" || tool === "get-class-members") {
+    return {
+      hints: [
+        `${tool}.target must be an object: {"type":"resolve","kind":"version|jar|coordinate","value":"..."} or {"type":"artifact","artifactId":"..."}.`,
+        "Bare string targets are not accepted; wrap the value under target.type/target.kind/target.value."
+      ],
+      suggestedCall: {
+        tool,
+        params: buildSourceLookupSuggestedParams(tool, normalizedInput)
+      }
+    };
+  }
+
+  return undefined;
 }
 
 function mapErrorToProblem(

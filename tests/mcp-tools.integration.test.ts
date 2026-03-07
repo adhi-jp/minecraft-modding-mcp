@@ -259,6 +259,241 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
   });
 });
 
+test("validate-mixin invalid JSON-like input string preserves structured input in suggestedCall", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "validate-mixin",
+        arguments: {
+          input: "{\"mode\":\"path\",\"path\":\"/workspace/src/main/java/ExampleMixin.java\"}",
+          version: "1.21.10"
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            input?: { mode?: string; path?: string };
+            version?: string;
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "validate-mixin");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    input: {
+      mode: "path",
+      path: "/workspace/src/main/java/ExampleMixin.java"
+    },
+    version: "1.21.10"
+  });
+});
+
+test("source lookup tools/list schema clarifies object target inputs and loader scope fallback", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
+  assert.ok(handler);
+
+  const response = await handler!(
+    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    {}
+  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
+
+  const toolMap = new Map(response.tools.map((entry) => [entry.name, entry.inputSchema]));
+  const resolveArtifactSchema = toolMap.get("resolve-artifact") as {
+    properties?: { target?: { description?: string }; scope?: { description?: string } };
+  };
+  const getClassSourceSchema = toolMap.get("get-class-source") as {
+    properties?: { target?: { description?: string }; scope?: { description?: string } };
+  };
+  const getClassMembersSchema = toolMap.get("get-class-members") as {
+    properties?: { target?: { description?: string }; scope?: { description?: string } };
+  };
+  const validateMixinSchema = toolMap.get("validate-mixin") as {
+    properties?: { reportMode?: { enum?: string[]; description?: string } };
+  };
+
+  assert.match(resolveArtifactSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
+  assert.match(getClassSourceSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
+  assert.match(getClassMembersSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
+  assert.match(resolveArtifactSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
+  assert.match(getClassSourceSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
+  assert.match(getClassMembersSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
+  assert.deepEqual(
+    [...(validateMixinSchema.properties?.reportMode?.enum ?? [])].sort(),
+    ["compact", "full", "summary-first"]
+  );
+  assert.match(validateMixinSchema.properties?.reportMode?.description ?? "", /summary-first/i);
+});
+
+test("resolve-artifact invalid string target returns retryable object target suggestedCall", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "resolve-artifact",
+        arguments: {
+          target: "1.21.10"
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        suggestedCall?: {
+          tool?: string;
+          params?: { target?: { kind?: string; value?: string } };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "resolve-artifact");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    target: {
+      kind: "version",
+      value: "1.21.10"
+    }
+  });
+});
+
+test("get-class-source invalid string target returns resolve-target suggestedCall", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "get-class-source",
+        arguments: {
+          className: "net.minecraft.server.Main",
+          target: "1.21.10"
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            className?: string;
+            target?: { type?: string; kind?: string; value?: string };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-source");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    className: "net.minecraft.server.Main",
+    target: {
+      type: "resolve",
+      kind: "version",
+      value: "1.21.10"
+    }
+  });
+});
+
+test("get-class-members invalid string target suggestedCall preserves valid fields only", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "get-class-members",
+        arguments: {
+          className: "net.minecraft.server.Main",
+          target: "1.21.10",
+          access: "all",
+          memberPattern: "tick",
+          mode: "full",
+          outputFile: "/tmp/ignored.java",
+          startLine: 10
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: Record<string, unknown>;
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-members");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    className: "net.minecraft.server.Main",
+    target: {
+      type: "resolve",
+      kind: "version",
+      value: "1.21.10"
+    },
+    access: "all",
+    memberPattern: "tick"
+  });
+});
+
 test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {
   const source = await readFile("src/index.ts", "utf8");
   const diffClassSignaturesBlock = source.match(/const diffClassSignaturesShape = \{[\s\S]*?\n\};/)?.[0] ?? "";

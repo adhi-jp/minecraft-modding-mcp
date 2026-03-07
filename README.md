@@ -238,7 +238,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[].validationStatus`, `summary.partial`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[].validationStatus`, `summary.partial`, `issueSummary?`, `provenance?`, `incompleteReasons?`, `toolHealth?`, `confidenceScore?`, `confidenceBreakdown?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -272,10 +272,14 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, `config`, or `project`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes). `input.mode="project"` recursively discovers `**/*.mixins.json` under `input.path`, then runs the same config-driven batch validation with `projectPath` defaulting to that workspace root.
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
 `validate-mixin` supports `includeIssues=false` for summary-first workflows that do not need per-result `issues[]`; combine it with `reportMode=compact` and `warningMode=aggregated` to keep responses small.
+`reportMode=summary-first` hoists shared provenance, warnings, and incomplete-reason summaries to the top level while trimming duplicate per-result metadata.
 `validate-mixin` per-result responses now include `validationStatus` (`full`, `partial`, `invalid`) plus `summary.membersValidated`, `summary.membersSkipped`, and `summary.membersMissing`; `quickSummary` now includes member coverage counts instead of only issue counts.
 `validate-mixin` batch `summary` now includes `partial` so callers can distinguish fully clean results from tool-limited-but-non-failing results.
+`validate-mixin` now reports `validation-incomplete` when target metadata cannot be loaded reliably, instead of misclassifying those tool-limited cases as confirmed missing classes.
+`validate-mixin` responses now include `confidenceBreakdown` alongside `confidenceScore`, exposing the base score plus the penalties that lowered confidence.
 `validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` provenance now exposes `requestedScope` / `appliedScope` and `requestedSourcePriority` / `appliedSourcePriority` so fallback and retry behavior is explicit.
+`scope="loader"` currently resolves the same artifact class as `scope="merged"`; keep using `scope` to declare intent, but expect the same underlying lookup path today.
 For non-vanilla scopes such as `scope="merged"`, `validate-mixin` now performs bytecode lookup in the resolved artifact namespace before remapping members back to the requested namespace, so Mojang-mapped Loom workspaces validate against merged class names instead of reporting false partial results.
 `validate-mixin` automatically retries with `sourcePriority="maven-first"` after a partial `loom-first` validation caused by mapping/signature resolution limits, and records that retry in warnings plus provenance notes.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
@@ -287,6 +291,7 @@ For non-vanilla scopes such as `scope="merged"`, `validate-mixin` now performs b
 `validate-mixin` per-result responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
 `validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery; generated `check-symbol-exists` recovery payloads now stay within that tool's public schema.
 Schema validation failures now also return the standard `ERR_INVALID_INPUT` envelope with `fieldErrors`, `hints`, and a mode-correct `suggestedCall` for common `validate-mixin` mistakes such as passing raw source text directly as `input`.
+Bare string `target` values now return `ERR_INVALID_INPUT` with a schema-correct `suggestedCall` wrapper for `resolve-artifact`, `get-class-source`, and `get-class-members`.
 `validate-mixin` summary uses `processingErrors`, `totalValidationErrors`, and `totalValidationWarnings`; the deprecated `summary.errors` field was removed.
 `check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version ...` noise when Maven tiny mappings successfully satisfy the lookup; successful fallback now reports a single concise warning instead of repeating the Loom miss on every result.
 `resolve-artifact` with `target.kind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.

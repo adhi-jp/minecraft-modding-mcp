@@ -542,7 +542,7 @@ export type ValidateMixinInput = {
   explain?: boolean;
   warningMode?: "full" | "aggregated";
   preferProjectMapping?: boolean;
-  reportMode?: "compact" | "full";
+  reportMode?: "compact" | "full" | "summary-first";
   warningCategoryFilter?: ("mapping" | "configuration" | "validation" | "resolution" | "parse")[];
   treatInfoAsWarning?: boolean;
   includeIssues?: boolean;
@@ -582,6 +582,8 @@ export type ValidateMixinOutput = {
     totalValidationWarnings: number;
   };
   issueSummary?: ValidateMixinBatchIssueSummaryItem[];
+  provenance?: MixinValidationProvenance;
+  incompleteReasons?: string[];
   toolHealth?: MappingHealthReport;
   confidenceScore?: number;
   warnings: string[];
@@ -3989,7 +3991,6 @@ export class SourceService {
         });
       } catch (sigErr) {
         warnings.push(`Could not load signature for class "${resolvedClassName}" (obfuscated: "${obfuscatedName}").`);
-        signatureFailedTargets.add(target.className);
         resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: "CLASS_NOT_FOUND", success: false, detail: sigErr instanceof Error ? sigErr.message : String(sigErr) });
 
         // Fallback: check if the symbol exists in the mapping graph even though getSignature failed
@@ -3999,14 +4000,14 @@ export class SourceService {
             sourceMapping: requestedMapping, nameMode: "auto", sourcePriority: currentSourcePriority
           });
           if (existenceCheck.resolved) {
-            signatureFailedTargets.delete(target.className);
             symbolExistsButSignatureFailed.add(target.className);
             resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "exists in mapping graph", success: true });
           } else {
             resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "not found", success: false });
           }
         } catch {
-          // Fallback check failed — keep as signatureFailedTarget
+          // Fallback check failed — treat as tool-limited partial validation.
+          signatureFailedTargets.add(target.className);
           resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "check failed", success: false });
         }
       }
@@ -4165,6 +4166,7 @@ export class SourceService {
       result.structuredWarnings = undefined;
       result.aggregatedWarnings = undefined;
       result.toolHealth = undefined;
+      result.confidenceBreakdown = undefined;
       if (result.provenance) {
         result.provenance.resolutionTrace = undefined;
       }
@@ -4315,13 +4317,45 @@ export class SourceService {
     output: ValidateMixinOutput,
     input: ValidateMixinInput
   ): ValidateMixinOutput {
+    let nextOutput = output;
+    const canHoistProvenance = nextOutput.provenance != null;
+    const warningCandidates = nextOutput.results
+      .map((entry) => entry.result?.warnings)
+      .filter((entry): entry is string[] => entry != null);
+    const canHoistWarnings = warningCandidates.length === 0
+      ? true
+      : warningCandidates.every((entry) => JSON.stringify(entry) === JSON.stringify(warningCandidates[0]));
+
+    if (input.reportMode === "summary-first") {
+      nextOutput = {
+        ...nextOutput,
+        results: nextOutput.results.map((entry) => (
+          entry.result
+            ? {
+                ...entry,
+                result: {
+                  ...entry.result,
+                  warnings: canHoistWarnings ? [] : entry.result.warnings,
+                  structuredWarnings: undefined,
+                  aggregatedWarnings: undefined,
+                  resolvedMembers: undefined,
+                  toolHealth: undefined,
+                  confidenceBreakdown: undefined,
+                  provenance: canHoistProvenance ? undefined : entry.result.provenance
+                }
+              }
+            : entry
+        ))
+      };
+    }
+
     if (input.includeIssues !== false) {
-      return output;
+      return nextOutput;
     }
 
     return {
-      ...output,
-      results: output.results.map((entry) => (
+      ...nextOutput,
+      results: nextOutput.results.map((entry) => (
         entry.result
           ? {
               ...entry,
@@ -4346,6 +4380,7 @@ export class SourceService {
     let totalValidationErrors = 0;
     let totalValidationWarnings = 0;
     const warningSet = new Set<string>();
+    const incompleteReasonSet = new Set<string>();
     const issueGroupMap = new Map<string, { kind: string; confidence: string; category: string; count: number; sampleTargets: string[] }>();
 
     for (const entry of results) {
@@ -4371,6 +4406,9 @@ export class SourceService {
       }
 
       for (const issue of entry.result.issues) {
+        if (issue.kind === "validation-incomplete") {
+          incompleteReasonSet.add(`validation-incomplete: ${issue.message}`);
+        }
         const key = `${issue.kind}\0${issue.confidence ?? "unknown"}\0${issue.category ?? "validation"}`;
         const existing = issueGroupMap.get(key);
         if (existing) {
@@ -4391,6 +4429,14 @@ export class SourceService {
     }
 
     const issueSummary = issueGroupMap.size > 0 ? [...issueGroupMap.values()] : undefined;
+    const provenanceCandidates = results
+      .map((entry) => entry.result?.provenance)
+      .filter((entry): entry is MixinValidationProvenance => entry != null);
+    const provenance = provenanceCandidates.length === 0
+      ? undefined
+      : provenanceCandidates.every((entry) => JSON.stringify(entry) === JSON.stringify(provenanceCandidates[0]))
+        ? provenanceCandidates[0]
+        : undefined;
     const toolHealth = results.find((entry) => entry.result?.toolHealth)?.result?.toolHealth;
     const confidenceScores = results
       .map((entry) => entry.result?.confidenceScore)
@@ -4409,6 +4455,8 @@ export class SourceService {
         totalValidationWarnings
       },
       issueSummary,
+      provenance,
+      incompleteReasons: incompleteReasonSet.size > 0 ? [...incompleteReasonSet] : undefined,
       toolHealth,
       confidenceScore: confidenceScores.length > 0 ? Math.min(...confidenceScores) : undefined,
       warnings: [...warningSet]
