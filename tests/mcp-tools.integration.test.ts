@@ -45,6 +45,35 @@ test("index.ts registers the expected MCP tools without mc prefix", async () => 
   assert.equal(registrations.length, EXPECTED_TOOLS.length);
 });
 
+test("manual stdio smoke validates restarted list-versions against the current releases contract", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  assert.match(source, /requireToolOk<ListVersionsOutput>\(\s*"list-versions-after-restart"/s);
+  assert.match(source, /versionsAfterRestart\.releases/);
+  assert.doesNotMatch(source, /versionsAfterRestart\.items/);
+});
+
+test("manual stdio smoke bounds transport shutdown and force-kills a stuck supervisor", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  assert.match(source, /async function closeTransportWithTimeout\(transport: StdioClientTransport/);
+  assert.match(source, /const pid = transport\.pid;/);
+  assert.match(source, /const closePromise = transport\.close\(\)\.catch\(\(\) => undefined\);/);
+  assert.match(source, /await Promise\.race\(\[\s*closePromise\.then\(\(\) => false\),\s*wait\(timeoutMs\)\.then\(\(\) => true\)\s*\]\)/s);
+  assert.match(source, /process\.kill\(pid,\s*"SIGTERM"\)/);
+  assert.match(source, /process\.kill\(pid,\s*"SIGKILL"\)/);
+});
+
+test("manual stdio smoke fully terminates the content-length probe child process", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  assert.match(source, /async function terminateChildProcess\(child: ChildProcess/);
+  assert.match(source, /child\.kill\("SIGTERM"\)/);
+  assert.match(source, /child\.kill\("SIGKILL"\)/);
+  assert.match(source, /child\.unref\(\)/);
+  assert.match(source, /await terminateChildProcess\(child\);/);
+});
+
 test("index.ts does not include legacy compatibility handlers", async () => {
   const source = await readFile("src/index.ts", "utf8");
 

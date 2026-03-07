@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import { createJar } from "../helpers/zip.ts";
+import type { ListVersionsOutput } from "../../src/version-service.ts";
 
 const EXPECTED_TOOLS = [
   "list-versions",
@@ -127,6 +128,10 @@ function asString(value: unknown, field: string): string {
   return value;
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitForChildPid(pidFile: string, previousPid?: number): Promise<number> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
@@ -144,6 +149,97 @@ async function waitForChildPid(pidFile: string, previousPid?: number): Promise<n
   }
 
   throw new Error(`Timed out waiting for worker pid file: ${pidFile}`);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        return true;
+      }
+      return false;
+    }
+
+    await wait(50);
+  }
+
+  return false;
+}
+
+async function terminateChildProcess(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
+  if (child.exitCode !== null) {
+    child.unref();
+    return;
+  }
+
+  const pid = child.pid;
+
+  try {
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  } catch {
+    // Best-effort stream teardown only.
+  }
+
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    child.unref();
+    return;
+  }
+
+  if (pid != null && await waitForProcessExit(pid, timeoutMs)) {
+    child.unref();
+    return;
+  }
+
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    child.unref();
+    return;
+  }
+
+  if (pid != null) {
+    await waitForProcessExit(pid, timeoutMs);
+  }
+  child.unref();
+}
+
+async function closeTransportWithTimeout(transport: StdioClientTransport, timeoutMs = 5_000): Promise<void> {
+  const pid = transport.pid;
+  const closePromise = transport.close().catch(() => undefined);
+  const timedOut = await Promise.race([
+    closePromise.then(() => false),
+    wait(timeoutMs).then(() => true)
+  ]);
+
+  if (!timedOut || pid == null) {
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+
+  if (await waitForProcessExit(pid, 2_000)) {
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return;
+  }
+
+  await waitForProcessExit(pid, 2_000);
 }
 
 async function ensureSqliteAvailable(): Promise<void> {
@@ -231,7 +327,7 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
     let stderrOutput = "";
     let settled = false;
 
-    const finalize = (error?: Error) => {
+    const finalize = async (error?: Error) => {
       if (settled) {
         return;
       }
@@ -241,9 +337,7 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
       child.stderr.off("data", onStderrData);
       child.off("error", onChildError);
       child.off("exit", onChildExit);
-      if (child.exitCode === null) {
-        child.kill("SIGTERM");
-      }
+      await terminateChildProcess(child);
       if (error) {
         reject(error);
         return;
@@ -267,9 +361,9 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
 
         const result = payload.result as Record<string, unknown>;
         assert.equal(result.protocolVersion, "2024-11-05");
-        finalize();
+        void finalize();
       } catch (error) {
-        finalize(error instanceof Error ? error : new Error(String(error)));
+        void finalize(error instanceof Error ? error : new Error(String(error)));
       }
     };
 
@@ -278,12 +372,12 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
     };
 
     const onChildError = (error: Error) => {
-      finalize(error);
+      void finalize(error);
     };
 
     const onChildExit = (code: number | null, signal: NodeJS.Signals | null) => {
       if (!settled) {
-        finalize(
+        void finalize(
           new Error(
             `Content-Length initialize handshake failed: child exited before response (code=${code ?? "null"}, signal=${signal ?? "null"}).\nstderr:\n${stderrOutput}`
           )
@@ -292,7 +386,7 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
     };
 
     const timeoutHandle = setTimeout(() => {
-      finalize(
+      void finalize(
         new Error(
           `Timed out waiting for Content-Length initialize response.\nstderr:\n${stderrOutput}`
         )
@@ -485,17 +579,19 @@ async function main(): Promise<void> {
         limit: 1
       }
     });
-    const versionsAfterRestart = requireToolOk<Record<string, unknown>>(
+    const versionsAfterRestart = requireToolOk<ListVersionsOutput>(
       "list-versions-after-restart",
       versionsAfterRestartResult as never
     );
-    assert.ok(Array.isArray(versionsAfterRestart.items), "Expected versions list after worker restart.");
+    assert.ok(Array.isArray(versionsAfterRestart.releases), "Expected releases list after worker restart.");
+    assert.equal(typeof versionsAfterRestart.totalAvailable, "number");
 
     console.log("Manual stdio client smoke passed: source tools and worker auto-restart validated.");
   } finally {
-    await client.close().catch(() => undefined);
+    await closeTransportWithTimeout(transport);
     await rm(root, { recursive: true, force: true });
   }
 }
 
 await main();
+process.exit(0);
