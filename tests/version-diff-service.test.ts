@@ -138,7 +138,7 @@ test("compareVersions filters class diffs, ignores nested classes, and warns on 
     removed: ["com.example.Alpha"],
     addedCount: 2,
     removedCount: 2,
-    unchanged: 2
+    unchanged: 1
   });
   assert.deepEqual(result.warnings, [
     "Class additions truncated: showing 1 of 2. Use packageFilter to narrow results.",

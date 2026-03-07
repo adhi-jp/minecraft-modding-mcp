@@ -66,6 +66,10 @@ function filterByPackage(classes: string[], prefix: string): string[] {
   return classes.filter((fqn) => fqn.startsWith(normalized));
 }
 
+function filterSetByPackage(classes: Set<string>, prefix: string): Set<string> {
+  return new Set(filterByPackage([...classes], prefix));
+}
+
 function diffSets(from: Set<string>, to: Set<string>): { added: string[]; removed: string[]; unchanged: number } {
   const added: string[] = [];
   const removed: string[] = [];
@@ -229,12 +233,13 @@ export class VersionDiffService {
 
           const fromClasses = extractClassEntries(fromEntries);
           const toClasses = extractClassEntries(toEntries);
-          let { added, removed, unchanged } = diffSets(fromClasses, toClasses);
-
-          if (input.packageFilter) {
-            added = filterByPackage(added, input.packageFilter);
-            removed = filterByPackage(removed, input.packageFilter);
-          }
+          const filteredFromClasses = input.packageFilter
+            ? filterSetByPackage(fromClasses, input.packageFilter)
+            : fromClasses;
+          const filteredToClasses = input.packageFilter
+            ? filterSetByPackage(toClasses, input.packageFilter)
+            : toClasses;
+          const { added, removed, unchanged } = diffSets(filteredFromClasses, filteredToClasses);
 
           const truncatedAdded = added.slice(0, maxClassResults);
           const truncatedRemoved = removed.slice(0, maxClassResults);

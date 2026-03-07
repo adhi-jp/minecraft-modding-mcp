@@ -481,6 +481,8 @@ Get a high-level summary of what changed between two releases, including class a
 ```
 
 Registry deltas are returned under `result.registry` (not `registryDiff`).
+When `packageFilter` is provided, `result.classes.addedCount`, `removedCount`, and `unchanged`
+are all scoped to that filtered package set.
 
 ### Mapping & Symbols
 

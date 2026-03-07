@@ -12,6 +12,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` now expose `returnedNamespace` to distinguish the namespace of returned content from the underlying artifact namespace (`mappingApplied`).
 
 ### Fixed
+- `compare-versions` now applies `packageFilter` consistently to `classes.addedCount`, `removedCount`, and `unchanged`, so class summary counts reflect the same filtered package scope as the returned class lists.
 - Heavy analysis tools are now serialized behind a bounded in-process queue, and queue overflow fails fast with `ERR_LIMIT_EXCEEDED` instead of amplifying concurrent load across the whole MCP transport.
 - The stdio CLI entrypoint now supervises an internal worker process, automatically restarts it after an unexpected exit, replays MCP initialization for the live session, and turns in-flight crashes into retryable JSON-RPC request failures instead of a full transport disconnect.
 - `get-class-source` / `get-class-members` now infer a missing artifact version from `projectPath` when `preferProjectVersion=true`, making project-aware lookups more consistent for previously resolved artifacts.
