@@ -53,13 +53,6 @@ export interface SearchFilesWithContentResult extends SearchFilesResult {
   content: string;
 }
 
-export interface FileContentPrefixRow {
-  artifactId: string;
-  filePath: string;
-  contentPrefix: string;
-  truncated: boolean;
-}
-
 export interface ListFileRowsOptions {
   limit: number;
   cursor?: string;
@@ -191,7 +184,6 @@ export class FilesRepo {
   private readonly searchPathStmt;
   private readonly searchFtsStmt;
   private readonly getByPathsStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
-  private readonly getPrefixByPathsStmtCache = new Map<string, ReturnType<SqliteDatabase["prepare"]>>();
 
   constructor(private readonly db: SqliteDatabase) {
     this.deleteStmt = this.db.prepare(`
@@ -380,42 +372,6 @@ export class FilesRepo {
     );
 
     return uniquePaths.map((path) => byPath.get(path)).filter((row): row is FileRow => row != null);
-  }
-
-  getFileContentPrefixesByPaths(
-    artifactId: string,
-    filePaths: string[],
-    maxChars: number
-  ): FileContentPrefixRow[] {
-    if (filePaths.length === 0) {
-      return [];
-    }
-
-    const normalizedMaxChars = Math.max(1, Math.trunc(maxChars));
-    const uniquePaths = [...new Set(filePaths)];
-    const stmt = this.getFileContentPrefixesByPathsStmt(uniquePaths.length, normalizedMaxChars);
-    const rows = stmt.all(normalizedMaxChars, artifactId, ...uniquePaths) as {
-      artifact_id: string;
-      file_path: string;
-      content_prefix: string;
-      content_length: number;
-    }[];
-
-    const byPath = new Map(
-      rows.map((row) => [
-        row.file_path,
-        {
-          artifactId: row.artifact_id,
-          filePath: row.file_path,
-          contentPrefix: row.content_prefix,
-          truncated: row.content_length > row.content_prefix.length
-        } as FileContentPrefixRow
-      ])
-    );
-
-    return uniquePaths
-      .map((path) => byPath.get(path))
-      .filter((row): row is FileContentPrefixRow => row != null);
   }
 
   searchFileCandidates(
@@ -666,29 +622,6 @@ export class FilesRepo {
       WHERE artifact_id = ? AND file_path IN (${placeholders})
     `);
     this.getByPathsStmtCache.set(normalizedCount, stmt);
-    return stmt;
-  }
-
-  private getFileContentPrefixesByPathsStmt(pathCount: number, maxChars: number) {
-    const normalizedCount = Math.max(1, Math.trunc(pathCount));
-    const normalizedMaxChars = Math.max(1, Math.trunc(maxChars));
-    const cacheKey = `${normalizedCount}:${normalizedMaxChars}`;
-    const cached = this.getPrefixByPathsStmtCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
-    if (this.getPrefixByPathsStmtCache.size >= 128) {
-      this.getPrefixByPathsStmtCache.clear();
-    }
-
-    const placeholders = Array.from({ length: normalizedCount }, () => "?").join(", ");
-    const stmt = this.db.prepare(`
-      SELECT artifact_id, file_path, substr(content, 1, ?) AS content_prefix, length(content) AS content_length
-      FROM files
-      WHERE artifact_id = ? AND file_path IN (${placeholders})
-    `);
-    this.getPrefixByPathsStmtCache.set(cacheKey, stmt);
     return stmt;
   }
 }
