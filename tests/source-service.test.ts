@@ -3944,6 +3944,104 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
   });
 });
 
+test("SourceService diffClassSignatures omits from/to snapshots when includeFullDiff=false", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-diff-compact-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const versions = ["1.0.1", "1.0.0"];
+  const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return versions;
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { jarPath: string }) {
+      const version = versionByJarPath.get(input.jarPath);
+      if (!version) {
+        throw new Error("unknown jar");
+      }
+
+      if (version === "1.0.0") {
+        return {
+          constructors: [],
+          fields: [
+            {
+              ownerFqn: "net.minecraft.server.Main",
+              name: "MUTATED_FIELD",
+              javaSignature: "public int MUTATED_FIELD",
+              jvmDescriptor: "I",
+              accessFlags: 0x0001,
+              isSynthetic: false
+            }
+          ],
+          methods: [],
+          warnings: []
+        };
+      }
+
+      return {
+        constructors: [],
+        fields: [
+          {
+            ownerFqn: "net.minecraft.server.Main",
+            name: "MUTATED_FIELD",
+            javaSignature: "public long MUTATED_FIELD",
+            jvmDescriptor: "J",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        methods: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await (service as unknown as {
+    diffClassSignatures: (input: {
+      className: string;
+      fromVersion: string;
+      toVersion: string;
+      includeFullDiff: false;
+    }) => Promise<{
+      fields: {
+        modified: Array<{
+          key: string;
+          changed: string[];
+          from?: unknown;
+          to?: unknown;
+        }>;
+      };
+    }>;
+  }).diffClassSignatures({
+    className: "net.minecraft.server.Main",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.1",
+    includeFullDiff: false
+  });
+
+  assert.deepEqual(result.fields.modified, [
+    {
+      key: "MUTATED_FIELD",
+      changed: ["javaSignature", "jvmDescriptor"]
+    }
+  ]);
+  assert.equal("from" in result.fields.modified[0]!, false);
+  assert.equal("to" in result.fields.modified[0]!, false);
+});
+
 test("SourceService diffClassSignatures reports class added and absent_in_both states", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-diff-states-"));

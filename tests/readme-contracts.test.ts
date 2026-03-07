@@ -28,6 +28,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `get-artifact-file` \|.*`artifactId`.*`filePath`.*`maxBytes\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `list-artifact-files` \|.*`artifactId`.*`prefix\?`.*`cursor\?`.*`artifactContents`.*`warnings\[\]`/);
+  assert.match(readme, /\| `diff-class-signatures` \|.*`includeFullDiff\?`.*`modified`/);
   assert.match(readme, /\| `compare-versions` \|.*`classes`, `registry`, `summary`, `warnings\[\]` \|/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
@@ -68,6 +69,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /`get-class-api-matrix` accepts `maxRows`/);
   assert.match(readme, /`decompile-mod-jar` supports `includeFiles=false`/);
   assert.match(readme, /`get-registry-data` supports `includeData=false`/);
+  assert.match(readme, /`diff-class-signatures` supports `includeFullDiff=false`/);
   assert.match(readme, /nameMode=auto/);
   assert.match(readme, /numeric-string coercion only applies to documented top-level tool arguments/);
   assert.match(readme, /mirrored in MCP `structuredContent`/);
@@ -92,6 +94,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `get-artifact-file` \|.*`artifactId`.*`filePath`.*`maxBytes\?`.*`returnedNamespace`.*`artifactContents`/);
   assert.match(readme, /\| `list-artifact-files` \|.*`artifactId`.*`prefix\?`.*`cursor\?`.*`artifactContents`.*`warnings\[\]`/);
+  assert.match(readme, /\| `diff-class-signatures` \|.*`includeFullDiff\?`.*`modified`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
   assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
@@ -128,6 +131,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /`get-class-api-matrix` は `maxRows` を受け付けます/);
   assert.match(readme, /`decompile-mod-jar` は `includeFiles=false`/);
   assert.match(readme, /`get-registry-data` は `includeData=false`/);
+  assert.match(readme, /`diff-class-signatures` は `includeFullDiff=false`/);
 });
 
 test("README documents CLI agent MCP quick start commands", async () => {

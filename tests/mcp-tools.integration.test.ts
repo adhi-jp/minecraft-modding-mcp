@@ -176,6 +176,7 @@ test("index.ts reshapes validate-mixin around mode-based input", async () => {
 
 test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {
   const source = await readFile("src/index.ts", "utf8");
+  const diffClassSignaturesBlock = source.match(/const diffClassSignaturesShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const findMappingBlock = source.match(/const findMappingShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const resolveMethodBlock = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const classApiBlock = source.match(/const getClassApiMatrixShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
@@ -185,6 +186,7 @@ test("index.ts exposes token-efficiency options on relevant tool schemas", async
   const registryBlock = source.match(/const getRegistryDataShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const decompileBlock = source.match(/const decompileModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
 
+  assert.match(diffClassSignaturesBlock, /includeFullDiff:\s*z\.boolean\(\)\.optional\(\)/);
   assert.match(findMappingBlock, /maxCandidates:\s*optionalPositiveInt/);
   assert.match(resolveMethodBlock, /maxCandidates:\s*optionalPositiveInt/);
   assert.match(classApiBlock, /maxRows:\s*optionalPositiveInt/);

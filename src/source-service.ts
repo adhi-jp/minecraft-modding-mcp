@@ -421,9 +421,9 @@ export type DiffMember = SignatureMember;
 
 export type DiffMemberChange = {
   key: string;
-  from: DiffMember;
-  to: DiffMember;
   changed: DiffMemberChangedField[];
+  from?: DiffMember;
+  to?: DiffMember;
 };
 
 export type DiffClassMemberDelta = {
@@ -438,6 +438,7 @@ export type DiffClassSignaturesInput = {
   toVersion: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  includeFullDiff?: boolean;
 };
 
 export type DiffClassSignaturesOutput = {
@@ -934,12 +935,12 @@ function sortDiffMemberChanges(changes: DiffMemberChange[]): DiffMemberChange[] 
       return keyCompare;
     }
 
-    const fromOwnerCompare = left.from.ownerFqn.localeCompare(right.from.ownerFqn);
+    const fromOwnerCompare = (left.from?.ownerFqn ?? "").localeCompare(right.from?.ownerFqn ?? "");
     if (fromOwnerCompare !== 0) {
       return fromOwnerCompare;
     }
 
-    return left.to.ownerFqn.localeCompare(right.to.ownerFqn);
+    return (left.to?.ownerFqn ?? "").localeCompare(right.to?.ownerFqn ?? "");
   });
 }
 
@@ -1030,6 +1031,17 @@ function emptyDiffDelta(): DiffClassMemberDelta {
     added: [],
     removed: [],
     modified: []
+  };
+}
+
+function compactDiffDelta(delta: DiffClassMemberDelta): DiffClassMemberDelta {
+  return {
+    added: delta.added,
+    removed: delta.removed,
+    modified: delta.modified.map((change) => ({
+      key: change.key,
+      changed: [...change.changed]
+    }))
   };
 }
 
@@ -2520,6 +2532,7 @@ export class SourceService {
     const className = input.className.trim();
     const fromVersion = input.fromVersion.trim();
     const toVersion = input.toVersion.trim();
+    const includeFullDiff = input.includeFullDiff ?? true;
     if (!className || !fromVersion || !toVersion) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -2734,11 +2747,39 @@ export class SourceService {
       ]);
       const remappedModified = await Promise.all(
         delta.modified.map(async (change) => {
+          if (!change.from || !change.to) {
+            throw createError({
+              code: ERROR_CODES.INTERNAL,
+              message: "Modified diff members are missing before remap.",
+              details: {
+                key: change.key,
+                kind,
+                fromVersion,
+                toVersion,
+                mapping
+              }
+            });
+          }
           const [fromResult, toResult] = await Promise.all([
             this.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings),
             this.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings)
           ]);
-          return { ...change, from: fromResult.members[0], to: toResult.members[0] };
+          const fromMember = fromResult.members[0];
+          const toMember = toResult.members[0];
+          if (!fromMember || !toMember) {
+            throw createError({
+              code: ERROR_CODES.INTERNAL,
+              message: "Failed to remap modified diff members.",
+              details: {
+                key: change.key,
+                kind,
+                fromVersion,
+                toVersion,
+                mapping
+              }
+            });
+          }
+          return { ...change, from: fromMember, to: toMember };
         })
       );
       return { added: addedResult.members, removed: removedResult.members, modified: remappedModified };
@@ -2785,9 +2826,9 @@ export class SourceService {
         toVersion
       },
       classChange,
-      constructors: remappedConstructors,
-      methods: remappedMethods,
-      fields: remappedFields,
+      constructors: includeFullDiff ? remappedConstructors : compactDiffDelta(remappedConstructors),
+      methods: includeFullDiff ? remappedMethods : compactDiffDelta(remappedMethods),
+      fields: includeFullDiff ? remappedFields : compactDiffDelta(remappedFields),
       summary,
       warnings
     };

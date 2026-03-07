@@ -267,7 +267,8 @@ const diffClassSignaturesShape = {
   fromVersion: nonEmptyString,
   toVersion: nonEmptyString,
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  includeFullDiff: z.boolean().optional().describe("When false, omit from/to snapshots from modified entries and keep only key+changed")
 };
 const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
 
@@ -1306,7 +1307,8 @@ server.tool("diff-class-signatures",
       fromVersion: input.fromVersion,
       toVersion: input.toVersion,
       mapping: input.mapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      includeFullDiff: input.includeFullDiff
     }) as Promise<Record<string, unknown>>
   )
 );

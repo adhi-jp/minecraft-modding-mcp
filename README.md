@@ -195,7 +195,7 @@ Tools for comparing class/registry changes across Minecraft versions and tracing
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
-| `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `summary`, `warnings[]` |
+| `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?`, `includeFullDiff?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `modified`, `modified[].{key,changed,from?,to?}`, `summary`, `warnings[]` |
 | `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classes`, `registry`, `summary`, `warnings[]` |
 
 ### Mapping & Symbols
@@ -268,6 +268,7 @@ Heavy analysis tools (`trace-symbol-lifecycle`, `diff-class-signatures`, `compar
 The CLI stdio entrypoint now runs a supervised worker process. If the worker exits unexpectedly, the wrapper restarts it, replays MCP initialization for the current session, and keeps the same stdio connection usable; any request that was already in flight fails with a retryable JSON-RPC internal error instead of tearing down the whole transport.
 `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept `maxCandidates` to cap `candidates[]`; `candidateCount` always reports the full pre-truncation candidate total and `candidatesTruncated=true` signals clipping.
 `get-class-api-matrix` accepts `maxRows`; `rowCount` reports the full pre-truncation row total and `rowsTruncated=true` signals clipping.
+`diff-class-signatures` supports `includeFullDiff=false` to omit `from`/`to` snapshots from `modified[]` entries and keep only `key` plus `changed`.
 `validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
 `validate-mixin` supports `includeIssues=false` for summary-first workflows that do not need per-result `issues[]`; combine it with `reportMode=compact` and `warningMode=aggregated` to keep responses small.
@@ -464,7 +465,8 @@ List source files under a specific package to understand project structure:
     "className": "net.minecraft.server.Main",
     "fromVersion": "1.20.1",
     "toVersion": "1.21.10",
-    "mapping": "obfuscated"
+    "mapping": "obfuscated",
+    "includeFullDiff": false
   }
 }
 ```
