@@ -255,6 +255,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 `resolve-artifact` now takes `target: { kind, value }`.
 `get-class-source` requires `target`, where `target.type="artifact"` selects a previously resolved `artifactId` and `target.type="resolve"` supplies `{ kind, value }` directly.
 `get-class-members` requires the same `target` object shape and still needs a binary jar (`binaryJarPath`) to read `.class` entries.
+`get-class-members` returns `ERR_INVALID_INPUT` when a classfile contains malformed field or method descriptors instead of emitting malformed Java signature text from corrupted bytecode.
 Error `suggestedCall` payloads now use the same `target` object schema instead of legacy `targetKind` / `targetValue` fields.
 Positive integer tool parameters accept numeric strings such as `"10"` in addition to JSON numbers.
 This numeric-string coercion only applies to documented top-level tool arguments; nested `typedJson` payloads and JSON Patch `value` objects are preserved verbatim.

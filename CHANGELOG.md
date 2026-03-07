@@ -18,6 +18,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Error recovery payloads (`suggestedCall`) now use the current `target` object schema instead of deprecated `targetKind` / `targetValue` fields.
 - `list-artifact-files` now warns when callers probe `assets/` or `data/` prefixes against the Java-source index, instead of silently returning an unexplained empty result.
 - `artifactContents.sourceCoverage` now strictly reports `full` or `partial`, matching the documented contract instead of carrying an unreachable `unknown` branch in the exported type.
+- `get-class-members` now rejects malformed field and method descriptors from corrupted bytecode with `ERR_INVALID_INPUT` instead of returning malformed Java signatures.
 - `resolve-artifact` now searches project-local and Gradle user-home Loom caches without auto-selecting unrelated mod/library source jars just because their filenames contain the requested Minecraft version.
 - `resolve-workspace-symbol` now recognizes NeoForge ModDevGradle workspaces as `mojang` compile mappings instead of returning `mapping_unavailable`.
 - `resolve-artifact`, `get-class-source`, and `get-class-members` now preserve `ERR_JAR_NOT_FOUND` for missing `target.kind=jar` paths instead of leaking raw filesystem `ENOENT` failures through the public contract.

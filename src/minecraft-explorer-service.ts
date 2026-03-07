@@ -124,7 +124,11 @@ function modifierPrefix(flags: number, category: "method" | "field"): string {
   return parts.join(" ");
 }
 
-function parseFieldType(descriptor: string, position = 0): { type: string; next: number } {
+function parseFieldType(
+  descriptor: string,
+  position = 0,
+  options: { allowVoid?: boolean } = {}
+): { type: string; next: number } {
   if (position >= descriptor.length) {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
@@ -152,6 +156,13 @@ function parseFieldType(descriptor: string, position = 0): { type: string; next:
     case "Z":
       return { type: "boolean", next: position + 1 };
     case "V":
+      if (!options.allowVoid) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Invalid field descriptor "${descriptor}".`,
+          details: { descriptor, position }
+        });
+      }
       return { type: "void", next: position + 1 };
     case "L": {
       const end = descriptor.indexOf(";", position);
@@ -190,7 +201,7 @@ function parseMethodDescriptor(descriptor: string): { args: string[]; returnType
   const args: string[] = [];
   let cursor = 1;
   while (cursor < descriptor.length && descriptor[cursor] !== ")") {
-    const parsed = parseFieldType(descriptor, cursor);
+    const parsed = parseFieldType(descriptor, cursor, { allowVoid: false });
     args.push(parsed.type);
     cursor = parsed.next;
   }
@@ -202,7 +213,15 @@ function parseMethodDescriptor(descriptor: string): { args: string[]; returnType
     });
   }
 
-  const returnType = parseFieldType(descriptor, cursor + 1).type;
+  const parsedReturn = parseFieldType(descriptor, cursor + 1, { allowVoid: true });
+  if (parsedReturn.next !== descriptor.length) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Invalid method descriptor "${descriptor}".`,
+      details: { descriptor, cursor: parsedReturn.next }
+    });
+  }
+  const returnType = parsedReturn.type;
   return { args, returnType };
 }
 
@@ -568,7 +587,15 @@ export class MinecraftExplorerService {
       category: "method" | "field"
     ): SignatureMember => {
       if (category === "field") {
-        const fieldType = parseFieldType(member.descriptor).type;
+        const parsedField = parseFieldType(member.descriptor, 0, { allowVoid: false });
+        if (parsedField.next !== member.descriptor.length) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: `Invalid field descriptor "${member.descriptor}".`,
+            details: { descriptor: member.descriptor, position: parsedField.next }
+          });
+        }
+        const fieldType = parsedField.type;
         const modifiers = modifierPrefix(member.accessFlags, "field");
         return {
           ownerFqn,
