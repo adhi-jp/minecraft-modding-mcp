@@ -13,6 +13,8 @@ import type { Config } from "./types.js";
 export type DecompileModJarInput = {
   jarPath: string;
   className?: string;
+  includeFiles?: boolean;
+  maxFiles?: number;
 };
 
 export type DecompileModJarOutput = {
@@ -23,6 +25,9 @@ export type DecompileModJarOutput = {
   outputDir: string;
   fileCount: number;
   files?: string[];
+  returnedFileCount?: number;
+  filesTruncated?: boolean;
+  filesOmitted?: boolean;
   source?: {
     className: string;
     content: string;
@@ -64,6 +69,13 @@ function filePathToClassName(filePath: string): string {
   return filePath.replace(/\.java$/, "").replaceAll("/", ".");
 }
 
+function clampPositiveInt(value: number | undefined): number | undefined {
+  if (!Number.isFinite(value) || value == null) {
+    return undefined;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
 export class ModDecompileService {
   private readonly config: Config;
   // Cache: jarPath hash → decompiled output dir + file list
@@ -81,6 +93,8 @@ export class ModDecompileService {
 
     const warnings: string[] = [];
     const { outputDir, files, analysis } = await this.ensureDecompiled(jarPath, warnings);
+    const includeFiles = input.includeFiles ?? true;
+    const maxFiles = clampPositiveInt(input.maxFiles);
 
     let sourceResult: DecompileModJarOutput["source"];
     if (input.className) {
@@ -102,6 +116,26 @@ export class ModDecompileService {
       }
     }
 
+    let returnedFiles: string[] | undefined;
+    let returnedFileCount: number | undefined;
+    let filesTruncated: boolean | undefined;
+    let filesOmitted: boolean | undefined;
+    if (!input.className) {
+      const classNames = files.map(filePathToClassName);
+      if (!includeFiles) {
+        returnedFileCount = 0;
+        filesOmitted = true;
+      } else {
+        const limitedFiles =
+          maxFiles != null && classNames.length > maxFiles
+            ? classNames.slice(0, maxFiles)
+            : classNames;
+        returnedFiles = limitedFiles;
+        returnedFileCount = limitedFiles.length;
+        filesTruncated = limitedFiles.length < classNames.length || undefined;
+      }
+    }
+
     return {
       modId: analysis.modId ?? "unknown",
       modName: analysis.modName,
@@ -109,7 +143,10 @@ export class ModDecompileService {
       loader: analysis.loader,
       outputDir,
       fileCount: files.length,
-      files: input.className ? undefined : files.map(filePathToClassName),
+      files: returnedFiles,
+      returnedFileCount,
+      filesTruncated,
+      filesOmitted,
       source: sourceResult,
       warnings
     };

@@ -204,11 +204,11 @@ Tools for converting symbol names between namespaces and checking symbol existen
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `ambiguityReasons?`, `provenance?`, `meta.warnings[]` |
-| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `provenance?`, `meta.warnings[]` |
-| `get-class-api-matrix` | Show one class API as a mapping matrix (`obfuscated/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?` | `classIdentity`, `rows[]`, `ambiguousRowCount?`, `meta.warnings[]` |
-| `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `workspaceDetection`, `meta.warnings[]` |
-| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `meta.warnings[]` |
+| `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `ambiguityReasons?`, `provenance?`, `meta.warnings[]` |
+| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner+name+descriptor matching | `version`, `name`, `owner`, `descriptor`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `provenance?`, `meta.warnings[]` |
+| `get-class-api-matrix` | Show one class API as a mapping matrix (`obfuscated/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?`, `maxRows?` | `classIdentity`, `rows[]`, `rowCount`, `rowsTruncated?`, `ambiguousRowCount?`, `meta.warnings[]` |
+| `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `workspaceDetection`, `meta.warnings[]` |
+| `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `meta.warnings[]` |
 
 ### NBT Utilities
 
@@ -227,7 +227,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `jarKind`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
-| `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?` | `outputDir`, `fileCount`, `files?`, `source?`, `warnings[]` |
+| `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?`, `includeFiles?`, `maxFiles?` | `outputDir`, `fileCount`, `files?`, `returnedFileCount?`, `filesTruncated?`, `filesOmitted?`, `source?`, `warnings[]` |
 | `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className`, `maxLines?`, `maxChars?`, `outputFile?` | `className`, `content`, `totalLines`, `truncated?`, `charsTruncated?`, `outputFilePath?`, `warnings[]` |
 | `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
 | `remap-mod-jar` | Remap a Fabric mod JAR from intermediary to yarn/mojang names | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
@@ -238,7 +238,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?` | `mode`, `results[]`, `summary`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[]`, `summary`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -247,7 +247,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `get-registry-data` | Get generated registry snapshots (blocks/items/entities etc.) | `version`, `registry?` | `registries` (all or selected), `warnings[]` |
+| `get-registry-data` | Get generated registry snapshots (blocks/items/entities etc.) | `version`, `registry?`, `includeData?`, `maxEntriesPerRegistry?` | `registries`, `data?`, `entryCount`, `returnedEntryCount?`, `registryEntryCounts?`, `dataTruncated?`, `warnings[]` |
 | `get-runtime-metrics` | Inspect runtime counters and latency snapshots | none | `result.*` runtime metrics, `meta` envelope |
 
 ### Tool Constraints
@@ -266,8 +266,11 @@ This numeric-string coercion only applies to documented top-level tool arguments
 `get-class-source` and `get-class-members` can infer a missing artifact version from `projectPath` when `preferProjectVersion=true` and artifact metadata does not already contain a version.
 Heavy analysis tools (`trace-symbol-lifecycle`, `diff-class-signatures`, `compare-versions`, `find-mapping`, `resolve-method-mapping-exact`, `get-class-api-matrix`, `get-registry-data`) are serialized inside the server to protect stdio transport stability; when the queue is full they fail fast with `ERR_LIMIT_EXCEEDED`.
 The CLI stdio entrypoint now runs a supervised worker process. If the worker exits unexpectedly, the wrapper restarts it, replays MCP initialization for the current session, and keeps the same stdio connection usable; any request that was already in flight fails with a retryable JSON-RPC internal error instead of tearing down the whole transport.
+`find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept `maxCandidates` to cap `candidates[]`; `candidateCount` always reports the full pre-truncation candidate total and `candidatesTruncated=true` signals clipping.
+`get-class-api-matrix` accepts `maxRows`; `rowCount` reports the full pre-truncation row total and `rowsTruncated=true` signals clipping.
 `validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
+`validate-mixin` supports `includeIssues=false` for summary-first workflows that do not need per-result `issues[]`; combine it with `reportMode=compact` and `warningMode=aggregated` to keep responses small.
 `validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.
@@ -307,12 +310,14 @@ Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path b
 `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
 `search-mod-source` detects source-only jars and searches `.java` entries directly without decompilation.
 `get-mod-class-source` supports `maxLines`, `maxChars`, and `outputFile` with truncation behavior aligned to `get-class-source`; when `outputFile` is set, the written file reflects applied truncation.
+`decompile-mod-jar` supports `includeFiles=false` to skip the full class list and `maxFiles` to cap it when you only need counts or a sample. `returnedFileCount`, `filesTruncated`, and `filesOmitted` make the shaping explicit.
 `find-mapping` returns `ambiguityReasons` when `status=ambiguous` to explain why candidates could not be uniquely resolved.
 `get-class-api-matrix` returns `ambiguousRowCount` when one or more rows required ambiguity fallback.
 `check-symbol-exists` defaults to strict FQCN class inputs; set `nameMode=auto` to allow short class names (ambiguous matches return `status=ambiguous`).
 `check-symbol-exists` supports `signatureMode=name-only` to match methods by owner+name without requiring a descriptor. Single match returns `resolved`; multiple overloads return `ambiguous` with all candidates.
 `check-symbol-exists` always validates input shape first and returns `ERR_INVALID_INPUT` for invalid symbol combinations, even when mapping data is unavailable.
 `get-registry-data` now discards corrupt cached `registries.json` files, regenerates them when possible, and returns `ERR_REGISTRY_GENERATION_FAILED` if the regenerated snapshot is still unreadable.
+`get-registry-data` supports `includeData=false` to return registry names and counts without full entry bodies. `maxEntriesPerRegistry` caps returned entries per registry while preserving full `entryCount` and `registryEntryCounts`.
 Migration notes:
 - Replace `resolve-artifact` `targetKind` + `targetValue` with `target: { kind, value }`.
 - Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
@@ -498,6 +503,7 @@ are all scoped to that filtered package set.
     "sourceMapping": "obfuscated",
     "targetMapping": "mojang",
     "sourcePriority": "loom-first",
+    "maxCandidates": 10,
     "disambiguation": {
       "ownerHint": "net.minecraft"
     }
@@ -544,10 +550,13 @@ are all scoped to that filtered package set.
     "version": "1.21.10",
     "className": "a.b.C",
     "classNameMapping": "obfuscated",
-    "includeKinds": "class,field,method"
+    "includeKinds": "class,field,method",
+    "maxRows": 100
   }
 }
 ```
+
+Add `maxCandidates` or `maxRows` when you only need the top matches or a bounded API slice.
 
 #### Resolve workspace compile-visible symbol
 ```json
@@ -664,6 +673,7 @@ Decompile all classes and optionally retrieve a specific class inline:
   "tool": "decompile-mod-jar",
   "arguments": {
     "jarPath": "/path/to/mymod-1.0.0.jar",
+    "includeFiles": false,
     "className": "com.example.mymod.MyMod"
   }
 }
@@ -678,7 +688,8 @@ After decompilation, read any class without re-decompiling:
   "tool": "get-mod-class-source",
   "arguments": {
     "jarPath": "/path/to/mymod-1.0.0.jar",
-    "className": "com.example.mymod.mixin.PlayerMixin"
+    "className": "com.example.mymod.mixin.PlayerMixin",
+    "maxLines": 120
   }
 }
 ```
@@ -729,7 +740,10 @@ Check a Mixin class source for correctness against a target Minecraft version:
       "source": "@Mixin(PlayerEntity.class)\npublic abstract class PlayerMixin {\n  @Inject(method = \"tick\", at = @At(\"HEAD\"))\n  private void onTick(CallbackInfo ci) {}\n}"
     },
     "version": "1.21.10",
-    "mapping": "yarn"
+    "mapping": "yarn",
+    "reportMode": "compact",
+    "warningMode": "aggregated",
+    "includeIssues": false
   }
 }
 ```
@@ -750,7 +764,10 @@ Run the same validation settings against multiple Mixin source files:
       ]
     },
     "version": "1.21.10",
-    "mapping": "yarn"
+    "mapping": "yarn",
+    "reportMode": "compact",
+    "warningMode": "aggregated",
+    "includeIssues": false
   }
 }
 ```
@@ -780,7 +797,8 @@ Retrieve the full set of generated registries (blocks, items, entities, etc.) fo
 {
   "tool": "get-registry-data",
   "arguments": {
-    "version": "1.21.10"
+    "version": "1.21.10",
+    "includeData": false
   }
 }
 ```
@@ -794,7 +812,8 @@ Fetch only a specific registry type:
   "tool": "get-registry-data",
   "arguments": {
     "version": "1.21.10",
-    "registry": "minecraft:block"
+    "registry": "minecraft:block",
+    "maxEntriesPerRegistry": 50
   }
 }
 ```

@@ -236,6 +236,7 @@ export type ResolveWorkspaceSymbolInput = {
   descriptor?: string;
   sourceMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  maxCandidates?: number;
 };
 
 export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
@@ -538,6 +539,7 @@ export type ValidateMixinInput = {
   reportMode?: "compact" | "full";
   warningCategoryFilter?: ("mapping" | "configuration" | "validation" | "resolution" | "parse")[];
   treatInfoAsWarning?: boolean;
+  includeIssues?: boolean;
 };
 
 export type ValidateMixinResultSource = {
@@ -2188,6 +2190,7 @@ export class SourceService {
         resolved: false,
         status: "mapping_unavailable",
         candidates: [],
+        candidateCount: 0,
         workspaceDetection,
         warnings
       };
@@ -2204,7 +2207,8 @@ export class SourceService {
         descriptor: methodDescriptor,
         sourceMapping: input.sourceMapping,
         targetMapping: mappingApplied,
-        sourcePriority: input.sourcePriority
+        sourcePriority: input.sourcePriority,
+        maxCandidates: input.maxCandidates
       });
 
       return {
@@ -2237,6 +2241,7 @@ export class SourceService {
           resolved: false,
           status: "not_found",
           candidates: [],
+          candidateCount: 0,
           workspaceDetection,
           warnings: [...warnings, ...matrix.warnings]
         };
@@ -2266,6 +2271,7 @@ export class SourceService {
         status: "resolved",
         resolvedSymbol,
         candidates: [resolvedCandidate],
+        candidateCount: 1,
         workspaceDetection,
         warnings: [...warnings, ...matrix.warnings]
       };
@@ -2279,7 +2285,8 @@ export class SourceService {
       descriptor,
       sourceMapping: input.sourceMapping,
       targetMapping: mappingApplied,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      maxCandidates: input.maxCandidates
     });
 
     const filtered = mapped.candidates.filter((candidate) => candidate.kind === kind);
@@ -2301,6 +2308,8 @@ export class SourceService {
       status,
       resolvedSymbol: status === "resolved" ? filtered[0] : undefined,
       candidates: filtered,
+      candidateCount: mapped.candidateCount,
+      candidatesTruncated: mapped.candidatesTruncated,
       workspaceDetection,
       warnings: [...warnings, ...mapped.warnings]
     };
@@ -3478,7 +3487,7 @@ export class SourceService {
         ...sharedInput,
         source: sourceInput.source
       });
-      return this.buildValidateMixinOutput(mode, [
+      return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, [
         {
           source: {
             kind: "inline",
@@ -3486,7 +3495,7 @@ export class SourceService {
           },
           result: singleResult
         }
-      ]);
+      ]), input);
     }
 
     if (mode === "path") {
@@ -3495,7 +3504,7 @@ export class SourceService {
         ...sharedInput,
         sourcePath: sourceInput.path
       });
-      return this.buildValidateMixinOutput(mode, [
+      return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, [
         {
           source: {
             kind: "path",
@@ -3504,7 +3513,7 @@ export class SourceService {
           },
           result: singleResult
         }
-      ]);
+      ]), input);
     }
 
     if (mode === "paths") {
@@ -4055,7 +4064,31 @@ export class SourceService {
       }
     }
 
-    return this.buildValidateMixinOutput(mode, results);
+    return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, results), input);
+  }
+
+  private applyValidateMixinOutputCompaction(
+    output: ValidateMixinOutput,
+    input: ValidateMixinInput
+  ): ValidateMixinOutput {
+    if (input.includeIssues !== false) {
+      return output;
+    }
+
+    return {
+      ...output,
+      results: output.results.map((entry) => (
+        entry.result
+          ? {
+              ...entry,
+              result: {
+                ...entry.result,
+                issues: []
+              }
+            }
+          : entry
+      ))
+    };
   }
 
   private buildValidateMixinOutput(

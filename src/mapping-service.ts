@@ -118,6 +118,8 @@ export type SymbolResolutionOutput = {
   status: SymbolResolutionStatus;
   resolvedSymbol?: SymbolReference;
   candidates: Array<SymbolReference & Pick<MappingLookupCandidate, "matchKind" | "confidence">>;
+  candidateCount: number;
+  candidatesTruncated?: boolean;
   warnings: string[];
   provenance?: MappingLookupProvenance;
   ambiguityReasons?: string[];
@@ -136,6 +138,7 @@ export type FindMappingInput = {
     ownerHint?: string;
     descriptorHint?: string;
   };
+  maxCandidates?: number;
 };
 
 export type FindMappingOutput = SymbolResolutionOutput;
@@ -161,6 +164,7 @@ export type ResolveMethodMappingExactInput = {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  maxCandidates?: number;
 };
 
 export type ResolveMethodMappingExactOutput = SymbolResolutionOutput;
@@ -173,6 +177,7 @@ export type ClassApiMatrixInput = {
   classNameMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   includeKinds?: ClassApiMatrixKind[];
+  maxRows?: number;
 };
 
 export type ClassApiMatrixEntry = {
@@ -198,6 +203,8 @@ export type ClassApiMatrixOutput = {
   classNameMapping: SourceMapping;
   classIdentity: Partial<Record<SourceMapping, string>>;
   rows: ClassApiMatrixRow[];
+  rowCount: number;
+  rowsTruncated?: boolean;
   warnings: string[];
   ambiguousRowCount?: number;
 };
@@ -212,6 +219,7 @@ export type SymbolExistenceInput = {
   sourcePriority?: MappingSourcePriority;
   nameMode?: "fqcn" | "auto";
   signatureMode?: "exact" | "name-only";
+  maxCandidates?: number;
 };
 
 export type SymbolExistenceOutput = SymbolResolutionOutput;
@@ -1215,6 +1223,38 @@ function inferAmbiguityReasons(
   return reasons;
 }
 
+function clampCandidateLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit) || limit == null) {
+    return MAX_CANDIDATES;
+  }
+  return Math.max(1, Math.min(MAX_CANDIDATES, Math.trunc(limit)));
+}
+
+function limitResolutionCandidates(
+  candidates: ResolutionCandidate[],
+  requestedLimit: number | undefined
+): {
+  candidates: ResolutionCandidate[];
+  candidateCount: number;
+  candidatesTruncated?: boolean;
+} {
+  const candidateCount = candidates.length;
+  const limit = clampCandidateLimit(requestedLimit);
+  const limitedCandidates = candidateCount > limit ? candidates.slice(0, limit) : candidates;
+  return {
+    candidates: limitedCandidates,
+    candidateCount,
+    ...(limitedCandidates.length < candidateCount ? { candidatesTruncated: true } : {})
+  };
+}
+
+function clampRowLimit(limit: number | undefined): number | undefined {
+  if (!Number.isFinite(limit) || limit == null) {
+    return undefined;
+  }
+  return Math.max(1, Math.min(5000, Math.trunc(limit)));
+}
+
 export class MappingService {
   private readonly config: Config;
   private readonly versionService: VersionMappingsResolver;
@@ -1273,13 +1313,16 @@ export class MappingService {
         matchKind: "exact",
         confidence: 1
       });
+      const limited = limitResolutionCandidates([identity], input.maxCandidates);
       return {
         querySymbol,
         mappingContext,
         resolved: true,
         status: "resolved",
         resolvedSymbol: querySymbol,
-        candidates: [identity],
+        candidates: limited.candidates,
+        candidateCount: limited.candidateCount,
+        candidatesTruncated: limited.candidatesTruncated,
         warnings: []
       };
     }
@@ -1293,6 +1336,7 @@ export class MappingService {
         resolved: false,
         status: "mapping_unavailable",
         candidates: [],
+        candidateCount: 0,
         warnings: [
           `No mapping path is available for ${sourceMapping} -> ${targetMapping} on version "${version}".`
         ]
@@ -1308,6 +1352,7 @@ export class MappingService {
       );
     }
     const candidates = disambiguatedCandidates.map(toResolutionCandidate);
+    const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
     if (
       queryRecord.kind === "method" &&
       queryRecord.descriptor &&
@@ -1340,7 +1385,9 @@ export class MappingService {
       resolved: status === "resolved",
       status,
       resolvedSymbol: status === "resolved" ? candidates[0] : undefined,
-      candidates,
+      candidates: limitedCandidates.candidates,
+      candidateCount: limitedCandidates.candidateCount,
+      candidatesTruncated: limitedCandidates.candidatesTruncated,
       warnings,
       provenance: this.provenanceForPath(graph, path),
       ambiguityReasons
@@ -1459,13 +1506,16 @@ export class MappingService {
         matchKind: "exact",
         confidence: 1
       });
+      const limited = limitResolutionCandidates([resolvedCandidate], input.maxCandidates);
       return {
         querySymbol,
         mappingContext,
         resolved: true,
         status: "resolved",
         resolvedSymbol: resolvedCandidate,
-        candidates: [resolvedCandidate],
+        candidates: limited.candidates,
+        candidateCount: limited.candidateCount,
+        candidatesTruncated: limited.candidatesTruncated,
         warnings: []
       };
     }
@@ -1480,6 +1530,7 @@ export class MappingService {
         resolved: false,
         status: "mapping_unavailable",
         candidates: [],
+        candidateCount: 0,
         warnings: [
           `No mapping path is available for ${sourceMapping} -> ${targetMapping} on version "${version}".`
         ]
@@ -1491,6 +1542,7 @@ export class MappingService {
       .mapCandidatesAlongPath(graph, path, queryRecord)
       .filter((candidate) => candidate.kind === "method");
     const candidates = rawCandidates.map(toResolutionCandidate);
+    const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
 
     const strictCandidates = rawCandidates.filter((candidate) => candidate.descriptor === descriptor);
     if (strictCandidates.length === 1) {
@@ -1501,7 +1553,9 @@ export class MappingService {
         resolved: true,
         status: "resolved",
         resolvedSymbol: resolved,
-        candidates,
+        candidates: limitedCandidates.candidates,
+        candidateCount: limitedCandidates.candidateCount,
+        candidatesTruncated: limitedCandidates.candidatesTruncated,
         warnings,
         provenance: this.provenanceForPath(graph, path)
       };
@@ -1514,7 +1568,9 @@ export class MappingService {
         mappingContext,
         resolved: false,
         status: "ambiguous",
-        candidates,
+        candidates: limitedCandidates.candidates,
+        candidateCount: limitedCandidates.candidateCount,
+        candidatesTruncated: limitedCandidates.candidatesTruncated,
         warnings,
         provenance: this.provenanceForPath(graph, path)
       };
@@ -1529,7 +1585,9 @@ export class MappingService {
         mappingContext,
         resolved: false,
         status: "mapping_unavailable",
-        candidates,
+        candidates: limitedCandidates.candidates,
+        candidateCount: limitedCandidates.candidateCount,
+        candidatesTruncated: limitedCandidates.candidatesTruncated,
         warnings,
         provenance: this.provenanceForPath(graph, path)
       };
@@ -1540,7 +1598,9 @@ export class MappingService {
       mappingContext,
       resolved: false,
       status: "not_found",
-      candidates,
+      candidates: limitedCandidates.candidates,
+      candidateCount: limitedCandidates.candidateCount,
+      candidatesTruncated: limitedCandidates.candidatesTruncated,
       warnings,
       provenance: this.provenanceForPath(graph, path)
     };
@@ -1613,6 +1673,7 @@ export class MappingService {
           yarn: classByMapping.yarn?.symbol
         },
         rows: [],
+        rowCount: 0,
         warnings
       };
     }
@@ -1713,6 +1774,10 @@ export class MappingService {
       }
     }
 
+    const rowCount = rows.length;
+    const rowLimit = clampRowLimit(input.maxRows);
+    const limitedRows = rowLimit != null && rowCount > rowLimit ? rows.slice(0, rowLimit) : rows;
+
     return {
       version,
       className,
@@ -1723,7 +1788,9 @@ export class MappingService {
         intermediary: classByMapping.intermediary?.symbol,
         yarn: classByMapping.yarn?.symbol
       },
-      rows,
+      rows: limitedRows,
+      rowCount,
+      rowsTruncated: limitedRows.length < rowCount ? true : undefined,
       warnings,
       ambiguousRowCount: ambiguousRowCount > 0 ? ambiguousRowCount : undefined
     };
@@ -1819,6 +1886,7 @@ export class MappingService {
         resolved: false,
         status: "mapping_unavailable",
         candidates: [],
+        candidateCount: 0,
         warnings
       };
     }
@@ -1829,13 +1897,16 @@ export class MappingService {
       status: SymbolResolutionStatus
     ): SymbolExistenceOutput => {
       const candidates = matched.map((record) => toResolutionCandidate(toLookupCandidate(record)));
+      const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
       return {
         querySymbol,
         mappingContext,
         resolved: status === "resolved",
         status,
         resolvedSymbol: status === "resolved" ? candidates[0] : undefined,
-        candidates,
+        candidates: limitedCandidates.candidates,
+        candidateCount: limitedCandidates.candidateCount,
+        candidatesTruncated: limitedCandidates.candidatesTruncated,
         warnings
       };
     };

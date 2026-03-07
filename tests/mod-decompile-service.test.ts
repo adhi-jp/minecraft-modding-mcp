@@ -144,6 +144,110 @@ test("getModClassSource normalizes jarPath before class lookup", async () => {
   assert.deepEqual(calls, [realpathSync(jarPath)]);
 });
 
+test("decompileModJar can omit the class list for compact responses", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-decompile-compact-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, {
+    "com/example/Demo.class": Buffer.alloc(4)
+  });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(outputDir, { recursive: true });
+
+  const service = new ModDecompileService(buildTestConfig(root));
+  (
+    service as unknown as {
+      ensureDecompiled: (
+        jarPath: string,
+        warnings: string[]
+      ) => Promise<{
+        outputDir: string;
+        files: string[];
+        analysis: {
+          loader: "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
+          modId?: string;
+          classCount: number;
+        };
+      }>;
+    }
+  ).ensureDecompiled = async () => ({
+    outputDir,
+    files: ["com/example/Demo.java", "com/example/Other.java"],
+    analysis: {
+      loader: "fabric",
+      modId: "demo-mod",
+      classCount: 2
+    }
+  });
+
+  const result = await service.decompileModJar({
+    jarPath,
+    includeFiles: false
+  } as never) as unknown as {
+    files?: string[];
+    filesOmitted?: boolean;
+    returnedFileCount?: number;
+    fileCount: number;
+  };
+
+  assert.equal(result.fileCount, 2);
+  assert.equal(result.returnedFileCount, 0);
+  assert.equal(result.filesOmitted, true);
+  assert.equal(result.files, undefined);
+});
+
+test("decompileModJar supports maxFiles for compact class listings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-decompile-maxfiles-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, {
+    "com/example/Demo.class": Buffer.alloc(4)
+  });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(outputDir, { recursive: true });
+
+  const service = new ModDecompileService(buildTestConfig(root));
+  (
+    service as unknown as {
+      ensureDecompiled: (
+        jarPath: string,
+        warnings: string[]
+      ) => Promise<{
+        outputDir: string;
+        files: string[];
+        analysis: {
+          loader: "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
+          modId?: string;
+          classCount: number;
+        };
+      }>;
+    }
+  ).ensureDecompiled = async () => ({
+    outputDir,
+    files: ["com/example/A.java", "com/example/B.java", "com/example/C.java"],
+    analysis: {
+      loader: "fabric",
+      modId: "demo-mod",
+      classCount: 3
+    }
+  });
+
+  const result = await service.decompileModJar({
+    jarPath,
+    maxFiles: 1
+  } as never) as unknown as {
+    files?: string[];
+    filesTruncated?: boolean;
+    returnedFileCount?: number;
+    fileCount: number;
+  };
+
+  assert.equal(result.fileCount, 3);
+  assert.equal(result.returnedFileCount, 1);
+  assert.equal(result.filesTruncated, true);
+  assert.deepEqual(result.files, ["com.example.A"]);
+});
+
 // ---------------------------------------------------------------------------
 // F-04: getModClassSource truncation params
 // ---------------------------------------------------------------------------

@@ -2849,6 +2849,7 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
         sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
         targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
         sourcePriority?: "loom-first" | "maven-first";
+        maxCandidates?: number;
       }) => Promise<{ candidates: Array<{ symbol: string }> }>;
     }
   ).findMapping({
@@ -2856,7 +2857,8 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
     kind: "class",
     name: "a.b.C",
     sourceMapping: "obfuscated",
-    targetMapping: "mojang"
+    targetMapping: "mojang",
+    maxCandidates: 1
   });
 
   assert.equal(result.candidates[0]?.symbol, "net.minecraft.server.Main");
@@ -2868,7 +2870,8 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
   const service = new SourceService(buildTestConfig(root));
 
   (service as unknown as { mappingService: unknown }).mappingService = {
-    async resolveMethodMappingExact() {
+    async resolveMethodMappingExact(input: { maxCandidates?: number }) {
+      assert.equal(input.maxCandidates, 1);
       return {
         querySymbol: {
           kind: "method",
@@ -2918,6 +2921,7 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
         descriptor: string;
         sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
         targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        maxCandidates?: number;
       }) => Promise<{ resolved: boolean; resolvedSymbol?: { name: string } }>;
     }
   ).resolveMethodMappingExact({
@@ -2927,7 +2931,8 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
     name: "f",
     descriptor: "(Ljava/lang/String;)V",
     sourceMapping: "obfuscated",
-    targetMapping: "mojang"
+    targetMapping: "mojang",
+    maxCandidates: 1
   });
 
   assert.equal(result.resolved, true);
@@ -2940,7 +2945,8 @@ test("SourceService getClassApiMatrix delegates to MappingService", async () => 
   const service = new SourceService(buildTestConfig(root));
 
   (service as unknown as { mappingService: unknown }).mappingService = {
-    async getClassApiMatrix() {
+    async getClassApiMatrix(input: { maxRows?: number }) {
+      assert.equal(input.maxRows, 2);
       return {
         classIdentity: {
           obfuscated: "a.b.C",
@@ -2960,12 +2966,14 @@ test("SourceService getClassApiMatrix delegates to MappingService", async () => 
         version: string;
         className: string;
         classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        maxRows?: number;
       }) => Promise<{ classIdentity: Record<string, string | undefined> }>;
     }
   ).getClassApiMatrix({
     version: "1.21.10",
     className: "a.b.C",
-    classNameMapping: "obfuscated"
+    classNameMapping: "obfuscated",
+    maxRows: 2
   });
 
   assert.equal(result.classIdentity.mojang, "com.example.ValueOutput");
@@ -2977,7 +2985,8 @@ test("SourceService checkSymbolExists delegates to MappingService", async () => 
   const service = new SourceService(buildTestConfig(root));
 
   (service as unknown as { mappingService: unknown }).mappingService = {
-    async checkSymbolExists() {
+    async checkSymbolExists(input: { maxCandidates?: number }) {
+      assert.equal(input.maxCandidates, 1);
       return {
         resolved: true,
         status: "resolved",
@@ -2995,6 +3004,7 @@ test("SourceService checkSymbolExists delegates to MappingService", async () => 
         name: string;
         descriptor?: string;
         sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        maxCandidates?: number;
       }) => Promise<{ resolved: boolean; status: string }>;
     }
   ).checkSymbolExists({
@@ -3003,7 +3013,8 @@ test("SourceService checkSymbolExists delegates to MappingService", async () => 
     owner: "a.b.C",
     name: "f",
     descriptor: "(I)V",
-    sourceMapping: "obfuscated"
+    sourceMapping: "obfuscated",
+    maxCandidates: 1
   });
 
   assert.equal(result.resolved, true);
@@ -6079,6 +6090,56 @@ test("SourceService validateMixin hideUncertain recomputes parseWarnings summary
   assert.equal(single?.summary.warnings, 0);
   assert.equal(single?.summary.parseWarnings, 0);
   assert.equal(single?.unfilteredSummary?.parseWarnings, 1);
+});
+
+test("SourceService validateMixin can omit per-result issues while preserving summaries", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-no-issues-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "inline",
+      source: [
+        "import net.minecraft.server.Main;",
+        "import org.spongepowered.asm.mixin.Mixin;",
+        "import org.spongepowered.asm.mixin.gen.Accessor;",
+        "",
+        "@Mixin(Main.class)",
+        "public interface BadAccessorMixin {",
+        "  @Accessor",
+        "  int notAMethod;",
+        "}"
+      ].join("\n")
+    },
+    version: "1.21",
+    mapping: "obfuscated",
+    includeIssues: false
+  } as never);
+
+  const single = result.results[0]?.result;
+  assert.equal(single?.issues.length, 0);
+  assert.equal(single?.summary.warnings, 1);
+  assert.equal(result.issueSummary?.[0]?.count, 1);
 });
 
 test("SourceService validateMixin mixinConfigPath auto-detect finds multiple module source roots", async () => {

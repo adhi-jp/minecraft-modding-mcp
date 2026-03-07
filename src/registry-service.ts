@@ -14,6 +14,8 @@ const MAX_STDIO_SNAPSHOT = 6_240;
 export type GetRegistryDataInput = {
   version: string;
   registry?: string;
+  includeData?: boolean;
+  maxEntriesPerRegistry?: number;
 };
 
 export type RegistryEntry = {
@@ -29,10 +31,55 @@ export type GetRegistryDataOutput = {
   version: string;
   registry?: string;
   registries?: string[];
-  data: Record<string, RegistryData> | RegistryData;
+  data?: Record<string, RegistryData> | RegistryData;
   entryCount: number;
+  returnedEntryCount?: number;
+  registryEntryCounts?: Record<string, number>;
+  dataTruncated?: boolean;
   warnings: string[];
 };
+
+function clampPositiveInt(value: number | undefined): number | undefined {
+  if (!Number.isFinite(value) || value == null) {
+    return undefined;
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+function sortedRegistryEntryNames(entries: Record<string, RegistryEntry>): string[] {
+  return Object.keys(entries).sort((left, right) => left.localeCompare(right));
+}
+
+function limitRegistryEntries(
+  data: RegistryData,
+  maxEntries: number | undefined
+): { data: RegistryData; total: number; returned: number; truncated: boolean } {
+  const entryNames = sortedRegistryEntryNames(data.entries);
+  const total = entryNames.length;
+  if (maxEntries == null || total <= maxEntries) {
+    return {
+      data,
+      total,
+      returned: total,
+      truncated: false
+    };
+  }
+
+  const limitedEntries: Record<string, RegistryEntry> = {};
+  for (const entryName of entryNames.slice(0, maxEntries)) {
+    limitedEntries[entryName] = data.entries[entryName] as RegistryEntry;
+  }
+
+  return {
+    data: {
+      default: data.default,
+      entries: limitedEntries
+    },
+    total,
+    returned: maxEntries,
+    truncated: true
+  };
+}
 
 function limitOutput(text: string): string {
   if (text.length <= MAX_STDIO_SNAPSHOT) return text;
@@ -213,6 +260,14 @@ export class RegistryService {
     const warnings: string[] = [];
     const allRegistries = await this.loadRegistries(version, warnings);
     const registryNames = Object.keys(allRegistries).sort();
+    const includeData = input.includeData ?? true;
+    const maxEntriesPerRegistry = clampPositiveInt(input.maxEntriesPerRegistry);
+    const registryEntryCounts = Object.fromEntries(
+      registryNames.map((registryName) => [
+        registryName,
+        Object.keys(allRegistries[registryName]!.entries).length
+      ])
+    );
 
     if (input.registry) {
       const registryName = normalizeRegistryName(input.registry);
@@ -229,11 +284,18 @@ export class RegistryService {
         });
       }
 
+      const limited = limitRegistryEntries(data, maxEntriesPerRegistry);
+
       return {
         version,
         registry: registryName,
-        data,
-        entryCount: Object.keys(data.entries).length,
+        ...(includeData ? { data: limited.data } : {}),
+        entryCount: limited.total,
+        returnedEntryCount: includeData ? limited.returned : 0,
+        registryEntryCounts: {
+          [registryName]: limited.total
+        },
+        ...(limited.truncated ? { dataTruncated: true } : {}),
         warnings
       };
     }
@@ -243,11 +305,26 @@ export class RegistryService {
       totalEntries += Object.keys(registry.entries).length;
     }
 
+    let returnedEntryCount = 0;
+    let dataTruncated = false;
+    const limitedData: Record<string, RegistryData> = {};
+    if (includeData) {
+      for (const registryName of registryNames) {
+        const limited = limitRegistryEntries(allRegistries[registryName]!, maxEntriesPerRegistry);
+        limitedData[registryName] = limited.data;
+        returnedEntryCount += limited.returned;
+        dataTruncated ||= limited.truncated;
+      }
+    }
+
     return {
       version,
       registries: registryNames,
-      data: allRegistries,
+      ...(includeData ? { data: limitedData } : {}),
       entryCount: totalEntries,
+      returnedEntryCount: includeData ? returnedEntryCount : 0,
+      registryEntryCounts,
+      ...(dataTruncated ? { dataTruncated: true } : {}),
       warnings
     };
   }

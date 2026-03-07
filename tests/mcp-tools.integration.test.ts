@@ -174,6 +174,29 @@ test("index.ts reshapes validate-mixin around mode-based input", async () => {
   assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourceRoot:/);
 });
 
+test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+  const findMappingBlock = source.match(/const findMappingShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const resolveMethodBlock = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const classApiBlock = source.match(/const getClassApiMatrixShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const resolveWorkspaceBlock = source.match(/const resolveWorkspaceSymbolShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const checkExistsBlock = source.match(/const checkSymbolExistsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const validateMixinBlock = source.match(/const validateMixinShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const registryBlock = source.match(/const getRegistryDataShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const decompileBlock = source.match(/const decompileModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+
+  assert.match(findMappingBlock, /maxCandidates:\s*optionalPositiveInt/);
+  assert.match(resolveMethodBlock, /maxCandidates:\s*optionalPositiveInt/);
+  assert.match(classApiBlock, /maxRows:\s*optionalPositiveInt/);
+  assert.match(resolveWorkspaceBlock, /maxCandidates:\s*optionalPositiveInt/);
+  assert.match(checkExistsBlock, /maxCandidates:\s*optionalPositiveInt/);
+  assert.match(validateMixinBlock, /includeIssues:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(registryBlock, /includeData:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(registryBlock, /maxEntriesPerRegistry:\s*optionalPositiveInt/);
+  assert.match(decompileBlock, /includeFiles:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(decompileBlock, /maxFiles:\s*optionalPositiveInt/);
+});
+
 test("index.ts documents symbol-query grammar for mapping tools", async () => {
   const source = await readFile("src/index.ts", "utf8");
 

@@ -182,3 +182,86 @@ test("RegistryService maps invalid regenerated registry snapshots to ERR_REGISTR
     }
   }
 });
+
+test("RegistryService supports summary-only and entry-capped registry responses", async () => {
+  const root = await mkdtemp(join(tmpdir(), "registry-service-compact-"));
+  const config = buildTestConfig(root);
+  const version = "1.21.1";
+  const registryDir = join(config.cacheDir, "registries", version);
+  await mkdir(registryDir, { recursive: true });
+  await writeFile(
+    join(registryDir, "registries.json"),
+    JSON.stringify({
+      "minecraft:block": {
+        default: "minecraft:stone",
+        entries: {
+          "minecraft:dirt": { protocol_id: 2 },
+          "minecraft:stone": { protocol_id: 1 },
+          "minecraft:grass_block": { protocol_id: 3 }
+        }
+      },
+      "minecraft:item": {
+        entries: {
+          "minecraft:apple": { protocol_id: 10 },
+          "minecraft:stick": { protocol_id: 11 }
+        }
+      }
+    }),
+    "utf8"
+  );
+
+  const service = new RegistryService(config, {} as never);
+
+  const summaryOnly = await service.getRegistryData({
+    version,
+    includeData: false
+  } as never) as unknown as {
+    data?: unknown;
+    registries?: string[];
+    entryCount: number;
+    returnedEntryCount?: number;
+    registryEntryCounts?: Record<string, number>;
+  };
+
+  assert.equal(summaryOnly.data, undefined);
+  assert.deepEqual(summaryOnly.registries, ["minecraft:block", "minecraft:item"]);
+  assert.equal(summaryOnly.entryCount, 5);
+  assert.equal(summaryOnly.returnedEntryCount, 0);
+  assert.deepEqual(summaryOnly.registryEntryCounts, {
+    "minecraft:block": 3,
+    "minecraft:item": 2
+  });
+
+  const capped = await service.getRegistryData({
+    version,
+    maxEntriesPerRegistry: 1
+  } as never) as unknown as {
+    data: Record<string, { entries: Record<string, { protocol_id: number }> }>;
+    entryCount: number;
+    returnedEntryCount?: number;
+    dataTruncated?: boolean;
+  };
+
+  assert.equal(capped.entryCount, 5);
+  assert.equal(capped.returnedEntryCount, 2);
+  assert.equal(capped.dataTruncated, true);
+  assert.equal(Object.keys(capped.data["minecraft:block"]!.entries).length, 1);
+  assert.equal(Object.keys(capped.data["minecraft:item"]!.entries).length, 1);
+
+  const singleRegistry = await service.getRegistryData({
+    version,
+    registry: "block",
+    maxEntriesPerRegistry: 1
+  } as never) as unknown as {
+    data: { default?: string; entries: Record<string, { protocol_id: number }> };
+    entryCount: number;
+    returnedEntryCount?: number;
+    dataTruncated?: boolean;
+  };
+
+  assert.equal(singleRegistry.entryCount, 3);
+  assert.equal(singleRegistry.returnedEntryCount, 1);
+  assert.equal(singleRegistry.dataTruncated, true);
+  assert.equal(singleRegistry.data.default, "minecraft:stone");
+  assert.equal(Object.keys(singleRegistry.data.entries).length, 1);
+});

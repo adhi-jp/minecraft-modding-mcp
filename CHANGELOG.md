@@ -10,6 +10,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Added
 - Source inspection tools now expose `artifactContents` so clients can tell whether a result came from a `source-jar` or `decompiled-binary`, whether non-Java resources are indexed, and whether source coverage is `full` or `partial`.
 - `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` now expose `returnedNamespace` to distinguish the namespace of returned content from the underlying artifact namespace (`mappingApplied`).
+- Token-efficient response shaping options: `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` now accept `maxCandidates`; `get-class-api-matrix` accepts `maxRows`; `decompile-mod-jar` accepts `includeFiles` / `maxFiles`; `get-registry-data` accepts `includeData` / `maxEntriesPerRegistry`; `validate-mixin` accepts `includeIssues`.
 
 ### Fixed
 - `compare-versions` now applies `packageFilter` consistently to `classes.addedCount`, `removedCount`, and `unchanged`, so class summary counts reflect the same filtered package scope as the returned class lists.
@@ -27,6 +28,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Documentation
 - Corrected the `compare-versions` README contract to document registry results under `result.registry`.
+- Documented the new compact-response options and updated token-efficient examples in both READMEs.
 
 ## [2.0.0] - 2026-03-07
 

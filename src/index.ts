@@ -286,7 +286,8 @@ const findMappingShape = {
       descriptorHint: optionalNonEmptyString
     })
     .partial()
-    .optional()
+    .optional(),
+  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -356,7 +357,8 @@ const resolveMethodMappingExactShape = {
   descriptor: nonEmptyString.describe("required JVM descriptor"),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
 };
 const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
@@ -400,7 +402,8 @@ const getClassApiMatrixShape = {
   className: nonEmptyString,
   classNameMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   includeKinds: classApiKindsSchema.optional().describe("comma-separated: class,field,method"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  maxRows: optionalPositiveInt.describe("Limit returned rows (max 5000)")
 };
 const getClassApiMatrixSchema = z.object(getClassApiMatrixShape);
 
@@ -412,7 +415,8 @@ const resolveWorkspaceSymbolShape = {
   owner: optionalNonEmptyString,
   descriptor: optionalNonEmptyString,
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  maxCandidates: optionalPositiveInt.describe("Limit returned candidates for field/method lookups (default 200, max 200)")
 };
 const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
@@ -484,7 +488,8 @@ const checkSymbolExistsShape = {
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)"),
   signatureMode: z.enum(["exact", "name-only"]).optional()
-    .describe("exact (default): require descriptor for methods; name-only: match by owner+name only")
+    .describe("exact (default): require descriptor for methods; name-only: match by owner+name only"),
+  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -619,7 +624,9 @@ const validateMixinShape = {
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
     .describe("Only include warnings/issues matching these categories (default: all)"),
   treatInfoAsWarning: z.boolean().optional()
-    .describe("When false, suppress info-severity structured warnings from output (default true)")
+    .describe("When false, suppress info-severity structured warnings from output (default true)"),
+  includeIssues: z.boolean().optional()
+    .describe("When false, keep summary fields but omit per-result issues[] payloads")
 };
 const validateMixinSchema = z.object(validateMixinShape);
 
@@ -639,7 +646,9 @@ const analyzeModJarSchema = z.object(analyzeModJarShape);
 
 const getRegistryDataShape = {
   version: nonEmptyString.describe("Minecraft version (e.g. 1.21)"),
-  registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.')
+  registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.'),
+  includeData: z.boolean().optional().describe("When false, return registry names/counts without full entry bodies"),
+  maxEntriesPerRegistry: optionalPositiveInt.describe("Limit returned entries per registry body")
 };
 const getRegistryDataSchema = z.object(getRegistryDataShape);
 
@@ -657,7 +666,9 @@ const compareVersionsSchema = z.object(compareVersionsShape);
 
 const decompileModJarShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
-  className: optionalNonEmptyString.describe("Optional fully-qualified class name to view source. Omit to list all classes.")
+  className: optionalNonEmptyString.describe("Optional fully-qualified class name to view source. Omit to list all classes."),
+  includeFiles: z.boolean().optional().describe("When false, omit the full class list and return counts only"),
+  maxFiles: optionalPositiveInt.describe("Limit returned class names when files are included")
 };
 const decompileModJarSchema = z.object(decompileModJarShape);
 
@@ -1314,7 +1325,8 @@ server.tool("find-mapping",
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
-      disambiguation: input.disambiguation
+      disambiguation: input.disambiguation,
+      maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1331,7 +1343,8 @@ server.tool("resolve-method-mapping-exact",
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1346,7 +1359,8 @@ server.tool("get-class-api-matrix",
       className: input.className,
       classNameMapping: input.classNameMapping,
       includeKinds: parseClassApiKinds(input.includeKinds),
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      maxRows: input.maxRows
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1364,7 +1378,8 @@ server.tool("resolve-workspace-symbol",
       owner: input.owner,
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1383,7 +1398,8 @@ server.tool("check-symbol-exists",
       sourceMapping: input.sourceMapping,
       sourcePriority: input.sourcePriority,
       nameMode: input.nameMode,
-      signatureMode: input.signatureMode
+      signatureMode: input.signatureMode,
+      maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1470,7 +1486,8 @@ server.tool("validate-mixin",
       preferProjectMapping: input.preferProjectMapping,
       reportMode: input.reportMode,
       warningCategoryFilter: input.warningCategoryFilter,
-      treatInfoAsWarning: input.treatInfoAsWarning
+      treatInfoAsWarning: input.treatInfoAsWarning,
+      includeIssues: input.includeIssues
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1508,7 +1525,9 @@ server.tool("get-registry-data",
   async (args) => runTool("get-registry-data", args, getRegistryDataSchema, async (input) =>
     sourceService.getRegistryData({
       version: input.version,
-      registry: input.registry
+      registry: input.registry,
+      includeData: input.includeData,
+      maxEntriesPerRegistry: input.maxEntriesPerRegistry
     }) as Promise<Record<string, unknown>>
   )
 );
@@ -1535,7 +1554,9 @@ server.tool("decompile-mod-jar",
   async (args) => runTool("decompile-mod-jar", args, decompileModJarSchema, async (input) =>
     sourceService.decompileModJar({
       jarPath: input.jarPath,
-      className: input.className
+      className: input.className,
+      includeFiles: input.includeFiles,
+      maxFiles: input.maxFiles
     }) as Promise<Record<string, unknown>>
   )
 );
