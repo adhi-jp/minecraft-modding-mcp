@@ -12,6 +12,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` now expose `returnedNamespace` to distinguish the namespace of returned content from the underlying artifact namespace (`mappingApplied`).
 - Token-efficient response shaping options: `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` now accept `maxCandidates`; `get-class-api-matrix` accepts `maxRows`; `diff-class-signatures` accepts `includeFullDiff`; `decompile-mod-jar` accepts `includeFiles` / `maxFiles`; `get-registry-data` accepts `includeData` / `maxEntriesPerRegistry`; `validate-mixin` accepts `includeIssues`.
 - `validate-mixin` now reports per-result `validationStatus` (`full` / `partial` / `invalid`), member coverage counters (`summary.membersValidated` / `membersSkipped` / `membersMissing`), batch `summary.partial`, and scope/source-priority provenance fields (`requestedScope` / `appliedScope`, `requestedSourcePriority` / `appliedSourcePriority`) so partial validation is explicit.
+- `validate-mixin` now supports `input.mode="project"` to recursively discover `*.mixins.json` under a workspace root and validate every referenced Mixin in one call.
 
 ### Fixed
 - `compare-versions` now applies `packageFilter` consistently to `classes.addedCount`, `removedCount`, and `unchanged`, so class summary counts reflect the same filtered package scope as the returned class lists.
@@ -29,6 +30,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` now retries with `sourcePriority="maven-first"` after a partial `loom-first` validation caused by mapping/signature resolution limits, reducing false warnings from Loom-only resolution paths.
 - `validate-mixin` no longer emits schema-invalid `check-symbol-exists` recovery payloads in `suggestedCall`; unsupported parameters such as `scope` and `projectPath` are omitted from those calls.
 - `validate-mixin` now lowers confidence for skipped member validation and exposes requested-vs-applied scope/source-priority details instead of making partial results look fully verified.
+- Invalid `validate-mixin` requests now return the standard `ERR_INVALID_INPUT` envelope with `fieldErrors`, `hints`, and a mode-correct `suggestedCall` instead of the SDK's generic pre-validation text error.
 - `check-symbol-exists` no longer repeats raw Loom tiny-cache miss warnings when Maven tiny mappings successfully satisfy the lookup; successful fallback now emits concise fallback context instead.
 
 ### Documentation

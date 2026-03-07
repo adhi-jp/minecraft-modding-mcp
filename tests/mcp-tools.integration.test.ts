@@ -81,7 +81,7 @@ test("index.ts coerces numeric string inputs for positive integer params", async
 
   assert.match(indexSource, /const optionalPositiveInt = z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\);/);
   assert.match(indexSource, /import\s+\{\s*prepareToolInput\s*\}\s+from\s+"\.\/tool-input\.js"/);
-  assert.match(indexSource, /const \{ normalizedInput, removedOfficialPaths, suggestedReplacementInput \} = prepareToolInput\(rawInput\);/);
+  assert.match(indexSource, /prepareToolInput\(rawInput\)/);
   assert.match(toolInputSource, /const POSITIVE_INT_FIELD_NAMES = new Set\(\[/);
   assert.match(toolInputSource, /function coerceTopLevelNumericStrings\(value: unknown\): unknown/);
   assert.match(toolInputSource, /typeof value !== "object" \|\| value == null \|\| Array\.isArray\(value\)/);
@@ -167,11 +167,96 @@ test("index.ts reshapes validate-mixin around mode-based input", async () => {
   assert.match(source, /mode:\s*z\.literal\("path"\),\s*path:\s*nonEmptyString/s);
   assert.match(source, /mode:\s*z\.literal\("paths"\),\s*paths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
   assert.match(source, /mode:\s*z\.literal\("config"\),\s*configPaths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
+  assert.match(source, /mode:\s*z\.literal\("project"\),\s*path:\s*nonEmptyString/s);
   assert.match(source, /sourceRoots:\s*z\.array\(z\.string\(\)\.min\(1\)\)\.optional\(\)/);
   assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePath:/);
   assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePaths:/);
   assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*mixinConfigPath:/);
   assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourceRoot:/);
+});
+
+test("validate-mixin tools/list schema exposes all mode-based inputs to clients", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
+  assert.ok(handler);
+
+  const response = await handler!(
+    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    {}
+  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
+
+  const tool = response.tools.find((entry) => entry.name === "validate-mixin");
+  assert.ok(tool);
+
+  const inputSchema = tool!.inputSchema as {
+    properties?: {
+      input?: {
+        description?: string;
+        anyOf?: Array<{ properties?: { mode?: { const?: string } } }>;
+      };
+    };
+  };
+  const modeEntries = inputSchema.properties?.input?.anyOf ?? [];
+  const modes = modeEntries
+    .map((entry) => entry.properties?.mode?.const)
+    .filter((value): value is string => typeof value === "string")
+    .sort();
+
+  assert.deepEqual(modes, ["config", "inline", "path", "paths", "project"]);
+  assert.match(inputSchema.properties?.input?.description ?? "", /inline.*path.*paths.*config.*project/s);
+});
+
+test("validate-mixin invalid input returns problem details with a retryable suggestedCall", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "validate-mixin",
+        arguments: {
+          input: "@Mixin(Player.class) class ExampleMixin {}",
+          version: "1.21.10"
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        hints?: string[];
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            input?: { mode?: string; source?: string };
+            version?: string;
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "input");
+  assert.ok(result.structuredContent?.error?.hints?.some((hint) => hint.includes("input.mode")));
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "validate-mixin");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    input: {
+      mode: "inline",
+      source: "@Mixin(Player.class) class ExampleMixin {}"
+    },
+    version: "1.21.10"
+  });
 });
 
 test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {

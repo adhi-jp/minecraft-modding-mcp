@@ -6686,6 +6686,98 @@ test("SourceService validateMixin mixinConfigPath finds mixins in both main and 
   assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
 });
 
+test("SourceService validateMixin project mode auto-discovers mixin configs across modules", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-project-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
+  const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
+  const commonConfigPath = join(root, "common", "src", "main", "resources", "example.mixins.json");
+  const neoConfigPath = join(root, "neoforge", "src", "main", "resources", "example.neoforge.mixins.json");
+
+  await mkdir(commonJavaRoot, { recursive: true });
+  await mkdir(neoJavaRoot, { recursive: true });
+  await mkdir(join(root, "common", "src", "main", "resources"), { recursive: true });
+  await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
+
+  const mixinSource = [
+    "import net.minecraft.server.Main;",
+    "import org.spongepowered.asm.mixin.Mixin;",
+    "",
+    "@Mixin(Main.class)",
+    "public abstract class __CLASS__ {}"
+  ].join("\n");
+
+  await writeFile(
+    join(commonJavaRoot, "CommonMixin.java"),
+    mixinSource.replace("__CLASS__", "CommonMixin"),
+    "utf8"
+  );
+  await writeFile(
+    join(neoJavaRoot, "NeoMixin.java"),
+    mixinSource.replace("__CLASS__", "NeoMixin"),
+    "utf8"
+  );
+  await writeFile(
+    commonConfigPath,
+    JSON.stringify({ package: "com.example", mixins: ["CommonMixin"] }, null, 2),
+    "utf8"
+  );
+  await writeFile(
+    neoConfigPath,
+    JSON.stringify({ package: "com.example", mixins: ["NeoMixin"] }, null, 2),
+    "utf8"
+  );
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "project",
+      path: root
+    },
+    version: "1.21",
+    mapping: "obfuscated"
+  } as never);
+
+  assert.equal(result.mode, "project");
+  assert.equal(result.summary.total, 2);
+  assert.equal(result.summary.processingErrors, 0);
+  assert.equal(result.summary.valid, 2);
+  assert.equal(result.results.length, 2);
+  assert.equal(result.results.filter((entry) => entry.source.configPath === commonConfigPath).length, 1);
+  assert.equal(result.results.filter((entry) => entry.source.configPath === neoConfigPath).length, 1);
+  assert.equal(result.results.every((entry) => entry.result?.valid === true), true);
+});
+
 // ---------------------------------------------------------------------------
 // F-01: strictVersion rejects version-approximated results
 // ---------------------------------------------------------------------------

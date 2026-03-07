@@ -525,6 +525,10 @@ export type ValidateMixinInput = {
     | {
         mode: "config";
         configPaths: string[];
+      }
+    | {
+        mode: "project";
+        path: string;
       };
   sourceRoots?: string[];
   version: string;
@@ -894,6 +898,14 @@ const COMMON_SOURCE_ROOTS = [
   "forge/src/client/java",
   "quilt/src/main/java",
   "quilt/src/client/java"
+] as const;
+
+const MIXIN_PROJECT_DISCOVERY_IGNORES = [
+  "**/.git/**",
+  "**/.gradle/**",
+  "**/build/**",
+  "**/out/**",
+  "**/node_modules/**"
 ] as const;
 
 function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
@@ -3612,7 +3624,10 @@ export class SourceService {
       );
     }
 
-    const configSources = await this.resolveMixinConfigSources(input);
+    const resolvedInput = mode === "project"
+      ? this.createProjectValidateMixinConfigInput(input)
+      : input;
+    const configSources = await this.resolveMixinConfigSources(resolvedInput);
     if (configSources.length === 0) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -3631,8 +3646,41 @@ export class SourceService {
         },
         sourcePath: entry.sourcePath
       })),
-      input
+      resolvedInput
     );
+  }
+
+  private createProjectValidateMixinConfigInput(input: ValidateMixinInput): ValidateMixinInput {
+    if (input.input.mode !== "project") {
+      return input;
+    }
+
+    const resolvedProjectPath = this.resolveMixinInputPath(input.input.path, "path");
+    const configPaths = fastGlob.sync(["**/*.mixins.json"], {
+      cwd: resolvedProjectPath,
+      absolute: true,
+      onlyFiles: true,
+      ignore: [...MIXIN_PROJECT_DISCOVERY_IGNORES]
+    }).sort((left, right) => left.localeCompare(right));
+
+    if (configPaths.length === 0) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `No mixin config JSON files were found under project path "${input.input.path}".`,
+        details: {
+          nextAction: "Use input.mode='config' with explicit configPaths[], or point input.path at the workspace root that contains *.mixins.json files."
+        }
+      });
+    }
+
+    return {
+      ...input,
+      projectPath: input.projectPath ?? resolvedProjectPath,
+      input: {
+        mode: "config",
+        configPaths
+      }
+    };
   }
 
   private shouldRetryValidateMixinWithMavenFirst(
@@ -4192,7 +4240,7 @@ export class SourceService {
   }
 
   private async validateMixinMany(
-    mode: "paths" | "config",
+    mode: "paths" | "config" | "project",
     entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
     input: ValidateMixinInput
   ): Promise<ValidateMixinOutput> {

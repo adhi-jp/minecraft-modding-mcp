@@ -600,8 +600,12 @@ const validateMixinShape = {
     z.object({
       mode: z.literal("config"),
       configPaths: z.array(nonEmptyString).min(1).describe("Path array to mixin config JSON files (e.g. modid.mixins.json)")
+    }),
+    z.object({
+      mode: z.literal("project"),
+      path: nonEmptyString.describe("Workspace root path used to discover *.mixins.json files automatically")
     })
-  ]),
+  ]).describe("One of { mode: 'inline', source }, { mode: 'path', path }, { mode: 'paths', paths[] }, { mode: 'config', configPaths[] }, or { mode: 'project', path }."),
   sourceRoots: z.array(z.string().min(1)).optional()
     .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
   version: nonEmptyString.describe("Minecraft version"),
@@ -725,6 +729,14 @@ const server = new McpServer({
   name: "@adhisang/minecraft-modding-mcp",
   version: SERVER_VERSION
 });
+
+// The SDK validates tool args before invoking handlers and returns generic InvalidParams text.
+// Bypass that layer so runTool() remains the single source of truth for validation and error envelopes.
+(
+  server as unknown as {
+    validateToolInput: (_tool: unknown, args: unknown, _toolName: string) => Promise<unknown>;
+  }
+).validateToolInput = async (_tool: unknown, args: unknown) => args;
 
 const config = loadConfig();
 const nbtLimits = {
@@ -960,8 +972,199 @@ function extractFieldErrorsFromDetails(details: unknown): ProblemFieldError[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDetails {
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value != null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim())
+    ? value as string[]
+    : undefined;
+}
+
+function copyValidateMixinSharedParams(source: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  const stringFields = [
+    "version",
+    "mapping",
+    "sourcePriority",
+    "scope",
+    "projectPath",
+    "minSeverity",
+    "warningMode",
+    "reportMode"
+  ] as const;
+  for (const field of stringFields) {
+    const value = source[field];
+    if (typeof value === "string" && value.trim()) {
+      result[field] = value;
+    }
+  }
+
+  const booleanFields = [
+    "preferProjectVersion",
+    "hideUncertain",
+    "explain",
+    "preferProjectMapping",
+    "treatInfoAsWarning",
+    "includeIssues"
+  ] as const;
+  for (const field of booleanFields) {
+    const value = source[field];
+    if (typeof value === "boolean") {
+      result[field] = value;
+    }
+  }
+
+  const sourceRoots = asStringArray(source.sourceRoots);
+  if (sourceRoots) {
+    result.sourceRoots = sourceRoots;
+  }
+
+  const warningCategoryFilter = asStringArray(source.warningCategoryFilter);
+  if (warningCategoryFilter) {
+    result.warningCategoryFilter = warningCategoryFilter;
+  }
+
+  return result;
+}
+
+function buildValidateMixinSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+  const record = asObjectRecord(normalizedInput);
+  if (!record) {
+    return {
+      input: {
+        mode: "inline",
+        source: "<Mixin Java source>"
+      },
+      version: "<minecraft-version>"
+    };
+  }
+
+  const inputRecord = asObjectRecord(record.input);
+  const shared = copyValidateMixinSharedParams(record);
+  const version = asNonEmptyString(record.version) ?? "<minecraft-version>";
+
+  const inlineSource =
+    asNonEmptyString(record.input) ??
+    asNonEmptyString(inputRecord?.source) ??
+    asNonEmptyString(record.source);
+  if (inlineSource) {
+    return {
+      ...shared,
+      input: {
+        mode: "inline",
+        source: inlineSource
+      },
+      version
+    };
+  }
+
+  const path =
+    asNonEmptyString(inputRecord?.path) ??
+    asNonEmptyString(record.sourcePath);
+  if (path) {
+    return {
+      ...shared,
+      input: {
+        mode: "path",
+        path
+      },
+      version
+    };
+  }
+
+  const paths =
+    asStringArray(inputRecord?.paths) ??
+    asStringArray(record.sourcePaths);
+  if (paths) {
+    return {
+      ...shared,
+      input: {
+        mode: "paths",
+        paths
+      },
+      version
+    };
+  }
+
+  const configPaths =
+    asStringArray(inputRecord?.configPaths) ??
+    (asNonEmptyString(record.mixinConfigPath) ? [record.mixinConfigPath as string] : undefined);
+  if (configPaths) {
+    return {
+      ...shared,
+      input: {
+        mode: "config",
+        configPaths
+      },
+      version
+    };
+  }
+
+  const projectPath =
+    asNonEmptyString(record.projectPath) ??
+    (inputRecord?.mode === "project" ? asNonEmptyString(inputRecord.path) : undefined);
+  if (projectPath) {
+    return {
+      ...shared,
+      input: {
+        mode: "project",
+        path: projectPath
+      },
+      version
+    };
+  }
+
+  return {
+    ...shared,
+    input: {
+      mode: "inline",
+      source: "<Mixin Java source>"
+    },
+    version
+  };
+}
+
+function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
+  hints?: string[];
+  suggestedCall?: SuggestedCall;
+} | undefined {
+  if (tool !== "validate-mixin") {
+    return undefined;
+  }
+
+  const hints = [
+    "validate-mixin.input must be an object with input.mode = \"inline\" | \"path\" | \"paths\" | \"config\" | \"project\".",
+    "Whole-project example: {\"input\":{\"mode\":\"project\",\"path\":\"/workspace\"},\"version\":\"1.21.10\",\"preferProjectVersion\":true,\"preferProjectMapping\":true}.",
+    "Legacy top-level source/sourcePath/sourcePaths/mixinConfigPath fields are no longer accepted; wrap them under input.mode instead."
+  ];
+
+  return {
+    hints,
+    suggestedCall: {
+      tool,
+      params: buildValidateMixinSuggestedParams(normalizedInput)
+    }
+  };
+}
+
+function mapErrorToProblem(
+  caughtError: unknown,
+  requestId: string,
+  context?: { tool?: string; normalizedInput?: unknown }
+): ProblemDetails {
   if (caughtError instanceof ZodError) {
+    const guidance = context?.tool
+      ? buildInvalidInputGuidance(context.tool, context.normalizedInput)
+      : undefined;
     return {
       type: "https://minecraft-modding-mcp.dev/problems/invalid-input",
       title: "Invalid input",
@@ -970,7 +1173,8 @@ function mapErrorToProblem(caughtError: unknown, requestId: string): ProblemDeta
       code: ERROR_CODES.INVALID_INPUT,
       instance: requestId,
       fieldErrors: toFieldErrorsFromZod(caughtError),
-      hints: ["Check fieldErrors and submit a valid tool argument payload."]
+      hints: guidance?.hints ?? ["Check fieldErrors and submit a valid tool argument payload."],
+      ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {})
     };
   }
 
@@ -1029,9 +1233,12 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
 ): Promise<CallToolResult> {
   const requestId = buildRequestId();
   const startedAt = Date.now();
+  let normalizedInput: unknown = rawInput;
 
   try {
-    const { normalizedInput, removedOfficialPaths, suggestedReplacementInput } = prepareToolInput(rawInput);
+    const preparedInput = prepareToolInput(rawInput);
+    normalizedInput = preparedInput.normalizedInput;
+    const { removedOfficialPaths, suggestedReplacementInput } = preparedInput;
     if (removedOfficialPaths.length > 0) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -1072,7 +1279,10 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       } satisfies ToolMeta
     });
   } catch (caughtError) {
-    const problem = mapErrorToProblem(caughtError, requestId);
+    const problem = mapErrorToProblem(caughtError, requestId, {
+      tool,
+      normalizedInput
+    });
 
     if (isAppError(caughtError)) {
       const isSevere =

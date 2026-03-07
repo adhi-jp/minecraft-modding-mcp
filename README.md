@@ -269,7 +269,7 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept `maxCandidates` to cap `candidates[]`; `candidateCount` always reports the full pre-truncation candidate total and `candidatesTruncated=true` signals clipping.
 `get-class-api-matrix` accepts `maxRows`; `rowCount` reports the full pre-truncation row total and `rowsTruncated=true` signals clipping.
 `diff-class-signatures` supports `includeFullDiff=false` to omit `from`/`to` snapshots from `modified[]` entries and keep only `key` plus `changed`.
-`validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
+`validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, `config`, or `project`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes). `input.mode="project"` recursively discovers `**/*.mixins.json` under `input.path`, then runs the same config-driven batch validation with `projectPath` defaulting to that workspace root.
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
 `validate-mixin` supports `includeIssues=false` for summary-first workflows that do not need per-result `issues[]`; combine it with `reportMode=compact` and `warningMode=aggregated` to keep responses small.
 `validate-mixin` per-result responses now include `validationStatus` (`full`, `partial`, `invalid`) plus `summary.membersValidated`, `summary.membersSkipped`, and `summary.membersMissing`; `quickSummary` now includes member coverage counts instead of only issue counts.
@@ -285,6 +285,7 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `validate-mixin` supports post-filtering with `minSeverity`, `hideUncertain`, and `warningCategoryFilter`; `treatInfoAsWarning=false` suppresses info-level entries in `structuredWarnings`.
 `validate-mixin` per-result responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
 `validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery; generated `check-symbol-exists` recovery payloads now stay within that tool's public schema.
+Schema validation failures now also return the standard `ERR_INVALID_INPUT` envelope with `fieldErrors`, `hints`, and a mode-correct `suggestedCall` for common `validate-mixin` mistakes such as passing raw source text directly as `input`.
 `validate-mixin` summary uses `processingErrors`, `totalValidationErrors`, and `totalValidationWarnings`; the deprecated `summary.errors` field was removed.
 `check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version ...` noise when Maven tiny mappings successfully satisfy the lookup; successful fallback now reports a single concise warning instead of repeating the Loom miss on every result.
 `resolve-artifact` with `target.kind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
@@ -328,7 +329,7 @@ Migration notes:
 - Replace `resolve-artifact` `targetKind` + `targetValue` with `target: { kind, value }`.
 - Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
 - `resolve-method-mapping-exact` is method-only and no longer accepts `kind`.
-- Replace `validate-mixin` `source` / `sourcePath` / `sourcePaths` / `mixinConfigPath` / `sourceRoot` with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`. Use `summary.processingErrors` instead of `summary.errors`.
+- Replace `validate-mixin` `source` / `sourcePath` / `sourcePaths` / `mixinConfigPath` / `sourceRoot` with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`. Use `input.mode="project"` when you want to discover `*.mixins.json` automatically from a workspace root. Use `summary.processingErrors` instead of `summary.errors`.
 - `search-class-source` removed `snippetLines`, `includeDefinition`, and `includeOneHop`; responses now contain compact `hits[]` plus `nextCursor?` only, and `symbolKind` may only be used with `intent=symbol`.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
 
@@ -748,6 +749,29 @@ Check a Mixin class source for correctness against a target Minecraft version:
     },
     "version": "1.21.10",
     "mapping": "yarn",
+    "reportMode": "compact",
+    "warningMode": "aggregated",
+    "includeIssues": false
+  }
+}
+```
+
+#### Validate all Mixins in a project
+
+Discover `*.mixins.json` files from a workspace root and validate every referenced Mixin in one call:
+
+```json
+{
+  "tool": "validate-mixin",
+  "arguments": {
+    "input": {
+      "mode": "project",
+      "path": "/workspace/modid"
+    },
+    "version": "1.21.10",
+    "projectPath": "/workspace/modid",
+    "preferProjectVersion": true,
+    "preferProjectMapping": true,
     "reportMode": "compact",
     "warningMode": "aggregated",
     "includeIssues": false
