@@ -238,7 +238,7 @@ Tools for validating Mixin source and Access Widener files against a target Mine
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[]`, `summary`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
+| `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[].validationStatus`, `summary.partial`, `issueSummary?`, `toolHealth?`, `confidenceScore?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
 
 ### Registry & Diagnostics
@@ -272,7 +272,11 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `validate-mixin` requires `input.mode` to be exactly one of `inline`, `path`, `paths`, or `config`. `input.path`/`input.paths[]` are normalized for host/WSL path formats before file reads. `input.configPaths[]` reads mixin config JSON files and auto-discovers source files for batch validation (`sourceRoots[]` override lookup roots; otherwise common roots like `src/main/java`, `src/client/java`, `common/src/{main,client}/java`, `fabric/src/{main,client}/java`, `neoforge/src/{main,client}/java`, `forge/src/{main,client}/java`, and `quilt/src/{main,client}/java` are auto-detected from configured mixin classes).
 `validate-mixin` always returns `mode`, `results[]`, and `summary`; single-input modes still use a one-element `results[]` array.
 `validate-mixin` supports `includeIssues=false` for summary-first workflows that do not need per-result `issues[]`; combine it with `reportMode=compact` and `warningMode=aggregated` to keep responses small.
+`validate-mixin` per-result responses now include `validationStatus` (`full`, `partial`, `invalid`) plus `summary.membersValidated`, `summary.membersSkipped`, and `summary.membersMissing`; `quickSummary` now includes member coverage counts instead of only issue counts.
+`validate-mixin` batch `summary` now includes `partial` so callers can distinguish fully clean results from tool-limited-but-non-failing results.
 `validate-mixin` per-result responses include `provenance.resolutionNotes?` when mapping fallback occurs.
+`validate-mixin` provenance now exposes `requestedScope` / `appliedScope` and `requestedSourcePriority` / `appliedSourcePriority` so fallback and retry behavior is explicit.
+`validate-mixin` automatically retries with `sourcePriority="maven-first"` after a partial `loom-first` validation caused by mapping/signature resolution limits, and records that retry in warnings plus provenance notes.
 `validate-mixin` validates `@Invoker` targets against methods only and `@Accessor` targets against fields only.
 `validate-mixin` parser supports both `.class` literal targets and `targets = "..."` / `targets = {"a", "b"}` string forms.
 `validate-mixin` parser handles multi-line annotations between `@Shadow`/`@Accessor` and declarations, and strips inline annotations from declaration lines.
@@ -280,8 +284,9 @@ The CLI stdio entrypoint now runs a supervised worker process. If the worker exi
 `validate-mixin` issues and `structuredWarnings` include `category` (`mapping`, `configuration`, `validation`, `resolution`, or `parse`) to distinguish setup/tooling/parser limits from real validation errors.
 `validate-mixin` supports post-filtering with `minSeverity`, `hideUncertain`, and `warningCategoryFilter`; `treatInfoAsWarning=false` suppresses info-level entries in `structuredWarnings`.
 `validate-mixin` per-result responses include `resolvedMembers?` tracking each member's resolution status (`resolved` or `not-found`).
-`validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery.
+`validate-mixin` with `explain=true` enriches each issue with `explanation` and `suggestedCall` (tool + params) for agent-driven recovery; generated `check-symbol-exists` recovery payloads now stay within that tool's public schema.
 `validate-mixin` summary uses `processingErrors`, `totalValidationErrors`, and `totalValidationWarnings`; the deprecated `summary.errors` field was removed.
+`check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version ...` noise when Maven tiny mappings successfully satisfy the lookup; successful fallback now reports a single concise warning instead of repeating the Loom miss on every result.
 `resolve-artifact` with `target.kind=version` uses Loom cache discovery from `projectPath` only when `mapping=mojang`; mapping failures include `searchedPaths`, `candidateArtifacts`, and `recommendedCommand` in error details.
 `resolve-artifact` supports `scope` (`vanilla`/`merged`/`loader`) and optional `preferProjectVersion=true` to override `target.value` from `gradle.properties` (`minecraft_version`, `mc_version`, `minecraftVersion`) when `target.kind=version`.
 `resolve-artifact` with `target.kind=coordinate` searches the local Maven repository, the local Gradle `modules-2` cache, and configured `MCP_SOURCE_REPOS` before reporting `ERR_SOURCE_NOT_FOUND`.

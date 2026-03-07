@@ -637,6 +637,31 @@ test("validateParsedMixin explain=true field-not-found omits signatureMode", () 
   assert.equal(issue!.suggestedCall!.params.sourceMapping, "mojang");
 });
 
+test("validateParsedMixin explain=true omits check-symbol-exists unsupported context fields", () => {
+  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+  const targetMembers = new Map<string, ResolvedTargetMembers>();
+  const warnings: string[] = [];
+  const provenance: MixinValidationProvenance = {
+    version: "1.21",
+    jarPath: "/path/to/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, warnings, provenance, undefined, undefined, true,
+    undefined, undefined,
+    { scope: "merged", sourcePriority: "loom-first", projectPath: "/my/project", mapping: "mojang" }
+  );
+
+  const params = result.issues[0].suggestedCall!.params;
+  assert.equal(params.sourcePriority, "loom-first");
+  assert.equal(params.scope, undefined);
+  assert.equal(params.projectPath, undefined);
+  assert.equal(params.mapping, undefined);
+  assert.equal(params.sourceMapping, "mojang");
+});
+
 test("validateParsedMixin explain=true omits suggestedCall when provenance is missing", () => {
   const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
   const targetMembers = new Map<string, ResolvedTargetMembers>();
@@ -1261,7 +1286,7 @@ test("validateParsedMixin keeps category=validation for true validation errors",
 /*  P5: suggestedCall context propagation                              */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin explain=true includes suggestedCallContext fields", () => {
+test("validateParsedMixin explain=true only propagates schema-valid context fields for check-symbol-exists", () => {
   const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
   const targetMembers = new Map<string, ResolvedTargetMembers>();
   const warnings: string[] = [];
@@ -1278,13 +1303,14 @@ test("validateParsedMixin explain=true includes suggestedCallContext fields", ()
     { scope: "merged", sourcePriority: "loom-first", projectPath: "/my/project", mapping: "mojang" }
   );
   const params = result.issues[0].suggestedCall!.params;
-  assert.equal(params.scope, "merged");
   assert.equal(params.sourcePriority, "loom-first");
-  assert.equal(params.projectPath, "/my/project");
-  assert.equal(params.mapping, "mojang");
+  assert.equal(params.scope, undefined);
+  assert.equal(params.projectPath, undefined);
+  assert.equal(params.mapping, undefined);
+  assert.equal(params.sourceMapping, "mojang");
 });
 
-test("validateParsedMixin explain=true omits undefined context fields", () => {
+test("validateParsedMixin explain=true keeps get-class-source context fields when that schema supports them", () => {
   const parsed = makeParsedMixin({
     injections: [{ annotation: "Inject", method: "missing", line: 5 }]
   });
@@ -1303,12 +1329,13 @@ test("validateParsedMixin explain=true omits undefined context fields", () => {
   const result = validateParsedMixin(
     parsed, targetMembers, warnings, provenance, undefined, undefined, true,
     undefined, undefined,
-    { scope: "vanilla" }
+    { scope: "vanilla", projectPath: "/my/project", mapping: "mojang", sourcePriority: "maven-first" }
   );
   const params = result.issues[0].suggestedCall!.params;
   assert.equal(params.scope, "vanilla");
-  assert.equal(params.sourcePriority, undefined);
-  assert.equal(params.projectPath, undefined);
+  assert.equal(params.sourcePriority, "maven-first");
+  assert.equal(params.projectPath, "/my/project");
+  assert.equal(params.mapping, "mojang");
 });
 
 /* ------------------------------------------------------------------ */
@@ -1765,12 +1792,17 @@ test("symbolExistsButSignatureFailed produces tool_issue warning and skipped mem
 
   // Should be valid (warning only, not error)
   assert.equal(result.valid, true);
+  assert.equal(result.validationStatus, "partial");
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].severity, "warning");
   assert.equal(result.issues[0].kind, "target-not-found");
   assert.equal(result.issues[0].issueOrigin, "tool_issue");
   assert.equal(result.issues[0].falsePositiveRisk, "high");
   assert.ok(result.issues[0].message.includes("exists in mapping data"));
+  assert.equal(result.summary.membersValidated, 0);
+  assert.equal(result.summary.membersSkipped, 3);
+  assert.equal(result.summary.membersMissing, 0);
+  assert.ok(result.quickSummary?.includes("3 member(s) skipped"));
 
   // All members should be skipped
   assert.ok(result.resolvedMembers);
@@ -1797,6 +1829,7 @@ test("symbolExistsButSignatureFailed does not block normal signature-resolved ta
   );
 
   assert.equal(result.valid, true);
+  assert.equal(result.validationStatus, "partial");
   // 1 warning for LivingEntity, 0 errors
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].target, "LivingEntity");
@@ -1858,8 +1891,13 @@ test("quickSummary reports all members validated when no issues", () => {
   const warnings: string[] = [];
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.validationStatus, "full");
+  assert.equal(result.summary.membersValidated, 2);
+  assert.equal(result.summary.membersSkipped, 0);
+  assert.equal(result.summary.membersMissing, 0);
   assert.ok(result.quickSummary);
   assert.ok(result.quickSummary!.includes("2 member(s) validated successfully"));
+  assert.ok(!result.quickSummary!.includes("skipped"));
 });
 
 test("quickSummary reports error counts when issues exist", () => {
@@ -1872,8 +1910,13 @@ test("quickSummary reports error counts when issues exist", () => {
   const warnings: string[] = [];
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.validationStatus, "invalid");
+  assert.equal(result.summary.membersValidated, 0);
+  assert.equal(result.summary.membersSkipped, 0);
+  assert.equal(result.summary.membersMissing, 1);
   assert.ok(result.quickSummary);
   assert.ok(result.quickSummary!.includes("error(s)"));
+  assert.ok(result.quickSummary!.includes("1 member(s) missing"));
 });
 
 /* ------------------------------------------------------------------ */

@@ -23,6 +23,7 @@ export type MappingHealthReport = {
 };
 
 export type IssueConfidence = "definite" | "likely" | "uncertain";
+export type ValidationStatus = "full" | "partial" | "invalid";
 
 export type ResolutionPath =
   | "member-remap-failed"
@@ -60,6 +61,9 @@ export type ValidationSummary = {
   shadows: number;
   accessors: number;
   total: number;
+  membersValidated: number;
+  membersSkipped: number;
+  membersMissing: number;
   errors: number;
   warnings: number;
   definiteErrors: number;
@@ -73,8 +77,12 @@ export type MixinValidationProvenance = {
   jarPath: string;
   requestedMapping: SourceMapping;
   mappingApplied: SourceMapping;
+  requestedScope?: "vanilla" | "merged" | "loader";
+  appliedScope?: "vanilla" | "merged" | "loader";
+  requestedSourcePriority?: "loom-first" | "maven-first";
+  appliedSourcePriority?: "loom-first" | "maven-first";
   resolutionNotes?: string[];
-  jarType?: "vanilla-client" | "merged" | "unknown";
+  jarType?: "vanilla-client" | "merged" | "loader" | "unknown";
   mappingChain?: string[];
   remapFailures?: number;
   mappingAutoDetected?: boolean;
@@ -116,6 +124,7 @@ export type MixinValidationResult = {
   targets: string[];
   priority?: number;
   valid: boolean;
+  validationStatus: ValidationStatus;
   issues: ValidationIssue[];
   summary: ValidationSummary;
   unfilteredSummary?: ValidationSummary;
@@ -289,7 +298,8 @@ function computeFalsePositiveRisk(
 function computeConfidenceScore(
   healthReport: MappingHealthReport | undefined,
   provenance: MixinValidationProvenance | undefined,
-  remapFailureCount: number
+  remapFailureCount: number,
+  skippedMemberCount: number
 ): number {
   let score = 100;
   if (healthReport) {
@@ -299,8 +309,60 @@ function computeConfidenceScore(
   }
   if (provenance?.scopeFallback) score -= 10;
   if (provenance && provenance.requestedMapping !== provenance.mappingApplied) score -= 15;
+  if (skippedMemberCount > 0) score -= 25;
   score -= Math.min(remapFailureCount * 2, 20);
   return Math.max(score, 0);
+}
+
+function summarizeResolvedMembers(resolvedMembers: ResolvedMember[]): Pick<
+  ValidationSummary,
+  "membersValidated" | "membersSkipped" | "membersMissing"
+> {
+  return {
+    membersValidated: resolvedMembers.filter((member) => member.status === "resolved").length,
+    membersSkipped: resolvedMembers.filter((member) => member.status === "skipped").length,
+    membersMissing: resolvedMembers.filter((member) => member.status === "not-found").length
+  };
+}
+
+function computeValidationStatus(
+  summary: ValidationSummary
+): ValidationStatus {
+  if (summary.errors > 0 || summary.definiteErrors > 0) {
+    return "invalid";
+  }
+  if (summary.warnings > 0 || summary.membersSkipped > 0) {
+    return "partial";
+  }
+  return "full";
+}
+
+function buildQuickSummary(
+  status: ValidationStatus,
+  summary: ValidationSummary
+): string {
+  if (status === "full") {
+    return `${summary.membersValidated} member(s) validated successfully.`;
+  }
+  return `${summary.definiteErrors} error(s), ${summary.uncertainErrors} uncertain, ${summary.warnings} warning(s). ${summary.membersValidated} validated, ${summary.membersSkipped} member(s) skipped, ${summary.membersMissing} member(s) missing.`;
+}
+
+export function refreshMixinValidationOutcome(result: MixinValidationResult): MixinValidationResult {
+  const memberSummary = result.resolvedMembers
+    ? summarizeResolvedMembers(result.resolvedMembers)
+    : {
+        membersValidated: result.summary.membersValidated,
+        membersSkipped: result.summary.membersSkipped,
+        membersMissing: result.summary.membersMissing
+      };
+  result.summary = {
+    ...result.summary,
+    ...memberSummary
+  };
+  result.validationStatus = computeValidationStatus(result.summary);
+  result.valid = result.summary.definiteErrors === 0;
+  result.quickSummary = buildQuickSummary(result.validationStatus, result.summary);
+  return result;
 }
 
 function validateInjection(
@@ -688,12 +750,15 @@ export function validateParsedMixin(
   if (explain) {
     const version = provenance?.version;
     const mapping = provenance?.requestedMapping;
-    // Build context fields to spread into suggestedCall params
-    const ctx: Record<string, unknown> = {};
-    if (suggestedCallContext?.scope) ctx.scope = suggestedCallContext.scope;
-    if (suggestedCallContext?.sourcePriority) ctx.sourcePriority = suggestedCallContext.sourcePriority;
-    if (suggestedCallContext?.projectPath) ctx.projectPath = suggestedCallContext.projectPath;
-    if (suggestedCallContext?.mapping) ctx.mapping = suggestedCallContext.mapping;
+    const symbolLookupContext: Record<string, unknown> = {};
+    if (suggestedCallContext?.sourcePriority) {
+      symbolLookupContext.sourcePriority = suggestedCallContext.sourcePriority;
+    }
+    const classSourceContext: Record<string, unknown> = {};
+    if (suggestedCallContext?.scope) classSourceContext.scope = suggestedCallContext.scope;
+    if (suggestedCallContext?.sourcePriority) classSourceContext.sourcePriority = suggestedCallContext.sourcePriority;
+    if (suggestedCallContext?.projectPath) classSourceContext.projectPath = suggestedCallContext.projectPath;
+    if (suggestedCallContext?.mapping) classSourceContext.mapping = suggestedCallContext.mapping;
 
     for (const issue of issues) {
       switch (issue.kind) {
@@ -702,7 +767,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...ctx }
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...symbolLookupContext }
             };
           }
           break;
@@ -711,7 +776,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...ctx }
+              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...symbolLookupContext }
             };
           }
           break;
@@ -727,7 +792,7 @@ export function validateParsedMixin(
                 target: { type: "resolve" as const, kind: "version" as const, value: version },
                 ...(mapping ? { mapping } : {}),
                 mode: "metadata",
-                ...ctx
+                ...classSourceContext
               }
             };
           }
@@ -741,7 +806,7 @@ export function validateParsedMixin(
           if (version && mapping) {
             issue.suggestedCall = {
               tool: "check-symbol-exists",
-              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping, ...ctx }
+              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping, ...symbolLookupContext }
             };
           }
           break;
@@ -793,34 +858,35 @@ export function validateParsedMixin(
 
   // Compute confidence score
   const remapFailureCount = provenance?.remapFailures ?? 0;
+  const memberSummary = summarizeResolvedMembers(resolvedMembers);
   const confidenceScore = healthReport
-    ? computeConfidenceScore(healthReport, provenance, remapFailureCount)
+    ? computeConfidenceScore(healthReport, provenance, remapFailureCount, memberSummary.membersSkipped)
     : undefined;
-
-  // Build quick summary
   const total = parsed.injections.length + parsed.shadows.length + parsed.accessors.length;
-  const quickSummary = issues.length === 0
-    ? `${total} member(s) validated successfully.`
-    : `${definiteErrors} error(s), ${uncertainErrors} uncertain, ${warningCount} warning(s).`;
+  const summary: ValidationSummary = {
+    injections: parsed.injections.length,
+    shadows: parsed.shadows.length,
+    accessors: parsed.accessors.length,
+    total,
+    ...memberSummary,
+    errors: errorCount,
+    warnings: warningCount,
+    definiteErrors,
+    uncertainErrors,
+    resolutionErrors,
+    parseWarnings: parseWarningCount
+  };
+  const validationStatus = computeValidationStatus(summary);
+  const quickSummary = buildQuickSummary(validationStatus, summary);
 
   return {
     className: parsed.className,
     targets: targetNames,
     priority: parsed.priority,
     valid: definiteErrors === 0,
+    validationStatus,
     issues,
-    summary: {
-      injections: parsed.injections.length,
-      shadows: parsed.shadows.length,
-      accessors: parsed.accessors.length,
-      total,
-      errors: errorCount,
-      warnings: warningCount,
-      definiteErrors,
-      uncertainErrors,
-      resolutionErrors,
-      parseWarnings: parseWarningCount
-    },
+    summary,
     provenance,
     warnings: outputWarnings,
     structuredWarnings: outputStructuredWarnings,

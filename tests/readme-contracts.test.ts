@@ -16,7 +16,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
     readme,
-    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`/
+    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`.*`results\[\]\.validationStatus`.*`summary\.partial`/
   );
   assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
   assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
@@ -57,6 +57,12 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, or `config`/);
   assert.match(readme, /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/);
   assert.match(readme, /`validate-mixin` supports `includeIssues=false`/);
+  assert.match(readme, /`validate-mixin` per-result responses now include `validationStatus`/);
+  assert.match(readme, /`validate-mixin` batch `summary` now includes `partial`/);
+  assert.match(readme, /`validate-mixin` provenance now exposes `requestedScope` \/ `appliedScope` and `requestedSourcePriority` \/ `appliedSourcePriority`/);
+  assert.match(readme, /`validate-mixin` automatically retries with `sourcePriority="maven-first"`/);
+  assert.match(readme, /generated `check-symbol-exists` recovery payloads now stay within that tool's public schema/);
+  assert.match(readme, /`check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version .*` noise/);
   assert.match(readme, /`reportMode=compact` and `warningMode=aggregated`/);
   assert.match(readme, /`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`/);
   assert.match(readme, /Use `get-artifact-file` or `get-class-source` to inspect returned files after search/);
@@ -83,7 +89,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
     readme,
-    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`/
+    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`.*`results\[\]\.validationStatus`.*`summary\.partial`/
   );
   assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
   assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
@@ -121,6 +127,12 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /`validate-mixin` は `input\.mode` が `inline` \/ `path` \/ `paths` \/ `config` のいずれか/);
   assert.match(readme, /`validate-mixin` は常に `mode`、`results\[\]`、`summary` を返し/);
   assert.match(readme, /`validate-mixin` は `includeIssues=false` をサポートし/);
+  assert.match(readme, /`validate-mixin` の各結果は `validationStatus`/);
+  assert.match(readme, /`validate-mixin` のバッチ `summary` には `partial` が追加され/);
+  assert.match(readme, /`validate-mixin` の provenance には `requestedScope` \/ `appliedScope` と `requestedSourcePriority` \/ `appliedSourcePriority`/);
+  assert.match(readme, /`validate-mixin` は、マッピング\/署名解決の制約で `loom-first` の結果が partial になった場合、自動で `sourcePriority="maven-first"` に再試行/);
+  assert.match(readme, /`check-symbol-exists` 向け recovery payload は、そのツールの公開 schema に収まる引数だけ/);
+  assert.match(readme, /`check-symbol-exists` は、Maven tiny mapping fallback が成功した場合に raw な `No Loom tiny mapping files matched version .*` warning を繰り返さず/);
   assert.match(readme, /`reportMode=compact` と `warningMode=aggregated`/);
   assert.match(readme, /`summary\.errors` は削除されました/);
   assert.match(readme, /`search-class-source` は snippets、行ウィンドウ、relation expansion、`totalApprox` を含まない/);

@@ -2249,22 +2249,30 @@ export class MappingService {
     this.mergePairs(graph.pairs, mojangLoad.pairs, "mojang-client-mappings", mojangLoad.mappingArtifact);
 
     let tinyLoaded = false;
+    const deferredTinyWarnings: string[] = [];
     for (const source of mappingSourceOrder(priority)) {
       const tinyLoad =
         source === "loom-cache"
           ? await this.loadTinyPairsFromLoom(version)
           : await this.loadTinyPairsFromMaven(version);
-      graph.warnings.push(...tinyLoad.warnings);
       if (tinyLoad.pairs.size === 0) {
+        deferredTinyWarnings.push(...tinyLoad.warnings);
         continue;
       }
 
       tinyLoaded = true;
       this.mergePairs(graph.pairs, tinyLoad.pairs, source, tinyLoad.mappingArtifact);
+      graph.warnings.push(...tinyLoad.warnings);
+      if (deferredTinyWarnings.length > 0) {
+        graph.warnings.push(
+          `Used ${source === "maven" ? "Maven" : "Loom cache"} tiny mappings for "${version}" after an earlier source lookup returned no data.`
+        );
+      }
       break;
     }
 
     if (!tinyLoaded) {
+      graph.warnings.push(...deferredTinyWarnings);
       graph.warnings.push("No intermediary/yarn tiny mappings were found for this version.");
     }
 

@@ -20,6 +20,7 @@ import { parseMixinSource } from "./mixin-parser.js";
 import { parseAccessWidener } from "./access-widener-parser.js";
 import {
   validateParsedMixin,
+  refreshMixinValidationOutcome,
   validateParsedAccessWidener,
   type IssueConfidence,
   type ResolvedTargetMembers,
@@ -570,6 +571,7 @@ export type ValidateMixinOutput = {
   summary: {
     total: number;
     valid: number;
+    partial: number;
     invalid: number;
     processingErrors: number;
     totalValidationErrors: number;
@@ -584,6 +586,10 @@ export type ValidateMixinOutput = {
 type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
   source?: string;
   sourcePath?: string;
+  retryState?: {
+    attempted: boolean;
+    initialSourcePriority: MappingSourcePriority;
+  };
 };
 
 type ValidateMixinConfigSource = {
@@ -781,6 +787,40 @@ function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: b
     normalizedPath.includes("minecraft-client") ||
     normalizedPath.includes("minecraft-server")
   );
+}
+
+function normalizeRequestedArtifactScope(scope: ArtifactScope | undefined): ArtifactScope {
+  return scope ?? "vanilla";
+}
+
+function inferAppliedArtifactScope(input: {
+  requestedScope: ArtifactScope;
+  scopeFallback?: { applied: string };
+  jarPath: string;
+  resolvedSourceJarPath?: string;
+}): ArtifactScope {
+  if (input.scopeFallback?.applied === "vanilla") {
+    return "vanilla";
+  }
+  if (input.requestedScope === "vanilla") {
+    return "vanilla";
+  }
+
+  const joinedPath = `${normalizePathStyle(input.jarPath)} ${normalizePathStyle(input.resolvedSourceJarPath ?? "")}`.toLowerCase();
+  if (joinedPath.includes("minecraft-merged")) {
+    return "merged";
+  }
+  if (input.requestedScope === "loader" && joinedPath.includes("merged")) {
+    return "merged";
+  }
+  return input.requestedScope;
+}
+
+function scopeToJarType(scope: ArtifactScope): "vanilla-client" | "merged" | "loader" {
+  if (scope === "vanilla") {
+    return "vanilla-client";
+  }
+  return scope;
 }
 
 function parseQualifiedMethodSymbol(symbol: string): { className: string; methodName: string } {
@@ -3595,8 +3635,32 @@ export class SourceService {
     );
   }
 
+  private shouldRetryValidateMixinWithMavenFirst(
+    input: ValidateMixinSingleInput,
+    result: MixinValidationResult
+  ): boolean {
+    const initialPriority = input.retryState?.initialSourcePriority ?? input.sourcePriority ?? this.config.mappingSourcePriority;
+    if (input.retryState?.attempted || initialPriority !== "loom-first") {
+      return false;
+    }
+    if (result.validationStatus !== "partial") {
+      return false;
+    }
+    if (result.summary.membersSkipped > 0) {
+      return true;
+    }
+    return result.issues.some((issue) =>
+      issue.resolutionPath === "source-signature-unavailable" ||
+      issue.resolutionPath === "target-mapping-failed" ||
+      issue.resolutionPath === "member-remap-failed"
+    );
+  }
+
   private async validateMixinSingle(input: ValidateMixinSingleInput): Promise<MixinValidationResult> {
     let version = input.version.trim();
+    const requestedScope = normalizeRequestedArtifactScope(input.scope);
+    const currentSourcePriority = input.sourcePriority ?? this.config.mappingSourcePriority;
+    const initialSourcePriority = input.retryState?.initialSourcePriority ?? currentSourcePriority;
     if (!version) {
       throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
     }
@@ -3660,22 +3724,23 @@ export class SourceService {
 
     // Resolve jar: use Loom cache for non-vanilla scope with projectPath
     let jarPath: string;
+    let resolvedArtifact: ResolveArtifactOutput | undefined;
     let scopeFallback: { requested: string; applied: string; reason: string } | undefined;
     if (input.scope && input.scope !== "vanilla" && input.projectPath) {
       try {
-        const resolved = await this.resolveArtifact({
+        resolvedArtifact = await this.resolveArtifact({
           target: { kind: "version", value: version },
           mapping: requestedMapping,
-          sourcePriority: input.sourcePriority,
+          sourcePriority: currentSourcePriority,
           projectPath: input.projectPath,
           scope: input.scope,
           preferProjectVersion: false
         });
-        jarPath = resolved.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
-        warnings.push(...resolved.warnings);
-        mappingApplied = resolved.mappingApplied;
-        if (resolved.version) {
-          version = resolved.version;
+        jarPath = resolvedArtifact.binaryJarPath ?? (await this.versionService.resolveVersionJar(version)).jarPath;
+        warnings.push(...resolvedArtifact.warnings);
+        mappingApplied = resolvedArtifact.mappingApplied;
+        if (resolvedArtifact.version) {
+          version = resolvedArtifact.version;
         }
       } catch (scopeErr) {
         // Scope preflight failed — fall back to vanilla
@@ -3708,7 +3773,7 @@ export class SourceService {
       const health = await this.mappingService.checkMappingHealth({
         version,
         requestedMapping,
-        sourcePriority: input.sourcePriority
+        sourcePriority: currentSourcePriority
       });
       const jarAvailable = existsSync(jarPath);
       healthReport = {
@@ -3767,7 +3832,7 @@ export class SourceService {
             name: resolvedClassName,
             sourceMapping: requestedMapping,
             targetMapping: "obfuscated",
-            sourcePriority: input.sourcePriority
+            sourcePriority: currentSourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             obfuscatedName = mapped.resolvedSymbol.name;
@@ -3801,9 +3866,9 @@ export class SourceService {
         if (requestedMapping !== "obfuscated") {
           try {
             const [ctorResult, methodResult, fieldResult] = await Promise.all([
-              this.remapSignatureMembers(sig.constructors, "method", version, "obfuscated", requestedMapping, input.sourcePriority, warnings),
-              this.remapSignatureMembers(sig.methods, "method", version, "obfuscated", requestedMapping, input.sourcePriority, warnings),
-              this.remapSignatureMembers(sig.fields, "field", version, "obfuscated", requestedMapping, input.sourcePriority, warnings)
+              this.remapSignatureMembers(sig.constructors, "method", version, "obfuscated", requestedMapping, currentSourcePriority, warnings),
+              this.remapSignatureMembers(sig.methods, "method", version, "obfuscated", requestedMapping, currentSourcePriority, warnings),
+              this.remapSignatureMembers(sig.fields, "field", version, "obfuscated", requestedMapping, currentSourcePriority, warnings)
             ]);
             constructors = ctorResult.members;
             methods = methodResult.members;
@@ -3842,7 +3907,7 @@ export class SourceService {
         try {
           const existenceCheck = await this.mappingService.checkSymbolExists({
             version, kind: "class", name: resolvedClassName,
-            sourceMapping: requestedMapping, nameMode: "auto"
+            sourceMapping: requestedMapping, nameMode: "auto", sourcePriority: currentSourcePriority
           });
           if (existenceCheck.resolved) {
             signatureFailedTargets.delete(target.className);
@@ -3860,11 +3925,14 @@ export class SourceService {
 
     // Fix toolHealth accuracy: reflect actual failures after target resolution
     if (healthReport) {
-      const hasFailures = signatureFailedTargets.size > 0 || mappingFailedTargets.size > 0;
+      const hasFailures =
+        signatureFailedTargets.size > 0 ||
+        mappingFailedTargets.size > 0 ||
+        symbolExistsButSignatureFailed.size > 0;
       if (hasFailures && healthReport.overallHealthy) {
         healthReport.overallHealthy = false;
         healthReport.degradations.push(
-          `${mappingFailedTargets.size} mapping failure(s), ${signatureFailedTargets.size} signature failure(s).`
+          `${mappingFailedTargets.size} mapping failure(s), ${signatureFailedTargets.size} signature failure(s), ${symbolExistsButSignatureFailed.size} partial validation target(s).`
         );
       }
     }
@@ -3873,6 +3941,17 @@ export class SourceService {
     if (requestedMapping !== mappingApplied) {
       resolutionNotes.push(
         `Mapping fallback: requested "${requestedMapping}" but applied "${mappingApplied}" due to remapping failure.`
+      );
+    }
+    const appliedScope = inferAppliedArtifactScope({
+      requestedScope,
+      scopeFallback,
+      jarPath,
+      resolvedSourceJarPath: resolvedArtifact?.resolvedSourceJarPath
+    });
+    if (!scopeFallback && requestedScope !== appliedScope) {
+      resolutionNotes.push(
+        `Scope adjusted during validation: requested "${requestedScope}" but resolved artifact looks like "${appliedScope}".`
       );
     }
 
@@ -3902,8 +3981,12 @@ export class SourceService {
       jarPath,
       requestedMapping,
       mappingApplied,
+      requestedScope,
+      appliedScope,
+      requestedSourcePriority: initialSourcePriority,
+      appliedSourcePriority: currentSourcePriority,
       resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined,
-      jarType: scopeFallback ? "vanilla-client" : (input.scope && input.scope !== "vanilla" && input.projectPath) ? "merged" : "vanilla-client",
+      jarType: scopeToJarType(appliedScope),
       mappingChain: mappingChain.length > 0 ? mappingChain : undefined,
       remapFailures: remapFailures > 0 ? remapFailures : undefined,
       mappingAutoDetected: mappingAutoDetected || undefined,
@@ -3911,14 +3994,14 @@ export class SourceService {
       resolutionTrace: resolutionTrace && resolutionTrace.length > 0 ? resolutionTrace : undefined
     };
 
-    const result = validateParsedMixin(
+    const result = refreshMixinValidationOutcome(validateParsedMixin(
       parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain,
       remapFailedMembers, signatureFailedTargets,
-      input.explain ? { scope: input.scope, sourcePriority: input.sourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
+      input.explain ? { scope: requestedScope, sourcePriority: currentSourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
       input.warningMode,
       healthReport,
       symbolExistsButSignatureFailed.size > 0 ? symbolExistsButSignatureFailed : undefined
-    );
+    ));
 
     // Apply minSeverity / hideUncertain filters
     const minSeverity = input.minSeverity ?? "all";
@@ -3956,7 +4039,6 @@ export class SourceService {
         parseWarnings: filteredParseWarnings
       };
       result.unfilteredSummary = unfilteredSummary;
-      result.valid = filteredDefiniteErrors === 0;
     }
 
     // Apply warningCategoryFilter
@@ -3980,7 +4062,6 @@ export class SourceService {
         resolutionErrors: result.issues.filter((i) => i.resolutionPath != null).length,
         parseWarnings: result.issues.filter((i) => i.category === "parse").length
       };
-      result.valid = catDefiniteErrors === 0;
     }
 
     // Apply treatInfoAsWarning filter
@@ -3997,6 +4078,39 @@ export class SourceService {
       result.toolHealth = undefined;
       if (result.provenance) {
         result.provenance.resolutionTrace = undefined;
+      }
+    }
+    refreshMixinValidationOutcome(result);
+
+    if (this.shouldRetryValidateMixinWithMavenFirst(input, result)) {
+      const retryWarning =
+        `Retrying validate-mixin with sourcePriority="maven-first" after partial validation using "${currentSourcePriority}".`;
+      try {
+        const retried = await this.validateMixinSingle({
+          ...input,
+          source,
+          sourcePath: undefined,
+          sourcePriority: "maven-first",
+          retryState: {
+            attempted: true,
+            initialSourcePriority
+          }
+        });
+        retried.warnings = [retryWarning, ...retried.warnings];
+        if (retried.provenance) {
+          retried.provenance.requestedSourcePriority = initialSourcePriority;
+          retried.provenance.appliedSourcePriority = "maven-first";
+          retried.provenance.resolutionNotes = [
+            ...(retried.provenance.resolutionNotes ?? []),
+            `Validation retried with sourcePriority "maven-first" after partial result from "${currentSourcePriority}".`
+          ];
+        }
+        return refreshMixinValidationOutcome(retried);
+      } catch (retryErr) {
+        result.warnings.unshift(
+          `${retryWarning} Retry failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
+        );
+        return result;
       }
     }
 
@@ -4137,6 +4251,7 @@ export class SourceService {
     results: ValidateMixinBatchResult[]
   ): ValidateMixinOutput {
     let valid = 0;
+    let partial = 0;
     let invalid = 0;
     let processingErrors = 0;
     let totalValidationErrors = 0;
@@ -4154,6 +4269,9 @@ export class SourceService {
         valid++;
       } else {
         invalid++;
+      }
+      if (entry.result.validationStatus === "partial") {
+        partial++;
       }
 
       totalValidationErrors += entry.result.summary.errors;
@@ -4195,6 +4313,7 @@ export class SourceService {
       summary: {
         total: results.length,
         valid,
+        partial,
         invalid,
         processingErrors,
         totalValidationErrors,

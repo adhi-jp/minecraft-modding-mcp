@@ -307,6 +307,65 @@ test("MappingService supports sourcePriority override over config default", asyn
   assert.equal(result.provenance?.source, "maven");
 });
 
+test("MappingService suppresses raw Loom miss warnings when Maven fallback resolves tiny mappings", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-priority-warning-fallback-"));
+  const config = buildTestConfig(root, {
+    mappingSourcePriority: "loom-first",
+    sourceRepos: ["https://example.test"]
+  });
+
+  const mavenTinyJar = join(root, "maven-tiny.jar");
+  await createJar(mavenTinyJar, {
+    "mappings/mappings.tiny": [
+      "tiny\t2\t0\tobfuscated\tintermediary",
+      "c\ta/b/C\tmaven/pkg/InterClass"
+    ].join("\n")
+  });
+  const tinyJarBuffer = await readFile(mavenTinyJar);
+
+  const fetchStub = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10-v2.jar") {
+      return new Response(tinyJarBuffer, { status: 200 });
+    }
+    if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10.jar") {
+      return new Response("not found", { status: 404 });
+    }
+    if (url === "https://example.test/net/fabricmc/yarn/maven-metadata.xml") {
+      return new Response("<metadata><versioning><versions></versions></versioning></metadata>", {
+        status: 200
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+  const result = await withCwd(root, () =>
+    service.checkSymbolExists({
+      version: "1.21.10",
+      kind: "class",
+      name: "a.b.C",
+      sourceMapping: "obfuscated"
+    } as never)
+  );
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.status, "resolved");
+  assert.ok(result.warnings.every((warning) => !warning.includes("No Loom tiny mapping files matched version")));
+});
+
 test("MappingService limits returned candidates while preserving ambiguity metadata", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-max-candidates-"));
