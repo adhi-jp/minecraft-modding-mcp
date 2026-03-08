@@ -38,6 +38,23 @@ function toErrorMessage(value: unknown): string {
   return String(value);
 }
 
+function hasJavaSourceExtension(entryPath: string): boolean {
+  const suffix = ".java";
+  if (entryPath.length < suffix.length) {
+    return false;
+  }
+
+  for (let index = 0; index < suffix.length; index += 1) {
+    const charCode = entryPath.charCodeAt(entryPath.length - suffix.length + index);
+    const normalizedCharCode = charCode >= 65 && charCode <= 90 ? charCode + 32 : charCode;
+    if (normalizedCharCode !== suffix.charCodeAt(index)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function openZipFile(jarPath: string): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
     yauzl.open(
@@ -175,7 +192,7 @@ export async function listJarEntries(jarPath: string): Promise<string[]> {
 
 export async function listJavaEntries(jarPath: string): Promise<string[]> {
   const entries = await listJarEntries(jarPath);
-  return entries.filter((entry) => entry.toLowerCase().endsWith(".java") && isSecureJarEntryPath(entry));
+  return entries.filter((entry) => hasJavaSourceExtension(entry) && isSecureJarEntryPath(entry));
 }
 
 export async function readJarEntryAsUtf8(jarPath: string, entryPath: string): Promise<string> {
@@ -224,7 +241,7 @@ export async function* iterateJavaEntriesAsUtf8(
       if (!entry) {
         break;
       }
-      if (!entry.fileName.toLowerCase().endsWith(".java")) {
+      if (!hasJavaSourceExtension(entry.fileName)) {
         continue;
       }
       if (!isSecureJarEntryPath(entry.fileName)) {

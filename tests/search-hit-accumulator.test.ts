@@ -91,3 +91,35 @@ test("SearchHitAccumulator applies cursor filtering before pagination", () => {
   );
   assert.equal(finalized.nextCursorHit, undefined);
 });
+
+test("SearchHitAccumulator finalize does not rely on Array.prototype.sort", () => {
+  const acc = createSearchHitAccumulator(3, undefined);
+
+  acc.add(makeHit("c/C.java", 70));
+  acc.add(makeHit("a/A.java", 100));
+  acc.add(makeHit("b/B.java", 80));
+  acc.add(makeHit("d/D.java", 60));
+
+  const originalSort = Array.prototype.sort;
+  let sortCalls = 0;
+  Array.prototype.sort = function patchedSort(...args: unknown[]) {
+    sortCalls += 1;
+    return originalSort.apply(this, args as [((a: unknown, b: unknown) => number)?]);
+  };
+
+  try {
+    const finalized = acc.finalize();
+    assert.deepEqual(
+      finalized.page.map((hit) => [hit.filePath, hit.score]),
+      [
+        ["a/A.java", 100],
+        ["b/B.java", 80],
+        ["c/C.java", 70]
+      ]
+    );
+  } finally {
+    Array.prototype.sort = originalSort;
+  }
+
+  assert.equal(sortCalls, 0);
+});

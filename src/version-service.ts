@@ -558,8 +558,14 @@ export class VersionService {
 
   private trimVersionDetailCache(): void {
     const maxEntries = Math.max(1, this.config.maxVersionDetailCache ?? 256);
-    while (this.versionDetailCache.size > maxEntries) {
-      const oldest = this.versionDetailCache.keys().next().value as string | undefined;
+    const overflow = this.versionDetailCache.size - maxEntries;
+    if (overflow <= 0) {
+      return;
+    }
+
+    const keyIterator = this.versionDetailCache.keys();
+    for (let index = 0; index < overflow; index += 1) {
+      const oldest = keyIterator.next().value as string | undefined;
       if (!oldest) {
         return;
       }

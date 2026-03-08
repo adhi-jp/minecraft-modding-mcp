@@ -160,6 +160,23 @@ function heapSiftUp(heap: SearchSourceHit[], index: number): void {
   }
 }
 
+function heapPopWorst(heap: SearchSourceHit[]): SearchSourceHit | undefined {
+  if (heap.length === 0) {
+    return undefined;
+  }
+
+  const root = heap[0];
+  const tail = heap.pop();
+  if (heap.length === 0) {
+    return root;
+  }
+  if (tail) {
+    heap[0] = tail;
+    heapSiftDown(heap, 0, heap.length);
+  }
+  return root;
+}
+
 export function createSearchHitAccumulator(
   limit: number,
   cursor: SearchCursorPayload | undefined
@@ -202,8 +219,14 @@ export function createSearchHitAccumulator(
       return heap.length;
     },
     finalize() {
-      // Sort heap contents by scoreHitOrder (best first)
-      const sorted = heap.slice().sort(scoreHitOrder);
+      const sorted = new Array<SearchSourceHit>(heap.length);
+      const heapCopy = heap.slice();
+      for (let index = heapCopy.length - 1; index >= 0; index -= 1) {
+        const next = heapPopWorst(heapCopy);
+        if (next) {
+          sorted[index] = next;
+        }
+      }
       const page = sorted.slice(0, pageLimit);
       const hasMore = totalAfterCursor > page.length;
       return {

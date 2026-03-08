@@ -57,6 +57,8 @@ export interface GetSignatureOutput {
   context: ResponseContext;
 }
 
+type CachedSignatureOutput = Omit<GetSignatureOutput, "context">;
+
 const CLASSFILE_MAGIC = 0xcafebabe;
 const MAX_INHERITANCE_DEPTH = 64;
 
@@ -238,6 +240,94 @@ function toInternalName(fqn: string): string {
 
 function extractVersionFromPath(inputPath: string): string | undefined {
   return inputPath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
+}
+
+type SignatureCacheNode = {
+  key: string;
+  value: CachedSignatureOutput;
+  older?: SignatureCacheNode;
+  newer?: SignatureCacheNode;
+};
+
+class SignatureCacheStore {
+  private readonly nodes = new Map<string, SignatureCacheNode>();
+  private oldest?: SignatureCacheNode;
+  private newest?: SignatureCacheNode;
+
+  constructor(private readonly maxEntries: number) {}
+
+  get(key: string): CachedSignatureOutput | undefined {
+    const node = this.nodes.get(key);
+    if (!node) {
+      return undefined;
+    }
+
+    this.promote(node);
+    return node.value;
+  }
+
+  set(key: string, value: CachedSignatureOutput): void {
+    const existing = this.nodes.get(key);
+    if (existing) {
+      existing.value = value;
+      this.promote(existing);
+      return;
+    }
+
+    const node: SignatureCacheNode = { key, value, older: this.newest };
+    if (this.newest) {
+      this.newest.newer = node;
+    } else {
+      this.oldest = node;
+    }
+    this.newest = node;
+    this.nodes.set(key, node);
+
+    while (this.nodes.size > this.maxEntries) {
+      this.evictOldest();
+    }
+  }
+
+  private promote(node: SignatureCacheNode): void {
+    if (this.newest === node) {
+      return;
+    }
+
+    if (node.older) {
+      node.older.newer = node.newer;
+    } else {
+      this.oldest = node.newer;
+    }
+
+    if (node.newer) {
+      node.newer.older = node.older;
+    }
+
+    node.older = this.newest;
+    node.newer = undefined;
+    if (this.newest) {
+      this.newest.newer = node;
+    } else {
+      this.oldest = node;
+    }
+    this.newest = node;
+  }
+
+  private evictOldest(): void {
+    const node = this.oldest;
+    if (!node) {
+      return;
+    }
+
+    this.oldest = node.newer;
+    if (this.oldest) {
+      this.oldest.older = undefined;
+    } else {
+      this.newest = undefined;
+    }
+
+    this.nodes.delete(node.key);
+  }
 }
 
 class ByteReader {
@@ -442,10 +532,11 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
 
 export class MinecraftExplorerService {
   private readonly config: Config;
-  private readonly signatureCache = new Map<string, GetSignatureOutput>();
+  private readonly signatureCache: SignatureCacheStore;
 
   constructor(explicitConfig?: Config) {
     this.config = explicitConfig ?? loadConfig();
+    this.signatureCache = new SignatureCacheStore(Math.max(1, this.config.maxSignatureCache ?? 2_000));
   }
 
   public async getSignature(input: GetSignatureInput): Promise<GetSignatureOutput> {
@@ -472,10 +563,11 @@ export class MinecraftExplorerService {
     ].join("|");
     const cached = this.signatureCache.get(cacheKey);
     if (cached) {
-      this.signatureCache.delete(cacheKey);
-      this.signatureCache.set(cacheKey, cached);
       return {
-        ...cached,
+        constructors: cached.constructors,
+        methods: cached.methods,
+        fields: cached.fields,
+        warnings: cached.warnings,
         context: this.contextForJar(jarPath)
       };
     }
@@ -695,16 +787,20 @@ export class MinecraftExplorerService {
       )
     );
 
-    const output: GetSignatureOutput = {
+    const output: CachedSignatureOutput = {
       constructors,
       methods,
       fields,
-      warnings,
-      context: this.contextForJar(jarPath)
+      warnings
     };
     this.signatureCache.set(cacheKey, output);
-    this.trimSignatureCache();
-    return output;
+    return {
+      constructors: output.constructors,
+      methods: output.methods,
+      fields: output.fields,
+      warnings: output.warnings,
+      context: this.contextForJar(jarPath)
+    };
   }
 
   private contextForJar(jarPath: string): ResponseContext {
@@ -726,17 +822,6 @@ export class MinecraftExplorerService {
         message: error instanceof Error ? error.message : `Could not resolve jar "${jarPath}".`,
         details: { jarPath }
       });
-    }
-  }
-
-  private trimSignatureCache(): void {
-    const maxEntries = Math.max(1, this.config.maxSignatureCache ?? 2_000);
-    while (this.signatureCache.size > maxEntries) {
-      const oldest = this.signatureCache.keys().next().value as string | undefined;
-      if (!oldest) {
-        return;
-      }
-      this.signatureCache.delete(oldest);
     }
   }
 }

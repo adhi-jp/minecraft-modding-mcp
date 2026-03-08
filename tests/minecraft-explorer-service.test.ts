@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -534,4 +534,13 @@ test("MinecraftExplorerService reuses cached signatures but refreshes response c
   assert.deepEqual(second.methods.map((method) => method.name), ["first"]);
   assert.notEqual(second.context.generatedAt, first.context.generatedAt);
   assert.notEqual(second.context.jarHash, first.context.jarHash);
+});
+
+test("MinecraftExplorerService avoids delete/set churn and spread copies on cache hits", async () => {
+  const source = await readFile(new URL("../src/minecraft-explorer-service.ts", import.meta.url), "utf8");
+  const block =
+    source.match(/const cached = this\.signatureCache\.get\(cacheKey\);[\s\S]*?const classEntryPath =/)?.[0] ?? "";
+
+  assert.doesNotMatch(block, /this\.signatureCache\.delete\(cacheKey\);\s*this\.signatureCache\.set\(cacheKey, cached\);/);
+  assert.doesNotMatch(block, /return\s*\{\s*\.\.\.cached,/);
 });

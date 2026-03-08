@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import type { SignatureMember } from "../src/minecraft-explorer-service.ts";
@@ -101,6 +102,25 @@ test("suggestSimilar returns empty for no close matches", () => {
   const candidates = ["completelyDifferent"];
   const suggestions = suggestSimilar("tick", candidates, 3);
   assert.equal(suggestions.length, 0);
+});
+
+test("suggestSimilar skips candidates whose length gap already exceeds maxDistance", async () => {
+  const source = await readFile("src/mixin-validator.ts", "utf8");
+  const block =
+    source.match(/export function suggestSimilar\([\s\S]*?return scored\.slice\(0, maxResults\)\.map\(\(s\) => s\.candidate\);\n\}/)?.[0] ?? "";
+
+  assert.match(block, /Math\.abs\(normalizedName\.length - normalizedCandidate\.length\) > maxDistance/);
+});
+
+test("validateParsedMixin hoists warning-classifier regexes out of the hot function body", async () => {
+  const source = await readFile("src/mixin-validator.ts", "utf8");
+  const block =
+    source.match(/export function validateParsedMixin\([\s\S]*?const structuredWarnings: StructuredWarning\[] = warnings\.map/)?.[0] ?? "";
+
+  assert.doesNotMatch(block, /const MAPPING_WARNING_RE =/);
+  assert.match(source, /const MAPPING_WARNING_RE = /);
+  assert.match(source, /const CONFIG_WARNING_RE = /);
+  assert.match(source, /const PARSE_WARNING_RE = /);
 });
 
 /* ------------------------------------------------------------------ */

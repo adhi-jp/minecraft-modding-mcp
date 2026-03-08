@@ -184,6 +184,7 @@ export class FilesRepo {
   private readonly searchPathStmt;
   private readonly searchFtsStmt;
   private readonly getByPathsStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
+  private readonly classLookupStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
 
   constructor(private readonly db: SqliteDatabase) {
     this.deleteStmt = this.db.prepare(`
@@ -575,6 +576,93 @@ export class FilesRepo {
     return row?.file_path;
   }
 
+  private getClassLookupStmt(exactPathCount: number): ReturnType<SqliteDatabase["prepare"]> {
+    const cached = this.classLookupStmtCache.get(exactPathCount);
+    if (cached) {
+      return cached;
+    }
+
+    const exactPlaceholders = Array.from({ length: exactPathCount }, () => "?").join(", ");
+    const statement = this.db.prepare(`
+      WITH ranked_candidates AS (
+        SELECT file_path, 0 AS rank
+        FROM files
+        WHERE artifact_id = ?
+          AND file_path IN (${exactPlaceholders})
+
+        UNION ALL
+
+        SELECT file_path,
+          CASE
+            WHEN qualified_name = ? THEN 1
+            WHEN symbol_name = ? THEN 2
+            ELSE 3
+          END AS rank
+        FROM symbols
+        WHERE artifact_id = ?
+          AND symbol_kind = 'class'
+          AND (
+            qualified_name = ?
+            OR symbol_name = ?
+            OR qualified_name LIKE ?
+          )
+          AND (? = '' OR instr(file_path, ?) = 1)
+
+        UNION ALL
+
+        SELECT file_path, 4 AS rank
+        FROM files
+        WHERE artifact_id = ?
+          AND (file_path = ? OR file_path LIKE ? ESCAPE '\\')
+          AND (? = '' OR instr(file_path, ?) = 1)
+      )
+      SELECT file_path
+      FROM ranked_candidates
+      ORDER BY rank ASC, file_path ASC
+      LIMIT 1
+    `);
+
+    this.classLookupStmtCache.set(exactPathCount, statement);
+    return statement;
+  }
+
+  findBestClassLookupPath(
+    artifactId: string,
+    exactFilePaths: string[],
+    qualifiedClassName: string,
+    simpleName: string,
+    expectedPrefix: string
+  ): string | undefined {
+    const normalizedExactFilePaths = [...new Set(exactFilePaths.map((entry) => entry.trim()).filter(Boolean))];
+    const normalizedClassName = qualifiedClassName.trim();
+    const normalizedSimpleName = simpleName.trim();
+    if (normalizedExactFilePaths.length === 0 || !normalizedClassName || !normalizedSimpleName) {
+      return undefined;
+    }
+
+    const stmt = this.getClassLookupStmt(normalizedExactFilePaths.length);
+    const fileName = `${normalizedSimpleName}.java`;
+    const row = stmt.get(
+      artifactId,
+      ...normalizedExactFilePaths,
+      normalizedClassName,
+      normalizedSimpleName,
+      artifactId,
+      normalizedClassName,
+      normalizedSimpleName,
+      `%.${normalizedSimpleName}`,
+      expectedPrefix,
+      expectedPrefix,
+      artifactId,
+      fileName,
+      `%/${fileName}`,
+      expectedPrefix,
+      expectedPrefix
+    ) as { file_path?: string } | undefined;
+
+    return row?.file_path;
+  }
+
   searchFiles(artifactId: string, options: SearchFilesOptions): PagedResult<SearchFilesResult> {
     const page = this.searchFilesWithContent(artifactId, options);
     return {
@@ -608,11 +696,16 @@ export class FilesRepo {
     const normalizedCount = Math.max(1, Math.trunc(pathCount));
     const cached = this.getByPathsStmtCache.get(normalizedCount);
     if (cached) {
+      this.getByPathsStmtCache.delete(normalizedCount);
+      this.getByPathsStmtCache.set(normalizedCount, cached);
       return cached;
     }
 
     if (this.getByPathsStmtCache.size >= 64) {
-      this.getByPathsStmtCache.clear();
+      const oldestKey = this.getByPathsStmtCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.getByPathsStmtCache.delete(oldestKey);
+      }
     }
 
     const placeholders = Array.from({ length: normalizedCount }, () => "?").join(", ");

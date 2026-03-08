@@ -284,6 +284,44 @@ test("filesRepo.searchFileCandidates supports mode-specific candidate queries", 
   assert.ok(textOnly.items.every((item) => item.matchedIn === "content"));
 });
 
+test("filesRepo keeps prepared path-count statements hot instead of clearing the entire cache", async () => {
+  const { artifacts, files } = await createRepos();
+  const artifactId = "artifact-get-by-paths-cache";
+  seedArtifact(artifacts, artifactId);
+
+  files.replaceFilesForArtifact(
+    artifactId,
+    Array.from({ length: 70 }, (_, index) => ({
+      filePath: `pkg/F${index}.java`,
+      content: `class F${index} {}`,
+      contentBytes: 12,
+      contentHash: `cache-${index}`
+    }))
+  );
+
+  for (let pathCount = 1; pathCount <= 64; pathCount += 1) {
+    files.getFileContentsByPaths(
+      artifactId,
+      Array.from({ length: pathCount }, (_, index) => `pkg/F${index}.java`)
+    );
+  }
+
+  const stmtCache = (files as unknown as {
+    getByPathsStmtCache: Map<number, unknown>;
+  }).getByPathsStmtCache;
+  assert.equal(stmtCache.size, 64);
+
+  files.getFileContentsByPaths(
+    artifactId,
+    Array.from({ length: 65 }, (_, index) => `pkg/F${index}.java`)
+  );
+
+  assert.equal(stmtCache.size, 64);
+  assert.equal(stmtCache.has(1), false);
+  assert.equal(stmtCache.has(64), true);
+  assert.equal(stmtCache.has(65), true);
+});
+
 test("symbolsRepo.findScopedSymbols supports contains + package prefix filtering", async () => {
   const { artifacts, files, symbols } = await createRepos();
   const artifactId = "artifact-scoped-symbols";

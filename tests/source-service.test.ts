@@ -1339,6 +1339,125 @@ test("SourceService keeps byte accounting consistent after maxCacheBytes evictio
   assert.equal(metrics.lru[0]?.contentBytes, expectedBytesTwo);
 });
 
+test("SourceService does not rescan cache accounting tables on artifact cache hit", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-cache-hit-metrics-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const jarPath = join(root, "cache-hit.jar");
+  const sourcesJarPath = join(root, "cache-hit-sources.jar");
+
+  await createJar(jarPath, {
+    "a/CacheHit.class": Buffer.from([1, 2, 3])
+  });
+  await createJar(sourcesJarPath, {
+    "a/CacheHit.java": 'package a;\npublic class CacheHit { String token = "hit"; }\n'
+  });
+
+  await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
+
+  const artifactsRepo = (service as unknown as {
+    artifactsRepo: {
+      countArtifacts: () => number;
+      totalContentBytes: () => number;
+      listArtifactsByLruWithContentBytes: (
+        limit: number
+      ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
+    };
+  }).artifactsRepo;
+
+  let countCalls = 0;
+  let totalBytesCalls = 0;
+  let lruCalls = 0;
+
+  const originalCountArtifacts = artifactsRepo.countArtifacts.bind(artifactsRepo);
+  const originalTotalContentBytes = artifactsRepo.totalContentBytes.bind(artifactsRepo);
+  const originalListLru =
+    artifactsRepo.listArtifactsByLruWithContentBytes.bind(artifactsRepo);
+
+  artifactsRepo.countArtifacts = () => {
+    countCalls += 1;
+    return originalCountArtifacts();
+  };
+  artifactsRepo.totalContentBytes = () => {
+    totalBytesCalls += 1;
+    return originalTotalContentBytes();
+  };
+  artifactsRepo.listArtifactsByLruWithContentBytes = (limit: number) => {
+    lruCalls += 1;
+    return originalListLru(limit);
+  };
+
+  await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
+
+  assert.equal(countCalls, 0);
+  assert.equal(totalBytesCalls, 0);
+  assert.equal(lruCalls, 0);
+});
+
+test("SourceService updates cache accounting incrementally after artifact ingest", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-ingest-metrics-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const jarPath = join(root, "ingest.jar");
+  const sourcesJarPath = join(root, "ingest-sources.jar");
+  const sourceText = 'package a;\npublic class Ingest { String token = "ingest"; }\n';
+
+  await createJar(jarPath, {
+    "a/Ingest.class": Buffer.from([1, 2, 3])
+  });
+  await createJar(sourcesJarPath, {
+    "a/Ingest.java": sourceText
+  });
+
+  const artifactsRepo = (service as unknown as {
+    artifactsRepo: {
+      countArtifacts: () => number;
+      totalContentBytes: () => number;
+      listArtifactsByLruWithContentBytes: (
+        limit: number
+      ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
+    };
+  }).artifactsRepo;
+
+  let countCalls = 0;
+  let totalBytesCalls = 0;
+  let lruCalls = 0;
+
+  const originalCountArtifacts = artifactsRepo.countArtifacts.bind(artifactsRepo);
+  const originalTotalContentBytes = artifactsRepo.totalContentBytes.bind(artifactsRepo);
+  const originalListLru =
+    artifactsRepo.listArtifactsByLruWithContentBytes.bind(artifactsRepo);
+
+  artifactsRepo.countArtifacts = () => {
+    countCalls += 1;
+    return originalCountArtifacts();
+  };
+  artifactsRepo.totalContentBytes = () => {
+    totalBytesCalls += 1;
+    return originalTotalContentBytes();
+  };
+  artifactsRepo.listArtifactsByLruWithContentBytes = (limit: number) => {
+    lruCalls += 1;
+    return originalListLru(limit);
+  };
+
+  const resolved = await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
+
+  assert.equal(countCalls, 0);
+  assert.equal(totalBytesCalls, 0);
+  assert.equal(lruCalls, 0);
+
+  const metrics = readCacheAccountingMetrics(service);
+  const expectedBytes = Buffer.byteLength(sourceText, "utf8");
+  assert.equal(metrics.cacheEntries, 1);
+  assert.equal(metrics.totalContentBytes, expectedBytes);
+  assert.equal(metrics.lru.length, 1);
+  assert.equal(metrics.lru[0]?.artifactId, resolved.artifactId);
+  assert.equal(metrics.lru[0]?.contentBytes, expectedBytes);
+});
+
 test("SourceService returns class source with line range filtering", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-"));
@@ -5277,6 +5396,127 @@ test("SourceService searchClassSource with ** glob pattern does not crash", asyn
       `Expected hit in net/minecraft/ but got ${hit.filePath}`
     );
   }
+});
+
+test("SourceService hoists fileGlob regex compilation out of regex symbol scan loop", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+  const block =
+    source.match(
+      /const candidates = this\.symbolsRepo\.listSymbolsForArtifact\(artifactId, scope\?\.symbolKind\);[\s\S]*?return result;/
+    )?.[0] ?? "";
+
+  assert.match(
+    block,
+    /const glob = scope\?\.fileGlob \? buildGlobRegex\(normalizePathStyle\(scope\.fileGlob\)\) : undefined;/
+  );
+  assert.doesNotMatch(
+    block,
+    /for \(const symbol of candidates\) \{[\s\S]*const glob = buildGlobRegex\(normalizePathStyle\(scope\.fileGlob\)\);/
+  );
+});
+
+test("SourceService avoids JSON.stringify equality checks in mixin output compaction", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+  const block =
+    source.match(/private applyValidateMixinOutputCompaction\([\s\S]*?private buildValidateMixinOutput/)?.[0] ?? "";
+
+  assert.doesNotMatch(block, /JSON\.stringify\(entry\)/);
+});
+
+test("SourceService centralizes quality flag deduplication instead of rebuilding inline Sets", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+
+  assert.match(source, /function dedupeQualityFlags\(/);
+  assert.doesNotMatch(source, /qualityFlags = \[\.\.\.new Set/);
+});
+
+test("SourceService resolveClassFilePath delegates to a combined repo lookup instead of sequential probes", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+  const block =
+    source.match(/private resolveClassFilePath\([\s\S]*?^\s{2}\}/m)?.[0] ?? "";
+
+  assert.match(block, /return this\.filesRepo\.findBestClassLookupPath\(/);
+  assert.doesNotMatch(block, /this\.symbolsRepo\.findBestClassFilePath/);
+  assert.doesNotMatch(block, /this\.filesRepo\.findFirstFilePathByName/);
+});
+
+test("SourceService validateMixin reuses class mapping lookups across batch entries", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-batch-cache-"));
+  const sourceA = join(root, "MainMixinA.java");
+  const sourceB = join(root, "MainMixinB.java");
+  const jarPath = join(root, "client.jar");
+  const mixinSource = [
+    "import net.minecraft.server.Main;",
+    "import org.spongepowered.asm.mixin.Mixin;",
+    "",
+    "@Mixin(Main.class)",
+    "public abstract class MainMixin {}"
+  ].join("\n");
+
+  await writeFile(sourceA, mixinSource, "utf8");
+  await writeFile(sourceB, mixinSource.replace("MainMixin", "SecondMainMixin"), "utf8");
+  await createJar(jarPath, {});
+
+  const service = new SourceService(buildTestConfig(root));
+  let classMappingLookups = 0;
+
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    },
+    async findMapping(input: {
+      kind?: "class" | "field" | "method";
+      sourceMapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+      targetMapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    }) {
+      if (input.kind === "class" && input.sourceMapping === "mojang" && input.targetMapping === "obfuscated") {
+        classMappingLookups += 1;
+      }
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: { name: "a" },
+        candidates: []
+      };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "a",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "paths",
+      paths: [sourceA, sourceB]
+    },
+    version: "1.21",
+    mapping: "mojang"
+  } as never);
+
+  assert.equal(result.summary.total, 2);
+  assert.equal(result.summary.processingErrors, 0);
+  assert.equal(result.results[0]?.result?.valid, true);
+  assert.equal(result.results[1]?.result?.valid, true);
+  assert.equal(classMappingLookups, 1);
 });
 
 test("SourceService getClassSource rejects package-incompatible fallback matches", async () => {

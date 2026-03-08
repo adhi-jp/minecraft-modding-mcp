@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -143,4 +143,11 @@ test("iterateJavaEntriesAsUtf8 skips entries exceeding maxBytes limit", async ()
   }
 
   assert.deepEqual(collected, ["com/example/Small.java"]);
+});
+
+test("sourceJarReader checks .java suffix without lowercasing every entry name", async () => {
+  const source = await readFile("src/source-jar-reader.ts", "utf8");
+
+  assert.match(source, /function hasJavaSourceExtension\(/);
+  assert.doesNotMatch(source, /toLowerCase\(\)\.endsWith\("\.java"\)/);
 });

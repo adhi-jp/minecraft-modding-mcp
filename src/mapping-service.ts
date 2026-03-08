@@ -65,6 +65,9 @@ type LoadedGraph = {
   version: string;
   priority: MappingSourcePriority;
   pairs: Map<PairKey, PairRecord>;
+  adjacency: Map<SourceMapping, SourceMapping[]>;
+  pathCache: Map<PairKey, SourceMapping[] | undefined>;
+  recordsByTarget: Map<SourceMapping, MappingSymbolRecord[]>;
   warnings: string[];
 };
 
@@ -245,16 +248,23 @@ function addToSetMap(map: Map<string, Set<string>>, key: string, value: string):
 }
 
 function normalizedVariants(symbol: string): string[] {
-  const variants = new Set<string>();
-  variants.add(symbol);
+  const variants = [symbol];
+  let dotted: string | undefined;
+  if (symbol.includes("/")) {
+    dotted = symbol.replace(/\//g, ".");
+    if (dotted !== symbol) {
+      variants.push(dotted);
+    }
+  }
 
-  const dotted = symbol.replace(/\//g, ".");
-  variants.add(dotted);
+  if (symbol.includes(".")) {
+    const slashed = symbol.replace(/\./g, "/");
+    if (slashed !== symbol && slashed !== dotted) {
+      variants.push(slashed);
+    }
+  }
 
-  const slashed = symbol.replace(/\./g, "/");
-  variants.add(slashed);
-
-  return [...variants];
+  return variants;
 }
 
 function simpleName(symbol: string): string | undefined {
@@ -470,11 +480,51 @@ function pairKey(sourceMapping: SourceMapping, targetMapping: SourceMapping): Pa
 }
 
 function parsePairKey(key: PairKey): { sourceMapping: SourceMapping; targetMapping: SourceMapping } {
-  const [source, target] = key.split("->");
+  const separator = key.indexOf("->");
+  const source = separator >= 0 ? key.slice(0, separator) : key;
+  const target = separator >= 0 ? key.slice(separator + 2) : "";
   return {
     sourceMapping: source as SourceMapping,
     targetMapping: target as SourceMapping
   };
+}
+
+function buildAdjacency(pairs: Map<PairKey, PairRecord>): Map<SourceMapping, SourceMapping[]> {
+  const adjacency = new Map<SourceMapping, Set<SourceMapping>>();
+  for (const key of pairs.keys()) {
+    const { sourceMapping, targetMapping } = parsePairKey(key);
+    let neighbors = adjacency.get(sourceMapping);
+    if (!neighbors) {
+      neighbors = new Set<SourceMapping>();
+      adjacency.set(sourceMapping, neighbors);
+    }
+    neighbors.add(targetMapping);
+  }
+
+  return new Map(
+    [...adjacency.entries()].map(([mapping, neighbors]) => [mapping, [...neighbors]])
+  );
+}
+
+function buildTargetRecordIndex(
+  pairs: Map<PairKey, PairRecord>
+): Map<SourceMapping, MappingSymbolRecord[]> {
+  const recordsByTarget = new Map<SourceMapping, Map<string, MappingSymbolRecord>>();
+  for (const [key, pair] of pairs.entries()) {
+    const { targetMapping } = parsePairKey(key);
+    let bucket = recordsByTarget.get(targetMapping);
+    if (!bucket) {
+      bucket = new Map<string, MappingSymbolRecord>();
+      recordsByTarget.set(targetMapping, bucket);
+    }
+    for (const record of pair.index.records.values()) {
+      bucket.set(buildSymbolKey(record), record);
+    }
+  }
+
+  return new Map(
+    [...recordsByTarget.entries()].map(([mapping, records]) => [mapping, [...records.values()]])
+  );
 }
 
 function ensurePairIndex(indexes: Map<PairKey, DirectionIndex>, from: SourceMapping, to: SourceMapping): DirectionIndex {
@@ -886,7 +936,7 @@ function mappingSourceOrder(priority: MappingSourcePriority): Array<"loom-cache"
 }
 
 function namespacePath(
-  pairs: Map<PairKey, PairRecord>,
+  graph: LoadedGraph,
   sourceMapping: SourceMapping,
   targetMapping: SourceMapping
 ): SourceMapping[] | undefined {
@@ -894,38 +944,49 @@ function namespacePath(
     return [sourceMapping];
   }
 
+  const key = pairKey(sourceMapping, targetMapping);
+  if (graph.pathCache.has(key)) {
+    return graph.pathCache.get(key);
+  }
+
+  const { adjacency } = graph;
   const queue: SourceMapping[] = [sourceMapping];
+  let queueIndex = 0;
   const parent = new Map<SourceMapping, SourceMapping | undefined>([[sourceMapping, undefined]]);
 
-  while (queue.length > 0) {
-    const current = queue.shift() as SourceMapping;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as SourceMapping;
+    queueIndex += 1;
     if (current === targetMapping) {
       break;
     }
 
-    for (const key of pairs.keys()) {
-      const parsed = parsePairKey(key);
-      if (parsed.sourceMapping !== current) {
+    const neighbors = adjacency.get(current);
+    if (!neighbors) {
+      continue;
+    }
+    for (const neighbor of neighbors) {
+      if (parent.has(neighbor)) {
         continue;
       }
-      if (parent.has(parsed.targetMapping)) {
-        continue;
-      }
-      parent.set(parsed.targetMapping, current);
-      queue.push(parsed.targetMapping);
+      parent.set(neighbor, current);
+      queue.push(neighbor);
     }
   }
 
   if (!parent.has(targetMapping)) {
+    graph.pathCache.set(key, undefined);
     return undefined;
   }
 
-  const path: SourceMapping[] = [];
+  const reversedPath: SourceMapping[] = [];
   let cursor: SourceMapping | undefined = targetMapping;
   while (cursor) {
-    path.unshift(cursor);
+    reversedPath.push(cursor);
     cursor = parent.get(cursor);
   }
+  const path = reversedPath.reverse();
+  graph.pathCache.set(key, path);
   return path;
 }
 
@@ -1151,17 +1212,7 @@ function applyDisambiguationHints(
 }
 
 function collectTargetRecords(graph: LoadedGraph, targetMapping: SourceMapping): MappingSymbolRecord[] {
-  const merged = new Map<string, MappingSymbolRecord>();
-  for (const [key, pair] of graph.pairs.entries()) {
-    const parsed = parsePairKey(key);
-    if (parsed.targetMapping !== targetMapping) {
-      continue;
-    }
-    for (const record of pair.index.records.values()) {
-      merged.set(buildSymbolKey(record), record);
-    }
-  }
-  return [...merged.values()];
+  return [...(graph.recordsByTarget.get(targetMapping) ?? [])];
 }
 
 function normalizeIncludedKinds(inputKinds: ClassApiMatrixKind[] | undefined): Set<ClassApiMatrixKind> {
@@ -1328,7 +1379,7 @@ export class MappingService {
     }
 
     const graph = await this.loadGraph(version, priority);
-    const path = namespacePath(graph.pairs, sourceMapping, targetMapping);
+    const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       return {
         querySymbol,
@@ -1429,7 +1480,7 @@ export class MappingService {
     }
 
     const graph = await this.loadGraph(version, priority);
-    const path = namespacePath(graph.pairs, sourceMapping, targetMapping);
+    const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       throw createError({
         code: ERROR_CODES.MAPPING_UNAVAILABLE,
@@ -1521,7 +1572,7 @@ export class MappingService {
     }
 
     const graph = await this.loadGraph(version, priority);
-    const path = namespacePath(graph.pairs, sourceMapping, targetMapping);
+    const path = namespacePath(graph, sourceMapping, targetMapping);
 
     if (!path) {
       return {
@@ -1635,6 +1686,22 @@ export class MappingService {
     const graph = await this.loadGraph(version, priority);
     const warnings = [...graph.warnings];
     const includeKinds = normalizeIncludedKinds(input.includeKinds);
+    const pathCache = new Map<PairKey, SourceMapping[] | undefined>();
+    const resolvePath = (
+      sourceMapping: SourceMapping,
+      targetMapping: SourceMapping
+    ): SourceMapping[] | undefined => {
+      if (sourceMapping === targetMapping) {
+        return [sourceMapping];
+      }
+      const key = pairKey(sourceMapping, targetMapping);
+      if (pathCache.has(key)) {
+        return pathCache.get(key);
+      }
+      const path = namespacePath(graph, sourceMapping, targetMapping);
+      pathCache.set(key, path);
+      return path;
+    };
 
     const classByMapping: Partial<Record<SourceMapping, MappingSymbolRecord>> = {
       [classNameMapping]: createClassSymbolRecord(className)
@@ -1648,7 +1715,8 @@ export class MappingService {
         graph,
         classNameMapping,
         mapping,
-        classByMapping[classNameMapping] as MappingSymbolRecord
+        classByMapping[classNameMapping] as MappingSymbolRecord,
+        resolvePath(classNameMapping, mapping)
       );
       if (mapped.length > 1) {
         const competing = mapped.slice(0, 5).map((c) => c.symbol);
@@ -1731,7 +1799,13 @@ export class MappingService {
         if (mapping === baseMapping) {
           resolved = baseRecord;
         } else {
-          const mapped = this.mapRecordBetweenMappings(graph, baseMapping, mapping, baseRecord);
+          const mapped = this.mapRecordBetweenMappings(
+            graph,
+            baseMapping,
+            mapping,
+            baseRecord,
+            resolvePath(baseMapping, mapping)
+          );
           let filtered = mapped;
           if (baseRecord.kind !== "class" && classIdentity) {
             filtered = filtered.filter((candidate) => candidate.owner === classIdentity.symbol);
@@ -1995,12 +2069,13 @@ export class MappingService {
     graph: LoadedGraph,
     sourceMapping: SourceMapping,
     targetMapping: SourceMapping,
-    record: MappingSymbolRecord
+    record: MappingSymbolRecord,
+    resolvedPath?: SourceMapping[]
   ): MappingSymbolRecord[] {
     if (sourceMapping === targetMapping) {
       return [record];
     }
-    const path = namespacePath(graph.pairs, sourceMapping, targetMapping);
+    const path = resolvedPath ?? namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       return [];
     }
@@ -2184,7 +2259,7 @@ export class MappingService {
     if (input.requestedMapping === "obfuscated") {
       memberRemapAvailable = true;
     } else {
-      const path = namespacePath(graph.pairs, input.requestedMapping, "obfuscated");
+      const path = namespacePath(graph, input.requestedMapping, "obfuscated");
       memberRemapAvailable = path != null && path.length > 1;
       if (!memberRemapAvailable) {
         degradations.push(`No mapping path from ${input.requestedMapping} to obfuscated; member remap will fail.`);
@@ -2231,6 +2306,9 @@ export class MappingService {
         version,
         priority,
         pairs: new Map(),
+        adjacency: new Map(),
+        pathCache: new Map(),
+        recordsByTarget: new Map(),
         warnings: [
           `Version ${version} is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names.`
         ]
@@ -2241,6 +2319,9 @@ export class MappingService {
       version,
       priority,
       pairs: new Map(),
+      adjacency: new Map(),
+      pathCache: new Map(),
+      recordsByTarget: new Map(),
       warnings: []
     };
 
@@ -2275,6 +2356,9 @@ export class MappingService {
       graph.warnings.push(...deferredTinyWarnings);
       graph.warnings.push("No intermediary/yarn tiny mappings were found for this version.");
     }
+
+    graph.adjacency = buildAdjacency(graph.pairs);
+    graph.recordsByTarget = buildTargetRecordIndex(graph.pairs);
 
     return graph;
   }
@@ -2428,20 +2512,25 @@ export class MappingService {
   }> {
     const warnings: string[] = [];
     const merged = new Map<PairKey, DirectionIndex>();
-    const attemptedArtifacts: string[] = [];
 
     const repos = this.config.sourceRepos;
     const intermediaryUrls: string[] = [];
     const yarnUrls: string[] = [];
 
-    for (const repo of repos) {
-      const base = repo.replace(/\/+$/, "");
+    const repoBases = repos.map((repo) => repo.replace(/\/+$/, ""));
+    const yarnCoordinatesByRepo = await Promise.all(
+      repoBases.map(async (base) => ({
+        base,
+        yarnCoordinates: await this.fetchYarnCoordinates(base, version)
+      }))
+    );
+
+    for (const { base, yarnCoordinates } of yarnCoordinatesByRepo) {
       intermediaryUrls.push(
         `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`,
         `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}.jar`
       );
 
-      const yarnCoordinates = await this.fetchYarnCoordinates(base, version);
       for (const coordinate of yarnCoordinates) {
         yarnUrls.push(
           `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}-v2.jar`,
@@ -2451,19 +2540,26 @@ export class MappingService {
     }
 
     const allUrls = [...intermediaryUrls, ...yarnUrls];
-    for (const url of allUrls) {
-      attemptedArtifacts.push(url);
-      const downloaded = await downloadToCache(url, defaultDownloadPath(this.config.cacheDir, url), {
-        fetchFn: this.fetchFn,
-        retries: this.config.fetchRetries,
-        timeoutMs: this.config.fetchTimeoutMs
-      });
-      if (!downloaded.ok || !downloaded.path) {
+    const parsedResults = await Promise.allSettled(
+      allUrls.map(async (url) => {
+        const downloaded = await downloadToCache(url, defaultDownloadPath(this.config.cacheDir, url), {
+          fetchFn: this.fetchFn,
+          retries: this.config.fetchRetries,
+          timeoutMs: this.config.fetchTimeoutMs
+        });
+        if (!downloaded.ok || !downloaded.path) {
+          return undefined;
+        }
+
+        return this.parseTinyFromJar(downloaded.path);
+      })
+    );
+
+    for (const result of parsedResults) {
+      if (result.status !== "fulfilled" || !result.value) {
         continue;
       }
-
-      const parsed = await this.parseTinyFromJar(downloaded.path);
-      for (const [key, index] of parsed.entries()) {
+      for (const [key, index] of result.value.entries()) {
         const existing = merged.get(key);
         if (!existing) {
           merged.set(key, index);
@@ -2480,7 +2576,7 @@ export class MappingService {
     return {
       pairs: merged,
       warnings,
-      mappingArtifact: attemptedArtifacts[0] ?? "maven:none"
+      mappingArtifact: allUrls[0] ?? "maven:none"
     };
   }
 

@@ -880,6 +880,9 @@ Check server performance counters, cache sizes, and latency snapshots:
 }
 ```
 
+Cache entry counts and byte accounting are maintained incrementally during `resolve-artifact`, `index-artifact`, cache hits, and eviction, so `get-runtime-metrics` remains cheap even after repeated artifact loads.
+Repeated mapping-heavy workflows such as `find-mapping`, `get-class-api-matrix`, `resolve-workspace-symbol`, `check-symbol-exists`, and `validate-mixin` also reuse hot-path resolution work to keep large batches responsive.
+
 ## Mapping Policy
 
 ### Namespace Definitions

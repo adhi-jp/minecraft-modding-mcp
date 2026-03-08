@@ -41,6 +41,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Corrected the `compare-versions` README contract to document registry results under `result.registry`.
 - Documented the new compact-response options, `summary-first` validate-mixin mode, bare-string `target` recovery guidance, and updated token-efficient examples in both READMEs.
 
+### Performance
+- `resolve-artifact`, `index-artifact`, and `get-runtime-metrics` now keep cache entry/byte accounting incrementally during ingest, reindex, cache hits, and eviction, avoiding repeated full-cache rescans after each artifact load.
+- `find-mapping`, `get-class-api-matrix`, `resolve-workspace-symbol`, `check-symbol-exists`, and `validate-mixin` now reuse hot-path mapping graph paths, class remaps, and normalization work, reducing latency for repeated namespace lookups and large Mixin validation batches.
+- Warm-cache source and mod workflows now avoid extra regex recompilation, statement-cache churn, and FIFO cache evictions across search, signature lookup, source resolution, and decompile paths.
+
 ## [2.0.0] - 2026-03-07
 
 ### Changed

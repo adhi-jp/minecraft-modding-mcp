@@ -229,7 +229,11 @@ export class ModDecompileService {
   ): Promise<{ outputDir: string; files: string[]; analysis: ModAnalysisResult }> {
     const cacheKey = modDecompileCacheKey(jarPath);
     const cached = this.decompileCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      this.decompileCache.delete(cacheKey);
+      this.decompileCache.set(cacheKey, cached);
+      return cached;
+    }
 
     log("info", "mod-decompile.start", { jarPath });
     const startedAt = Date.now();
@@ -270,9 +274,12 @@ export class ModDecompileService {
     this.decompileCache.set(cacheKey, result);
 
     // Trim cache
-    if (this.decompileCache.size > 8) {
+    while (this.decompileCache.size > 8) {
       const oldest = this.decompileCache.keys().next().value;
-      if (oldest !== undefined) this.decompileCache.delete(oldest);
+      if (oldest === undefined) {
+        break;
+      }
+      this.decompileCache.delete(oldest);
     }
 
     log("info", "mod-decompile.done", {

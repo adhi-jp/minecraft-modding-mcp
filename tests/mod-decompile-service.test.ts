@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -394,4 +394,11 @@ test("F-04: getModClassSource with no truncation params returns full content", a
   assert.equal(result.content.split("\n").length, 50);
   assert.equal(result.truncated, undefined);
   assert.equal(result.charsTruncated, undefined);
+});
+
+test("ModDecompileService refreshes cache hits before eviction so hot jars stay resident", async () => {
+  const source = await readFile("src/mod-decompile-service.ts", "utf8");
+
+  assert.match(source, /this\.decompileCache\.delete\(cacheKey\);\s*this\.decompileCache\.set\(cacheKey, cached\);/);
+  assert.match(source, /while \(this\.decompileCache\.size > 8\)/);
 });

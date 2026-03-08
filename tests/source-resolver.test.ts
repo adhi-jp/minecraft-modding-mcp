@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -230,4 +230,12 @@ test("resolveSourceTarget(targetKind=coordinate) resolves Gradle modules cache a
       process.env.GRADLE_USER_HOME = previousGradleUserHome;
     }
   }
+});
+
+test("resolveLocalCoordinateCandidates avoids nested readdirSync scans of Gradle cache directories", async () => {
+  const source = await readFile("src/source-resolver.ts", "utf8");
+  const block =
+    source.match(/function resolveLocalCoordinateCandidates\([\s\S]*?discoveredFiles = discoveredFiles\.filter/)?.[0] ?? "";
+
+  assert.doesNotMatch(block, /for \(const entry of readdirSync\(fullDir\)\)/);
 });

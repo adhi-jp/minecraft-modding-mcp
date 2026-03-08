@@ -175,6 +175,29 @@ export type AccessWidenerValidationResult = {
   warnings: string[];
 };
 
+const TOOL_RESOLUTION_PATHS: ResolutionPath[] = [
+  "target-mapping-failed",
+  "member-remap-failed",
+  "source-signature-unavailable"
+];
+const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
+const CONFIG_WARNING_RE = /(?:version|gradle|jar\b|properties|project)/i;
+const PARSE_WARNING_RE = /(?:could not parse|parse\s+warning|missing method attribute)/i;
+
+function classifyStructuredWarning(message: string): StructuredWarning {
+  return {
+    severity: MAPPING_WARNING_RE.test(message) ? "warning" : PARSE_WARNING_RE.test(message) ? "warning" : "info",
+    message,
+    category: MAPPING_WARNING_RE.test(message)
+      ? "mapping"
+      : PARSE_WARNING_RE.test(message)
+        ? "parse"
+        : CONFIG_WARNING_RE.test(message)
+          ? "configuration"
+          : "validation"
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Levenshtein distance                                               */
 /* ------------------------------------------------------------------ */
@@ -206,9 +229,14 @@ export function levenshteinDistance(a: string, b: string): number {
 }
 
 export function suggestSimilar(name: string, candidates: string[], maxDistance = 3, maxResults = 3): string[] {
+  const normalizedName = name.toLowerCase();
   const scored: Array<{ candidate: string; distance: number }> = [];
   for (const candidate of candidates) {
-    const distance = levenshteinDistance(name.toLowerCase(), candidate.toLowerCase());
+    const normalizedCandidate = candidate.toLowerCase();
+    if (Math.abs(normalizedName.length - normalizedCandidate.length) > maxDistance) {
+      continue;
+    }
+    const distance = levenshteinDistance(normalizedName, normalizedCandidate);
     if (distance <= maxDistance && distance > 0) {
       scored.push({ candidate, distance });
     }
@@ -761,22 +789,24 @@ export function validateParsedMixin(
   }
 
   // Contradiction detection: if some same-annotation members resolved OK but parse failed for others, note it
-  const resolvedAnnotations = new Set(resolvedMembers.filter((m) => m.status === "resolved").map((m) => m.annotation));
+  const resolvedAnnotations = new Set<string>();
+  for (const member of resolvedMembers) {
+    if (member.status === "resolved") {
+      resolvedAnnotations.add(member.annotation);
+    }
+  }
+
+  let errorCount = 0;
+  let warningCount = 0;
+  let definiteErrors = 0;
+  let uncertainErrors = 0;
+  let resolutionErrors = 0;
+  let parseWarningCount = 0;
   for (const issue of issues) {
     if (issue.category === "parse" && resolvedAnnotations.has(issue.annotation)) {
       issue.message += " (Note: other members with the same annotation resolved successfully.)";
     }
-  }
 
-  const errorCount = issues.filter((i) => i.severity === "error").length;
-  const warningCount = issues.filter((i) => i.severity === "warning").length;
-  const definiteErrors = issues.filter((i) => i.severity === "error" && i.confidence !== "uncertain").length;
-  const uncertainErrors = issues.filter((i) => i.severity === "error" && i.confidence === "uncertain").length;
-  const resolutionErrors = issues.filter((i) => i.resolutionPath != null).length;
-  const parseWarningCount = issues.filter((i) => i.category === "parse").length;
-
-  // Assign category and issueOrigin to issues that don't have them yet
-  for (const issue of issues) {
     if (!issue.category) {
       issue.category = issue.resolutionPath ? "resolution" : "validation";
     }
@@ -784,11 +814,27 @@ export function validateParsedMixin(
       if (issue.category === "parse") {
         issue.issueOrigin = "parser_limitation";
       } else {
-        const toolPaths: ResolutionPath[] = ["target-mapping-failed", "member-remap-failed", "source-signature-unavailable"];
-        issue.issueOrigin = issue.resolutionPath && toolPaths.includes(issue.resolutionPath)
+        issue.issueOrigin = issue.resolutionPath && TOOL_RESOLUTION_PATHS.includes(issue.resolutionPath)
           ? "tool_issue"
           : "code_issue";
       }
+    }
+
+    if (issue.severity === "error") {
+      errorCount++;
+      if (issue.confidence === "uncertain") {
+        uncertainErrors++;
+      } else {
+        definiteErrors++;
+      }
+    } else {
+      warningCount++;
+    }
+    if (issue.resolutionPath != null) {
+      resolutionErrors++;
+    }
+    if (issue.category === "parse") {
+      parseWarningCount++;
     }
   }
 
@@ -876,18 +922,7 @@ export function validateParsedMixin(
     }
   }
 
-  // Build structuredWarnings — classify by severity and category
-  const MAPPING_WARNING_RE = /(?:mapping|remap|fallback|could not map)/i;
-  const CONFIG_WARNING_RE = /(?:version|gradle|jar\b|properties|project)/i;
-  const PARSE_WARNING_RE = /(?:could not parse|parse\s+warning|missing method attribute)/i;
-  const structuredWarnings: StructuredWarning[] = warnings.map((msg) => ({
-    severity: MAPPING_WARNING_RE.test(msg) ? "warning" as const : PARSE_WARNING_RE.test(msg) ? "warning" as const : "info" as const,
-    message: msg,
-    category: MAPPING_WARNING_RE.test(msg) ? "mapping" as IssueCategory
-      : PARSE_WARNING_RE.test(msg) ? "parse" as IssueCategory
-      : CONFIG_WARNING_RE.test(msg) ? "configuration" as IssueCategory
-      : "validation" as IssueCategory
-  }));
+  const structuredWarnings: StructuredWarning[] = warnings.map(classifyStructuredWarning);
 
   // Warning aggregation mode
   let aggregatedWarnings: AggregatedWarningGroup[] | undefined;

@@ -241,6 +241,103 @@ test("MappingService falls back to Maven tiny when Loom cache is unavailable", a
   assert.equal(result.provenance?.source, "maven");
 });
 
+test("MappingService fetches Maven tiny jars in parallel during fallback loading", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-parallel-"));
+  const config = buildTestConfig(root);
+
+  const tinyJarPath = join(root, "parallel-tiny.jar");
+  await createJar(tinyJarPath, {
+    "mappings/mappings.tiny": `${TEST_TINY}\n`
+  });
+  const tinyJarBuffer = await readFile(tinyJarPath);
+
+  let activeJarFetches = 0;
+  let maxActiveJarFetches = 0;
+
+  const fetchStub = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+      return new Response(
+        [
+          "<metadata>",
+          "<versioning>",
+          "<versions>",
+          "<version>1.21.10+build.1</version>",
+          "</versions>",
+          "</versioning>",
+          "</metadata>"
+        ].join(""),
+        { status: 200 }
+      );
+    }
+    if (url.endsWith(".jar")) {
+      activeJarFetches += 1;
+      maxActiveJarFetches = Math.max(maxActiveJarFetches, activeJarFetches);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      activeJarFetches -= 1;
+      return new Response(tinyJarBuffer, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: "https://example.test/versions/1.21.10.json",
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+  await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "obfuscated",
+      targetMapping: "intermediary"
+    })
+  );
+
+  assert.ok(maxActiveJarFetches > 1, `expected parallel jar fetches, got ${maxActiveJarFetches}`);
+});
+
+test("MappingService namespacePath uses graph adjacency instead of scanning pair keys", async () => {
+  const source = await readFile("src/mapping-service.ts", "utf8");
+  const block =
+    source.match(/function namespacePath\([\s\S]*?return path;/)?.[0] ?? "";
+
+  assert.match(block, /adjacency/);
+  assert.doesNotMatch(block, /for \(const key of pairs\.keys\(\)\)/);
+});
+
+test("MappingService getClassApiMatrix caches namespace paths per mapping pair", async () => {
+  const source = await readFile("src/mapping-service.ts", "utf8");
+  const block =
+    source.match(/async getClassApiMatrix\([\s\S]*?return \{/)?.[0] ?? "";
+
+  assert.match(block, /const pathCache = new Map</);
+});
+
+test("MappingService trims hot-path string allocations in normalization helpers", async () => {
+  const source = await readFile("src/mapping-service.ts", "utf8");
+  const normalizedBlock =
+    source.match(/function normalizedVariants\(symbol: string\): string\[\] \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const pairBlock =
+    source.match(
+      /function parsePairKey\(key: PairKey\): \{ sourceMapping: SourceMapping; targetMapping: SourceMapping \} \{[\s\S]*?\n\}/
+    )?.[0] ?? "";
+
+  assert.doesNotMatch(normalizedBlock, /new Set/);
+  assert.match(normalizedBlock, /symbol\.includes\(["']\/["']\)/);
+  assert.match(normalizedBlock, /symbol\.includes\(["']\.["']\)/);
+  assert.doesNotMatch(pairBlock, /split\("->"\)/);
+  assert.match(pairBlock, /indexOf\("->"\)/);
+});
+
 test("MappingService supports sourcePriority override over config default", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-priority-"));

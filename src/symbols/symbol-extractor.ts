@@ -8,13 +8,14 @@ export interface ExtractedSymbol {
 const CLASS_DECLARATION = /^(?:\s*@[\w.]+\s+)*(?:\s*(?:public|private|protected|abstract|final|sealed|non-sealed|static)\s+)*\s*(class|interface|enum|record)\s+([A-Za-z_$][\w$]*)/;
 const METHOD_DECLARATION = /^(?:\s*@[\w.]+\s+)*[^{;]*?\b([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?:\{|;)/;
 const FIELD_DECLARATION = /^(?:\s*@[\w.]+\s+)*[^\s][\w<>\[\],.?]+\s+([A-Za-z_$][\w$]*)\s*(?:=|;|,)/;
+const NOISE_TOKENS = new Set(["if", "for", "while", "switch", "catch", "return", "new", "throw"]);
 
 function normalizeLine(line: string): string {
   return line.replace(/\s+/g, " ").trim();
 }
 
 function isNoiseToken(token: string): boolean {
-  return new Set(["if", "for", "while", "switch", "catch", "return", "new", "throw"]).has(token);
+  return NOISE_TOKENS.has(token);
 }
 
 function lineIndexToLine(lineNo: number): number {
@@ -24,6 +25,7 @@ function lineIndexToLine(lineNo: number): number {
 export function extractSymbolsFromSource(filePath: string, content: string): Array<ExtractedSymbol> {
   const lines = content.split(/\r?\n/);
   const symbols: ExtractedSymbol[] = [];
+  const qualifiedName = filePath.replace(/\.java$/, "").replaceAll("/", ".");
 
   for (let index = 0; index < lines.length; index += 1) {
     const rawLine = lines[index] ?? "";
@@ -40,7 +42,7 @@ export function extractSymbolsFromSource(filePath: string, content: string): Arr
         symbols.push({
           symbolKind,
           symbolName,
-          qualifiedName: filePath.replace(/\.java$/, "").replaceAll("/", "."),
+          qualifiedName,
           line: lineIndexToLine(index)
         });
       }
@@ -54,7 +56,7 @@ export function extractSymbolsFromSource(filePath: string, content: string): Arr
         symbols.push({
           symbolKind: "method",
           symbolName,
-          qualifiedName: filePath.replace(/\.java$/, "").replaceAll("/", "."),
+          qualifiedName,
           line: lineIndexToLine(index)
         });
       }
@@ -68,7 +70,7 @@ export function extractSymbolsFromSource(filePath: string, content: string): Arr
         symbols.push({
           symbolKind: "field",
           symbolName,
-          qualifiedName: filePath.replace(/\.java$/, "").replaceAll("/", "."),
+          qualifiedName,
           line: lineIndexToLine(index)
         });
       }

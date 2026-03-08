@@ -2,6 +2,8 @@ import { readdirSync } from "node:fs";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 
+import fastGlob from "fast-glob";
+
 import { createError, ERROR_CODES } from "./errors.js";
 import type { Config, ResolvedSourceArtifact, SourceTargetInput } from "./types.js";
 import {
@@ -136,13 +138,11 @@ function resolveGradleCacheCoordinateCandidate(
 
   let discoveredFiles: string[] = [];
   try {
-    const hashes = readdirSync(baseDir);
-    for (const hashDir of hashes) {
-      const fullDir = join(baseDir, hashDir);
-      for (const entry of readdirSync(fullDir)) {
-        discoveredFiles.push(join(fullDir, entry));
-      }
-    }
+    discoveredFiles = fastGlob.sync("*/*", {
+      cwd: baseDir,
+      absolute: true,
+      onlyFiles: true
+    });
   } catch {
     return undefined;
   }

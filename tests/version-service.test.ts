@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -230,6 +230,15 @@ test("version manifest fetch is cached across list operations", async () => {
   assert.deepEqual(versionIds, ["1.21.4"]);
   assert.deepEqual(versions.releases, [{ id: "1.21.4", unobfuscated: false }]);
   assert.equal(fetchFn.calls.filter((url) => url === DEFAULT_MANIFEST_URL).length, 1);
+});
+
+test("VersionService trims version detail cache without iterative single-entry eviction", async () => {
+  const source = await readFile("src/version-service.ts", "utf8");
+  const block =
+    source.match(/private trimVersionDetailCache\(\): void \{[\s\S]*?\n  \}/)?.[0] ?? "";
+
+  assert.match(block, /const overflow = this\.versionDetailCache\.size - maxEntries/);
+  assert.doesNotMatch(block, /while \(this\.versionDetailCache\.size > maxEntries\)/);
 });
 
 test("resolveVersionMappings returns mapping URLs and reuses cached version details", async () => {

@@ -245,6 +245,20 @@ export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
 };
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
+const GLOB_REGEX_CACHE = new Map<string, RegExp>();
+const MAX_HELPER_REGEX_CACHE = 128;
+
+function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
+  if (cache.size >= MAX_HELPER_REGEX_CACHE) {
+    const oldestKey = cache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(key, regex);
+  return regex;
+}
 
 function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
   const encoded = Buffer.from(content, "utf8");
@@ -263,6 +277,106 @@ function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
   }
 
   return "";
+}
+
+function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const qualityFlag of qualityFlags) {
+    if (seen.has(qualityFlag)) {
+      continue;
+    }
+    seen.add(qualityFlag);
+    deduped.push(qualityFlag);
+  }
+  return deduped;
+}
+
+function sameStringArray(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameScopeFallback(
+  left: MixinValidationProvenance["scopeFallback"] | undefined,
+  right: MixinValidationProvenance["scopeFallback"] | undefined
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.requested === right.requested && left.applied === right.applied && left.reason === right.reason;
+}
+
+function sameResolutionTrace(
+  left: MixinValidationProvenance["resolutionTrace"] | undefined,
+  right: MixinValidationProvenance["resolutionTrace"] | undefined
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftEntry = left[index];
+    const rightEntry = right[index];
+    if (!leftEntry || !rightEntry) {
+      return false;
+    }
+    if (
+      leftEntry.target !== rightEntry.target ||
+      leftEntry.step !== rightEntry.step ||
+      leftEntry.input !== rightEntry.input ||
+      leftEntry.output !== rightEntry.output ||
+      leftEntry.success !== rightEntry.success ||
+      leftEntry.detail !== rightEntry.detail
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameMixinValidationProvenance(
+  left: MixinValidationProvenance | undefined,
+  right: MixinValidationProvenance | undefined
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.version === right.version &&
+    left.jarPath === right.jarPath &&
+    left.requestedMapping === right.requestedMapping &&
+    left.mappingApplied === right.mappingApplied &&
+    left.requestedScope === right.requestedScope &&
+    left.appliedScope === right.appliedScope &&
+    left.requestedSourcePriority === right.requestedSourcePriority &&
+    left.appliedSourcePriority === right.appliedSourcePriority &&
+    sameStringArray(left.resolutionNotes, right.resolutionNotes) &&
+    left.jarType === right.jarType &&
+    sameStringArray(left.mappingChain, right.mappingChain) &&
+    left.remapFailures === right.remapFailures &&
+    left.mappingAutoDetected === right.mappingAutoDetected &&
+    sameScopeFallback(left.scopeFallback, right.scopeFallback) &&
+    sameResolutionTrace(left.resolutionTrace, right.resolutionTrace)
+  );
 }
 
 export type SourceMode = "metadata" | "snippet" | "full";
@@ -592,6 +706,9 @@ export type ValidateMixinOutput = {
 type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
   source?: string;
   sourcePath?: string;
+  batchCaches?: {
+    classMappings: Map<string, Promise<MappingFindMappingOutput>>;
+  };
   retryState?: {
     attempted: boolean;
     initialSourcePriority: MappingSourcePriority;
@@ -630,6 +747,7 @@ interface RebuiltArtifactData {
   }>;
   indexedAt: string;
   indexDurationMs: number;
+  totalContentBytes: number;
 }
 
 const INDEX_SCHEMA_VERSION = 1;
@@ -700,10 +818,14 @@ function hasExactVersionToken(path: string, version: string): boolean {
     return false;
   }
   // Avoid prefix false-positives like "1.21.1" matching "1.21.10".
-  const pattern = new RegExp(
-    `(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`,
-    "i"
-  );
+  const cached = VERSION_TOKEN_REGEX_CACHE.get(normalizedVersion);
+  const pattern =
+    cached
+    ?? rememberCachedRegex(
+      VERSION_TOKEN_REGEX_CACHE,
+      normalizedVersion,
+      new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`, "i")
+    );
   return pattern.test(normalizedPath);
 }
 
@@ -1134,6 +1256,13 @@ function canUseIndexedSearchPath(
 }
 
 function buildGlobRegex(pattern: string): RegExp {
+  const cached = GLOB_REGEX_CACHE.get(pattern);
+  if (cached) {
+    GLOB_REGEX_CACHE.delete(pattern);
+    GLOB_REGEX_CACHE.set(pattern, cached);
+    return cached;
+  }
+
   const REGEX_META = /[-/\\^$+.()|[\]{}]/;
   let result = "";
   let i = 0;
@@ -1157,7 +1286,7 @@ function buildGlobRegex(pattern: string): RegExp {
       i += 1;
     }
   }
-  return new RegExp(`^${result}$`);
+  return rememberCachedRegex(GLOB_REGEX_CACHE, pattern, new RegExp(`^${result}$`));
 }
 
 function globToSqlLike(pattern: string): string {
@@ -1367,6 +1496,15 @@ export class SourceService {
   private readonly versionDiffService: VersionDiffService;
   private readonly modDecompileService: ModDecompileService;
   private readonly modSearchService: ModSearchService;
+  private cacheMetricsState: {
+    entries: number;
+    totalContentBytes: number;
+    lru: Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
+  } = {
+    entries: 0,
+    totalContentBytes: 0,
+    lru: []
+  };
 
   constructor(explicitConfig?: Config, metrics = new RuntimeMetrics()) {
     this.config = explicitConfig ?? loadConfig();
@@ -1813,7 +1951,7 @@ export class SourceService {
           );
         }
       }
-      resolved.qualityFlags = [...new Set(resolved.qualityFlags)];
+      resolved.qualityFlags = dedupeQualityFlags(resolved.qualityFlags);
       await this.ingestIfNeeded(resolved);
 
       let sampleEntries: string[] | undefined;
@@ -3140,7 +3278,7 @@ export class SourceService {
       activeOrigin = fallbackResolved.origin;
       activeMappingApplied = fallbackResolved.mappingApplied ?? activeMappingApplied;
       activeProvenance = fallbackResolved.provenance ?? activeProvenance;
-      activeQualityFlags = [...new Set([...(fallbackResolved.qualityFlags ?? []), "binary-fallback"])];
+      activeQualityFlags = dedupeQualityFlags([...(fallbackResolved.qualityFlags ?? []), "binary-fallback"]);
       activeSourceJarPath = fallbackResolved.sourceJarPath;
       warnings.push(
         `Falling back to binary artifact "${normalizedBinaryJarPath}" because source coverage for "${className}" was incomplete.`
@@ -3706,6 +3844,53 @@ export class SourceService {
     );
   }
 
+  private findValidateMixinClassMapping(input: {
+    version: string;
+    className: string;
+    sourceMapping: SourceMapping;
+    targetMapping: SourceMapping;
+    sourcePriority: MappingSourcePriority;
+    batchCaches?: ValidateMixinSingleInput["batchCaches"];
+  }): Promise<MappingFindMappingOutput> {
+    const cache = input.batchCaches?.classMappings;
+    if (!cache) {
+      return this.mappingService.findMapping({
+        version: input.version,
+        kind: "class",
+        name: input.className,
+        sourceMapping: input.sourceMapping,
+        targetMapping: input.targetMapping,
+        sourcePriority: input.sourcePriority
+      });
+    }
+
+    const cacheKey = [
+      input.version,
+      input.className,
+      input.sourceMapping,
+      input.targetMapping,
+      input.sourcePriority
+    ].join("\0");
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = this.mappingService.findMapping({
+      version: input.version,
+      kind: "class",
+      name: input.className,
+      sourceMapping: input.sourceMapping,
+      targetMapping: input.targetMapping,
+      sourcePriority: input.sourcePriority
+    }).catch((error) => {
+      cache.delete(cacheKey);
+      throw error;
+    });
+    cache.set(cacheKey, pending);
+    return pending;
+  }
+
   private async validateMixinSingle(input: ValidateMixinSingleInput): Promise<MixinValidationResult> {
     let version = input.version.trim();
     const requestedScope = normalizeRequestedArtifactScope(input.scope);
@@ -3879,13 +4064,13 @@ export class SourceService {
 
       if (requestedMapping !== signatureLookupMapping) {
         try {
-          const mapped = await this.mappingService.findMapping({
+          const mapped = await this.findValidateMixinClassMapping({
             version,
-            kind: "class",
-            name: resolvedClassName,
+            className: resolvedClassName,
             sourceMapping: requestedMapping,
             targetMapping: signatureLookupMapping,
-            sourcePriority: currentSourcePriority
+            sourcePriority: currentSourcePriority,
+            batchCaches: input.batchCaches
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             obfuscatedName = mapped.resolvedSymbol.name;
@@ -4290,13 +4475,17 @@ export class SourceService {
     const results: ValidateMixinBatchResult[] = [];
     const batchWarningMode = input.warningMode ?? "aggregated";
     const { input: _discardedInput, ...sharedInput } = input;
+    const batchCaches = {
+      classMappings: new Map<string, Promise<MappingFindMappingOutput>>()
+    };
 
     for (const entry of entries) {
       try {
         const singleResult = await this.validateMixinSingle({
           ...sharedInput,
           sourcePath: entry.sourcePath,
-          warningMode: batchWarningMode
+          warningMode: batchWarningMode,
+          batchCaches
         });
         results.push({
           source: entry.source,
@@ -4324,7 +4513,7 @@ export class SourceService {
       .filter((entry): entry is string[] => entry != null);
     const canHoistWarnings = warningCandidates.length === 0
       ? true
-      : warningCandidates.every((entry) => JSON.stringify(entry) === JSON.stringify(warningCandidates[0]));
+      : warningCandidates.every((entry) => sameStringArray(entry, warningCandidates[0]));
 
     if (input.reportMode === "summary-first") {
       nextOutput = {
@@ -4434,7 +4623,7 @@ export class SourceService {
       .filter((entry): entry is MixinValidationProvenance => entry != null);
     const provenance = provenanceCandidates.length === 0
       ? undefined
-      : provenanceCandidates.every((entry) => JSON.stringify(entry) === JSON.stringify(provenanceCandidates[0]))
+      : provenanceCandidates.every((entry) => sameMixinValidationProvenance(entry, provenanceCandidates[0]))
         ? provenanceCandidates[0]
         : undefined;
     const toolHealth = results.find((entry) => entry.result?.toolHealth)?.result?.toolHealth;
@@ -4857,17 +5046,15 @@ export class SourceService {
     this.metrics.recordSearchDbRoundtrip();
     this.metrics.recordSearchRowsScanned(candidates.length);
     const result: IndexedSymbolHit[] = [];
+    const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
 
     for (const symbol of candidates) {
       if (!checkPackagePrefix(symbol.filePath, scope?.packagePrefix)) {
         continue;
       }
 
-      if (scope?.fileGlob) {
-        const glob = buildGlobRegex(normalizePathStyle(scope.fileGlob));
-        if (!glob.test(symbol.filePath)) {
-          continue;
-        }
+      if (glob && !glob.test(symbol.filePath)) {
+        continue;
       }
 
       if (!isSymbolKind(symbol.symbolKind)) {
@@ -4983,31 +5170,19 @@ export class SourceService {
       candidates.add(`${classPath.slice(0, innerIndex)}.java`);
     }
 
-    for (const candidate of candidates) {
-      const row = this.filesRepo.getFileContent(artifactId, candidate);
-      if (row) {
-        return row.filePath;
-      }
-    }
-
     const simpleName = normalizedClassName.split(/[.$]/).at(-1);
     if (!simpleName) {
       return undefined;
     }
-    const classPathBySymbol = this.symbolsRepo.findBestClassFilePath(
+    const lastSlash = classPath.lastIndexOf("/");
+    const expectedPrefix = lastSlash < 0 ? "" : classPath.slice(0, lastSlash + 1);
+    return this.filesRepo.findBestClassLookupPath(
       artifactId,
+      [...candidates],
       normalizedClassName,
-      simpleName
+      simpleName,
+      expectedPrefix
     );
-    if (classPathBySymbol && isPackageCompatible(classPathBySymbol, classPath)) {
-      return classPathBySymbol;
-    }
-
-    const byName = this.filesRepo.findFirstFilePathByName(artifactId, `${simpleName}.java`);
-    if (byName && isPackageCompatible(byName, classPath)) {
-      return byName;
-    }
-    return undefined;
   }
 
   private async resolveBinaryFallbackArtifact(input: {
@@ -5035,9 +5210,11 @@ export class SourceService {
       fallbackResolved.requestedMapping = input.requestedMapping;
       fallbackResolved.mappingApplied = input.mappingApplied;
       fallbackResolved.provenance = input.provenance;
-      fallbackResolved.qualityFlags = [
-        ...new Set([...(fallbackResolved.qualityFlags ?? []), ...input.qualityFlags, "binary-fallback"])
-      ];
+      fallbackResolved.qualityFlags = dedupeQualityFlags([
+        ...(fallbackResolved.qualityFlags ?? []),
+        ...input.qualityFlags,
+        "binary-fallback"
+      ]);
       await this.ingestIfNeeded(fallbackResolved);
       return fallbackResolved;
     } catch {
@@ -5492,6 +5669,7 @@ export class SourceService {
       });
     });
     tx();
+    this.upsertCacheMetrics(resolved.artifactId, rebuilt.totalContentBytes, timestamp);
 
     log("info", "index.rebuild.done", {
       artifactId: resolved.artifactId,
@@ -5578,7 +5756,8 @@ export class SourceService {
       files,
       symbols,
       indexedAt: new Date().toISOString(),
-      indexDurationMs: Date.now() - indexStartedAt
+      indexDurationMs: Date.now() - indexStartedAt,
+      totalContentBytes: files.reduce((sum, file) => sum + file.contentBytes, 0)
     };
   }
 
@@ -5623,8 +5802,9 @@ export class SourceService {
 
     if (existing && reason === "already_current") {
       this.metrics.recordArtifactCacheHit();
-      this.artifactsRepo.touchArtifact(resolved.artifactId, new Date().toISOString());
-      this.refreshCacheMetrics();
+      const touchedAt = new Date().toISOString();
+      this.artifactsRepo.touchArtifact(resolved.artifactId, touchedAt);
+      this.touchCacheMetrics(resolved.artifactId, touchedAt);
       return;
     }
 
@@ -5640,7 +5820,6 @@ export class SourceService {
       reason === "already_current" ? "missing_meta" : reason
     );
     this.enforceCacheLimits();
-    this.refreshCacheMetrics();
   }
 
   private async loadFromSourceJar(sourceJarPath: string): Promise<IndexedFileRecord[]> {
@@ -5662,23 +5841,24 @@ export class SourceService {
   }
 
   private enforceCacheLimits(): void {
-    let artifactCount = this.artifactsRepo.countArtifacts();
-    let totalBytes = this.artifactsRepo.totalContentBytes();
+    let artifactCount = this.cacheMetricsState.entries;
+    let totalBytes = this.cacheMetricsState.totalContentBytes;
     if (artifactCount <= this.config.maxArtifacts && totalBytes <= this.config.maxCacheBytes) {
       return;
     }
 
-    const candidates = this.artifactsRepo.listArtifactsByLruWithContentBytes(Math.max(artifactCount, 1));
+    const candidates = [...this.cacheMetricsState.lru];
     for (const candidate of candidates) {
       const shouldEvict = artifactCount > this.config.maxArtifacts || totalBytes > this.config.maxCacheBytes;
       if (!shouldEvict || artifactCount <= 1) {
-        return;
+        break;
       }
 
       const artifactCountBefore = artifactCount;
       const totalBytesBefore = totalBytes;
       this.filesRepo.deleteFilesForArtifact(candidate.artifactId);
       this.artifactsRepo.deleteArtifact(candidate.artifactId);
+      this.removeCacheMetrics(candidate.artifactId, false);
       artifactCount = Math.max(0, artifactCount - 1);
       totalBytes = Math.max(0, totalBytes - candidate.totalContentBytes);
       this.metrics.recordCacheEviction();
@@ -5689,6 +5869,8 @@ export class SourceService {
         artifactBytes: candidate.totalContentBytes
       });
     }
+
+    this.publishCacheMetrics();
   }
 
   private refreshCacheMetrics(): void {
@@ -5697,12 +5879,99 @@ export class SourceService {
     const lruAccounting = this.artifactsRepo
       .listArtifactsByLruWithContentBytes(Math.max(cacheEntries, 1))
       .map((row) => ({
+        artifactId: row.artifactId,
+        totalContentBytes: row.totalContentBytes,
+        updatedAt: row.updatedAt
+      }));
+    this.cacheMetricsState = {
+      entries: cacheEntries,
+      totalContentBytes,
+      lru: lruAccounting
+    };
+    this.publishCacheMetrics();
+  }
+
+  private touchCacheMetrics(artifactId: string, updatedAt: string): void {
+    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
+    if (existingIndex < 0) {
+      this.refreshCacheMetrics();
+      return;
+    }
+
+    const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
+    if (!existing) {
+      this.refreshCacheMetrics();
+      return;
+    }
+
+    existing.updatedAt = updatedAt;
+    this.cacheMetricsState.lru.push(existing);
+    this.publishCacheMetrics();
+  }
+
+  private upsertCacheMetrics(artifactId: string, totalContentBytes: number, updatedAt: string): void {
+    const normalizedBytes = Math.max(0, Math.trunc(totalContentBytes));
+    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
+    if (existingIndex >= 0) {
+      const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
+      if (!existing) {
+        this.refreshCacheMetrics();
+        return;
+      }
+
+      this.cacheMetricsState.totalContentBytes = Math.max(
+        0,
+        this.cacheMetricsState.totalContentBytes - existing.totalContentBytes + normalizedBytes
+      );
+      existing.totalContentBytes = normalizedBytes;
+      existing.updatedAt = updatedAt;
+      this.cacheMetricsState.lru.push(existing);
+    } else {
+      this.cacheMetricsState.entries += 1;
+      this.cacheMetricsState.totalContentBytes += normalizedBytes;
+      this.cacheMetricsState.lru.push({
+        artifactId,
+        totalContentBytes: normalizedBytes,
+        updatedAt
+      });
+    }
+
+    this.cacheMetricsState.entries = this.cacheMetricsState.lru.length;
+    this.publishCacheMetrics();
+  }
+
+  private removeCacheMetrics(artifactId: string, publish = true): void {
+    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
+    if (existingIndex < 0) {
+      this.refreshCacheMetrics();
+      return;
+    }
+
+    const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
+    if (!existing) {
+      this.refreshCacheMetrics();
+      return;
+    }
+
+    this.cacheMetricsState.entries = this.cacheMetricsState.lru.length;
+    this.cacheMetricsState.totalContentBytes = Math.max(
+      0,
+      this.cacheMetricsState.totalContentBytes - existing.totalContentBytes
+    );
+    if (publish) {
+      this.publishCacheMetrics();
+    }
+  }
+
+  private publishCacheMetrics(): void {
+    this.metrics.setCacheEntries(this.cacheMetricsState.entries);
+    this.metrics.setCacheTotalContentBytes(this.cacheMetricsState.totalContentBytes);
+    this.metrics.setCacheArtifactByteAccounting(
+      this.cacheMetricsState.lru.map((row) => ({
         artifact_id: row.artifactId,
         content_bytes: row.totalContentBytes,
         updated_at: row.updatedAt
-      }));
-    this.metrics.setCacheEntries(cacheEntries);
-    this.metrics.setCacheTotalContentBytes(totalContentBytes);
-    this.metrics.setCacheArtifactByteAccounting(lruAccounting);
+      }))
+    );
   }
 }
