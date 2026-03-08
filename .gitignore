@@ -46,3 +46,4 @@ coverage/
 # Development artifacts
 .plans/
 .reference/
+docs/plans/
