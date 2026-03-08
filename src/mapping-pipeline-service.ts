@@ -62,9 +62,17 @@ export function applyMappingPipeline(input: MappingPipelineInput): MappingPipeli
         requestedMapping: input.requestedMapping,
         target: input.target,
         origin: input.resolved.origin,
+        artifactOrigin: input.resolved.origin,
         binaryJarPath: input.resolved.binaryJarPath,
         sourceJarPath: input.resolved.sourceJarPath,
-        nextAction: "Provide a source-backed artifact (source jar) or use mapping=obfuscated."
+        nextAction: "Provide a source-backed artifact (source jar) or use mapping=obfuscated.",
+        suggestedCall: {
+          tool: "resolve-artifact",
+          params: {
+            target: input.target,
+            mapping: "obfuscated"
+          }
+        }
       }
     });
   }

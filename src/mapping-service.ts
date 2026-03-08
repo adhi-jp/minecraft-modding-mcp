@@ -134,6 +134,7 @@ export type FindMappingInput = {
   name: string;
   owner?: string;
   descriptor?: string;
+  signatureMode?: "exact" | "name-only";
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -1335,7 +1336,7 @@ export class MappingService {
       });
     }
 
-    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input);
+    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode);
 
     const sourceMapping = input.sourceMapping;
     const targetMapping = input.targetMapping;

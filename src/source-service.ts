@@ -1863,6 +1863,7 @@ export class SourceService {
             message: caughtError.message,
             details: {
               ...(caughtError.details ?? {}),
+              artifactOrigin: resolved.origin,
               searchedPaths: versionSourceDiscovery?.searchedPaths ?? [],
               candidateArtifacts:
                 versionSourceDiscovery?.candidateArtifacts ?? resolved.adjacentSourceCandidates ?? [],
@@ -5444,16 +5445,33 @@ export class SourceService {
       };
     }
     try {
-      const mapped = await this.mappingService.findMapping({
-        version,
-        kind,
-        name,
-        owner: ownerInSourceMapping,
-        descriptor,
-        sourceMapping: mapping,
-        targetMapping: "obfuscated",
-        sourcePriority
-      });
+      const canResolveMethodExactly =
+        kind === "method" &&
+        descriptor &&
+        "resolveMethodMappingExact" in this.mappingService &&
+        typeof this.mappingService.resolveMethodMappingExact === "function";
+      const mapped = canResolveMethodExactly
+        ? await this.mappingService.resolveMethodMappingExact({
+            version,
+            owner: ownerInSourceMapping,
+            name,
+            descriptor,
+            sourceMapping: mapping,
+            targetMapping: "obfuscated",
+            sourcePriority
+          })
+        : await this.mappingService.findMapping({
+            version,
+            kind,
+            name,
+            owner: ownerInSourceMapping,
+            descriptor,
+            signatureMode: kind === "method" && !descriptor ? "name-only" : undefined,
+            sourceMapping: mapping,
+            targetMapping: "obfuscated",
+            sourcePriority
+          });
+      warnings.push(...mapped.warnings);
       if (mapped.resolved && mapped.resolvedSymbol) {
         return {
           name: mapped.resolvedSymbol.name,
@@ -5461,8 +5479,10 @@ export class SourceService {
         };
       }
       warnings.push(`Could not map ${kind} "${name}" from ${mapping} to obfuscated.`);
-    } catch {
-      warnings.push(`Mapping lookup failed for ${kind} "${name}".`);
+    } catch (caughtError) {
+      warnings.push(
+        `Mapping lookup failed for ${kind} "${name}": ${caughtError instanceof Error ? caughtError.message : String(caughtError)}`
+      );
     }
     return {
       name,

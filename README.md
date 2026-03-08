@@ -194,7 +194,7 @@ Tools for comparing class/registry changes across Minecraft versions and tracing
 
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
+| `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions (`descriptor` omitted = name-only lookup) | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
 | `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?`, `includeFullDiff?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `modified`, `modified[].{key,changed,from?,to?}`, `summary`, `warnings[]` |
 | `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classes`, `registry`, `summary`, `warnings[]` |
 
@@ -230,7 +230,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 | `decompile-mod-jar` | Decompile mod JAR and optionally return one class source | `jarPath`, `className?`, `includeFiles?`, `maxFiles?` | `outputDir`, `fileCount`, `files?`, `returnedFileCount?`, `filesTruncated?`, `filesOmitted?`, `source?`, `warnings[]` |
 | `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className`, `maxLines?`, `maxChars?`, `outputFile?` | `className`, `content`, `totalLines`, `truncated?`, `charsTruncated?`, `outputFilePath?`, `warnings[]` |
 | `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
-| `remap-mod-jar` | Remap a Fabric mod JAR from intermediary to yarn/mojang names | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
+| `remap-mod-jar` | Remap a Fabric/Quilt mod JAR to yarn/mojang names; Mojang-mapped inputs are copied for `targetMapping="mojang"` | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
 
 ### Validation
 
@@ -338,6 +338,7 @@ Migration notes:
 - Replace `validate-mixin` `source` / `sourcePath` / `sourcePaths` / `mixinConfigPath` / `sourceRoot` with `input.mode` plus `input.source` / `input.path` / `input.paths[]` / `input.configPaths[]` and `sourceRoots[]`. Use `input.mode="project"` when you want to discover `*.mixins.json` automatically from a workspace root. Use `summary.processingErrors` instead of `summary.errors`.
 - `search-class-source` removed `snippetLines`, `includeDefinition`, and `includeOneHop`; responses now contain compact `hits[]` plus `nextCursor?` only, and `symbolKind` may only be used with `intent=symbol`.
 `remap-mod-jar` requires Java to be installed and only supports Fabric/Quilt mods.
+Mojang-mapped inputs can be returned as-is for `targetMapping="mojang"`. `targetMapping="yarn"` still expects an intermediary-built input jar.
 
 ## Resources
 
@@ -739,6 +740,8 @@ Remap a Fabric mod from `intermediary` to `yarn` names for easier reading:
 }
 ```
 
+If the input jar was already built with Mojang mappings, use `targetMapping: "mojang"` to get a copied output jar and a `fromMapping: "mojang"` result.
+
 ### Validation
 
 #### Validate Mixin source
@@ -911,6 +914,9 @@ Symbol query inputs use `kind` + `name` + optional `owner`/`descriptor`:
 - `intermediary` / `yarn` require a resolvable Minecraft version context (for example `target.kind=version` or a versioned coordinate).
 - for unobfuscated versions (for example 26.1+), requesting `intermediary` / `yarn` falls back to `obfuscated` with a warning.
 - `mojang` requires source-backed artifacts; decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
+
+When `trace-symbol-lifecycle` omits `descriptor`, the server resolves methods by owner+name and warns if overload ambiguity prevents a unique answer.
+For decompile-only `ERR_MAPPING_NOT_APPLIED` failures, error details include `artifactOrigin`, `nextAction`, and `suggestedCall` so clients can recover without guessing.
 
 If `find-class` or `get-class-source` returns no hit on an `obfuscated` artifact for names like `net.minecraft.world.item.Item`, the tool now warns that `obfuscated` means Mojang's obfuscated runtime names and recommends retrying with `mapping="mojang"` or translating via `find-mapping`.
 

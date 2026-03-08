@@ -68,7 +68,34 @@ function scopedCachePath(
   return join(cacheDir, "remapped-mods", `${key}.jar`);
 }
 
-async function createMinimalFabricJar(path: string): Promise<void> {
+function fakeClassBytesForNamespace(namespace: "intermediary" | "mojang"): Buffer {
+  if (namespace === "mojang") {
+    return Buffer.from(
+      [
+        "CAFEBABE",
+        "Lnet/minecraft/server/MinecraftServer;",
+        "Lnet/minecraft/world/level/Level;",
+        "method_3735"
+      ].join("\0"),
+      "latin1"
+    );
+  }
+
+  return Buffer.from(
+    [
+      "CAFEBABE",
+      "Lnet/minecraft/class_1132;",
+      "Lnet/minecraft/class_1937;",
+      "method_3735"
+    ].join("\0"),
+    "latin1"
+  );
+}
+
+async function createMinimalFabricJar(
+  path: string,
+  namespace: "intermediary" | "mojang" = "intermediary"
+): Promise<void> {
   const { createJar } = await import("./helpers/zip.ts");
   await createJar(path, {
     "fabric.mod.json": JSON.stringify({
@@ -77,7 +104,7 @@ async function createMinimalFabricJar(path: string): Promise<void> {
       version: "1.0.0",
       depends: { minecraft: "1.21.1" }
     }),
-    "com/example/ExampleMod.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    "com/example/ExampleMod.class": fakeClassBytesForNamespace(namespace)
   });
 }
 
@@ -200,6 +227,58 @@ test("remapModJar accepts mojang target with auto-detected version and returns c
     assert.equal(result.mcVersion, "1.21.1");
     assert.equal(result.fromMapping, "intermediary");
     assert.equal(result.resolvedTargetNamespace, "mojang");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar detects mojang-mapped Fabric jars and returns a copied output for mojang target", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath, "mojang");
+
+    const config = makeTestConfig(tempDir);
+    const input: ModRemapInput = {
+      inputJar: jarPath,
+      targetMapping: "mojang"
+    };
+
+    const result = await remapModJar(input, config);
+    assert.equal(result.targetMapping, "mojang");
+    assert.equal(result.fromMapping, "mojang");
+    assert.equal(result.resolvedTargetNamespace, "mojang");
+    assert.ok(result.warnings.some((warning) => warning.includes("already uses mojang")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar rejects mojang-mapped Fabric jars when targetMapping=yarn", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath, "mojang");
+
+    const config = makeTestConfig(tempDir);
+
+    await assert.rejects(
+      () =>
+        remapModJar(
+          {
+            inputJar: jarPath,
+            targetMapping: "yarn"
+          },
+          config
+        ),
+      (error: unknown) => {
+        const appError = error as { code?: string; details?: Record<string, unknown> };
+        return (
+          appError.code === ERROR_CODES.REMAP_FAILED &&
+          appError.details?.fromMapping === "mojang"
+        );
+      }
+    );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { log } from "./logger.js";
 import { resolveTinyMappingFile } from "./mapping-service.js";
 import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { analyzeModJar, type ModLoader } from "./mod-analyzer.js";
 import { normalizePathForHost } from "./path-converter.js";
+import { listJarEntries, readJarEntryAsBuffer } from "./source-jar-reader.js";
 import { remapJar } from "./tiny-remapper-service.js";
 import { resolveTinyRemapperJar } from "./tiny-remapper-resolver.js";
 import type { Config } from "./types.js";
@@ -34,7 +35,7 @@ function normalizeTargetNamespace(target: ModRemapInput["targetMapping"]): "yarn
   return target === "yarn" ? "yarn" : "mojang";
 }
 
-function sourceNamespaceForLoader(loader: ModLoader): string {
+function defaultSourceNamespaceForLoader(loader: ModLoader): "intermediary" {
   if (loader === "fabric" || loader === "quilt") {
     return "intermediary";
   }
@@ -60,6 +61,104 @@ function extractMinecraftVersion(
   // Try to extract exact version from ranges like ">=1.20.4", "~1.20.4", "1.20.4", "^1.20.4"
   const match = mcDep.versionRange.match(/(\d+\.\d+(?:\.\d+)?)/);
   return match?.[1];
+}
+
+function countMatches(input: string, pattern: RegExp): number {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  let count = 0;
+  while (globalPattern.exec(input)) {
+    count += 1;
+  }
+  return count;
+}
+
+async function detectFabricLikeInputNamespace(
+  inputJar: string
+): Promise<{ fromNamespace: "intermediary" | "mojang"; warnings: string[] }> {
+  const warnings: string[] = [];
+  const classEntries = (await listJarEntries(inputJar))
+    .filter((entry) => entry.endsWith(".class"))
+    .slice(0, 24);
+
+  if (classEntries.length === 0) {
+    warnings.push("Could not inspect class entries to detect input mapping; assuming intermediary.");
+    return {
+      fromNamespace: "intermediary",
+      warnings
+    };
+  }
+
+  let mojangScore = 0;
+  let intermediaryScore = 0;
+  for (const entry of classEntries) {
+    let text = "";
+    try {
+      text = (await readJarEntryAsBuffer(inputJar, entry)).toString("latin1");
+    } catch {
+      continue;
+    }
+    mojangScore += countMatches(
+      text,
+      /net\/minecraft\/(?:advancements|client|commands|core|data|gametest|nbt|network|recipe|resources|server|sounds|stats|tags|util|world)\//g
+    ) * 3;
+    intermediaryScore += countMatches(text, /net\/minecraft\/class_\d+/g) * 3;
+    intermediaryScore += countMatches(text, /\b(?:method|field)_\d+\b/g);
+  }
+
+  if (mojangScore > intermediaryScore && mojangScore > 0) {
+    return {
+      fromNamespace: "mojang",
+      warnings
+    };
+  }
+  if (intermediaryScore > mojangScore && intermediaryScore > 0) {
+    return {
+      fromNamespace: "intermediary",
+      warnings
+    };
+  }
+
+  warnings.push(
+    "Could not confidently detect whether the input jar uses intermediary or mojang names; assuming intermediary."
+  );
+  return {
+    fromNamespace: "intermediary",
+    warnings
+  };
+}
+
+async function detectInputNamespaceForLoader(
+  inputJar: string,
+  loader: ModLoader
+): Promise<{ fromNamespace: "intermediary" | "mojang"; warnings: string[] }> {
+  if (loader === "fabric" || loader === "quilt") {
+    return detectFabricLikeInputNamespace(inputJar);
+  }
+  return {
+    fromNamespace: defaultSourceNamespaceForLoader(loader),
+    warnings: []
+  };
+}
+
+function resolveOutputJarPath(
+  input: ModRemapInput,
+  normalizedInput: string,
+  modId: string | undefined,
+  modVersion: string | undefined
+): string {
+  const defaultOutputName = `${modId ?? "mod"}-${modVersion ?? "0"}-${input.targetMapping}.jar`;
+  return input.outputJar
+    ? normalizePathForHost(input.outputJar, undefined, "outputJar")
+    : join(dirname(normalizedInput), defaultOutputName);
+}
+
+function copyJarToDestination(sourceJar: string, destinationJar: string): void {
+  if (sourceJar === destinationJar) {
+    return;
+  }
+  mkdirSync(dirname(destinationJar), { recursive: true });
+  copyFileSync(sourceJar, destinationJar);
 }
 
 function buildCacheKey(
@@ -113,7 +212,9 @@ export async function remapModJar(
     });
   }
 
-  const fromNamespace = sourceNamespaceForLoader(analysis.loader);
+  const namespaceDetection = await detectInputNamespaceForLoader(normalizedInput, analysis.loader);
+  warnings.push(...namespaceDetection.warnings);
+  const fromNamespace = namespaceDetection.fromNamespace;
 
   // 3. Determine MC version
   const mcVersion = input.mcVersion ?? extractMinecraftVersion(analysis.dependencies);
@@ -129,6 +230,13 @@ export async function remapModJar(
     });
   }
 
+  const outputJar = resolveOutputJarPath(
+    input,
+    normalizedInput,
+    analysis.modId,
+    analysis.modVersion
+  );
+
   // 4. Check cache after mapping context is known
   const cacheKey = buildCacheKey(
     normalizedInput,
@@ -141,17 +249,27 @@ export async function remapModJar(
   const cachedOutput = join(cacheDir, `${cacheKey}.jar`);
 
   if (existsSync(cachedOutput)) {
-    const outputJar = input.outputJar
-      ? normalizePathForHost(input.outputJar, undefined, "outputJar")
+    const cacheHitOutputJar = input.outputJar
+      ? outputJar
       : cachedOutput;
+    copyJarToDestination(cachedOutput, cacheHitOutputJar);
 
-    if (outputJar !== cachedOutput) {
-      const { copyFileSync } = await import("node:fs");
-      mkdirSync(dirname(outputJar), { recursive: true });
-      copyFileSync(cachedOutput, outputJar);
-    }
+    log("info", "remap.cache-hit", { inputJar: normalizedInput, outputJar: cacheHitOutputJar });
+    return {
+      outputJar: cacheHitOutputJar,
+      mcVersion,
+      fromMapping: fromNamespace,
+      targetMapping: input.targetMapping,
+      resolvedTargetNamespace,
+      durationMs: Date.now() - startedAt,
+      warnings: [...warnings, "Result served from cache."]
+    };
+  }
 
-    log("info", "remap.cache-hit", { inputJar: normalizedInput, outputJar });
+  if (fromNamespace === resolvedTargetNamespace) {
+    copyJarToDestination(normalizedInput, outputJar);
+    copyJarToDestination(normalizedInput, cachedOutput);
+    warnings.push(`Input JAR already uses ${fromNamespace} names; output is a copy of the input JAR.`);
     return {
       outputJar,
       mcVersion,
@@ -159,8 +277,24 @@ export async function remapModJar(
       targetMapping: input.targetMapping,
       resolvedTargetNamespace,
       durationMs: Date.now() - startedAt,
-      warnings: ["Result served from cache."]
+      warnings
     };
+  }
+
+  if (fromNamespace === "mojang" && resolvedTargetNamespace === "yarn") {
+    throw createError({
+      code: ERROR_CODES.REMAP_FAILED,
+      message: "Mojang-mapped Fabric/Quilt input jars cannot be remapped to yarn with the available mapping files.",
+      details: {
+        inputJar: normalizedInput,
+        mcVersion,
+        fromMapping: fromNamespace,
+        targetMapping: input.targetMapping,
+        resolvedTargetNamespace,
+        nextAction:
+          'Use targetMapping="mojang" for Mojang-mapped inputs, or rebuild the mod against intermediary mappings before requesting yarn output.'
+      }
+    });
   }
 
   // 5. Resolve tiny-remapper
@@ -179,14 +313,6 @@ export async function remapModJar(
     warnings.push(...mojangTiny.warnings);
   }
 
-  // 7. Determine output path
-  const modId = analysis.modId ?? "mod";
-  const modVersion = analysis.modVersion ?? "0";
-  const defaultOutputName = `${modId}-${modVersion}-${input.targetMapping}.jar`;
-  const outputJar = input.outputJar
-    ? normalizePathForHost(input.outputJar, undefined, "outputJar")
-    : join(dirname(normalizedInput), defaultOutputName);
-
   mkdirSync(dirname(outputJar), { recursive: true });
 
   // 8. Use temporary directory for intermediate work
@@ -196,18 +322,33 @@ export async function remapModJar(
   try {
     const tempOutput = join(tempDir, "remapped.jar");
 
-    await remapJar(tinyRemapperJar, {
-      inputJar: normalizedInput,
-      outputJar: tempOutput,
-      mappingsFile,
-      fromNamespace,
-      toNamespace,
-      timeoutMs: config.remapTimeoutMs,
-      maxMemoryMb: config.remapMaxMemoryMb
-    });
+    try {
+      await remapJar(tinyRemapperJar, {
+        inputJar: normalizedInput,
+        outputJar: tempOutput,
+        mappingsFile,
+        fromNamespace,
+        toNamespace,
+        timeoutMs: config.remapTimeoutMs,
+        maxMemoryMb: config.remapMaxMemoryMb
+      });
+    } catch (caughtError) {
+      if (isAppError(caughtError)) {
+        throw createError({
+          code: caughtError.code,
+          message: caughtError.message,
+          details: {
+            ...(caughtError.details ?? {}),
+            fromMapping: fromNamespace,
+            targetMapping: input.targetMapping,
+            resolvedTargetNamespace
+          }
+        });
+      }
+      throw caughtError;
+    }
 
     // Copy to final destination and cache
-    const { copyFileSync } = await import("node:fs");
     copyFileSync(tempOutput, outputJar);
 
     if (outputJar !== cachedOutput) {

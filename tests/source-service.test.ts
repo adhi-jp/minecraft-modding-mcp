@@ -2566,7 +2566,11 @@ test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot
           return (
             Array.isArray(details.searchedPaths) &&
             Array.isArray(details.candidateArtifacts) &&
-            typeof details.recommendedCommand === "string"
+            typeof details.recommendedCommand === "string" &&
+            details.artifactOrigin === "decompiled" &&
+            typeof details.nextAction === "string" &&
+            typeof details.suggestedCall === "object" &&
+            details.suggestedCall !== null
           );
         }
       )
@@ -3820,6 +3824,153 @@ test("SourceService traceSymbolLifecycle with non-obfuscated mapping remaps desc
   });
 
   assert.equal(result.presence.existsNow, true);
+});
+
+test("SourceService traceSymbolLifecycle uses name-only mapping when descriptor is omitted", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-name-only-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return ["1.0.0"];
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string }) {
+      assert.equal(input.fqn, "net.minecraft.server.OffMain");
+      return {
+        constructors: [],
+        fields: [],
+        methods: [
+          {
+            ownerFqn: "net.minecraft.server.OffMain",
+            name: "tickOfficial",
+            javaSignature: "public void tickOfficial()",
+            jvmDescriptor: "()V",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: {
+      kind: string;
+      name: string;
+      descriptor?: string;
+      signatureMode?: "exact" | "name-only";
+    }) {
+      if (input.kind === "class" && input.name === "net.minecraft.server.InterMain") {
+        return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.OffMain" }, warnings: [] };
+      }
+      if (
+        input.kind === "method" &&
+        input.name === "tickInter" &&
+        input.signatureMode === "name-only" &&
+        input.descriptor === undefined
+      ) {
+        return {
+          resolved: true,
+          resolvedSymbol: { name: "tickOfficial" },
+          warnings: []
+        };
+      }
+      return { resolved: false, candidates: [], warnings: [] };
+    }
+  };
+
+  const result = await (service as unknown as {
+    traceSymbolLifecycle: (input: {
+      symbol: string;
+      mapping: "intermediary";
+      fromVersion: string;
+      toVersion: string;
+    }) => Promise<{ presence: { existsNow: boolean } }>;
+  }).traceSymbolLifecycle({
+    symbol: "net.minecraft.server.InterMain.tickInter",
+    mapping: "intermediary",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.0"
+  });
+
+  assert.equal(result.presence.existsNow, true);
+});
+
+test("SourceService traceSymbolLifecycle surfaces invalid method mapping input details in warnings", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-invalid-warning-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return ["1.0.0"];
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return {
+        constructors: [],
+        fields: [],
+        methods: [],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string }) {
+      if (input.kind === "class") {
+        return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.OffMain" }, warnings: [] };
+      }
+      throw Object.assign(new Error("descriptor must be a valid JVM descriptor when kind=method."), {
+        code: ERROR_CODES.INVALID_INPUT
+      });
+    }
+  };
+
+  const result = await (service as unknown as {
+    traceSymbolLifecycle: (input: {
+      symbol: string;
+      mapping: "intermediary";
+      descriptor: string;
+      fromVersion: string;
+      toVersion: string;
+    }) => Promise<{ warnings: string[] }>;
+  }).traceSymbolLifecycle({
+    symbol: "net.minecraft.server.InterMain.tickInter",
+    mapping: "intermediary",
+    descriptor: "()broken",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.0"
+  });
+
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("descriptor must be a valid JVM descriptor"))
+  );
 });
 
 test("SourceService diffClassSignatures returns member added/removed/modified deltas", async () => {
