@@ -196,7 +196,7 @@ Minecraft バージョン間でのクラス/レジストリの変更比較と、
 | --- | --- | --- | --- |
 | `trace-symbol-lifecycle` | `Class.method` が Minecraft バージョン間でいつ存在するかを追跡 | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
 | `diff-class-signatures` | 2つのバージョン間で1つのクラスを比較しメンバーの差分を返す | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?`, `includeFullDiff?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `modified`, `modified[].{key,changed,from?,to?}`, `summary`, `warnings[]` |
-| `compare-versions` | 2つのバージョン間のクラス/レジストリの変更を比較 | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classesDiff`, `registryDiff`, `summary`, `warnings[]` |
+| `compare-versions` | 2つのバージョン間のクラス/レジストリの変更を比較 | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classes`, `registry`, `summary`, `warnings[]` |
 
 ### マッピング＆シンボル (Mapping & Symbols)
 
@@ -497,6 +497,9 @@ JSON リソースも同じ `result/error/meta` パターンに従います。テ
   }
 }
 ```
+
+レジストリ差分は `result.registry` に返ります（`registryDiff` ではありません）。
+`packageFilter` を指定した場合、`result.classes.addedCount`、`removedCount`、`unchanged` も同じフィルタ済みパッケージ集合に対する件数になります。
 
 ### マッピング＆シンボル (Mapping & Symbols)
 

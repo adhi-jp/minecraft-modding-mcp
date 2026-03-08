@@ -124,6 +124,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /\| `check-symbol-exists` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
   assert.match(readme, /\| `decompile-mod-jar` \|.*`includeFiles\?`.*`maxFiles\?`.*`returnedFileCount\?`.*`filesTruncated\?`.*`filesOmitted\?`/);
   assert.match(readme, /\| `get-registry-data` \|.*`includeData\?`.*`maxEntriesPerRegistry\?`.*`returnedEntryCount\?`.*`registryEntryCounts\?`.*`dataTruncated\?`/);
+  assert.match(readme, /\| `compare-versions` \|.*`classes`, `registry`, `summary`, `warnings\[\]` \|/);
   assert.match(readme, /`resolve-artifact` は `target: \{ kind, value \}` を受け取ります。/);
   assert.match(readme, /エラーの `suggestedCall` も、旧 `targetKind` \/ `targetValue` ではなく同じ `target` オブジェクト形状/);
   assert.match(readme, /`artifactContents` を返し/);
@@ -155,6 +156,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /`structuredContent`/);
   assert.match(readme, /`isError=true`/);
   assert.match(readme, /旧来の公開名前空間名 `official` は削除されました/);
+  assert.match(readme, /レジストリ差分は `result\.registry` に返ります（`registryDiff` ではありません）。/);
   assert.match(readme, /`maxCandidates` で `candidates\[\]` を上限付きにできます/);
   assert.match(readme, /`get-class-api-matrix` は `maxRows` を受け付けます/);
   assert.match(readme, /`decompile-mod-jar` は `includeFiles=false`/);
