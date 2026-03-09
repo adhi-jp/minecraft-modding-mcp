@@ -172,6 +172,29 @@ Pass environment variables to override defaults:
 
 ## Tool Surface
 
+### v3 Entry Tools
+
+These are the default starting points for v3 workflows. They keep the public `{ result?, error?, meta }` envelope, always return `result.summary`, and share `detail: "summary" | "standard" | "full"` plus opt-in `include[]` groups. Mutating entry tools use `executionMode: "preview" | "apply"` so preview is explicit in the public contract.
+
+| Tool | Purpose | Key Inputs | Key Outputs |
+| --- | --- | --- | --- |
+| `inspect-minecraft` | Start from a version, artifact, class, file, search query, or workspace and route to the most relevant Minecraft inspection flow | `task?`, `subject?`, `detail?`, `include?`, `limit?`, `cursor?`, `includeSnapshots?` | `result.summary`, `subject`, `artifact?`, `class?`, `search?`, `file?`, `files?` |
+| `analyze-symbol` | One entry point for symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol analysis, and API overview | `task`, `subject`, `version?`, `sourceMapping?`, `targetMapping?`, `projectPath?`, `classNameMapping?`, `detail?`, `include?` | `result.summary`, `match?`, `candidates?`, `ambiguity?`, `matrix?`, `workspace?` |
+| `compare-minecraft` | Compare version pairs, class signatures, registries, or produce a migration-oriented overview | `task?`, `subject`, `detail?`, `include?`, `sourcePriority?`, `maxClassResults?`, `maxEntriesPerRegistry?`, `includeFullDiff?` | `result.summary`, `comparison`, `classes?`, `classDiff?`, `registry?`, `migration?` |
+| `analyze-mod` | Metadata-first entry point for mod summary, decompile/search flows, class source, and safe remap previews/applies | `task`, `subject`, `query?`, `searchType?`, `targetMapping?`, `outputJar?`, `executionMode?`, `detail?`, `include?` | `result.summary`, `metadata?`, `decompile?`, `hits?`, `source?`, `operation?` |
+| `validate-project` | Project-level validation entry for workspace summaries plus direct Mixin and Access Widener validation | `task`, `subject`, `version?`, `mapping?`, `detail?`, `include?`, `sourceRoots?`, `configPaths?`, validator controls | `result.summary`, `project`, `workspace?`, `issues?`, `recovery?` |
+| `manage-cache` | User-facing cache summary, listing, verification, previewed deletion/pruning/rebuild, and explicit apply operations | `action`, `cacheKinds?`, `selector?`, `executionMode?`, `detail?`, `include?`, `limit?`, `cursor?` | `result.summary`, `stats?`, `cacheEntries?`, `operation?`, `meta.pagination.nextCursor?` |
+
+`compare-minecraft` forwards `sourcePriority` for class-diff flows, matching `diff-class-signatures`.
+`inspect-minecraft` also accepts `subject.kind="workspace"` with `focus.kind="class"` for `task="class-overview" | "class-source" | "class-members"` without requiring an explicit `artifact`; it resolves the artifact from the workspace version first.
+`compare-minecraft` summary-mode version comparisons now expose clipped class and registry samples through `meta.truncated`, including mixed `include=["classes"]` / `["registry"]` requests where the other summary-side group was clipped.
+When `registry-diff` can only load one side of detailed registry data, it returns `summary.status="partial"` plus recovery-oriented `nextActions` instead of failing the whole call.
+
+`manage-cache` list pagination returns `meta.pagination.nextCursor`.
+`selector.olderThan` accepts ISO-8601 durations such as `P30D`, `selector.status` uses the shared `healthy | partial | stale | orphaned | corrupt | in_use` vocabulary, and `jarPath` / `projectPath` matching normalizes WSL and Windows path forms before filtering.
+
+If you already know the exact low-level operation you want, the retained expert tools below are still available and remain the fastest way to do narrow follow-up work.
+
 ### Source Exploration
 
 Tools for browsing Minecraft versions, resolving source artifacts, and reading/searching decompiled source code.
@@ -332,6 +355,12 @@ Mod tool `jarPath` inputs are normalized to a canonical local `.jar` file path b
 `get-registry-data` now discards corrupt cached `registries.json` files, regenerates them when possible, and returns `ERR_REGISTRY_GENERATION_FAILED` if the regenerated snapshot is still unreadable.
 `get-registry-data` supports `includeData=false` to return registry names and counts without full entry bodies. `maxEntriesPerRegistry` caps returned entries per registry while preserving full `entryCount` and `registryEntryCounts`.
 Migration notes:
+- Start with `inspect-minecraft` for version/artifact/class/file/search workflows before dropping to `list-versions`, `resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, or `list-artifact-files`.
+- Start with `analyze-symbol` for symbol mapping/existence/lifecycle/workspace questions before using `find-mapping`, `resolve-method-mapping-exact`, `check-symbol-exists`, `trace-symbol-lifecycle`, `resolve-workspace-symbol`, or `get-class-api-matrix` directly.
+- Start with `compare-minecraft` for version-pair, class diff, registry diff, and migration-summary flows before using `compare-versions`, `diff-class-signatures`, or `get-registry-data` directly.
+- Start with `analyze-mod` for metadata-first mod inspection and safe remap previews/applies before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
+- Start with `validate-project` for workspace summaries and direct Mixin / Access Widener validation before using `validate-mixin` or `validate-access-widener` directly.
+- Start with `manage-cache` for cache inventory and safe cleanup; use `executionMode="preview"` to inspect deletion/prune/rebuild impact before `executionMode="apply"`.
 - Replace `resolve-artifact` `targetKind` + `targetValue` with `target: { kind, value }`.
 - Replace `get-class-source` / `get-class-members` top-level `artifactId` / `targetKind` / `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
 - `resolve-method-mapping-exact` is method-only and no longer accepts `kind`.

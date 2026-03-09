@@ -7,6 +7,22 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+- v3 entry tools: `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` now provide summary-first starting points for the main Minecraft, symbol, mod, validation, and cache workflows while keeping expert tools available for follow-up work.
+- The new v3 entry tools share `detail` / `include` response shaping and always return `result.summary` inside the standard `{ result?, error?, meta }` envelope, reducing default payload size and making next actions explicit.
+- `analyze-mod` now exposes `executionMode="preview" | "apply"` for safe remap planning and execution, and `manage-cache` now exposes the same preview/apply model for cache deletion, pruning, and rebuild workflows.
+
+### Documentation
+- Added v3 entry-tool usage guidance, shared response-shaping notes, and entry-tool-first migration guidance to both READMEs.
+
+### Fixed
+- `inspect-minecraft` now routes `subject.kind="workspace"` requests with `focus.kind="class" | "file" | "search"` through the matching task for `task=auto`, while preserving workspace-aware artifact resolution for focused file and search follow-up flows.
+- `inspect-minecraft task=class-overview | class-source | class-members` now accepts `subject.kind="workspace"` with `focus.kind="class"` even when the focus omits an explicit artifact reference, reusing workspace version detection to resolve artifact context first.
+- `validate-project task=project-summary` now keeps per-config Mixin validation failures inside the summary result as warnings and invalid counts instead of aborting the whole workspace run on the first bad config.
+- `compare-minecraft` now accepts `sourcePriority` for class-diff requests, and `registry-diff` degrades to `summary.status="partial"` with recovery actions when only one side of detailed registry data can be loaded.
+- `compare-minecraft task=versions` now sets `meta.truncated` with recovery actions when summary-mode class or registry samples are clipped, including mixed `include=["classes"]` / `["registry"]` requests where the other summary-side group was truncated.
+- `manage-cache` now applies `selector.olderThan`, `mapping`, `scope`, `projectPath`, and normalized `jarPath` matching, exposes real cache health states (`stale`, `orphaned`, `corrupt`, `in_use`), and advances `list` pagination through `meta.pagination.nextCursor`.
+
 ## [2.1.0] - 2026-03-08
 
 ### Added

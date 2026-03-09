@@ -24,6 +24,41 @@ import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
 import { ToolExecutionGate } from "./tool-execution-gate.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
+import { WorkspaceMappingService } from "./workspace-mapping-service.js";
+import {
+  InspectMinecraftService,
+  inspectMinecraftSchema,
+  inspectMinecraftShape
+} from "./inspect-minecraft-service.js";
+import {
+  AnalyzeSymbolService,
+  analyzeSymbolSchema,
+  analyzeSymbolShape
+} from "./analyze-symbol-service.js";
+import {
+  CompareMinecraftService,
+  compareMinecraftSchema,
+  compareMinecraftShape
+} from "./compare-minecraft-service.js";
+import {
+  AnalyzeModService,
+  analyzeModSchema,
+  analyzeModShape
+} from "./analyze-mod-service.js";
+import {
+  ValidateProjectService,
+  validateProjectSchema,
+  validateProjectShape,
+  discoverWorkspaceAccessWideners,
+  discoverWorkspaceMixins
+} from "./validate-project-service.js";
+import {
+  ManageCacheService,
+  manageCacheSchema,
+  manageCacheShape
+} from "./manage-cache-service.js";
+import { createCacheRegistry } from "./cache-registry.js";
+import { buildEntryToolMeta } from "./v3/response-contract.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
@@ -63,6 +98,10 @@ type ToolMeta = {
   tool: string;
   durationMs: number;
   warnings: string[];
+  detailApplied?: "summary" | "standard" | "full";
+  includeApplied?: string[];
+  truncated?: Record<string, unknown>;
+  pagination?: Record<string, unknown>;
 };
 
 const SOURCE_MAPPINGS = ["obfuscated", "mojang", "intermediary", "yarn"] as const;
@@ -86,6 +125,14 @@ const HEAVY_TOOL_NAMES = new Set([
   "resolve-method-mapping-exact",
   "get-class-api-matrix",
   "get-registry-data"
+]);
+const ENTRY_TOOL_NAMES = new Set([
+  "inspect-minecraft",
+  "analyze-symbol",
+  "compare-minecraft",
+  "analyze-mod",
+  "validate-project",
+  "manage-cache"
 ]);
 const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });
 
@@ -766,6 +813,51 @@ const sourceService = new Proxy({} as SourceService, {
     return typeof value === "function" ? value.bind(service) : value;
   }
 });
+const workspaceMappingService = new WorkspaceMappingService();
+const inspectMinecraftService = new InspectMinecraftService({
+  listVersions: (input) => sourceService.listVersions(input),
+  resolveArtifact: (input) => sourceService.resolveArtifact(input),
+  findClass: (input) => Promise.resolve(sourceService.findClass(input)),
+  getClassSource: (input) => sourceService.getClassSource(input),
+  getClassMembers: (input) => sourceService.getClassMembers(input),
+  searchClassSource: (input) => sourceService.searchClassSource(input),
+  getArtifactFile: (input) => sourceService.getArtifactFile(input),
+  listArtifactFiles: (input) => sourceService.listArtifactFiles(input),
+  detectProjectMinecraftVersion: (projectPath) =>
+    workspaceMappingService.detectProjectMinecraftVersion(projectPath)
+});
+const analyzeSymbolService = new AnalyzeSymbolService({
+  checkSymbolExists: (input) => sourceService.checkSymbolExists(input),
+  findMapping: (input) => sourceService.findMapping(input),
+  resolveMethodMappingExact: (input) => sourceService.resolveMethodMappingExact(input),
+  traceSymbolLifecycle: (input) => sourceService.traceSymbolLifecycle(input),
+  resolveWorkspaceSymbol: (input) => sourceService.resolveWorkspaceSymbol(input),
+  getClassApiMatrix: (input) => sourceService.getClassApiMatrix(input)
+});
+const compareMinecraftService = new CompareMinecraftService({
+  compareVersions: (input) => sourceService.compareVersions(input),
+  diffClassSignatures: (input) => sourceService.diffClassSignatures(input),
+  getRegistryData: (input) => sourceService.getRegistryData(input)
+});
+const analyzeModService = new AnalyzeModService({
+  analyzeModJar: (jarPath, options) => analyzeModJar(jarPath, options),
+  decompileModJar: (input) => sourceService.decompileModJar(input),
+  getModClassSource: (input) => sourceService.getModClassSource(input),
+  searchModSource: (input) => sourceService.searchModSource(input),
+  remapModJar: (input) => remapModJar(input, config) as unknown as Promise<Record<string, unknown> & { warnings?: string[] }>
+});
+const validateProjectService = new ValidateProjectService({
+  validateMixin: (input) => sourceService.validateMixin(input as any) as Promise<Record<string, unknown> & { warnings?: string[] }>,
+  validateAccessWidener: (input) => sourceService.validateAccessWidener(input),
+  discoverMixins: discoverWorkspaceMixins,
+  discoverAccessWideners: discoverWorkspaceAccessWideners
+});
+const manageCacheService = new ManageCacheService({
+  registry: createCacheRegistry({
+    cacheDir: config.cacheDir,
+    sqlitePath: config.sqlitePath
+  })
+});
 
 registerResources(server, sourceService);
 
@@ -1386,22 +1478,32 @@ function mapErrorToProblem(
 function splitWarnings(data: Record<string, unknown>): {
   result: Record<string, unknown>;
   warnings: string[];
+  meta: Record<string, unknown>;
 } {
   const result = { ...data };
+  const warnings: string[] = [];
   const maybeWarnings = result.warnings;
-  if (!Array.isArray(maybeWarnings)) {
-    return {
-      result,
-      warnings: []
-    };
+  if (Array.isArray(maybeWarnings)) {
+    warnings.push(...maybeWarnings.filter((entry): entry is string => typeof entry === "string"));
+    delete result.warnings;
   }
 
-  const warnings = maybeWarnings.filter((entry): entry is string => typeof entry === "string");
-  delete result.warnings;
+  let meta: Record<string, unknown> = {};
+  const maybeMeta = result.meta;
+  if (maybeMeta && typeof maybeMeta === "object" && !Array.isArray(maybeMeta)) {
+    meta = { ...(maybeMeta as Record<string, unknown>) };
+    delete result.meta;
+    const metaWarnings = meta.warnings;
+    if (Array.isArray(metaWarnings)) {
+      warnings.push(...metaWarnings.filter((entry): entry is string => typeof entry === "string"));
+      delete meta.warnings;
+    }
+  }
 
   return {
     result,
-    warnings
+    warnings: [...new Set(warnings)],
+    meta
   };
 }
 
@@ -1447,11 +1549,31 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
         : action(parsedInput)
     );
-    const { result, warnings } = splitWarnings(payload);
+    const { result, warnings, meta: resultMeta } = splitWarnings(payload);
+    const entryMeta = ENTRY_TOOL_NAMES.has(tool)
+      ? buildEntryToolMeta({
+          detail:
+            normalizedInput &&
+            typeof normalizedInput === "object" &&
+            !Array.isArray(normalizedInput) &&
+            typeof (normalizedInput as { detail?: unknown }).detail === "string"
+              ? (normalizedInput as { detail?: "summary" | "standard" | "full" }).detail ?? "summary"
+              : "summary",
+          include:
+            normalizedInput &&
+            typeof normalizedInput === "object" &&
+            !Array.isArray(normalizedInput) &&
+            Array.isArray((normalizedInput as { include?: unknown }).include)
+              ? (normalizedInput as { include?: string[] }).include
+              : undefined
+        })
+      : undefined;
 
     return objectResult({
       result,
       meta: {
+        ...(entryMeta ?? {}),
+        ...resultMeta,
         requestId,
         tool,
         durationMs: Date.now() - startedAt,
@@ -1515,6 +1637,60 @@ server.tool("list-versions",
       includeSnapshots: input.includeSnapshots,
       limit: input.limit
     }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("inspect-minecraft",
+  "High-level v3 entry tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings.",
+  inspectMinecraftShape,
+  { readOnlyHint: true },
+  async (args) => runTool("inspect-minecraft", args, inspectMinecraftSchema, async (input) =>
+    inspectMinecraftService.execute(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("analyze-symbol",
+  "High-level v3 entry tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview.",
+  analyzeSymbolShape,
+  { readOnlyHint: true },
+  async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>
+    analyzeSymbolService.execute(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("compare-minecraft",
+  "High-level v3 entry tool for version comparisons, class diffs, registry diffs, and migration overviews.",
+  compareMinecraftShape,
+  { readOnlyHint: true },
+  async (args) => runTool("compare-minecraft", args, compareMinecraftSchema, async (input) =>
+    compareMinecraftService.execute(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("analyze-mod",
+  "High-level v3 entry tool for mod metadata inspection, decompile/search flows, class source, and safe remap previews/applies.",
+  analyzeModShape,
+  { readOnlyHint: false },
+  async (args) => runTool("analyze-mod", args, analyzeModSchema, async (input) =>
+    analyzeModService.execute(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("validate-project",
+  "High-level v3 entry tool for project summary, direct mixin validation, and access widener validation.",
+  validateProjectShape,
+  { readOnlyHint: true },
+  async (args) => runTool("validate-project", args, validateProjectSchema, async (input) =>
+    validateProjectService.execute(input) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("manage-cache",
+  "High-level v3 entry tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
+  manageCacheShape,
+  { readOnlyHint: false },
+  async (args) => runTool("manage-cache", args, manageCacheSchema, async (input) =>
+    manageCacheService.execute(input) as Promise<Record<string, unknown>>
   )
 );
 

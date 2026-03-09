@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
+import { createJar } from "./helpers/zip.ts";
+
 const EXPECTED_TOOLS = [
+  "inspect-minecraft",
+  "analyze-symbol",
+  "compare-minecraft",
+  "analyze-mod",
+  "validate-project",
+  "manage-cache",
   "list-versions",
   "resolve-artifact",
   "find-class",
@@ -578,6 +588,185 @@ test("index.ts formats tool responses with result/error/meta envelope", async ()
   assert.match(source, /patch:\s*z\.array\(/);
   assert.match(helperSource, /structuredContent:\s*data/);
   assert.match(helperSource, /options\.isError \? \{ isError: true \} : \{\}/);
+});
+
+test("analyze-mod remap preview returns an operation block without mutating", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const root = await mkdtemp(join(tmpdir(), "analyze-mod-tool-"));
+  const jarPath = join(root, "example.jar");
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "example",
+      version: "1.0.0",
+      name: "Example",
+      depends: {
+        minecraft: "1.21.10"
+      }
+    }, null, 2)
+  });
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "analyze-mod",
+        arguments: {
+          task: "remap",
+          subject: {
+            kind: "jar",
+            jarPath
+          },
+          targetMapping: "mojang",
+          executionMode: "preview"
+        }
+      }
+    },
+    {}
+  ) as {
+    structuredContent?: {
+      result?: {
+        summary?: { status?: string };
+        operation?: { executionMode?: string; targetMapping?: string };
+      };
+    };
+  };
+
+  assert.equal(result.structuredContent?.result?.summary?.status, "unchanged");
+  assert.equal(result.structuredContent?.result?.operation?.executionMode, "preview");
+  assert.equal(result.structuredContent?.result?.operation?.targetMapping, "mojang");
+});
+
+test("manage-cache summary normalizes apply to preview at the public contract", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "manage-cache",
+        arguments: {
+          action: "summary",
+          cacheKinds: ["downloads"],
+          executionMode: "apply",
+          include: ["preview", "warnings"]
+        }
+      }
+    },
+    {}
+  ) as {
+    structuredContent?: {
+      meta?: {
+        detailApplied?: string;
+        includeApplied?: string[];
+      };
+      result?: {
+        operation?: { executionMode?: string };
+      };
+    };
+  };
+
+  assert.equal(result.structuredContent?.meta?.detailApplied, "summary");
+  assert.deepEqual(result.structuredContent?.meta?.includeApplied, ["warnings", "preview"]);
+  assert.equal(result.structuredContent?.result?.operation?.executionMode, "preview");
+});
+
+test("analyze-symbol rejects api-overview requests that include owner or descriptor selectors", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "analyze-symbol",
+        arguments: {
+          task: "api-overview",
+          version: "1.21.10",
+          subject: {
+            kind: "class",
+            name: "net.minecraft.world.level.block.Blocks",
+            owner: "net.minecraft.world.level.block.Blocks"
+          }
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.ok(
+    result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "subject.owner")
+  );
+});
+
+test("validate-project rejects top-level configPaths for direct access-widener validation", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
+  assert.ok(handler);
+
+  const result = await handler!(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "validate-project",
+        arguments: {
+          task: "access-widener",
+          version: "1.21.10",
+          configPaths: ["example.mixins.json"],
+          subject: {
+            kind: "access-widener",
+            input: {
+              mode: "inline",
+              content: "accessWidener v2 named"
+            }
+          }
+        }
+      }
+    },
+    {}
+  ) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.ok(
+    result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "configPaths")
+  );
 });
 
 test("index.ts validates includeKinds values instead of silently ignoring invalid kinds", async () => {

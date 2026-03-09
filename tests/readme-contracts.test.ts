@@ -13,6 +13,20 @@ test("README documents analyze-mod-jar inputs that match implementation", async 
 test("README documents source resolution options and source-mode behavior", async () => {
   const readme = await readFile("README.md", "utf8");
 
+  assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
+  assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
+  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
+  assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
+  assert.match(readme, /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `detail\?`, `include\?`, `sourceRoots\?`, `configPaths\?`/);
+  assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
+  assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
+  assert.match(readme, /always return `result\.summary`/);
+  assert.match(readme, /share `detail: "summary" \| "standard" \| "full"` plus opt-in `include\[\]` groups/);
+  assert.match(readme, /`executionMode: "preview" \| "apply"`/);
+  assert.match(readme, /Start with `inspect-minecraft`/);
+  assert.match(readme, /Start with `manage-cache`/);
+  assert.match(readme, /`registry-diff` can only load one side of detailed registry data, it returns `summary.status="partial"`/);
+  assert.match(readme, /`selector\.olderThan` accepts ISO-8601 durations such as `P30D`/);
   assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
     readme,
@@ -93,6 +107,20 @@ test("README documents source resolution options and source-mode behavior", asyn
 test("Japanese README documents the current public contract", async () => {
   const readme = await readFile("docs/README-ja.md", "utf8");
 
+  assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
+  assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
+  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
+  assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
+  assert.match(readme, /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `detail\?`, `include\?`, `sourceRoots\?`, `configPaths\?`/);
+  assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
+  assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
+  assert.match(readme, /常に `result\.summary` を返します/);
+  assert.match(readme, /`detail: "summary" \| "standard" \| "full"` と opt-in の `include\[\]` を共有/);
+  assert.match(readme, /`executionMode: "preview" \| "apply"`/);
+  assert.match(readme, /まず `inspect-minecraft` を使い/);
+  assert.match(readme, /まず `manage-cache` を使い/);
+  assert.match(readme, /`registry-diff` で detailed registry data を片側しか読めない場合でも、ツール全体を失敗させず `summary.status="partial"`/);
+  assert.match(readme, /`selector\.olderThan` は `P30D` のような ISO-8601 duration を受け付け/);
   assert.match(readme, /4つの命名空間（`obfuscated`、`mojang`、`intermediary`、`yarn`）/);
   assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
   assert.match(
