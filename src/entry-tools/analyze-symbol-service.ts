@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES } from "../errors.js";
 import type {
   CheckSymbolExistsOutput,
   FindMappingOutput,
@@ -8,14 +8,14 @@ import type {
   ResolveMethodMappingExactOutput,
   ResolveWorkspaceSymbolOutput,
   TraceSymbolLifecycleOutput
-} from "./source-service.js";
-import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./v3/entry-tool-schema.js";
+} from "../source-service.js";
+import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolResult,
   type DetailLevel,
   type Summary
-} from "./v3/response-contract.js";
-import { resolveDetail, resolveInclude } from "./v3/request-normalizers.js";
+} from "./response-contract.js";
+import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "candidates", "matrix", "workspace", "timings"] as const;

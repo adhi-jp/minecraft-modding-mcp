@@ -4,21 +4,21 @@ import {
   type CacheRegistry,
   type CacheSelector,
   PUBLIC_CACHE_KINDS
-} from "./cache-registry.js";
-import { createError, ERROR_CODES } from "./errors.js";
+} from "../cache-registry.js";
+import { createError, ERROR_CODES } from "../errors.js";
 import {
   buildIncludeSchema,
   detailSchema,
   executionModeSchema,
   positiveIntSchema
-} from "./v3/entry-tool-schema.js";
-import { buildEntryToolResult } from "./v3/response-contract.js";
+} from "./entry-tool-schema.js";
+import { buildEntryToolResult } from "./response-contract.js";
 import {
   normalizeReadOnlyExecutionMode,
   requireNonEmptyObject,
   resolveDetail,
   resolveInclude
-} from "./v3/request-normalizers.js";
+} from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "cacheEntries", "paths", "owners", "health", "preview", "timings"] as const;

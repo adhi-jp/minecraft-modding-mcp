@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { normalizePathForHost } from "./path-converter.js";
-import type { AnalyzeModOptions, ModAnalysisResult } from "./mod-analyzer.js";
-import { createError, ERROR_CODES } from "./errors.js";
+import { normalizePathForHost } from "../path-converter.js";
+import type { AnalyzeModOptions, ModAnalysisResult } from "../mod-analyzer.js";
+import { createError, ERROR_CODES } from "../errors.js";
 import { z } from "zod";
-import { buildIncludeSchema, detailSchema, executionModeSchema, positiveIntSchema } from "./v3/entry-tool-schema.js";
-import { buildEntryToolResult, type Summary } from "./v3/response-contract.js";
-import { resolveDetail, resolveInclude } from "./v3/request-normalizers.js";
+import { buildIncludeSchema, detailSchema, executionModeSchema, positiveIntSchema } from "./entry-tool-schema.js";
+import { buildEntryToolResult, type Summary } from "./response-contract.js";
+import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "files", "source", "samples", "timings"] as const;

@@ -1,18 +1,18 @@
 import { z } from "zod";
 
-import type { DiffClassSignaturesOutput } from "./source-service.js";
-import type { CompareVersionsOutput } from "./version-diff-service.js";
-import type { GetRegistryDataOutput } from "./registry-service.js";
-import { createError, ERROR_CODES } from "./errors.js";
-import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./v3/entry-tool-schema.js";
+import type { DiffClassSignaturesOutput } from "../source-service.js";
+import type { CompareVersionsOutput } from "../version-diff-service.js";
+import type { GetRegistryDataOutput } from "../registry-service.js";
+import { createError, ERROR_CODES } from "../errors.js";
+import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolMeta,
   buildEntryToolResult,
   createNextAction,
   createTruncationMeta,
   type Summary
-} from "./v3/response-contract.js";
-import { capArray, resolveDetail, resolveInclude } from "./v3/request-normalizers.js";
+} from "./response-contract.js";
+import { capArray, resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "classes", "registry", "diff", "samples", "timings"] as const;

@@ -29,36 +29,36 @@ import {
   InspectMinecraftService,
   inspectMinecraftSchema,
   inspectMinecraftShape
-} from "./inspect-minecraft-service.js";
+} from "./entry-tools/inspect-minecraft-service.js";
 import {
   AnalyzeSymbolService,
   analyzeSymbolSchema,
   analyzeSymbolShape
-} from "./analyze-symbol-service.js";
+} from "./entry-tools/analyze-symbol-service.js";
 import {
   CompareMinecraftService,
   compareMinecraftSchema,
   compareMinecraftShape
-} from "./compare-minecraft-service.js";
+} from "./entry-tools/compare-minecraft-service.js";
 import {
   AnalyzeModService,
   analyzeModSchema,
   analyzeModShape
-} from "./analyze-mod-service.js";
+} from "./entry-tools/analyze-mod-service.js";
 import {
   ValidateProjectService,
   validateProjectSchema,
   validateProjectShape,
   discoverWorkspaceAccessWideners,
   discoverWorkspaceMixins
-} from "./validate-project-service.js";
+} from "./entry-tools/validate-project-service.js";
 import {
   ManageCacheService,
   manageCacheSchema,
   manageCacheShape
-} from "./manage-cache-service.js";
+} from "./entry-tools/manage-cache-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
-import { buildEntryToolMeta } from "./v3/response-contract.js";
+import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";

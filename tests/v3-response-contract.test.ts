@@ -7,7 +7,7 @@ import {
   createNextAction,
   createTruncationMeta,
   normalizeIncludeGroups
-} from "../src/v3/response-contract.ts";
+} from "../src/entry-tools/response-contract.ts";
 
 test("buildEntryToolResult keeps summary and task while preserving selected blocks", () => {
   const result = buildEntryToolResult({

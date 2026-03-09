@@ -5,12 +5,12 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
-import { AnalyzeModService } from "../src/analyze-mod-service.ts";
-import { AnalyzeSymbolService } from "../src/analyze-symbol-service.ts";
-import { CompareMinecraftService } from "../src/compare-minecraft-service.ts";
-import { InspectMinecraftService } from "../src/inspect-minecraft-service.ts";
-import { ManageCacheService } from "../src/manage-cache-service.ts";
-import { ValidateProjectService } from "../src/validate-project-service.ts";
+import { AnalyzeModService } from "../src/entry-tools/analyze-mod-service.ts";
+import { AnalyzeSymbolService } from "../src/entry-tools/analyze-symbol-service.ts";
+import { CompareMinecraftService } from "../src/entry-tools/compare-minecraft-service.ts";
+import { InspectMinecraftService } from "../src/entry-tools/inspect-minecraft-service.ts";
+import { ManageCacheService } from "../src/entry-tools/manage-cache-service.ts";
+import { ValidateProjectService } from "../src/entry-tools/validate-project-service.ts";
 
 test("InspectMinecraftService returns ambiguous class overview with follow-up candidates", async () => {
   const service = new InspectMinecraftService({

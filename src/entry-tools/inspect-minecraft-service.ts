@@ -8,10 +8,10 @@ import type {
   ListArtifactFilesOutput,
   ResolveArtifactOutput,
   SearchClassSourceOutput
-} from "./source-service.js";
-import type { ListVersionsOutput } from "./version-service.js";
-import { createError, ERROR_CODES, isAppError } from "./errors.js";
-import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./v3/entry-tool-schema.js";
+} from "../source-service.js";
+import type { ListVersionsOutput } from "../version-service.js";
+import { createError, ERROR_CODES, isAppError } from "../errors.js";
+import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolResult,
   buildEntryToolMeta,
@@ -20,8 +20,8 @@ import {
   type DetailLevel,
   type NextAction,
   type Summary
-} from "./v3/response-contract.js";
-import { capArray, nextActionsOrUndefined, resolveDetail, resolveInclude } from "./v3/request-normalizers.js";
+} from "./response-contract.js";
+import { capArray, nextActionsOrUndefined, resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "source", "files", "samples", "artifact", "timings"] as const;
 const TASKS = ["auto", "versions", "artifact", "class-overview", "class-source", "class-members", "search", "file", "list-files"] as const;
