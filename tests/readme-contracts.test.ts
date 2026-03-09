@@ -15,9 +15,19 @@ test("README documents source resolution options and source-mode behavior", asyn
 
   assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`sourcePriority\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`fromVersion\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`toVersion\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
   assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
   assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
-  assert.match(readme, /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `detail\?`, `include\?`, `sourceRoots\?`, `configPaths\?`/);
+  assert.match(
+    readme,
+    /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `sourcePriority\?`, `scope\?`.*`sourceRoots\?`, `configPaths\?`.*`detail\?`, `include\?`/
+  );
+  assert.doesNotMatch(readme, /\| `validate-project` \|.*`projectPath\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
   assert.match(readme, /always return `result\.summary`/);
@@ -109,9 +119,19 @@ test("Japanese README documents the current public contract", async () => {
 
   assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`sourcePriority\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`fromVersion\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`toVersion\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
+  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
   assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
   assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
-  assert.match(readme, /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `detail\?`, `include\?`, `sourceRoots\?`, `configPaths\?`/);
+  assert.match(
+    readme,
+    /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `sourcePriority\?`, `scope\?`.*`sourceRoots\?`, `configPaths\?`.*`detail\?`, `include\?`/
+  );
+  assert.doesNotMatch(readme, /\| `validate-project` \|.*`projectPath\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
   assert.match(readme, /常に `result\.summary` を返します/);
