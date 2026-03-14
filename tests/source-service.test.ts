@@ -7220,358 +7220,298 @@ test("SourceService validateMixin handles representative report-shaping flows", 
   }
 });
 
-test("SourceService validateMixin mixinConfigPath auto-detect finds multiple module source roots", async () => {
+test("SourceService validateMixin discovers representative config and project layouts", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-config-roots-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
 
-  const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
-  const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
-  const mixinConfigPath = join(root, "neoforge", "src", "main", "resources", "example.mixins.json");
-
-  await mkdir(commonJavaRoot, { recursive: true });
-  await mkdir(neoJavaRoot, { recursive: true });
-  await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
-
-  const mixinSource = [
-    "import net.minecraft.server.Main;",
-    "import org.spongepowered.asm.mixin.Mixin;",
-    "",
-    "@Mixin(Main.class)",
-    "public abstract class __CLASS__ {}"
-  ].join("\n");
-
-  await writeFile(
-    join(commonJavaRoot, "CommonMixin.java"),
-    mixinSource.replace("__CLASS__", "CommonMixin"),
-    "utf8"
-  );
-  await writeFile(
-    join(neoJavaRoot, "NeoMixin.java"),
-    mixinSource.replace("__CLASS__", "NeoMixin"),
-    "utf8"
-  );
-  await writeFile(
-    mixinConfigPath,
-    JSON.stringify({ package: "com.example", mixins: ["CommonMixin", "NeoMixin"] }, null, 2),
-    "utf8"
-  );
-
-  const service = new SourceService(buildTestConfig(root));
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: true,
-        tinyMappingsAvailable: true,
-        memberRemapAvailable: true,
-        degradations: []
-      };
-    }
+  type ValidateMixinDiscoveryContext = {
+    root: string;
+    jarPath: string;
+    service: InstanceType<typeof SourceService>;
   };
 
-  const result = await service.validateMixin({
-    input: {
-      mode: "config",
-      configPaths: [mixinConfigPath]
-    },
-    projectPath: root,
-    version: "1.21",
-    mapping: "obfuscated"
-  } as never);
-
-  assert.equal(result.mode, "config");
-  assert.equal(result.summary.total, 2);
-  assert.equal("errors" in result.summary, false);
-  assert.equal(result.summary.processingErrors, 0);
-  assert.equal(result.summary.valid, 2);
-  assert.equal(result.summary.invalid, 0);
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results.filter((r) => r.error != null).length, 0);
-  assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
-  assert.equal(result.results.every((r) => r.source.kind === "config"), true);
-  assert.equal(result.results.every((r) => r.source.configPath === mixinConfigPath), true);
-});
-
-test("SourceService validateMixin mixinConfigPath auto-detect finds client source root (split source sets)", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-client-root-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
-
-  const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
-  const mixinConfigPath = join(root, "src", "client", "resources", "modid.client.mixins.json");
-
-  await mkdir(clientJavaRoot, { recursive: true });
-  await mkdir(join(root, "src", "client", "resources"), { recursive: true });
-
-  await writeFile(
-    join(clientJavaRoot, "ExampleClientMixin.java"),
-    [
-      "package com.example.mixin.client;",
-      "",
-      "import net.minecraft.client.Minecraft;",
+  function buildServerMixinSource() {
+    return [
+      "import net.minecraft.server.Main;",
       "import org.spongepowered.asm.mixin.Mixin;",
       "",
-      "@Mixin(Minecraft.class)",
-      "public class ExampleClientMixin {}"
-    ].join("\n"),
-    "utf8"
-  );
-  await writeFile(
-    mixinConfigPath,
-    JSON.stringify({
-      required: true,
-      package: "com.example.mixin.client",
-      client: ["ExampleClientMixin"]
-    }, null, 2),
-    "utf8"
-  );
+      "@Mixin(Main.class)",
+      "public abstract class __CLASS__ {}"
+    ].join("\n");
+  }
 
-  const service = new SourceService(buildTestConfig(root));
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.client.Minecraft",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: true,
-        tinyMappingsAvailable: true,
-        memberRemapAvailable: true,
-        degradations: []
-      };
-    }
-  };
+  async function createValidateMixinDiscoveryContext(
+    rootPrefix: string,
+    signatureClassName = "net.minecraft.server.Main"
+  ): Promise<ValidateMixinDiscoveryContext> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const jarPath = join(root, "client.jar");
+    await createJar(jarPath, {});
 
-  const result = await service.validateMixin({
-    input: {
-      mode: "config",
-      configPaths: [mixinConfigPath]
+    const service = new SourceService(buildTestConfig(root));
+    (service as any).versionService = {
+      async resolveVersionJar(version: string) {
+        return { version, jarPath };
+      }
+    };
+    (service as any).explorerService = {
+      async getSignature() {
+        return {
+          className: signatureClassName,
+          constructors: [],
+          methods: [],
+          fields: [],
+          warnings: []
+        };
+      }
+    };
+    (service as any).mappingService = {
+      async checkMappingHealth() {
+        return {
+          mojangMappingsAvailable: true,
+          tinyMappingsAvailable: true,
+          memberRemapAvailable: true,
+          degradations: []
+        };
+      }
+    };
+
+    return { root, jarPath, service };
+  }
+
+  const cases: Array<{
+    name: string;
+    signatureClassName?: string;
+    run: (ctx: ValidateMixinDiscoveryContext) => Promise<void>;
+  }> = [
+    {
+      name: "mixinConfigPath auto-detect finds multiple module source roots",
+      run: async ({ root, service }) => {
+        const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
+        const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
+        const mixinConfigPath = join(root, "neoforge", "src", "main", "resources", "example.mixins.json");
+
+        await mkdir(commonJavaRoot, { recursive: true });
+        await mkdir(neoJavaRoot, { recursive: true });
+        await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
+
+        const mixinSource = buildServerMixinSource();
+        await writeFile(
+          join(commonJavaRoot, "CommonMixin.java"),
+          mixinSource.replace("__CLASS__", "CommonMixin"),
+          "utf8"
+        );
+        await writeFile(
+          join(neoJavaRoot, "NeoMixin.java"),
+          mixinSource.replace("__CLASS__", "NeoMixin"),
+          "utf8"
+        );
+        await writeFile(
+          mixinConfigPath,
+          JSON.stringify({ package: "com.example", mixins: ["CommonMixin", "NeoMixin"] }, null, 2),
+          "utf8"
+        );
+
+        const result = await service.validateMixin({
+          input: {
+            mode: "config",
+            configPaths: [mixinConfigPath]
+          },
+          projectPath: root,
+          version: "1.21",
+          mapping: "obfuscated"
+        } as never);
+
+        assert.equal(result.mode, "config");
+        assert.equal(result.summary.total, 2);
+        assert.equal("errors" in result.summary, false);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 2);
+        assert.equal(result.summary.invalid, 0);
+        assert.equal(result.results.length, 2);
+        assert.equal(result.results.filter((r) => r.error != null).length, 0);
+        assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
+        assert.equal(result.results.every((r) => r.source.kind === "config"), true);
+        assert.equal(result.results.every((r) => r.source.configPath === mixinConfigPath), true);
+      }
     },
-    projectPath: root,
-    version: "1.21",
-    mapping: "obfuscated"
-  });
+    {
+      name: "mixinConfigPath auto-detect finds client source root (split source sets)",
+      signatureClassName: "net.minecraft.client.Minecraft",
+      run: async ({ root, service }) => {
+        const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
+        const mixinConfigPath = join(root, "src", "client", "resources", "modid.client.mixins.json");
 
-  assert.equal(result.mode, "config");
-  assert.equal(result.summary.total, 1);
-  assert.equal("errors" in result.summary, false);
-  assert.equal(result.summary.processingErrors, 0);
-  assert.equal(result.summary.valid, 1);
-  assert.equal(result.results.length, 1);
-  assert.equal(result.results[0].result?.valid, true);
-});
+        await mkdir(clientJavaRoot, { recursive: true });
+        await mkdir(join(root, "src", "client", "resources"), { recursive: true });
 
-test("SourceService validateMixin mixinConfigPath finds mixins in both main and client source roots", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-mixed-roots-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
+        await writeFile(
+          join(clientJavaRoot, "ExampleClientMixin.java"),
+          [
+            "package com.example.mixin.client;",
+            "",
+            "import net.minecraft.client.Minecraft;",
+            "import org.spongepowered.asm.mixin.Mixin;",
+            "",
+            "@Mixin(Minecraft.class)",
+            "public class ExampleClientMixin {}"
+          ].join("\n"),
+          "utf8"
+        );
+        await writeFile(
+          mixinConfigPath,
+          JSON.stringify(
+            {
+              required: true,
+              package: "com.example.mixin.client",
+              client: ["ExampleClientMixin"]
+            },
+            null,
+            2
+          ),
+          "utf8"
+        );
 
-  const mainJavaRoot = join(root, "src", "main", "java", "com", "example", "mixin");
-  const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
-  const mixinConfigDir = join(root, "src", "main", "resources");
+        const result = await service.validateMixin({
+          input: {
+            mode: "config",
+            configPaths: [mixinConfigPath]
+          },
+          projectPath: root,
+          version: "1.21",
+          mapping: "obfuscated"
+        });
 
-  await mkdir(mainJavaRoot, { recursive: true });
-  await mkdir(clientJavaRoot, { recursive: true });
-  await mkdir(mixinConfigDir, { recursive: true });
-
-  const mixinSource = [
-    "import net.minecraft.server.Main;",
-    "import org.spongepowered.asm.mixin.Mixin;",
-    "",
-    "@Mixin(Main.class)",
-    "public abstract class __CLASS__ {}"
-  ].join("\n");
-
-  await writeFile(
-    join(mainJavaRoot, "ServerMixin.java"),
-    mixinSource.replace("__CLASS__", "ServerMixin"),
-    "utf8"
-  );
-  await writeFile(
-    join(clientJavaRoot, "ClientMixin.java"),
-    mixinSource.replace("__CLASS__", "ClientMixin"),
-    "utf8"
-  );
-
-  const mixinConfigPath = join(mixinConfigDir, "modid.mixins.json");
-  await writeFile(
-    mixinConfigPath,
-    JSON.stringify({
-      package: "com.example.mixin",
-      mixins: ["ServerMixin"],
-      client: ["client.ClientMixin"]
-    }, null, 2),
-    "utf8"
-  );
-
-  const service = new SourceService(buildTestConfig(root));
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: true,
-        tinyMappingsAvailable: true,
-        memberRemapAvailable: true,
-        degradations: []
-      };
-    }
-  };
-
-  const result = await service.validateMixin({
-    input: {
-      mode: "config",
-      configPaths: [mixinConfigPath]
+        assert.equal(result.mode, "config");
+        assert.equal(result.summary.total, 1);
+        assert.equal("errors" in result.summary, false);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 1);
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0].result?.valid, true);
+      }
     },
-    projectPath: root,
-    version: "1.21",
-    mapping: "obfuscated"
-  });
+    {
+      name: "mixinConfigPath finds mixins in both main and client source roots",
+      run: async ({ root, service }) => {
+        const mainJavaRoot = join(root, "src", "main", "java", "com", "example", "mixin");
+        const clientJavaRoot = join(root, "src", "client", "java", "com", "example", "mixin", "client");
+        const mixinConfigDir = join(root, "src", "main", "resources");
 
-  assert.equal(result.mode, "config");
-  assert.equal(result.summary.total, 2);
-  assert.equal("errors" in result.summary, false);
-  assert.equal(result.summary.processingErrors, 0);
-  assert.equal(result.summary.valid, 2);
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
-});
+        await mkdir(mainJavaRoot, { recursive: true });
+        await mkdir(clientJavaRoot, { recursive: true });
+        await mkdir(mixinConfigDir, { recursive: true });
 
-test("SourceService validateMixin project mode auto-discovers mixin configs across modules", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-project-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
+        const mixinSource = buildServerMixinSource();
+        await writeFile(
+          join(mainJavaRoot, "ServerMixin.java"),
+          mixinSource.replace("__CLASS__", "ServerMixin"),
+          "utf8"
+        );
+        await writeFile(
+          join(clientJavaRoot, "ClientMixin.java"),
+          mixinSource.replace("__CLASS__", "ClientMixin"),
+          "utf8"
+        );
 
-  const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
-  const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
-  const commonConfigPath = join(root, "common", "src", "main", "resources", "example.mixins.json");
-  const neoConfigPath = join(root, "neoforge", "src", "main", "resources", "example.neoforge.mixins.json");
+        const mixinConfigPath = join(mixinConfigDir, "modid.mixins.json");
+        await writeFile(
+          mixinConfigPath,
+          JSON.stringify(
+            {
+              package: "com.example.mixin",
+              mixins: ["ServerMixin"],
+              client: ["client.ClientMixin"]
+            },
+            null,
+            2
+          ),
+          "utf8"
+        );
 
-  await mkdir(commonJavaRoot, { recursive: true });
-  await mkdir(neoJavaRoot, { recursive: true });
-  await mkdir(join(root, "common", "src", "main", "resources"), { recursive: true });
-  await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
+        const result = await service.validateMixin({
+          input: {
+            mode: "config",
+            configPaths: [mixinConfigPath]
+          },
+          projectPath: root,
+          version: "1.21",
+          mapping: "obfuscated"
+        });
 
-  const mixinSource = [
-    "import net.minecraft.server.Main;",
-    "import org.spongepowered.asm.mixin.Mixin;",
-    "",
-    "@Mixin(Main.class)",
-    "public abstract class __CLASS__ {}"
-  ].join("\n");
-
-  await writeFile(
-    join(commonJavaRoot, "CommonMixin.java"),
-    mixinSource.replace("__CLASS__", "CommonMixin"),
-    "utf8"
-  );
-  await writeFile(
-    join(neoJavaRoot, "NeoMixin.java"),
-    mixinSource.replace("__CLASS__", "NeoMixin"),
-    "utf8"
-  );
-  await writeFile(
-    commonConfigPath,
-    JSON.stringify({ package: "com.example", mixins: ["CommonMixin"] }, null, 2),
-    "utf8"
-  );
-  await writeFile(
-    neoConfigPath,
-    JSON.stringify({ package: "com.example", mixins: ["NeoMixin"] }, null, 2),
-    "utf8"
-  );
-
-  const service = new SourceService(buildTestConfig(root));
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: true,
-        tinyMappingsAvailable: true,
-        memberRemapAvailable: true,
-        degradations: []
-      };
-    }
-  };
-
-  const result = await service.validateMixin({
-    input: {
-      mode: "project",
-      path: root
+        assert.equal(result.mode, "config");
+        assert.equal(result.summary.total, 2);
+        assert.equal("errors" in result.summary, false);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 2);
+        assert.equal(result.results.length, 2);
+        assert.equal(result.results.filter((r) => r.result?.valid === true).length, 2);
+      }
     },
-    version: "1.21",
-    mapping: "obfuscated"
-  } as never);
+    {
+      name: "project mode auto-discovers mixin configs across modules",
+      run: async ({ root, service }) => {
+        const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
+        const neoJavaRoot = join(root, "neoforge", "src", "main", "java", "com", "example");
+        const commonConfigPath = join(root, "common", "src", "main", "resources", "example.mixins.json");
+        const neoConfigPath = join(root, "neoforge", "src", "main", "resources", "example.neoforge.mixins.json");
 
-  assert.equal(result.mode, "project");
-  assert.equal(result.summary.total, 2);
-  assert.equal(result.summary.processingErrors, 0);
-  assert.equal(result.summary.valid, 2);
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results.filter((entry) => entry.source.configPath === commonConfigPath).length, 1);
-  assert.equal(result.results.filter((entry) => entry.source.configPath === neoConfigPath).length, 1);
-  assert.equal(result.results.every((entry) => entry.result?.valid === true), true);
+        await mkdir(commonJavaRoot, { recursive: true });
+        await mkdir(neoJavaRoot, { recursive: true });
+        await mkdir(join(root, "common", "src", "main", "resources"), { recursive: true });
+        await mkdir(join(root, "neoforge", "src", "main", "resources"), { recursive: true });
+
+        const mixinSource = buildServerMixinSource();
+        await writeFile(
+          join(commonJavaRoot, "CommonMixin.java"),
+          mixinSource.replace("__CLASS__", "CommonMixin"),
+          "utf8"
+        );
+        await writeFile(
+          join(neoJavaRoot, "NeoMixin.java"),
+          mixinSource.replace("__CLASS__", "NeoMixin"),
+          "utf8"
+        );
+        await writeFile(
+          commonConfigPath,
+          JSON.stringify({ package: "com.example", mixins: ["CommonMixin"] }, null, 2),
+          "utf8"
+        );
+        await writeFile(
+          neoConfigPath,
+          JSON.stringify({ package: "com.example", mixins: ["NeoMixin"] }, null, 2),
+          "utf8"
+        );
+
+        const result = await service.validateMixin({
+          input: {
+            mode: "project",
+            path: root
+          },
+          version: "1.21",
+          mapping: "obfuscated"
+        } as never);
+
+        assert.equal(result.mode, "project");
+        assert.equal(result.summary.total, 2);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 2);
+        assert.equal(result.results.length, 2);
+        assert.equal(result.results.filter((entry) => entry.source.configPath === commonConfigPath).length, 1);
+        assert.equal(result.results.filter((entry) => entry.source.configPath === neoConfigPath).length, 1);
+        assert.equal(result.results.every((entry) => entry.result?.valid === true), true);
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const ctx = await createValidateMixinDiscoveryContext(
+        `service-validate-mixin-${testCase.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-`,
+        testCase.signatureClassName
+      );
+      await testCase.run(ctx);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
