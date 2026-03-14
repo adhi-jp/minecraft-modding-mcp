@@ -7673,138 +7673,149 @@ test("F-01: resolveArtifact with strictVersion=false still returns version-appro
 // ---------------------------------------------------------------------------
 // F-03: queryMode search fallback for separator-containing queries
 // ---------------------------------------------------------------------------
-test("F-03: search-class-source queryMode=auto keeps separator queries on the indexed path", async () => {
+test("F-03: search-class-source handles representative queryMode behavior for separator queries", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f03-auto-"));
-  const service = new SourceService(buildTestConfig(root));
 
-  // Create a jar with a file containing "dispatcher.register"
-  const jarPath = join(root, "test-sources.jar");
-  await createJar(jarPath, {
-    "net/minecraft/commands/CommandDispatcher.java":
-      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
-  });
+  type SearchQueryModeFixture = {
+    service: InstanceType<typeof SourceService>;
+    artifactId: string;
+  };
 
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: jarPath }
-  } as any);
+  const separatorQueryFixtureContent = [
+    "package net.minecraft.commands;",
+    "public class CommandDispatcher {",
+    "  public void register() {",
+    '    dispatcher.register(literal("test"));',
+    "  }",
+    "}"
+  ].join("\n");
 
-  const beforePathMetrics = readSearchPathMetrics(service);
-  const beforeModeMetrics = readSearchModeMetrics(service);
+  async function createSearchQueryModeFixture(
+    rootPrefix: string,
+    configOverrides: Partial<Config> = {}
+  ): Promise<SearchQueryModeFixture> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const service = new SourceService(buildTestConfig(root, configOverrides));
+    const jarPath = join(root, "test-sources.jar");
 
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "dispatcher.register",
-    intent: "text",
-    match: "contains",
-    queryMode: "auto"
-  });
+    await createJar(jarPath, {
+      "net/minecraft/commands/CommandDispatcher.java": separatorQueryFixtureContent
+    });
 
-  const afterPathMetrics = readSearchPathMetrics(service);
-  const afterModeMetrics = readSearchModeMetrics(service);
+    const resolved = await service.resolveArtifact({
+      target: { kind: "jar", value: jarPath }
+    } as any);
 
-  assert.ok(result.hits.length > 0, "auto mode should find separator-containing query through indexed search");
-  assert.equal("totalApprox" in result, false);
-  assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
-  assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
-  assert.equal(afterModeMetrics.autoCount - beforeModeMetrics.autoCount, 1);
-  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
-});
+    return {
+      service,
+      artifactId: resolved.artifactId
+    };
+  }
 
-test("F-03: search-class-source queryMode=token resolves separator query through normalized indexed lookup", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f03-token-"));
-  const service = new SourceService(buildTestConfig(root));
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    configOverrides?: Partial<Config>;
+    run: (fixture: SearchQueryModeFixture) => Promise<void>;
+  }> = [
+    {
+      name: "queryMode=auto keeps separator queries on the indexed path",
+      rootPrefix: "service-f03-auto-",
+      run: async ({ service, artifactId }) => {
+        const beforePathMetrics = readSearchPathMetrics(service);
+        const beforeModeMetrics = readSearchModeMetrics(service);
 
-  const jarPath = join(root, "test-sources.jar");
-  await createJar(jarPath, {
-    "net/minecraft/commands/CommandDispatcher.java":
-      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
-  });
+        const result = await service.searchClassSource({
+          artifactId,
+          query: "dispatcher.register",
+          intent: "text",
+          match: "contains",
+          queryMode: "auto"
+        });
 
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: jarPath }
-  } as any);
+        const afterPathMetrics = readSearchPathMetrics(service);
+        const afterModeMetrics = readSearchModeMetrics(service);
 
-  const beforePathMetrics = readSearchPathMetrics(service);
-  const beforeModeMetrics = readSearchModeMetrics(service);
+        assert.ok(result.hits.length > 0, "auto mode should find separator-containing query through indexed search");
+        assert.equal("totalApprox" in result, false);
+        assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
+        assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
+        assert.equal(afterModeMetrics.autoCount - beforeModeMetrics.autoCount, 1);
+        assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
+      }
+    },
+    {
+      name: "queryMode=token resolves separator query through normalized indexed lookup",
+      rootPrefix: "service-f03-token-",
+      run: async ({ service, artifactId }) => {
+        const beforePathMetrics = readSearchPathMetrics(service);
+        const beforeModeMetrics = readSearchModeMetrics(service);
 
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "dispatcher.register",
-    intent: "text",
-    match: "contains",
-    queryMode: "token"
-  });
+        const result = await service.searchClassSource({
+          artifactId,
+          query: "dispatcher.register",
+          intent: "text",
+          match: "contains",
+          queryMode: "token"
+        });
 
-  const afterPathMetrics = readSearchPathMetrics(service);
-  const afterModeMetrics = readSearchModeMetrics(service);
+        const afterPathMetrics = readSearchPathMetrics(service);
+        const afterModeMetrics = readSearchModeMetrics(service);
 
-  assert.ok(result.hits.length > 0, "token mode should find separator-containing query through the indexed path");
-  assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
-  assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
-  assert.equal(afterModeMetrics.tokenCount - beforeModeMetrics.tokenCount, 1);
-  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
-});
+        assert.ok(result.hits.length > 0, "token mode should find separator-containing query through the indexed path");
+        assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
+        assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
+        assert.equal(afterModeMetrics.tokenCount - beforeModeMetrics.tokenCount, 1);
+        assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
+      }
+    },
+    {
+      name: "queryMode=token does not fallback when indexed search is disabled",
+      rootPrefix: "service-f03-token-no-index-",
+      configOverrides: { indexedSearchEnabled: false },
+      run: async ({ service, artifactId }) => {
+        const result = await service.searchClassSource({
+          artifactId,
+          query: "dispatcher.register",
+          intent: "text",
+          match: "contains",
+          queryMode: "token"
+        });
+        assert.equal(result.hits.length, 0, "token mode should not fallback to literal scan when indexed search is disabled");
+      }
+    },
+    {
+      name: "queryMode=literal forces substring scan",
+      rootPrefix: "service-f03-literal-",
+      run: async ({ service, artifactId }) => {
+        const beforePathMetrics = readSearchPathMetrics(service);
+        const beforeModeMetrics = readSearchModeMetrics(service);
 
-test("F-03: search-class-source queryMode=token does not fallback when indexed search is disabled", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f03-token-no-index-"));
-  const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
+        const result = await service.searchClassSource({
+          artifactId,
+          query: "dispatcher.register",
+          intent: "text",
+          match: "contains",
+          queryMode: "literal"
+        });
 
-  const jarPath = join(root, "test-sources.jar");
-  await createJar(jarPath, {
-    "net/minecraft/commands/CommandDispatcher.java":
-      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
-  });
+        const afterPathMetrics = readSearchPathMetrics(service);
+        const afterModeMetrics = readSearchModeMetrics(service);
 
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: jarPath }
-  } as any);
+        assert.ok(result.hits.length > 0, "literal mode should find via substring scan");
+        assert.ok(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits >= 1);
+        assert.equal(afterModeMetrics.literalCount - beforeModeMetrics.literalCount, 1);
+        assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 1);
+      }
+    }
+  ];
 
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "dispatcher.register",
-    intent: "text",
-    match: "contains",
-    queryMode: "token"
-  });
-  assert.equal(result.hits.length, 0, "token mode should not fallback to literal scan when indexed search is disabled");
-});
-
-test("F-03: search-class-source queryMode=literal forces substring scan", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f03-literal-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  const jarPath = join(root, "test-sources.jar");
-  await createJar(jarPath, {
-    "net/minecraft/commands/CommandDispatcher.java":
-      "package net.minecraft.commands;\npublic class CommandDispatcher {\n  public void register() {\n    dispatcher.register(literal(\"test\"));\n  }\n}"
-  });
-
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: jarPath }
-  } as any);
-
-  const beforePathMetrics = readSearchPathMetrics(service);
-  const beforeModeMetrics = readSearchModeMetrics(service);
-
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "dispatcher.register",
-    intent: "text",
-    match: "contains",
-    queryMode: "literal"
-  });
-
-  const afterPathMetrics = readSearchPathMetrics(service);
-  const afterModeMetrics = readSearchModeMetrics(service);
-
-  assert.ok(result.hits.length > 0, "literal mode should find via substring scan");
-  assert.ok(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits >= 1);
-  assert.equal(afterModeMetrics.literalCount - beforeModeMetrics.literalCount, 1);
-  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 1);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fixture = await createSearchQueryModeFixture(testCase.rootPrefix, testCase.configOverrides);
+      await testCase.run(fixture);
+    });
+  }
 });
 
 test("resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND", async () => {
