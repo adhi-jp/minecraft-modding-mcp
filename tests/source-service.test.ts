@@ -1168,204 +1168,268 @@ test("SourceService can manually reindex an artifact", async () => {
   assert.ok(result.counts.ftsRows >= 1);
 });
 
-test("SourceService rejects symbolKind scope filters for text and path intents", async () => {
+test("SourceService searchClassSource handles representative edge cases", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-symbolkind-scope-"));
-  const binaryJarPath = join(root, "server-scope.jar");
-  const sourcesJarPath = join(root, "server-scope-sources.jar");
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
-    "net/minecraft/server/OnlyField.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      "  void tickServer() {",
-      "    String methodToken = \"METHOD_TOKEN\";",
-      "  }",
-      "}"
-    ].join("\n"),
-    "net/minecraft/server/OnlyField.java": [
-      "package net.minecraft.server;",
-      "public class OnlyField {",
-      "  static String fieldToken = \"FIELD_TOKEN\";",
-      "}"
-    ].join("\n")
-  });
+  type SearchEdgeCaseFixture = {
+    service: InstanceType<typeof SourceService>;
+    artifactId: string;
+  };
 
-  const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  await assert.rejects(
-    () =>
-      service.searchClassSource({
-        artifactId: resolved.artifactId,
-        query: "FIELD_TOKEN",
-        intent: "text",
-        match: "contains",
-        scope: {
-          symbolKind: "method"
-        },
-        limit: 10
-      }),
-    (error: unknown) =>
+  function isInvalidInputError(error: unknown): boolean {
+    return (
       typeof error === "object" &&
       error !== null &&
       "code" in error &&
       (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
+    );
+  }
 
-  await assert.rejects(
-    () =>
-      service.searchClassSource({
-        artifactId: resolved.artifactId,
-        query: "OnlyField.java",
-        intent: "path",
-        match: "contains",
-        scope: {
-          symbolKind: "method"
-        },
-        limit: 10
-      }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
-});
+  async function createSearchEdgeCaseFixture(input: {
+    rootPrefix: string;
+    binaryJarName: string;
+    indexedSearchEnabled?: boolean;
+    sources: Record<string, string>;
+  }): Promise<SearchEdgeCaseFixture> {
+    const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+    const binaryJarPath = join(root, input.binaryJarName);
+    const sourcesJarPath = join(root, input.binaryJarName.replace(/\.jar$/, "-sources.jar"));
 
-test("SourceService ignores cursor when search intent changes", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-cursor-intent-mismatch-"));
-  const binaryJarPath = join(root, "server-cursor-intent.jar");
-  const sourcesJarPath = join(root, "server-cursor-intent-sources.jar");
+    await createJar(
+      binaryJarPath,
+      Object.fromEntries(
+        Object.keys(input.sources).map((filePath) => [
+          filePath.replace(/\.java$/, ".class"),
+          Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+        ])
+      )
+    );
+    await createJar(sourcesJarPath, input.sources);
+
+    const service = new SourceService(
+      buildTestConfig(root, {
+        indexedSearchEnabled: input.indexedSearchEnabled ?? true
+      })
+    );
+    const resolved = await service.resolveArtifact({
+      target: { kind: "jar", value: binaryJarPath },
+      mapping: "obfuscated"
+    });
+
+    return {
+      service,
+      artifactId: resolved.artifactId
+    };
+  }
+
   const filler = "x".repeat(420);
+  const cases: Array<{
+    name: string;
+    createFixture: () => Promise<SearchEdgeCaseFixture>;
+    run: (fixture: SearchEdgeCaseFixture) => Promise<void>;
+  }> = [
+    {
+      name: "rejects symbolKind scope filters for text and path intents",
+      createFixture: () =>
+        createSearchEdgeCaseFixture({
+          rootPrefix: "service-symbolkind-scope-",
+          binaryJarName: "server-scope.jar",
+          indexedSearchEnabled: false,
+          sources: {
+            "net/minecraft/server/Main.java": [
+              "package net.minecraft.server;",
+              "public class Main {",
+              "  void tickServer() {",
+              "    String methodToken = \"METHOD_TOKEN\";",
+              "  }",
+              "}"
+            ].join("\n"),
+            "net/minecraft/server/OnlyField.java": [
+              "package net.minecraft.server;",
+              "public class OnlyField {",
+              "  static String fieldToken = \"FIELD_TOKEN\";",
+              "}"
+            ].join("\n")
+          }
+        }),
+      run: async ({ service, artifactId }) => {
+        await assert.rejects(
+          () =>
+            service.searchClassSource({
+              artifactId,
+              query: "FIELD_TOKEN",
+              intent: "text",
+              match: "contains",
+              scope: {
+                symbolKind: "method"
+              },
+              limit: 10
+            }),
+          isInvalidInputError
+        );
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/FooNeedleA.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
-    "net/minecraft/server/FooNeedleB.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/FooNeedleA.java": [
-      "package net.minecraft.server;",
-      "public class FooNeedleA {",
-      `  String payload = "${filler}FooNeedle";`,
-      "}"
-    ].join("\n"),
-    "net/minecraft/server/FooNeedleB.java": [
-      "package net.minecraft.server;",
-      "public class FooNeedleB {",
-      `  String payload = "${filler}FooNeedle";`,
-      "}"
-    ].join("\n")
-  });
+        await assert.rejects(
+          () =>
+            service.searchClassSource({
+              artifactId,
+              query: "OnlyField.java",
+              intent: "path",
+              match: "contains",
+              scope: {
+                symbolKind: "method"
+              },
+              limit: 10
+            }),
+          isInvalidInputError
+        );
+      }
+    },
+    {
+      name: "ignores cursor when search intent changes",
+      createFixture: () =>
+        createSearchEdgeCaseFixture({
+          rootPrefix: "service-cursor-intent-mismatch-",
+          binaryJarName: "server-cursor-intent.jar",
+          indexedSearchEnabled: false,
+          sources: {
+            "net/minecraft/server/FooNeedleA.java": [
+              "package net.minecraft.server;",
+              "public class FooNeedleA {",
+              `  String payload = "${filler}FooNeedle";`,
+              "}"
+            ].join("\n"),
+            "net/minecraft/server/FooNeedleB.java": [
+              "package net.minecraft.server;",
+              "public class FooNeedleB {",
+              `  String payload = "${filler}FooNeedle";`,
+              "}"
+            ].join("\n")
+          }
+        }),
+      run: async ({ service, artifactId }) => {
+        const textPage = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "text",
+          match: "contains",
+          limit: 1
+        });
+        assert.ok(textPage.nextCursor);
 
-  const service = new SourceService(buildTestConfig(root, { indexedSearchEnabled: false }));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
+        const pathWithoutCursor = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "path",
+          match: "contains",
+          limit: 1
+        });
+        assert.equal(pathWithoutCursor.hits.length, 1);
 
-  const textPage = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "text",
-    match: "contains",
-    limit: 1
-  });
-  assert.ok(textPage.nextCursor);
+        const pathWithForeignCursor = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "path",
+          match: "contains",
+          cursor: textPage.nextCursor,
+          limit: 1
+        });
 
-  const pathWithoutCursor = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "path",
-    match: "contains",
-    limit: 1
-  });
-  assert.equal(pathWithoutCursor.hits.length, 1);
+        assert.equal(pathWithForeignCursor.hits.length, 1);
+        assert.equal(pathWithForeignCursor.hits[0]?.filePath, pathWithoutCursor.hits[0]?.filePath);
+      }
+    },
+    {
+      name: "ignores cursor when queryMode changes",
+      createFixture: () =>
+        createSearchEdgeCaseFixture({
+          rootPrefix: "service-cursor-query-mode-mismatch-",
+          binaryJarName: "server-cursor-mode.jar",
+          sources: {
+            "net/minecraft/server/FooNeedleA.java": [
+              "package net.minecraft.server;",
+              "public class FooNeedleA {",
+              "  String payload = \"FooNeedle at start\";",
+              "}"
+            ].join("\n"),
+            "net/minecraft/server/FooNeedleB.java": [
+              "package net.minecraft.server;",
+              "public class FooNeedleB {",
+              "  String payload = \"xxxxxxxxxxxxxxxxxxxx FooNeedle later\";",
+              "}"
+            ].join("\n")
+          }
+        }),
+      run: async ({ service, artifactId }) => {
+        const literalPage = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "text",
+          match: "contains",
+          queryMode: "literal",
+          limit: 1
+        });
+        assert.ok(literalPage.nextCursor);
 
-  const pathWithForeignCursor = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "path",
-    match: "contains",
-    cursor: textPage.nextCursor,
-    limit: 1
-  });
+        const tokenWithoutCursor = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "text",
+          match: "contains",
+          queryMode: "token",
+          limit: 1
+        });
+        assert.equal(tokenWithoutCursor.hits.length, 1);
 
-  assert.equal(pathWithForeignCursor.hits.length, 1);
-  assert.equal(pathWithForeignCursor.hits[0]?.filePath, pathWithoutCursor.hits[0]?.filePath);
-});
+        const tokenWithForeignCursor = await service.searchClassSource({
+          artifactId,
+          query: "FooNeedle",
+          intent: "text",
+          match: "contains",
+          queryMode: "token",
+          cursor: literalPage.nextCursor,
+          limit: 1
+        });
 
-test("SourceService ignores cursor when queryMode changes", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-cursor-query-mode-mismatch-"));
-  const binaryJarPath = join(root, "server-cursor-mode.jar");
-  const sourcesJarPath = join(root, "server-cursor-mode-sources.jar");
+        assert.equal(tokenWithForeignCursor.hits.length, 1);
+        assert.equal(tokenWithForeignCursor.hits[0]?.filePath, tokenWithoutCursor.hits[0]?.filePath);
+      }
+    },
+    {
+      name: "rejects regex queries longer than guard limit",
+      createFixture: () =>
+        createSearchEdgeCaseFixture({
+          rootPrefix: "service-regex-guard-",
+          binaryJarName: "server-regex-guard.jar",
+          sources: {
+            "net/minecraft/server/Main.java": [
+              "package net.minecraft.server;",
+              "public class Main {",
+              '  String marker = "needle";',
+              "}"
+            ].join("\n")
+          }
+        }),
+      run: async ({ service, artifactId }) => {
+        await assert.rejects(
+          () =>
+            service.searchClassSource({
+              artifactId,
+              query: "a".repeat(201),
+              intent: "text",
+              match: "regex",
+              limit: 20
+            }),
+          isInvalidInputError
+        );
+      }
+    }
+  ];
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/FooNeedleA.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
-    "net/minecraft/server/FooNeedleB.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/FooNeedleA.java": [
-      "package net.minecraft.server;",
-      "public class FooNeedleA {",
-      "  String payload = \"FooNeedle at start\";",
-      "}"
-    ].join("\n"),
-    "net/minecraft/server/FooNeedleB.java": [
-      "package net.minecraft.server;",
-      "public class FooNeedleB {",
-      "  String payload = \"xxxxxxxxxxxxxxxxxxxx FooNeedle later\";",
-      "}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  const literalPage = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "text",
-    match: "contains",
-    queryMode: "literal",
-    limit: 1
-  });
-  assert.ok(literalPage.nextCursor);
-
-  const tokenWithoutCursor = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "text",
-    match: "contains",
-    queryMode: "token",
-    limit: 1
-  });
-  assert.equal(tokenWithoutCursor.hits.length, 1);
-
-  const tokenWithForeignCursor = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "FooNeedle",
-    intent: "text",
-    match: "contains",
-    queryMode: "token",
-    cursor: literalPage.nextCursor,
-    limit: 1
-  });
-
-  assert.equal(tokenWithForeignCursor.hits.length, 1);
-  assert.equal(tokenWithForeignCursor.hits[0]?.filePath, tokenWithoutCursor.hits[0]?.filePath);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run(await testCase.createFixture());
+    });
+  }
 });
 
 test("SourceService changes artifactId when source jar signature changes", async () => {
@@ -5608,50 +5672,6 @@ test("SourceService text search respects exact (case-sensitive) and prefix (case
     limit: 10
   });
   assert.ok(prefixHit.hits.some((h) => h.filePath === "net/minecraft/server/Main.java"));
-});
-
-test("SourceService rejects regex queries longer than guard limit", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-regex-guard-"));
-  const binaryJarPath = join(root, "server-regex-guard.jar");
-  const sourcesJarPath = join(root, "server-regex-guard-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      '  String marker = "needle";',
-      "}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  await assert.rejects(
-    () =>
-      service.searchClassSource({
-        artifactId: resolved.artifactId,
-        query: "a".repeat(201),
-        intent: "text",
-        match: "regex",
-        limit: 20
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
-  );
 });
 
 test("SourceService searchClassSource with ** glob pattern does not crash", async () => {
