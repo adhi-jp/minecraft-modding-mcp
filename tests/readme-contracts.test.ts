@@ -21,7 +21,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
-  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
+  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `subject\.kind="class"\.sourcePriority\?`, `maxClassResults\?`/);
   assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
   assert.match(
     readme,
@@ -31,6 +31,7 @@ test("README documents source resolution options and source-mode behavior", asyn
   assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
   assert.match(readme, /always return `result\.summary`/);
+  assert.match(readme, /`summary\.subject` plus `summary\.nextActions`/);
   assert.match(readme, /share `detail: "summary" \| "standard" \| "full"` plus opt-in `include\[\]` groups/);
   assert.match(readme, /`executionMode: "preview" \| "apply"`/);
   assert.match(readme, /Start with `inspect-minecraft`/);
@@ -125,7 +126,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
   assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
-  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `sourcePriority\?`, `maxClassResults\?`/);
+  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `subject\.kind="class"\.sourcePriority\?`, `maxClassResults\?`/);
   assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
   assert.match(
     readme,
@@ -135,6 +136,7 @@ test("Japanese README documents the current public contract", async () => {
   assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
   assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
   assert.match(readme, /常に `result\.summary` を返します/);
+  assert.match(readme, /`summary\.subject` と `summary\.nextActions`/);
   assert.match(readme, /`detail: "summary" \| "standard" \| "full"` と opt-in の `include\[\]` を共有/);
   assert.match(readme, /`executionMode: "preview" \| "apply"`/);
   assert.match(readme, /まず `inspect-minecraft` を使い/);

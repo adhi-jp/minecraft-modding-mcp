@@ -3,6 +3,8 @@ export interface MetricTimingSnapshot {
   totalMs: number;
   avgMs: number;
   lastMs: number;
+  p95Ms: number;
+  p99Ms: number;
 }
 
 export interface CacheArtifactByteAccountingRow {
@@ -20,6 +22,10 @@ export interface RuntimeMetricSnapshot {
   search_intent_symbol_duration_ms: MetricTimingSnapshot;
   search_intent_text_duration_ms: MetricTimingSnapshot;
   search_intent_path_duration_ms: MetricTimingSnapshot;
+  search_query_mode_auto_count: number;
+  search_query_mode_token_count: number;
+  search_query_mode_literal_count: number;
+  search_literal_explicit_count: number;
   search_regex_fallback_count: number;
   search_token_bytes_returned: number;
   onehop_expand_count: number;
@@ -56,6 +62,18 @@ interface DurationState {
   count: number;
   totalMs: number;
   lastMs: number;
+  samples: number[];
+}
+
+const MAX_TIMING_SAMPLES = 512;
+
+function percentile(samples: number[], p: number): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  return sorted[index] ?? 0;
 }
 
 export class RuntimeMetrics {
@@ -63,6 +81,10 @@ export class RuntimeMetrics {
   private cacheHits = 0;
   private cacheMisses = 0;
   private repoFailoverCount = 0;
+  private searchQueryModeAutoCount = 0;
+  private searchQueryModeTokenCount = 0;
+  private searchQueryModeLiteralCount = 0;
+  private searchLiteralExplicitCount = 0;
   private searchRegexFallbackCount = 0;
   private searchTokenBytesReturned = 0;
   private oneHopExpandCount = 0;
@@ -92,7 +114,7 @@ export class RuntimeMetrics {
       "search_intent_path_duration_ms"
     ];
     for (const name of names) {
-      this.timings.set(name, { count: 0, totalMs: 0, lastMs: 0 });
+      this.timings.set(name, { count: 0, totalMs: 0, lastMs: 0, samples: [] });
     }
   }
 
@@ -106,6 +128,10 @@ export class RuntimeMetrics {
     timing.count += 1;
     timing.totalMs += normalizedDuration;
     timing.lastMs = normalizedDuration;
+    timing.samples.push(normalizedDuration);
+    if (timing.samples.length > MAX_TIMING_SAMPLES) {
+      timing.samples.shift();
+    }
   }
 
   recordArtifactCacheHit(): void {
@@ -118,6 +144,21 @@ export class RuntimeMetrics {
 
   recordRepoFailover(): void {
     this.repoFailoverCount += 1;
+  }
+
+  recordSearchQueryMode(mode: "auto" | "token" | "literal"): void {
+    switch (mode) {
+      case "auto":
+        this.searchQueryModeAutoCount += 1;
+        break;
+      case "token":
+        this.searchQueryModeTokenCount += 1;
+        break;
+      case "literal":
+        this.searchQueryModeLiteralCount += 1;
+        this.searchLiteralExplicitCount += 1;
+        break;
+    }
   }
 
   recordSearchIntentDuration(intent: "symbol" | "text" | "path", durationMs: number): void {
@@ -208,6 +249,10 @@ export class RuntimeMetrics {
       search_intent_symbol_duration_ms: this.toSnapshot("search_intent_symbol_duration_ms"),
       search_intent_text_duration_ms: this.toSnapshot("search_intent_text_duration_ms"),
       search_intent_path_duration_ms: this.toSnapshot("search_intent_path_duration_ms"),
+      search_query_mode_auto_count: this.searchQueryModeAutoCount,
+      search_query_mode_token_count: this.searchQueryModeTokenCount,
+      search_query_mode_literal_count: this.searchQueryModeLiteralCount,
+      search_literal_explicit_count: this.searchLiteralExplicitCount,
       search_regex_fallback_count: this.searchRegexFallbackCount,
       search_token_bytes_returned: this.searchTokenBytesReturned,
       onehop_expand_count: this.oneHopExpandCount,
@@ -237,7 +282,9 @@ export class RuntimeMetrics {
       count,
       totalMs,
       avgMs: count > 0 ? totalMs / count : 0,
-      lastMs: timing?.lastMs ?? 0
+      lastMs: timing?.lastMs ?? 0,
+      p95Ms: percentile(timing?.samples ?? [], 95),
+      p99Ms: percentile(timing?.samples ?? [], 99)
     };
   }
 

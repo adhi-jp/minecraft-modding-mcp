@@ -88,6 +88,33 @@ function readSearchIoMetrics(service: { getRuntimeMetrics: () => unknown }): {
   };
 }
 
+function readSearchModeMetrics(service: { getRuntimeMetrics: () => unknown }): {
+  autoCount: number;
+  tokenCount: number;
+  literalCount: number;
+  explicitLiteralCount: number;
+} {
+  const snapshot = service.getRuntimeMetrics() as Record<string, unknown>;
+  return {
+    autoCount:
+      typeof snapshot.search_query_mode_auto_count === "number"
+        ? snapshot.search_query_mode_auto_count
+        : -1,
+    tokenCount:
+      typeof snapshot.search_query_mode_token_count === "number"
+        ? snapshot.search_query_mode_token_count
+        : -1,
+    literalCount:
+      typeof snapshot.search_query_mode_literal_count === "number"
+        ? snapshot.search_query_mode_literal_count
+        : -1,
+    explicitLiteralCount:
+      typeof snapshot.search_literal_explicit_count === "number"
+        ? snapshot.search_literal_explicit_count
+        : -1
+  };
+}
+
 function readListFilesDurationMetric(service: { getRuntimeMetrics: () => unknown }): {
   count: number;
   totalMs: number;
@@ -7587,7 +7614,7 @@ test("F-01: resolveArtifact with strictVersion=false still returns version-appro
 // ---------------------------------------------------------------------------
 // F-03: queryMode search fallback for separator-containing queries
 // ---------------------------------------------------------------------------
-test("F-03: search-class-source queryMode=auto falls back to literal for separator queries", async () => {
+test("F-03: search-class-source queryMode=auto keeps separator queries on the indexed path", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-f03-auto-"));
   const service = new SourceService(buildTestConfig(root));
@@ -7603,7 +7630,9 @@ test("F-03: search-class-source queryMode=auto falls back to literal for separat
     target: { kind: "jar", value: jarPath }
   } as any);
 
-  // queryMode=auto (default) should find "dispatcher.register" via fallback
+  const beforePathMetrics = readSearchPathMetrics(service);
+  const beforeModeMetrics = readSearchModeMetrics(service);
+
   const result = await service.searchClassSource({
     artifactId: resolved.artifactId,
     query: "dispatcher.register",
@@ -7611,11 +7640,19 @@ test("F-03: search-class-source queryMode=auto falls back to literal for separat
     match: "contains",
     queryMode: "auto"
   });
-  assert.ok(result.hits.length > 0, "auto mode should find separator-containing query via fallback");
+
+  const afterPathMetrics = readSearchPathMetrics(service);
+  const afterModeMetrics = readSearchModeMetrics(service);
+
+  assert.ok(result.hits.length > 0, "auto mode should find separator-containing query through indexed search");
   assert.equal("totalApprox" in result, false);
+  assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
+  assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
+  assert.equal(afterModeMetrics.autoCount - beforeModeMetrics.autoCount, 1);
+  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
 });
 
-test("F-03: search-class-source queryMode=token returns 0 hits for separator query", async () => {
+test("F-03: search-class-source queryMode=token resolves separator query through normalized indexed lookup", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-f03-token-"));
   const service = new SourceService(buildTestConfig(root));
@@ -7630,7 +7667,9 @@ test("F-03: search-class-source queryMode=token returns 0 hits for separator que
     target: { kind: "jar", value: jarPath }
   } as any);
 
-  // queryMode=token should NOT find "dispatcher.register" (FTS5 splits on dots)
+  const beforePathMetrics = readSearchPathMetrics(service);
+  const beforeModeMetrics = readSearchModeMetrics(service);
+
   const result = await service.searchClassSource({
     artifactId: resolved.artifactId,
     query: "dispatcher.register",
@@ -7638,7 +7677,15 @@ test("F-03: search-class-source queryMode=token returns 0 hits for separator que
     match: "contains",
     queryMode: "token"
   });
-  assert.equal(result.hits.length, 0, "token mode should not find separator-split query in FTS5");
+
+  const afterPathMetrics = readSearchPathMetrics(service);
+  const afterModeMetrics = readSearchModeMetrics(service);
+
+  assert.ok(result.hits.length > 0, "token mode should find separator-containing query through the indexed path");
+  assert.equal(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits, 0);
+  assert.ok(afterPathMetrics.indexedHits - beforePathMetrics.indexedHits >= 1);
+  assert.equal(afterModeMetrics.tokenCount - beforeModeMetrics.tokenCount, 1);
+  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 0);
 });
 
 test("F-03: search-class-source queryMode=token does not fallback when indexed search is disabled", async () => {
@@ -7681,7 +7728,9 @@ test("F-03: search-class-source queryMode=literal forces substring scan", async 
     target: { kind: "jar", value: jarPath }
   } as any);
 
-  // queryMode=literal should always find via substring scan
+  const beforePathMetrics = readSearchPathMetrics(service);
+  const beforeModeMetrics = readSearchModeMetrics(service);
+
   const result = await service.searchClassSource({
     artifactId: resolved.artifactId,
     query: "dispatcher.register",
@@ -7689,7 +7738,14 @@ test("F-03: search-class-source queryMode=literal forces substring scan", async 
     match: "contains",
     queryMode: "literal"
   });
+
+  const afterPathMetrics = readSearchPathMetrics(service);
+  const afterModeMetrics = readSearchModeMetrics(service);
+
   assert.ok(result.hits.length > 0, "literal mode should find via substring scan");
+  assert.ok(afterPathMetrics.fallbackHits - beforePathMetrics.fallbackHits >= 1);
+  assert.equal(afterModeMetrics.literalCount - beforeModeMetrics.literalCount, 1);
+  assert.equal(afterModeMetrics.explicitLiteralCount - beforeModeMetrics.explicitLiteralCount, 1);
 });
 
 test("resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND", async () => {

@@ -12,6 +12,7 @@ import type {
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolResult,
+  createSummarySubject,
   type DetailLevel,
   type Summary
 } from "./response-contract.js";
@@ -188,6 +189,15 @@ export class AnalyzeSymbolService {
               headline: output.resolved
                 ? `The symbol exists in ${output.mappingContext.version}.`
                 : `The symbol could not be resolved in ${output.mappingContext.version}.`,
+              subject: createSummarySubject({
+                task: "exists",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                owner: input.subject.owner,
+                descriptor: input.subject.descriptor,
+                version: input.version,
+                sourceMapping: input.sourceMapping ?? "obfuscated"
+              }),
               counts: {
                 candidates: output.candidateCount
               }
@@ -223,6 +233,16 @@ export class AnalyzeSymbolService {
               headline: output.resolved
                 ? `Mapped the symbol into ${output.mappingContext.targetMapping}.`
                 : `Found ${output.candidateCount} candidate mappings.`,
+              subject: createSummarySubject({
+                task: "map",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                owner: input.subject.owner,
+                descriptor: input.subject.descriptor,
+                version: input.version,
+                sourceMapping: input.sourceMapping ?? "obfuscated",
+                targetMapping: input.targetMapping ?? "mojang"
+              }),
               counts: {
                 candidates: output.candidateCount
               }
@@ -262,6 +282,16 @@ export class AnalyzeSymbolService {
               headline: output.resolved
                 ? "Resolved the exact method mapping."
                 : "Could not resolve the exact method mapping.",
+              subject: createSummarySubject({
+                task: "exact-map",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                owner: input.subject.owner,
+                descriptor: input.subject.descriptor,
+                version: input.version,
+                sourceMapping: input.sourceMapping ?? "obfuscated",
+                targetMapping: input.targetMapping ?? "mojang"
+              }),
               counts: {
                 candidates: output.candidateCount
               }
@@ -292,6 +322,15 @@ export class AnalyzeSymbolService {
               headline: output.presence.firstSeen
                 ? `Tracked the symbol from ${output.range.fromVersion} to ${output.range.toVersion}.`
                 : "The symbol was not found in the scanned version range.",
+              subject: createSummarySubject({
+                task: "lifecycle",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                owner: input.subject.owner,
+                descriptor: input.subject.descriptor,
+                version: input.version,
+                sourceMapping: input.sourceMapping ?? "obfuscated"
+              }),
               counts: {
                 scannedVersions: output.range.scannedCount
               }
@@ -325,6 +364,16 @@ export class AnalyzeSymbolService {
               headline: output.workspaceDetection.resolved
                 ? `Resolved compile-visible symbol using ${output.workspaceDetection.mappingApplied} workspace mappings.`
                 : "Workspace compile mapping could not be detected confidently.",
+              subject: createSummarySubject({
+                task: "workspace",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                owner: input.subject.owner,
+                descriptor: input.subject.descriptor,
+                projectPath: input.projectPath,
+                version: input.version ?? "unknown",
+                sourceMapping: input.sourceMapping ?? "obfuscated"
+              }),
               counts: {
                 candidates: output.candidateCount
               }
@@ -354,6 +403,13 @@ export class AnalyzeSymbolService {
             summary: {
               status: "ok",
               headline: `Built an API overview for ${output.className}.`,
+              subject: createSummarySubject({
+                task: "api-overview",
+                kind: input.subject.kind,
+                name: input.subject.name,
+                version: input.version,
+                classNameMapping: input.classNameMapping ?? "obfuscated"
+              }),
               counts: {
                 rows: output.rowCount,
                 ambiguousRows: output.ambiguousRowCount ?? 0

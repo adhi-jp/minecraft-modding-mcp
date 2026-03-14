@@ -9,6 +9,7 @@ import {
   buildEntryToolMeta,
   buildEntryToolResult,
   createNextAction,
+  createSummarySubject,
   createTruncationMeta,
   type Summary
 } from "./response-contract.js";
@@ -135,6 +136,14 @@ export class CompareMinecraftService {
             summary: {
               status: compareStatusFromCounts(changedCount),
               headline: `Compared ${output.fromVersion} to ${output.toVersion}.`,
+              subject: createSummarySubject({
+                task: "versions",
+                kind: input.subject.kind,
+                fromVersion: input.subject.fromVersion,
+                toVersion: input.subject.toVersion,
+                packageFilter: "packageFilter" in input.subject ? input.subject.packageFilter : undefined,
+                registry: input.subject.kind === "registry" ? input.subject.registry : undefined
+              }),
               counts: {
                 addedClasses: output.classes?.addedCount ?? 0,
                 removedClasses: output.classes?.removedCount ?? 0,
@@ -223,6 +232,15 @@ export class CompareMinecraftService {
             summary: {
               status: compareStatusFromCounts(changedCount),
               headline: `Compared ${output.query.className} between ${output.range.fromVersion} and ${output.range.toVersion}.`,
+              subject: createSummarySubject({
+                task: "class-diff",
+                kind: "class",
+                className: input.subject.className,
+                fromVersion: input.subject.fromVersion,
+                toVersion: input.subject.toVersion,
+                mapping: input.subject.mapping,
+                sourcePriority: input.subject.sourcePriority
+              }),
               counts: output.summary.total
             },
             blocks: {
@@ -320,6 +338,13 @@ export class CompareMinecraftService {
           headline: partialDetail
             ? `Compared registry changes between ${subject.fromVersion} and ${subject.toVersion} with partial detail.`
             : `Compared registry changes between ${subject.fromVersion} and ${subject.toVersion}.`,
+          subject: createSummarySubject({
+            task: "registry-diff",
+            kind: "registry",
+            fromVersion: subject.fromVersion,
+            toVersion: subject.toVersion,
+            registry: subject.registry
+          }),
           counts: {
             changedRegistries: registrySummary.registriesChanged,
             addedEntries: registrySummary.totalAdded,
@@ -391,6 +416,28 @@ export class CompareMinecraftService {
         const classSignals = (compare.classes?.addedCount ?? 0) + (compare.classes?.removedCount ?? 0);
         const registrySignals = compare.registry?.summary.registriesChanged ?? 0;
         const status = compareStatusFromCounts(classSignals + registrySignals);
+        const representativeClassName = compare.classes?.added[0] ?? compare.classes?.removed[0];
+        const nextActions = representativeClassName
+          ? [
+              createNextAction("compare-minecraft", {
+                task: "class-diff",
+                subject: {
+                  kind: "class",
+                  className: representativeClassName,
+                  fromVersion: subject.fromVersion,
+                  toVersion: subject.toVersion
+                }
+              })
+            ]
+          : [
+              createNextAction("inspect-minecraft", {
+                task: "artifact",
+                subject: {
+                  kind: "version",
+                  version: subject.toVersion
+                }
+              })
+            ];
         return {
           ...buildEntryToolResult({
             task: "migration-overview",
@@ -399,10 +446,17 @@ export class CompareMinecraftService {
             summary: {
               status,
               headline: `Summarized migration impact from ${subject.fromVersion} to ${subject.toVersion}.`,
+              subject: createSummarySubject({
+                task: "migration-overview",
+                kind: "version-pair",
+                fromVersion: subject.fromVersion,
+                toVersion: subject.toVersion
+              }),
               counts: {
                 classSignals,
                 registrySignals
-              }
+              },
+              nextActions
             },
             blocks: {
               comparison: subject,
@@ -414,28 +468,7 @@ export class CompareMinecraftService {
                     : registrySignals > 0
                       ? "registry"
                       : "minimal",
-                nextActions: [
-                  {
-                    tool: classSignals > 0 ? "compare-minecraft" : "inspect-minecraft",
-                    params: classSignals > 0
-                      ? {
-                          task: "class-diff",
-                          subject: {
-                            kind: "class",
-                            className: "net.minecraft.world.item.ItemStack",
-                            fromVersion: subject.fromVersion,
-                            toVersion: subject.toVersion
-                          }
-                        }
-                      : {
-                          task: "artifact",
-                          subject: {
-                            kind: "version",
-                            version: subject.toVersion
-                          }
-                        }
-                  }
-                ]
+                nextActions
               }
             }
           }),

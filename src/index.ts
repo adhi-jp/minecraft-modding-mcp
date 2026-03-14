@@ -274,7 +274,7 @@ const searchClassSourceShape = {
   packagePrefix: optionalNonEmptyString,
   fileGlob: optionalNonEmptyString,
   symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
-  queryMode: z.enum(["auto", "token", "literal"]).optional().describe("auto (default): FTS5 with literal fallback for separator queries; token: FTS5 only; literal: substring scan only"),
+  queryMode: z.enum(["auto", "token", "literal"]).optional().describe("auto (default): indexed search, including separator queries like foo.bar; token: indexed-only; literal: explicit substring scan only"),
   limit: optionalPositiveInt.describe("default 20"),
   cursor: optionalNonEmptyString
 };

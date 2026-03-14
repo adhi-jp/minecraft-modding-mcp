@@ -7,6 +7,17 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+- `search-class-source` `queryMode="auto" | "token"` now keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path instead of silently retrying a full substring scan; `queryMode="literal"` remains the explicit opt-in scan mode.
+- v3 entry tools now include `result.summary.subject` consistently, and high-confidence follow-up flows such as migration overviews, remap previews, cache previews, and entry-tool search misses now surface `summary.nextActions`.
+
+### Performance
+- Explicit text/path scan fallbacks no longer materialize the full scoped file-path list before scanning, reducing heap growth and keeping full-scan cost more predictable on large artifacts.
+
+### Documentation
+- README tool tables are now validated from a shared contract manifest in code, correcting the documented `compare-minecraft` class-only `subject.kind="class".sourcePriority` input and aligning the published `inspect-minecraft` / `validate-project` output summaries with the implementation.
+- Clarified the updated `search-class-source` `queryMode` behavior and the summary-first entry-tool follow-up contract in both READMEs.
+
 ## [3.0.0] - 2026-03-09
 
 ### Added

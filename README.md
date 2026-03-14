@@ -174,18 +174,20 @@ Pass environment variables to override defaults:
 
 ### v3 Entry Tools
 
-These are the default starting points for v3 workflows. They keep the public `{ result?, error?, meta }` envelope, always return `result.summary`, and share `detail: "summary" | "standard" | "full"` plus opt-in `include[]` groups. Mutating entry tools use `executionMode: "preview" | "apply"` so preview is explicit in the public contract.
+These are the default starting points for v3 workflows. They keep the public `{ result?, error?, meta }` envelope, always return `result.summary`, and structure `summary.subject` plus `summary.nextActions` so follow-up tool calls can be composed mechanically. They also share `detail: "summary" | "standard" | "full"` plus opt-in `include[]` groups. Mutating entry tools use `executionMode: "preview" | "apply"` so preview is explicit in the public contract.
 
+<!-- BEGIN GENERATED TOOL TABLE: v3-entry-tools -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
-| `inspect-minecraft` | Start from a version, artifact, class, file, search query, or workspace and route to the most relevant Minecraft inspection flow | `task?`, `subject?`, `detail?`, `include?`, `limit?`, `cursor?`, `includeSnapshots?` | `result.summary`, `subject`, `artifact?`, `class?`, `search?`, `file?`, `files?` |
+| `inspect-minecraft` | Start from a version, artifact, class, file, search query, or workspace and route to the most relevant Minecraft inspection flow | `task?`, `subject?`, `detail?`, `include?`, `limit?`, `cursor?`, `includeSnapshots?` | `result.summary`, `versions?`, `subject`, `artifact?`, `class?`, `source?`, `members?`, `search?`, `file?`, `files?` |
 | `analyze-symbol` | One entry point for symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol analysis, and API overview | `task`, `subject`, `version?`, `sourceMapping?`, `targetMapping?`, `projectPath?`, `classNameMapping?`, `signatureMode?`, `nameMode?`, `includeKinds?`, `maxRows?`, `maxCandidates?`, `detail?`, `include?` | `result.summary`, `match?`, `candidates?`, `ambiguity?`, `matrix?`, `workspace?` |
-| `compare-minecraft` | Compare version pairs, class signatures, registries, or produce a migration-oriented overview | `task?`, `subject`, `detail?`, `include?`, `sourcePriority?`, `maxClassResults?`, `maxEntriesPerRegistry?`, `includeFullDiff?`, `limit?` | `result.summary`, `comparison`, `classes?`, `classDiff?`, `registry?`, `migration?` |
+| `compare-minecraft` | Compare version pairs, class signatures, registries, or produce a migration-oriented overview | `task?`, `subject`, `detail?`, `include?`, `subject.kind="class".sourcePriority?`, `maxClassResults?`, `maxEntriesPerRegistry?`, `includeFullDiff?`, `limit?` | `result.summary`, `comparison`, `classes?`, `classDiff?`, `registry?`, `migration?` |
 | `analyze-mod` | Metadata-first entry point for mod summary, decompile/search flows, class source, and safe remap previews/applies | `task`, `subject`, `query?`, `searchType?`, `targetMapping?`, `outputJar?`, `executionMode?`, `includeFiles?`, `maxFiles?`, `maxLines?`, `maxChars?`, `limit?`, `detail?`, `include?` | `result.summary`, `metadata?`, `decompile?`, `hits?`, `source?`, `operation?` |
-| `validate-project` | Project-level validation entry for workspace summaries plus direct Mixin and Access Widener validation | `task`, `subject`, `version?`, `mapping?`, `sourcePriority?`, `scope?`, `preferProjectVersion?`, `preferProjectMapping?`, `sourceRoots?`, `configPaths?`, `minSeverity?`, `hideUncertain?`, `explain?`, `warningMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `includeIssues?`, `detail?`, `include?` | `result.summary`, `project`, `workspace?`, `issues?`, `recovery?` |
+| `validate-project` | Project-level validation entry for workspace summaries plus direct Mixin and Access Widener validation | `task`, `subject`, `version?`, `mapping?`, `sourcePriority?`, `scope?`, `preferProjectVersion?`, `preferProjectMapping?`, `sourceRoots?`, `configPaths?`, `minSeverity?`, `hideUncertain?`, `explain?`, `warningMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `includeIssues?`, `detail?`, `include?` | `result.summary`, `project`, `workspace?`, `issues?` |
 | `manage-cache` | User-facing cache summary, listing, verification, previewed deletion/pruning/rebuild, and explicit apply operations | `action`, `cacheKinds?`, `selector?`, `executionMode?`, `detail?`, `include?`, `limit?`, `cursor?` | `result.summary`, `stats?`, `cacheEntries?`, `operation?`, `meta.pagination.nextCursor?` |
+<!-- END GENERATED TOOL TABLE: v3-entry-tools -->
 
-`compare-minecraft` forwards `sourcePriority` for class-diff flows, matching `diff-class-signatures`.
+`compare-minecraft` forwards `subject.kind="class".sourcePriority` for class-diff flows, matching `diff-class-signatures`.
 `inspect-minecraft` also accepts `subject.kind="workspace"` with `focus.kind="class"` for `task="class-overview" | "class-source" | "class-members"` without requiring an explicit `artifact`; it resolves the artifact from the workspace version first.
 `compare-minecraft` summary-mode version comparisons now expose clipped class and registry samples through `meta.truncated`, including mixed `include=["classes"]` / `["registry"]` requests where the other summary-side group was clipped.
 When `registry-diff` can only load one side of detailed registry data, it returns `summary.status="partial"` plus recovery-oriented `nextActions` instead of failing the whole call.
@@ -199,6 +201,7 @@ If you already know the exact low-level operation you want, the retained expert 
 
 Tools for browsing Minecraft versions, resolving source artifacts, and reading/searching decompiled source code.
 
+<!-- BEGIN GENERATED TOOL TABLE: source-exploration -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang manifest + local cache | `includeSnapshots?`, `limit?` | `result.latest`, `result.releases[]`, `meta.warnings[]` |
@@ -210,21 +213,25 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading/s
 | `get-artifact-file` | Read full source file with byte guard | `artifactId`, `filePath`, `maxBytes?` | `content`, `contentBytes`, `truncated`, `mappingApplied`, `returnedNamespace`, `artifactContents` |
 | `list-artifact-files` | List indexed source file paths with cursor pagination | `artifactId`, `prefix?`, `limit?`, `cursor?` | `items[]`, `nextCursor?`, `mappingApplied`, `artifactContents`, `warnings[]` |
 | `index-artifact` | Rebuild index metadata for an existing artifact | `artifactId`, `force?` | `reindexed`, `reason`, `counts`, `indexedAt`, `durationMs` |
+<!-- END GENERATED TOOL TABLE: source-exploration -->
 
 ### Version Comparison & Symbol Tracking
 
 Tools for comparing class/registry changes across Minecraft versions and tracing symbol existence over time.
 
+<!-- BEGIN GENERATED TOOL TABLE: version-comparison-symbol-tracking -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `trace-symbol-lifecycle` | Trace when `Class.method` exists across Minecraft versions (`descriptor` omitted = name-only lookup) | `symbol`, `descriptor?`, `fromVersion?`, `toVersion?`, `mapping?`, `sourcePriority?`, `includeSnapshots?`, `maxVersions?`, `includeTimeline?` | `presence.firstSeen`, `presence.lastSeen`, `presence.missingBetween[]`, `presence.existsNow`, `timeline?`, `warnings[]` |
 | `diff-class-signatures` | Compare one class between two versions and return member deltas | `className`, `fromVersion`, `toVersion`, `mapping?`, `sourcePriority?`, `includeFullDiff?` | `classChange`, `constructors/methods/fields.{added,removed,modified}`, `modified`, `modified[].{key,changed,from?,to?}`, `summary`, `warnings[]` |
 | `compare-versions` | Compare class/registry changes between two versions | `fromVersion`, `toVersion`, `category?`, `packageFilter?`, `maxClassResults?` | `classes`, `registry`, `summary`, `warnings[]` |
+<!-- END GENERATED TOOL TABLE: version-comparison-symbol-tracking -->
 
 ### Mapping & Symbols
 
 Tools for converting symbol names between namespaces and checking symbol existence.
 
+<!-- BEGIN GENERATED TOOL TABLE: mapping-symbols -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `find-mapping` | Find mapping candidates for class/field/method symbols between namespaces | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `targetMapping`, `sourcePriority?`, `disambiguation?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `ambiguityReasons?`, `provenance?`, `meta.warnings[]` |
@@ -232,21 +239,25 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `get-class-api-matrix` | Show one class API as a mapping matrix (`obfuscated/mojang/intermediary/yarn`) | `version`, `className`, `classNameMapping`, `includeKinds?`, `sourcePriority?`, `maxRows?` | `classIdentity`, `rows[]`, `rowCount`, `rowsTruncated?`, `ambiguousRowCount?`, `meta.warnings[]` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names for a Gradle workspace (`build.gradle/.kts`) | `projectPath`, `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `workspaceDetection`, `meta.warnings[]` |
 | `check-symbol-exists` | Strict symbol presence check for class/field/method | `version`, `kind`, `name`, `owner?`, `descriptor?`, `sourceMapping`, `sourcePriority?`, `nameMode?`, `signatureMode?`, `maxCandidates?` | `querySymbol`, `mappingContext`, `resolved`, `status`, `resolvedSymbol?`, `candidates[]`, `candidateCount`, `candidatesTruncated?`, `meta.warnings[]` |
+<!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
 ### NBT Utilities
 
 Tools for decoding, patching, and encoding Java Edition NBT binary data using a typed JSON representation.
 
+<!-- BEGIN GENERATED TOOL TABLE: nbt-utilities -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `nbt-to-json` | Decode Java Edition NBT binary (`base64`) to typed JSON | `nbtBase64`, `compression?` (`none`, `gzip`, `auto`) | `typedJson`, `meta.compressionDetected`, `meta.inputBytes` |
 | `nbt-apply-json-patch` | Apply RFC 6902 patch (`add/remove/replace/test`) to typed NBT JSON | `typedJson`, `patch` | `typedJson`, `meta.appliedOps`, `meta.testOps`, `meta.changed` |
 | `json-to-nbt` | Encode typed JSON back to Java Edition NBT binary (`base64`) | `typedJson`, `compression?` (`none`, `gzip`) | `nbtBase64`, `meta.outputBytes`, `meta.compressionApplied` |
+<!-- END GENERATED TOOL TABLE: nbt-utilities -->
 
 ### Mod Analysis
 
 Tools for extracting metadata from mod JARs, decompiling mod source, searching mod code, and remapping mod namespaces.
 
+<!-- BEGIN GENERATED TOOL TABLE: mod-analysis -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `analyze-mod-jar` | Extract mod metadata/dependencies/entrypoints from mod JAR | `jarPath`, `includeClasses?` | `modId`, `loader`, `jarKind`, `dependencies`, `entrypoints`, `mixinConfigs`, class stats |
@@ -254,24 +265,29 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 | `get-mod-class-source` | Read one class source from decompiled mod cache | `jarPath`, `className`, `maxLines?`, `maxChars?`, `outputFile?` | `className`, `content`, `totalLines`, `truncated?`, `charsTruncated?`, `outputFilePath?`, `warnings[]` |
 | `search-mod-source` | Search decompiled mod source by class/method/field/content | `jarPath`, `query`, `searchType?`, `limit?` | `hits[]`, `totalHits`, `truncated`, `warnings[]` |
 | `remap-mod-jar` | Remap a Fabric/Quilt mod JAR to yarn/mojang names; Mojang-mapped inputs are copied for `targetMapping="mojang"` | `inputJar`, `targetMapping`, `mcVersion?`, `outputJar?` | `outputJar`, `mcVersion`, `fromMapping`, `targetMapping`, `resolvedTargetNamespace`, `warnings[]` |
+<!-- END GENERATED TOOL TABLE: mod-analysis -->
 
 ### Validation
 
 Tools for validating Mixin source and Access Widener files against a target Minecraft version.
 
+<!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `validate-mixin` | Parse/validate Mixin source against target Minecraft version | `input`, `sourceRoots?`, `version`, `mapping?`, `sourcePriority?`, `projectPath?`, `scope?`, `preferProjectVersion?`, `minSeverity?`, `hideUncertain?`, `warningMode?`, `preferProjectMapping?`, `reportMode?`, `warningCategoryFilter?`, `treatInfoAsWarning?`, `explain?`, `includeIssues?` | `mode`, `results[].validationStatus`, `summary.partial`, `issueSummary?`, `provenance?`, `incompleteReasons?`, `toolHealth?`, `confidenceScore?`, `confidenceBreakdown?` |
 | `validate-access-widener` | Parse/validate Access Widener content against target version | `content`, `version`, `mapping?`, `sourcePriority?` | `valid`, `issues[]`, `warnings[]`, `summary` |
+<!-- END GENERATED TOOL TABLE: validation -->
 
 ### Registry & Diagnostics
 
 Tools for querying generated registry data and inspecting server runtime state.
 
+<!-- BEGIN GENERATED TOOL TABLE: registry-diagnostics -->
 | Tool | Purpose | Key Inputs | Key Outputs |
 | --- | --- | --- | --- |
 | `get-registry-data` | Get generated registry snapshots (blocks/items/entities etc.) | `version`, `registry?`, `includeData?`, `maxEntriesPerRegistry?` | `registries`, `data?`, `entryCount`, `returnedEntryCount?`, `registryEntryCounts?`, `dataTruncated?`, `warnings[]` |
 | `get-runtime-metrics` | Inspect runtime counters and latency snapshots | none | `result.*` runtime metrics, `meta` envelope |
+<!-- END GENERATED TOOL TABLE: registry-diagnostics -->
 
 ### Tool Constraints
 
@@ -327,7 +343,7 @@ Bare string `target` values now return `ERR_INVALID_INPUT` with a schema-correct
 `find-class` returns an explanatory warning when an `obfuscated` artifact is queried with names that look like deobfuscated Mojang classes.
 `find-class` suppresses non-vanilla matches for vanilla-looking queries on artifacts flagged with `partial-source-no-net-minecraft`; in that situation it returns a warning instead of unrelated modded classes.
 `search-class-source` uses `limit: 20` by default.
-`search-class-source` `queryMode` controls text search strategy: `auto` (default) uses indexed token search with literal fallback for separator queries, `token` keeps indexed token behavior only, and `literal` uses substring scan only.
+`search-class-source` `queryMode` controls text search strategy: `auto` (default) and `token` stay on the indexed path, including separator queries such as `foo.bar` / `foo_bar` / `foo$bar`, while `literal` is the explicit substring-scan mode.
 `search-class-source` with `match=regex` enforces `query.length <= 200` and a strict result cap of `100`.
 `search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`.
 Use `get-artifact-file` or `get-class-source` to inspect returned files after search.

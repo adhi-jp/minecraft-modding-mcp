@@ -102,6 +102,14 @@ export function createNextAction(tool: string, params: Record<string, unknown>):
   return { tool, params };
 }
 
+export function createSummarySubject(
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined)
+  );
+}
+
 export function createTruncationMeta(input: {
   omittedGroups?: string[];
   nextActions?: NextAction[];

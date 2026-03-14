@@ -31,6 +31,7 @@ export interface ListFilesOptions {
 export interface SearchFilesOptions {
   limit: number;
   query: string;
+  match?: "exact" | "prefix" | "contains" | "regex";
   cursor?: string;
   mode?: "mixed" | "text" | "path";
   fetchLimitOverride?: number;
@@ -171,6 +172,31 @@ function buildPreview(content: string, query: string): string {
   const prefix = start > 0 ? "..." : "";
   const suffix = end < content.length ? "..." : "";
   return `${prefix}${content.slice(start, end)}${suffix}`.replace(/\s+/g, " ").trim();
+}
+
+function tokenizeIndexedQuery(query: string): string[] {
+  return query.match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function buildIndexedMatchQuery(
+  query: string,
+  match: SearchFilesOptions["match"]
+): string {
+  const tokens = tokenizeIndexedQuery(query.trim());
+  if (tokens.length === 0) {
+    return query.trim();
+  }
+
+  // Separator-heavy queries become an order-agnostic FTS5 MATCH expression.
+  // Whitespace is implicit AND, which keeps "dispatcher.register" on the indexed
+  // path while SourceService re-checks hydrated path/content matches before
+  // returning hits. Callers can still use literal mode for exact substring scans.
+  return tokens.map((token, index) => {
+    if (match === "prefix" && index === tokens.length - 1) {
+      return `${token}*`;
+    }
+    return token;
+  }).join(" ");
 }
 
 export class FilesRepo {
@@ -386,6 +412,7 @@ export class FilesRepo {
 
     const cursor = parseSearchCursor(options.cursor);
     const likeQuery = `%${normalized}%`;
+    const ftsQuery = buildIndexedMatchQuery(normalized, options.match);
     const mode = options.mode ?? "mixed";
 
     // Cursor-adaptive fetch limit: when no cursor, use a generous limit;
@@ -428,9 +455,9 @@ export class FilesRepo {
     const mergedByPath = new Map<string, SearchFileCandidateResult>(merged.map((hit) => [hit.filePath, hit]));
 
     let contentRows: { file_path: string; rank: number }[] = [];
-    if (includeContent) {
+    if (includeContent && ftsQuery) {
       try {
-        contentRows = this.searchFtsStmt.all(artifactId, normalized, fetchLimit) as {
+        contentRows = this.searchFtsStmt.all(artifactId, ftsQuery, fetchLimit) as {
           file_path: string;
           rank: number;
         }[];
@@ -441,7 +468,7 @@ export class FilesRepo {
         }
         log("warn", "storage.files.fts_syntax_error", {
           artifactId,
-          query: normalized,
+          query: ftsQuery,
           message
         });
       }
@@ -530,15 +557,19 @@ export class FilesRepo {
     if (!normalized) {
       return 0;
     }
+    const ftsQuery = buildIndexedMatchQuery(normalized, "contains");
+    if (!ftsQuery) {
+      return 0;
+    }
     try {
       const row = this.db.prepare(
         `SELECT COUNT(*) AS cnt FROM files_fts WHERE artifact_id = ? AND files_fts MATCH ?`
-      ).get(artifactId, normalized) as { cnt: number } | undefined;
+      ).get(artifactId, ftsQuery) as { cnt: number } | undefined;
       return row?.cnt ?? 0;
     } catch {
       log("warn", "storage.files.count_text_candidates_failed", {
         artifactId,
-        query: normalized
+        query: ftsQuery
       });
       return 0;
     }

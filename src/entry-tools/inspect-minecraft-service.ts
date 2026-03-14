@@ -16,6 +16,7 @@ import {
   buildEntryToolResult,
   buildEntryToolMeta,
   createNextAction,
+  createSummarySubject,
   createTruncationMeta,
   type DetailLevel,
   type NextAction,
@@ -469,6 +470,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Found ${versions.totalAvailable} Minecraft versions.`,
+      subject: createSummarySubject({
+        task: "versions",
+        kind: "versions",
+        includeSnapshots: input.includeSnapshots,
+        limit: input.limit
+      }),
       counts: {
         releases: versions.releases.length,
         snapshots: versions.snapshots?.length ?? 0
@@ -513,6 +520,10 @@ export class InspectMinecraftService {
       const summary: Summary = {
         status: "blocked",
         headline: "Could not resolve an artifact without a Minecraft version.",
+        subject: createSummarySubject({
+          task: "artifact",
+          requested: subject
+        }),
         nextActions: nextActionsOrUndefined([
           createNextAction("inspect-minecraft", {
             task: "artifact",
@@ -543,6 +554,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Resolved artifact ${resolved.artifactId}.`,
+      subject: createSummarySubject({
+        task: "artifact",
+        requested: subject,
+        artifactId: resolved.artifactId,
+        version: resolved.version
+      }),
       counts: {
         warnings: resolved.warnings.length
       }
@@ -596,7 +613,12 @@ export class InspectMinecraftService {
     if (!artifact.artifactId) {
       const summary: Summary = {
         status: "blocked",
-        headline: `Could not resolve artifact context for ${className}.`
+        headline: `Could not resolve artifact context for ${className}.`,
+        subject: createSummarySubject({
+          task: "class-overview",
+          requested: subject,
+          className
+        })
       };
       return {
         ...buildEntryToolResult({
@@ -624,7 +646,13 @@ export class InspectMinecraftService {
     if (matches.total === 0) {
       const summary: Summary = {
         status: "not_found",
-        headline: `No class match was found for ${className}.`
+        headline: `No class match was found for ${className}.`,
+        subject: createSummarySubject({
+          task: "class-overview",
+          requested: subject,
+          className,
+          artifactId: artifact.artifactId
+        })
       };
       return {
         ...buildEntryToolResult({
@@ -664,6 +692,12 @@ export class InspectMinecraftService {
       const summary: Summary = {
         status: "ambiguous",
         headline: `Found ${matches.total} class matches for ${className}.`,
+        subject: createSummarySubject({
+          task: "class-overview",
+          requested: subject,
+          className,
+          artifactId: artifact.artifactId
+        }),
         counts: {
           matches: matches.total
         },
@@ -699,6 +733,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Resolved class overview for ${match.qualifiedName}.`,
+      subject: createSummarySubject({
+        task: "class-overview",
+        requested: subject,
+        className: match.qualifiedName,
+        artifactId: artifact.artifactId
+      }),
       counts: {
         totalLines: metadata.totalLines
       },
@@ -778,6 +818,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Resolved source for ${source.className}.`,
+      subject: createSummarySubject({
+        task: "class-source",
+        requested: subject,
+        className: source.className,
+        artifactId: source.artifactId
+      }),
       counts: {
         totalLines: source.totalLines
       }
@@ -837,6 +883,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: members.truncated ? "partial" : "ok",
       headline: `Collected ${members.counts.total} members for ${members.className}.`,
+      subject: createSummarySubject({
+        task: "class-members",
+        requested: subject,
+        className: members.className,
+        artifactId: members.artifactId
+      }),
       counts: members.counts
     };
     return {
@@ -921,14 +973,70 @@ export class InspectMinecraftService {
     });
 
     const sampledHits = capArray(search.hits, 5);
+    const isAutoSeparatorMiss =
+      search.hits.length === 0 &&
+      (searchSubject.queryMode ?? "auto") === "auto" &&
+      /[._$]/.test(searchSubject.query);
+    const literalRetrySubject = subject.kind === "search"
+      ? {
+          ...subject,
+          queryMode: "literal" as const
+        }
+      : {
+          ...subject,
+          focus: {
+            ...searchSubject,
+            kind: "search" as const,
+            queryMode: "literal" as const
+          }
+        };
     const summary: Summary = {
       status: search.hits.length > 0 ? "ok" : "not_found",
       headline: search.hits.length > 0
         ? `Found ${search.hits.length} source hits for ${searchSubject.query}.`
         : `No source hits were found for ${searchSubject.query}.`,
+      subject: createSummarySubject({
+        task: "search",
+        requested: subject,
+        query: searchSubject.query,
+        artifactId: artifact.artifactId
+      }),
       counts: {
         hits: search.hits.length
-      }
+      },
+      nextActions: nextActionsOrUndefined([
+        ...(search.hits.length > 0
+          ? [
+              createNextAction("inspect-minecraft", {
+                task: "file",
+                subject: {
+                  kind: "file",
+                  filePath: search.hits[0]!.filePath,
+                  artifact: {
+                    type: "resolved-id",
+                    artifactId: artifact.artifactId
+                  }
+                },
+                include: ["source"]
+              })
+            ]
+          : []),
+        ...(isAutoSeparatorMiss
+          ? [
+              createNextAction("inspect-minecraft", {
+                task: "search",
+                subject: literalRetrySubject
+              })
+            ]
+          : [])
+      ]),
+      ...(isAutoSeparatorMiss
+        ? {
+            notes: [
+              "Separator query returned no indexed hits. Retry with queryMode=\"literal\" for an explicit full substring scan."
+            ]
+          }
+        : {})
     };
     return {
       ...buildEntryToolResult({
@@ -977,6 +1085,12 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Read ${file.filePath}.`,
+      subject: createSummarySubject({
+        task: "file",
+        requested: subject,
+        filePath: file.filePath,
+        artifactId: artifact.artifactId
+      }),
       counts: {
         bytes: file.contentBytes
       }
@@ -1025,9 +1139,31 @@ export class InspectMinecraftService {
     const summary: Summary = {
       status: "ok",
       headline: `Listed ${files.items.length} files for ${artifact.artifactId}.`,
+      subject: createSummarySubject({
+        task: "list-files",
+        requested: subject,
+        artifactId: artifact.artifactId
+      }),
       counts: {
         files: files.items.length
-      }
+      },
+      nextActions: nextActionsOrUndefined(
+        files.items.length > 0
+          ? [
+              createNextAction("inspect-minecraft", {
+                task: "file",
+                subject: {
+                  kind: "file",
+                  filePath: files.items[0],
+                  artifact: {
+                    type: "resolved-id",
+                    artifactId: artifact.artifactId
+                  }
+                }
+              })
+            ]
+          : []
+      )
     };
     return {
       ...buildEntryToolResult({

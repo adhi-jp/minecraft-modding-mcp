@@ -2055,6 +2055,7 @@ export class SourceService {
       const limit = clampLimit(input.limit, 20, searchLimitCap);
       const regexPattern = match === "regex" ? compileRegex(query) : undefined;
       const queryMode = input.queryMode ?? "auto";
+      this.metrics.recordSearchQueryMode(queryMode);
       const cursorContext = buildSearchCursorContext({
         artifactId: artifact.artifactId,
         query,
@@ -2075,7 +2076,6 @@ export class SourceService {
       const recordHit = (hit: SearchSourceHit): void => {
         accumulator.add(hit);
       };
-      const hasSeparators = /[._$]/.test(query);
       const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
       if (intent === "symbol") {
         this.searchSymbolIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
@@ -2099,11 +2099,6 @@ export class SourceService {
             this.searchPathIntentIndexed(artifact.artifactId, query, match, scope, recordHit);
           } else {
             this.searchTextIntentIndexed(artifact.artifactId, query, match, scope, recordHit);
-
-            // F-03: queryMode=auto fallback — when indexed returns 0 hits and query has separators, retry with literal scan
-            if (queryMode === "auto" && hasSeparators && accumulator.currentCount() === 0) {
-              this.searchTextIntent(artifact.artifactId, query, match, scope, regexPattern, recordHit);
-            }
           }
           this.metrics.recordSearchIndexedHit();
         } catch (caughtError) {
@@ -4831,6 +4826,7 @@ export class SourceService {
     const candidateLimit = this.indexedCandidateLimitForMatch(match);
     const indexed = this.filesRepo.searchFileCandidates(artifactId, {
       query,
+      match,
       limit: candidateLimit,
       mode: "text"
     });
@@ -4944,15 +4940,23 @@ export class SourceService {
     regexPattern: RegExp | undefined,
     onHit: (hit: SearchSourceHit) => void
   ): void {
-    const filePaths = this.loadScopedFilePaths(artifactId, scope);
     const pageSize = Math.max(1, this.config.searchScanPageSize ?? 250);
+    const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+    let cursor: string | undefined = undefined;
 
-    for (const chunk of chunkArray(filePaths, pageSize)) {
-      const rows = this.filesRepo.getFileContentsByPaths(artifactId, chunk);
+    while (true) {
+      const page = this.filesRepo.listFileRows(artifactId, { limit: pageSize, cursor });
       this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(rows.length);
+      this.metrics.recordSearchRowsScanned(page.items.length);
 
-      for (const row of rows) {
+      for (const row of page.items) {
+        if (!checkPackagePrefix(row.filePath, scope?.packagePrefix)) {
+          continue;
+        }
+        if (glob && !glob.test(row.filePath)) {
+          continue;
+        }
+
         const contentIndex =
           match === "regex"
             ? matchRegexIndex(row.content, regexPattern as RegExp)
@@ -4968,6 +4972,11 @@ export class SourceService {
           reasonCodes: ["content_match", `text_${match}`]
         });
       }
+
+      if (!page.nextCursor) {
+        break;
+      }
+      cursor = page.nextCursor;
     }
   }
 
@@ -4979,28 +4988,43 @@ export class SourceService {
     regexPattern: RegExp | undefined,
     onHit: (hit: SearchSourceHit) => void
   ): void {
-    const filePaths = this.loadScopedFilePaths(artifactId, scope);
-    const matching = filePaths.flatMap((filePath) => {
-      const pathIndex =
-        match === "regex"
-          ? matchRegexIndex(filePath, regexPattern as RegExp)
-          : findMatchIndex(filePath, query, match);
-      if (pathIndex < 0) {
-        return [];
-      }
-      return [{ filePath, pathIndex }];
-    });
     const pageSize = Math.max(1, this.config.searchScanPageSize ?? 250);
+    const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+    let cursor: string | undefined = undefined;
 
-    for (const chunk of chunkArray(matching, pageSize)) {
-      for (const candidate of chunk) {
+    while (true) {
+      const page = this.filesRepo.listFiles(artifactId, { limit: pageSize, cursor });
+      this.metrics.recordSearchDbRoundtrip();
+      this.metrics.recordSearchRowsScanned(page.items.length);
+
+      for (const filePath of page.items) {
+        if (!checkPackagePrefix(filePath, scope?.packagePrefix)) {
+          continue;
+        }
+        if (glob && !glob.test(filePath)) {
+          continue;
+        }
+
+        const pathIndex =
+          match === "regex"
+            ? matchRegexIndex(filePath, regexPattern as RegExp)
+            : findMatchIndex(filePath, query, match);
+        if (pathIndex < 0) {
+          continue;
+        }
+
         onHit({
-          filePath: candidate.filePath,
-          score: scorePathMatch(match, candidate.pathIndex),
+          filePath,
+          score: scorePathMatch(match, pathIndex),
           matchedIn: "path",
           reasonCodes: ["path_match", `path_${match}`]
         });
       }
+
+      if (!page.nextCursor) {
+        break;
+      }
+      cursor = page.nextCursor;
     }
   }
 
@@ -5075,40 +5099,6 @@ export class SourceService {
         score: scoreSymbolMatch(match, index, symbol.symbolKind),
         matchIndex: index
       });
-    }
-
-    return result;
-  }
-
-  private loadScopedFilePaths(
-    artifactId: string,
-    scope: SearchScope | undefined
-  ): string[] {
-    const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
-
-    const result: string[] = [];
-    let cursor: string | undefined = undefined;
-    const pageSize = Math.max(1, this.config.searchScanPageSize ?? 250);
-
-    while (true) {
-      const page = this.filesRepo.listFiles(artifactId, { limit: pageSize, cursor });
-      this.metrics.recordSearchDbRoundtrip();
-      this.metrics.recordSearchRowsScanned(page.items.length);
-
-      for (const filePath of page.items) {
-        if (!checkPackagePrefix(filePath, scope?.packagePrefix)) {
-          continue;
-        }
-        if (glob && !glob.test(filePath)) {
-          continue;
-        }
-        result.push(filePath);
-      }
-
-      if (!page.nextCursor) {
-        break;
-      }
-      cursor = page.nextCursor;
     }
 
     return result;

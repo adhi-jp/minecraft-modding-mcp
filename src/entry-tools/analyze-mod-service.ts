@@ -6,7 +6,12 @@ import type { AnalyzeModOptions, ModAnalysisResult } from "../mod-analyzer.js";
 import { createError, ERROR_CODES } from "../errors.js";
 import { z } from "zod";
 import { buildIncludeSchema, detailSchema, executionModeSchema, positiveIntSchema } from "./entry-tool-schema.js";
-import { buildEntryToolResult, type Summary } from "./response-contract.js";
+import {
+  buildEntryToolResult,
+  createNextAction,
+  createSummarySubject,
+  type Summary
+} from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
@@ -128,6 +133,11 @@ export class AnalyzeModService {
             summary: {
               status: "ok",
               headline: `Summarized ${analysis.loader} mod metadata.`,
+              subject: createSummarySubject({
+                task: "summary",
+                kind: input.subject.kind,
+                jarPath: input.subject.jarPath
+              }),
               counts: {
                 classes: analysis.classCount,
                 dependencies: analysis.dependencies?.length ?? 0
@@ -153,7 +163,14 @@ export class AnalyzeModService {
             include,
             summary: {
               status: "ok",
-              headline: `Decompiled ${input.subject.jarPath}.`
+              headline: `Decompiled ${input.subject.jarPath}.`,
+              subject: createSummarySubject({
+                task: "decompile",
+                kind: input.subject.kind,
+                jarPath: input.subject.jarPath,
+                includeFiles: input.includeFiles,
+                maxFiles: input.maxFiles
+              })
             },
             blocks: {
               decompile: output
@@ -176,7 +193,15 @@ export class AnalyzeModService {
             include,
             summary: {
               status: "ok",
-              headline: `Searched ${input.subject.jarPath} for ${input.query}.`
+              headline: `Searched ${input.subject.jarPath} for ${input.query}.`,
+              subject: createSummarySubject({
+                task: "search",
+                kind: input.subject.kind,
+                jarPath: input.subject.jarPath,
+                query: input.query,
+                searchType: input.searchType,
+                limit: input.limit
+              })
             },
             blocks: {
               hits: output
@@ -205,7 +230,15 @@ export class AnalyzeModService {
             include,
             summary: {
               status: "ok",
-              headline: `Loaded class source for ${input.subject.className}.`
+              headline: `Loaded class source for ${input.subject.className}.`,
+              subject: createSummarySubject({
+                task: "class-source",
+                kind: input.subject.kind,
+                jarPath: input.subject.jarPath,
+                className: input.subject.className,
+                maxLines: input.maxLines,
+                maxChars: input.maxChars
+              })
             },
             blocks: {
               source: output
@@ -240,7 +273,25 @@ export class AnalyzeModService {
               include,
               summary: {
                 status: "unchanged",
-                headline: `Previewed remap output for ${normalizedInputJar}.`
+                headline: `Previewed remap output for ${normalizedInputJar}.`,
+                subject: createSummarySubject({
+                  task: "remap",
+                  kind: input.subject.kind,
+                  jarPath: normalizedInputJar,
+                  executionMode: "preview",
+                  targetMapping: input.targetMapping
+                }),
+                nextActions: [
+                  createNextAction("analyze-mod", {
+                    task: "remap",
+                    subject: {
+                      kind: input.subject.kind,
+                      jarPath: input.subject.jarPath
+                    },
+                    executionMode: "apply",
+                    targetMapping: input.targetMapping
+                  })
+                ]
               },
               blocks: {
                 metadata: {
@@ -271,7 +322,14 @@ export class AnalyzeModService {
             include,
             summary: {
               status: "changed",
-              headline: `Remapped ${normalizedInputJar} to ${input.targetMapping}.`
+              headline: `Remapped ${normalizedInputJar} to ${input.targetMapping}.`,
+              subject: createSummarySubject({
+                task: "remap",
+                kind: input.subject.kind,
+                jarPath: normalizedInputJar,
+                executionMode: "apply",
+                targetMapping: input.targetMapping
+              })
             },
             blocks: {
               operation: {

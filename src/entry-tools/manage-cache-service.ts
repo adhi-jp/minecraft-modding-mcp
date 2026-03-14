@@ -12,7 +12,11 @@ import {
   executionModeSchema,
   positiveIntSchema
 } from "./entry-tool-schema.js";
-import { buildEntryToolResult } from "./response-contract.js";
+import {
+  buildEntryToolResult,
+  createNextAction,
+  createSummarySubject
+} from "./response-contract.js";
 import {
   normalizeReadOnlyExecutionMode,
   requireNonEmptyObject,
@@ -56,6 +60,12 @@ export class ManageCacheService {
     const include = resolveInclude(input.include);
     const executionMode = normalizeReadOnlyExecutionMode(input.action, input.executionMode);
     const cacheKinds = input.cacheKinds?.length ? input.cacheKinds : [...PUBLIC_CACHE_KINDS];
+    const summarySubject = createSummarySubject({
+      action: input.action,
+      cacheKinds,
+      executionMode,
+      selector: input.selector
+    });
 
     if (
       executionMode === "apply" &&
@@ -90,6 +100,7 @@ export class ManageCacheService {
             summary: {
               status: hasUnhealthyKinds ? "partial" : "ok",
               headline: `Summarized ${cacheKinds.length} cache kind(s).`,
+              subject: summarySubject,
               counts: {
                 entries: entryCount,
                 bytes: totalBytes
@@ -132,6 +143,7 @@ export class ManageCacheService {
             summary: {
               status: hasUnhealthyEntries ? "partial" : "ok",
               headline: `${input.action === "list" ? "Listed" : "Inspected"} ${page.entries.length} cache entr${page.entries.length === 1 ? "y" : "ies"}.`,
+              subject: summarySubject,
               counts: {
                 entries: page.entries.length
               }
@@ -169,6 +181,7 @@ export class ManageCacheService {
             summary: {
               status: output.unhealthyEntries > 0 ? "partial" : "ok",
               headline: `Verified ${output.checkedEntries} cache entr${output.checkedEntries === 1 ? "y" : "ies"}.`,
+              subject: summarySubject,
               counts: {
                 checkedEntries: output.checkedEntries,
                 unhealthyEntries: output.unhealthyEntries
@@ -205,10 +218,23 @@ export class ManageCacheService {
             summary: {
               status: output.deletedEntries > 0 && executionMode === "apply" ? "changed" : "unchanged",
               headline: `${executionMode === "apply" ? "Applied" : "Previewed"} ${input.action} across ${cacheKinds.length} cache kind(s).`,
+              subject: summarySubject,
               counts: {
                 deletedEntries: output.deletedEntries,
                 deletedBytes: output.deletedBytes
-              }
+              },
+              ...(executionMode === "preview"
+                ? {
+                    nextActions: [
+                      createNextAction("manage-cache", {
+                        action: input.action,
+                        cacheKinds,
+                        executionMode: "apply",
+                        selector: input.selector
+                      })
+                    ]
+                  }
+                : {})
             },
             blocks: {
               operation: {
@@ -236,9 +262,22 @@ export class ManageCacheService {
             summary: {
               status: output.rebuiltEntries > 0 && executionMode === "apply" ? "changed" : "unchanged",
               headline: `${executionMode === "apply" ? "Applied" : "Previewed"} rebuild for ${cacheKinds.length} cache kind(s).`,
+              subject: summarySubject,
               counts: {
                 rebuiltEntries: output.rebuiltEntries
-              }
+              },
+              ...(executionMode === "preview"
+                ? {
+                    nextActions: [
+                      createNextAction("manage-cache", {
+                        action: "rebuild",
+                        cacheKinds,
+                        executionMode: "apply",
+                        selector: input.selector
+                      })
+                    ]
+                  }
+                : {})
             },
             blocks: {
               operation: {

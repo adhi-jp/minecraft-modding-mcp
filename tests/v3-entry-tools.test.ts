@@ -657,6 +657,68 @@ test("AnalyzeSymbolService returns matrix rows only when include=matrix is reque
   assert.equal(withMatrix.matrix?.rows?.length, 1);
 });
 
+test("AnalyzeSymbolService includes summary.subject for mapping flows", async () => {
+  const service = new AnalyzeSymbolService({
+    checkSymbolExists: async () => {
+      throw new Error("not used");
+    },
+    findMapping: async () => ({
+      status: "resolved",
+      resolved: true,
+      candidateCount: 1,
+      candidatesTruncated: false,
+      querySymbol: {
+        kind: "class",
+        name: "net.minecraft.world.item.ItemStack"
+      },
+      resolvedSymbol: {
+        kind: "class",
+        name: "net.minecraft.world.item.ItemStack"
+      },
+      mappingContext: {
+        version: "1.21.10",
+        sourceMapping: "obfuscated",
+        targetMapping: "mojang"
+      },
+      candidates: [],
+      warnings: []
+    }),
+    resolveMethodMappingExact: async () => {
+      throw new Error("not used");
+    },
+    traceSymbolLifecycle: async () => {
+      throw new Error("not used");
+    },
+    resolveWorkspaceSymbol: async () => {
+      throw new Error("not used");
+    },
+    getClassApiMatrix: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "map",
+    detail: "summary",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang",
+    subject: {
+      kind: "class",
+      name: "net.minecraft.world.item.ItemStack"
+    }
+  });
+
+  assert.deepEqual(result.summary.subject, {
+    task: "map",
+    kind: "class",
+    name: "net.minecraft.world.item.ItemStack",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang"
+  });
+});
+
 test("CompareMinecraftService summarizes changed versions without full class lists by default", async () => {
   const service = new CompareMinecraftService({
     compareVersions: async () => ({
@@ -1193,6 +1255,128 @@ test("CompareMinecraftService returns partial registry-diff results when one sid
   assert.ok(result.warnings?.some((warning) => warning.includes('1.21.3')));
 });
 
+test("CompareMinecraftService promotes migration follow-up into summary.nextActions with summary.subject", async () => {
+  const service = new CompareMinecraftService({
+    compareVersions: async () => ({
+      fromVersion: "1.20.4",
+      toVersion: "1.21",
+      warnings: [],
+      classes: {
+        added: ["net.minecraft.world.item.BundleContents"],
+        removed: [],
+        addedCount: 1,
+        removedCount: 0,
+        unchanged: 10
+      },
+      registry: {
+        added: {},
+        removed: {},
+        newRegistries: [],
+        removedRegistries: [],
+        summary: {
+          registriesChanged: 0,
+          totalAdded: 0,
+          totalRemoved: 0
+        }
+      }
+    }),
+    diffClassSignatures: async () => {
+      throw new Error("not used");
+    },
+    getRegistryData: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "summary",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "1.20.4",
+      toVersion: "1.21"
+    }
+  });
+
+  assert.deepEqual(result.summary.subject, {
+    task: "migration-overview",
+    kind: "version-pair",
+    fromVersion: "1.20.4",
+    toVersion: "1.21"
+  });
+  assert.deepEqual(result.summary.nextActions, [
+    {
+      tool: "compare-minecraft",
+      params: {
+        task: "class-diff",
+        subject: {
+          kind: "class",
+          className: "net.minecraft.world.item.BundleContents",
+          fromVersion: "1.20.4",
+          toVersion: "1.21"
+        }
+      }
+    }
+  ]);
+});
+
+test("CompareMinecraftService falls back to artifact follow-up when migration overview has class counts without representative class names", async () => {
+  const service = new CompareMinecraftService({
+    compareVersions: async () => ({
+      fromVersion: "1.20.4",
+      toVersion: "1.21",
+      warnings: [],
+      classes: {
+        added: [],
+        removed: [],
+        addedCount: 2,
+        removedCount: 1,
+        unchanged: 10
+      },
+      registry: {
+        added: {},
+        removed: {},
+        newRegistries: [],
+        removedRegistries: [],
+        summary: {
+          registriesChanged: 0,
+          totalAdded: 0,
+          totalRemoved: 0
+        }
+      }
+    }),
+    diffClassSignatures: async () => {
+      throw new Error("not used");
+    },
+    getRegistryData: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "summary",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "1.20.4",
+      toVersion: "1.21"
+    }
+  });
+
+  assert.deepEqual(result.summary.nextActions, [
+    {
+      tool: "inspect-minecraft",
+      params: {
+        task: "artifact",
+        subject: {
+          kind: "version",
+          version: "1.21"
+        }
+      }
+    }
+  ]);
+});
+
 test("ManageCacheService normalizes read-only actions to preview mode and blocks broad delete apply", async () => {
   const root = await mkdtemp(join(tmpdir(), "manage-cache-"));
   await mkdir(join(root, "downloads"), { recursive: true });
@@ -1235,4 +1419,111 @@ test("ManageCacheService normalizes read-only actions to preview mode and blocks
       }),
     (error: any) => error.code === ERROR_CODES.INVALID_INPUT
   );
+});
+
+test("AnalyzeModService remap preview includes summary.subject and apply follow-up", async () => {
+  const service = new AnalyzeModService({
+    analyzeModJar: async () => ({
+      loader: "fabric",
+      jarKind: "binary",
+      modId: "example",
+      modName: "Example",
+      modVersion: "1.0.0",
+      classCount: 1,
+      dependencies: []
+    }),
+    decompileModJar: async () => {
+      throw new Error("not used");
+    },
+    getModClassSource: async () => {
+      throw new Error("not used");
+    },
+    searchModSource: async () => {
+      throw new Error("not used");
+    },
+    remapModJar: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "remap",
+    detail: "summary",
+    subject: {
+      kind: "jar",
+      jarPath: "/tmp/example.jar"
+    },
+    executionMode: "preview",
+    targetMapping: "mojang"
+  });
+
+  assert.deepEqual(result.summary.subject, {
+    task: "remap",
+    kind: "jar",
+    jarPath: "/tmp/example.jar",
+    executionMode: "preview",
+    targetMapping: "mojang"
+  });
+  assert.deepEqual(result.summary.nextActions, [
+    {
+      tool: "analyze-mod",
+      params: {
+        task: "remap",
+        subject: {
+          kind: "jar",
+          jarPath: "/tmp/example.jar"
+        },
+        executionMode: "apply",
+        targetMapping: "mojang"
+      }
+    }
+  ]);
+});
+
+test("ManageCacheService preview delete includes summary.subject and apply follow-up", async () => {
+  const service = new ManageCacheService({
+    registry: {
+      summarize: async () => {
+        throw new Error("not used");
+      },
+      listEntries: async () => ({ entries: [], nextCursor: undefined }),
+      inspectEntries: async () => [],
+      deleteEntries: async () => ({ deletedEntries: 2, deletedBytes: 64, warnings: [] }),
+      pruneEntries: async () => ({ deletedEntries: 0, deletedBytes: 0, warnings: [] }),
+      rebuildEntries: async () => ({ rebuiltEntries: 0, warnings: [] }),
+      verifyEntries: async () => ({ checkedEntries: 0, unhealthyEntries: 0, warnings: [] })
+    }
+  });
+
+  const result = await service.execute({
+    action: "delete",
+    detail: "summary",
+    executionMode: "preview",
+    cacheKinds: ["downloads"],
+    selector: {
+      status: "stale"
+    }
+  });
+
+  assert.deepEqual(result.summary.subject, {
+    action: "delete",
+    cacheKinds: ["downloads"],
+    executionMode: "preview",
+    selector: {
+      status: "stale"
+    }
+  });
+  assert.deepEqual(result.summary.nextActions, [
+    {
+      tool: "manage-cache",
+      params: {
+        action: "delete",
+        cacheKinds: ["downloads"],
+        executionMode: "apply",
+        selector: {
+          status: "stale"
+        }
+      }
+    }
+  ]);
 });

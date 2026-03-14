@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { createError, ERROR_CODES } from "../errors.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
-import { buildEntryToolResult } from "./response-contract.js";
+import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
@@ -193,6 +193,15 @@ export class ValidateProjectService {
             summary: {
               status: invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok",
               headline: `Validated ${summary?.total ?? 0} mixin input(s).`,
+              subject: createSummarySubject({
+                task: "mixin",
+                kind: input.subject.kind,
+                input: input.subject.input,
+                version: input.version,
+                mapping: input.mapping,
+                sourcePriority: input.sourcePriority,
+                scope: input.scope
+              }),
               counts: {
                 valid: summary?.valid ?? 0,
                 partial: partialCount,
@@ -236,6 +245,14 @@ export class ValidateProjectService {
               headline: output.valid
                 ? "Access Widener is valid."
                 : "Access Widener contains validation issues.",
+              subject: createSummarySubject({
+                task: "access-widener",
+                kind: input.subject.kind,
+                input: input.subject.input,
+                version: input.version,
+                mapping: input.mapping,
+                sourcePriority: input.sourcePriority
+              }),
               counts: {
                 valid: output.valid ? 1 : 0,
                 invalid: output.valid ? 0 : 1
@@ -272,6 +289,12 @@ export class ValidateProjectService {
               summary: {
                 status: "blocked",
                 headline: "project-summary requires version or preferProjectVersion=true.",
+                subject: createSummarySubject({
+                  task: "project-summary",
+                  kind: input.subject.kind,
+                  projectPath: input.subject.projectPath,
+                  discover: input.subject.discover
+                }),
                 nextActions: [
                   {
                     tool: "validate-project",
@@ -387,6 +410,16 @@ export class ValidateProjectService {
             summary: {
               status,
               headline: `Validated ${mixinConfigs.length} mixin config(s) and ${accessWideners.length} access widener(s).`,
+              subject: createSummarySubject({
+                task: "project-summary",
+                kind: input.subject.kind,
+                projectPath,
+                discover: input.subject.discover,
+                version: input.version,
+                mapping: input.mapping,
+                sourcePriority: input.sourcePriority,
+                scope: input.scope
+              }),
               counts: {
                 valid: validMixins + validAw,
                 partial: partialCount,
