@@ -291,7 +291,9 @@ async function createResolvedSearchFixture(input: {
 }
 
 type SearchFixture = Awaited<ReturnType<typeof createResolvedSearchFixture>>;
-type SourceServiceFixture = SearchFixture["service"];
+type SourceServiceFixture = InstanceType<
+  (typeof import("../src/source-service.ts"))["SourceService"]
+>;
 type SearchClassSourceCaseInput = Omit<
   Parameters<SearchFixture["service"]["searchClassSource"]>[0],
   "artifactId"
@@ -1455,8 +1457,7 @@ test("SourceService reports representative cache byte-accounting states", async 
       artifacts: [
         {
           jarBaseName: "cache-one",
-          sourceEntries: { "a/CacheOne.java": cacheOneSource },
-          binaryEntries: { "a/CacheOne.class": Buffer.from([1, 2, 3]) }
+          sourceEntries: { "a/CacheOne.java": cacheOneSource }
         },
         {
           jarBaseName: "cache-two",
