@@ -291,6 +291,7 @@ async function createResolvedSearchFixture(input: {
 }
 
 type SearchFixture = Awaited<ReturnType<typeof createResolvedSearchFixture>>;
+type SourceServiceFixture = SearchFixture["service"];
 type SearchClassSourceCaseInput = Omit<
   Parameters<SearchFixture["service"]["searchClassSource"]>[0],
   "artifactId"
@@ -298,6 +299,106 @@ type SearchClassSourceCaseInput = Omit<
 type SearchClassSourceCaseResult = Awaited<
   ReturnType<SearchFixture["service"]["searchClassSource"]>
 >;
+
+type CacheFixtureArtifactInput = {
+  jarBaseName: string;
+  sourceEntries: Record<string, string>;
+  binaryEntries?: Record<string, Buffer>;
+};
+
+type CacheFixtureArtifact = {
+  jarPath: string;
+  expectedContentBytes: number;
+  sourceEntries: Record<string, string>;
+};
+
+type CacheAccountingRepo = {
+  countArtifacts: () => number;
+  totalContentBytes: () => number;
+  listArtifactsByLruWithContentBytes: (
+    limit: number
+  ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
+};
+
+function computeSourceEntriesBytes(sourceEntries: Record<string, string>): number {
+  return Object.values(sourceEntries).reduce(
+    (total, content) => total + Buffer.byteLength(content, "utf8"),
+    0
+  );
+}
+
+function defaultBinaryEntriesFor(sourceEntries: Record<string, string>): Record<string, Buffer> {
+  const [firstSourcePath] = Object.keys(sourceEntries);
+  const defaultClassPath =
+    firstSourcePath?.replace(/\.java$/, ".class") ?? "net/minecraft/server/Main.class";
+  return {
+    [defaultClassPath]: Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  };
+}
+
+async function createCacheAccountingFixture(input: {
+  rootPrefix: string;
+  configOverrides?: Partial<Config>;
+  artifacts: CacheFixtureArtifactInput[];
+}): Promise<{
+  service: SourceServiceFixture;
+  artifacts: CacheFixtureArtifact[];
+}> {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+  const artifacts: CacheFixtureArtifact[] = [];
+
+  for (const artifact of input.artifacts) {
+    const jarPath = join(root, `${artifact.jarBaseName}.jar`);
+    const sourcesJarPath = join(root, `${artifact.jarBaseName}-sources.jar`);
+    await createJar(jarPath, artifact.binaryEntries ?? defaultBinaryEntriesFor(artifact.sourceEntries));
+    await createJar(sourcesJarPath, artifact.sourceEntries);
+    artifacts.push({
+      jarPath,
+      expectedContentBytes: computeSourceEntriesBytes(artifact.sourceEntries),
+      sourceEntries: artifact.sourceEntries
+    });
+  }
+
+  return {
+    service: new SourceService(buildTestConfig(root, input.configOverrides)),
+    artifacts
+  };
+}
+
+function instrumentCacheAccountingRepo(service: SourceServiceFixture): {
+  counts: () => { countCalls: number; totalBytesCalls: number; lruCalls: number };
+} {
+  const artifactsRepo = (service as unknown as {
+    artifactsRepo: CacheAccountingRepo;
+  }).artifactsRepo;
+
+  let countCalls = 0;
+  let totalBytesCalls = 0;
+  let lruCalls = 0;
+
+  const originalCountArtifacts = artifactsRepo.countArtifacts.bind(artifactsRepo);
+  const originalTotalContentBytes = artifactsRepo.totalContentBytes.bind(artifactsRepo);
+  const originalListLru =
+    artifactsRepo.listArtifactsByLruWithContentBytes.bind(artifactsRepo);
+
+  artifactsRepo.countArtifacts = () => {
+    countCalls += 1;
+    return originalCountArtifacts();
+  };
+  artifactsRepo.totalContentBytes = () => {
+    totalBytesCalls += 1;
+    return originalTotalContentBytes();
+  };
+  artifactsRepo.listArtifactsByLruWithContentBytes = (limit: number) => {
+    lruCalls += 1;
+    return originalListLru(limit);
+  };
+
+  return {
+    counts: () => ({ countCalls, totalBytesCalls, lruCalls })
+  };
+}
 
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../src/source-service.ts");
@@ -1331,212 +1432,190 @@ test("SourceService evicts oldest artifacts when maxArtifacts is exceeded", asyn
   );
 });
 
-test("SourceService exposes artifact-level byte accounting in runtime metrics", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-cache-accounting-"));
-  const config = buildTestConfig(root, { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 });
-  const service = new SourceService(config);
+test("SourceService reports representative cache byte-accounting states", async (t) => {
+  const cacheOneSource = "package a;\npublic class CacheOne { String token = \"one\"; }\n";
+  const cacheTwoSource = "package b;\npublic class CacheTwo { String token = \"two\"; }\n";
+  const alphaSource = "package a;\npublic class A { String payload = \"alpha-alpha-alpha\"; }\n";
+  const betaSource = "package b;\npublic class B { String payload = \"beta-beta-beta\"; }\n";
 
-  const jar1 = join(root, "cache-one.jar");
-  const src1 = join(root, "cache-one-sources.jar");
-  const jar2 = join(root, "cache-two.jar");
-  const src2 = join(root, "cache-two-sources.jar");
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    configOverrides?: Partial<Config>;
+    artifacts: CacheFixtureArtifactInput[];
+    verify: (input: {
+      service: SourceServiceFixture;
+      artifacts: CacheFixtureArtifact[];
+    }) => Promise<void>;
+  }> = [
+    {
+      name: "tracks byte accounting across multiple artifacts",
+      rootPrefix: "service-cache-accounting-",
+      configOverrides: { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 },
+      artifacts: [
+        {
+          jarBaseName: "cache-one",
+          sourceEntries: { "a/CacheOne.java": cacheOneSource },
+          binaryEntries: { "a/CacheOne.class": Buffer.from([1, 2, 3]) }
+        },
+        {
+          jarBaseName: "cache-two",
+          sourceEntries: { "b/CacheTwo.java": cacheTwoSource },
+          binaryEntries: { "b/CacheTwo.class": Buffer.from([4, 5, 6]) }
+        }
+      ],
+      verify: async ({ service, artifacts }) => {
+        const first = await service.resolveArtifact({ target: { kind: "jar", value: artifacts[0]!.jarPath } });
+        const second = await service.resolveArtifact({ target: { kind: "jar", value: artifacts[1]!.jarPath } });
+        assert.notEqual(first.artifactId, second.artifactId);
 
-  const fileOne = "package a;\npublic class CacheOne { String token = \"one\"; }\n";
-  const fileTwo = "package b;\npublic class CacheTwo { String token = \"two\"; }\n";
-  const expectedBytesOne = Buffer.byteLength(fileOne, "utf8");
-  const expectedBytesTwo = Buffer.byteLength(fileTwo, "utf8");
+        const metrics = readCacheAccountingMetrics(service);
+        assert.equal(metrics.cacheEntries, 2);
+        assert.equal(
+          metrics.totalContentBytes,
+          artifacts[0]!.expectedContentBytes + artifacts[1]!.expectedContentBytes
+        );
+        assert.equal(metrics.lru.length, 2);
 
-  await createJar(jar1, { "a/CacheOne.class": Buffer.from([1, 2, 3]) });
-  await createJar(src1, { "a/CacheOne.java": fileOne });
-  await createJar(jar2, { "b/CacheTwo.class": Buffer.from([4, 5, 6]) });
-  await createJar(src2, { "b/CacheTwo.java": fileTwo });
+        const firstRow = metrics.lru.find((entry) => entry.artifactId === first.artifactId);
+        const secondRow = metrics.lru.find((entry) => entry.artifactId === second.artifactId);
+        assert.equal(firstRow?.contentBytes, artifacts[0]!.expectedContentBytes);
+        assert.equal(secondRow?.contentBytes, artifacts[1]!.expectedContentBytes);
+      }
+    },
+    {
+      name: "keeps byte accounting consistent after maxCacheBytes eviction",
+      rootPrefix: "service-evict-bytes-",
+      configOverrides: {
+        maxArtifacts: 10,
+        maxCacheBytes: Buffer.byteLength(alphaSource, "utf8") + 1
+      },
+      artifacts: [
+        {
+          jarBaseName: "bytes-one",
+          sourceEntries: { "a/A.java": alphaSource },
+          binaryEntries: { "a/A.class": Buffer.from([1, 2, 3]) }
+        },
+        {
+          jarBaseName: "bytes-two",
+          sourceEntries: { "b/B.java": betaSource },
+          binaryEntries: { "b/B.class": Buffer.from([4, 5, 6]) }
+        }
+      ],
+      verify: async ({ service, artifacts }) => {
+        const first = await service.resolveArtifact({ target: { kind: "jar", value: artifacts[0]!.jarPath } });
+        const second = await service.resolveArtifact({ target: { kind: "jar", value: artifacts[1]!.jarPath } });
+        assert.notEqual(first.artifactId, second.artifactId);
 
-  const first = await service.resolveArtifact({ target: { kind: "jar", value: jar1 } });
-  const second = await service.resolveArtifact({ target: { kind: "jar", value: jar2 } });
-  assert.notEqual(first.artifactId, second.artifactId);
+        await assert.rejects(
+          () =>
+            service.getClassSource({
+              artifactId: first.artifactId,
+              className: "a.A"
+            }),
+          (error: unknown) => {
+            return (
+              typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
+            );
+          }
+        );
 
-  const metrics = readCacheAccountingMetrics(service);
-  assert.equal(metrics.cacheEntries, 2);
-  assert.equal(metrics.totalContentBytes, expectedBytesOne + expectedBytesTwo);
-  assert.equal(metrics.lru.length, 2);
-
-  const firstRow = metrics.lru.find((entry) => entry.artifactId === first.artifactId);
-  const secondRow = metrics.lru.find((entry) => entry.artifactId === second.artifactId);
-  assert.equal(firstRow?.contentBytes, expectedBytesOne);
-  assert.equal(secondRow?.contentBytes, expectedBytesTwo);
-});
-
-test("SourceService keeps byte accounting consistent after maxCacheBytes eviction", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-evict-bytes-"));
-
-  const fileOne = "package a;\npublic class A { String payload = \"alpha-alpha-alpha\"; }\n";
-  const fileTwo = "package b;\npublic class B { String payload = \"beta-beta-beta\"; }\n";
-  const expectedBytesOne = Buffer.byteLength(fileOne, "utf8");
-  const expectedBytesTwo = Buffer.byteLength(fileTwo, "utf8");
-
-  const config = buildTestConfig(root, {
-    maxArtifacts: 10,
-    maxCacheBytes: expectedBytesOne + 1
-  });
-  const service = new SourceService(config);
-
-  const jar1 = join(root, "bytes-one.jar");
-  const src1 = join(root, "bytes-one-sources.jar");
-  const jar2 = join(root, "bytes-two.jar");
-  const src2 = join(root, "bytes-two-sources.jar");
-
-  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
-  await createJar(src1, { "a/A.java": fileOne });
-  await createJar(jar2, { "b/B.class": Buffer.from([4, 5, 6]) });
-  await createJar(src2, { "b/B.java": fileTwo });
-
-  const first = await service.resolveArtifact({ target: { kind: "jar", value: jar1 } });
-  const second = await service.resolveArtifact({ target: { kind: "jar", value: jar2 } });
-  assert.notEqual(first.artifactId, second.artifactId);
-
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        artifactId: first.artifactId,
-        className: "a.A"
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
-      );
+        const metrics = readCacheAccountingMetrics(service);
+        assert.equal(metrics.cacheEntries, 1);
+        assert.equal(metrics.totalContentBytes, artifacts[1]!.expectedContentBytes);
+        assert.equal(metrics.lru.length, 1);
+        assert.equal(metrics.lru[0]?.artifactId, second.artifactId);
+        assert.equal(metrics.lru[0]?.contentBytes, artifacts[1]!.expectedContentBytes);
+      }
     }
-  );
+  ];
 
-  const metrics = readCacheAccountingMetrics(service);
-  assert.equal(metrics.cacheEntries, 1);
-  assert.equal(metrics.totalContentBytes, expectedBytesTwo);
-  assert.equal(metrics.lru.length, 1);
-  assert.equal(metrics.lru[0]?.artifactId, second.artifactId);
-  assert.equal(metrics.lru[0]?.contentBytes, expectedBytesTwo);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fixture = await createCacheAccountingFixture({
+        rootPrefix: testCase.rootPrefix,
+        configOverrides: testCase.configOverrides,
+        artifacts: testCase.artifacts
+      });
+      await testCase.verify(fixture);
+    });
+  }
 });
 
-test("SourceService does not rescan cache accounting tables on artifact cache hit", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-cache-hit-metrics-"));
-  const service = new SourceService(buildTestConfig(root));
+test("SourceService updates cache accounting without rescanning repo tables", async (t) => {
+  const cacheHitSource = 'package a;\npublic class CacheHit { String token = "hit"; }\n';
+  const ingestSource = 'package a;\npublic class Ingest { String token = "ingest"; }\n';
 
-  const jarPath = join(root, "cache-hit.jar");
-  const sourcesJarPath = join(root, "cache-hit-sources.jar");
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    artifact: CacheFixtureArtifactInput;
+    verify: (input: {
+      service: SourceServiceFixture;
+      artifact: CacheFixtureArtifact;
+    }) => Promise<void>;
+  }> = [
+    {
+      name: "artifact cache hits avoid rescanning accounting tables",
+      rootPrefix: "service-cache-hit-metrics-",
+      artifact: {
+        jarBaseName: "cache-hit",
+        sourceEntries: { "a/CacheHit.java": cacheHitSource },
+        binaryEntries: { "a/CacheHit.class": Buffer.from([1, 2, 3]) }
+      },
+      verify: async ({ service, artifact }) => {
+        await service.resolveArtifact({ target: { kind: "jar", value: artifact.jarPath } });
+        const repoCounters = instrumentCacheAccountingRepo(service);
 
-  await createJar(jarPath, {
-    "a/CacheHit.class": Buffer.from([1, 2, 3])
-  });
-  await createJar(sourcesJarPath, {
-    "a/CacheHit.java": 'package a;\npublic class CacheHit { String token = "hit"; }\n'
-  });
+        await service.resolveArtifact({ target: { kind: "jar", value: artifact.jarPath } });
 
-  await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
+        assert.deepEqual(repoCounters.counts(), {
+          countCalls: 0,
+          totalBytesCalls: 0,
+          lruCalls: 0
+        });
+      }
+    },
+    {
+      name: "artifact ingest updates accounting incrementally",
+      rootPrefix: "service-ingest-metrics-",
+      artifact: {
+        jarBaseName: "ingest",
+        sourceEntries: { "a/Ingest.java": ingestSource },
+        binaryEntries: { "a/Ingest.class": Buffer.from([1, 2, 3]) }
+      },
+      verify: async ({ service, artifact }) => {
+        const repoCounters = instrumentCacheAccountingRepo(service);
+        const resolved = await service.resolveArtifact({ target: { kind: "jar", value: artifact.jarPath } });
 
-  const artifactsRepo = (service as unknown as {
-    artifactsRepo: {
-      countArtifacts: () => number;
-      totalContentBytes: () => number;
-      listArtifactsByLruWithContentBytes: (
-        limit: number
-      ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
-    };
-  }).artifactsRepo;
+        assert.deepEqual(repoCounters.counts(), {
+          countCalls: 0,
+          totalBytesCalls: 0,
+          lruCalls: 0
+        });
 
-  let countCalls = 0;
-  let totalBytesCalls = 0;
-  let lruCalls = 0;
+        const metrics = readCacheAccountingMetrics(service);
+        assert.equal(metrics.cacheEntries, 1);
+        assert.equal(metrics.totalContentBytes, artifact.expectedContentBytes);
+        assert.equal(metrics.lru.length, 1);
+        assert.equal(metrics.lru[0]?.artifactId, resolved.artifactId);
+        assert.equal(metrics.lru[0]?.contentBytes, artifact.expectedContentBytes);
+      }
+    }
+  ];
 
-  const originalCountArtifacts = artifactsRepo.countArtifacts.bind(artifactsRepo);
-  const originalTotalContentBytes = artifactsRepo.totalContentBytes.bind(artifactsRepo);
-  const originalListLru =
-    artifactsRepo.listArtifactsByLruWithContentBytes.bind(artifactsRepo);
-
-  artifactsRepo.countArtifacts = () => {
-    countCalls += 1;
-    return originalCountArtifacts();
-  };
-  artifactsRepo.totalContentBytes = () => {
-    totalBytesCalls += 1;
-    return originalTotalContentBytes();
-  };
-  artifactsRepo.listArtifactsByLruWithContentBytes = (limit: number) => {
-    lruCalls += 1;
-    return originalListLru(limit);
-  };
-
-  await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
-
-  assert.equal(countCalls, 0);
-  assert.equal(totalBytesCalls, 0);
-  assert.equal(lruCalls, 0);
-});
-
-test("SourceService updates cache accounting incrementally after artifact ingest", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-ingest-metrics-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  const jarPath = join(root, "ingest.jar");
-  const sourcesJarPath = join(root, "ingest-sources.jar");
-  const sourceText = 'package a;\npublic class Ingest { String token = "ingest"; }\n';
-
-  await createJar(jarPath, {
-    "a/Ingest.class": Buffer.from([1, 2, 3])
-  });
-  await createJar(sourcesJarPath, {
-    "a/Ingest.java": sourceText
-  });
-
-  const artifactsRepo = (service as unknown as {
-    artifactsRepo: {
-      countArtifacts: () => number;
-      totalContentBytes: () => number;
-      listArtifactsByLruWithContentBytes: (
-        limit: number
-      ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
-    };
-  }).artifactsRepo;
-
-  let countCalls = 0;
-  let totalBytesCalls = 0;
-  let lruCalls = 0;
-
-  const originalCountArtifacts = artifactsRepo.countArtifacts.bind(artifactsRepo);
-  const originalTotalContentBytes = artifactsRepo.totalContentBytes.bind(artifactsRepo);
-  const originalListLru =
-    artifactsRepo.listArtifactsByLruWithContentBytes.bind(artifactsRepo);
-
-  artifactsRepo.countArtifacts = () => {
-    countCalls += 1;
-    return originalCountArtifacts();
-  };
-  artifactsRepo.totalContentBytes = () => {
-    totalBytesCalls += 1;
-    return originalTotalContentBytes();
-  };
-  artifactsRepo.listArtifactsByLruWithContentBytes = (limit: number) => {
-    lruCalls += 1;
-    return originalListLru(limit);
-  };
-
-  const resolved = await service.resolveArtifact({ target: { kind: "jar", value: jarPath } });
-
-  assert.equal(countCalls, 0);
-  assert.equal(totalBytesCalls, 0);
-  assert.equal(lruCalls, 0);
-
-  const metrics = readCacheAccountingMetrics(service);
-  const expectedBytes = Buffer.byteLength(sourceText, "utf8");
-  assert.equal(metrics.cacheEntries, 1);
-  assert.equal(metrics.totalContentBytes, expectedBytes);
-  assert.equal(metrics.lru.length, 1);
-  assert.equal(metrics.lru[0]?.artifactId, resolved.artifactId);
-  assert.equal(metrics.lru[0]?.contentBytes, expectedBytes);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const { service, artifacts } = await createCacheAccountingFixture({
+        rootPrefix: testCase.rootPrefix,
+        artifacts: [testCase.artifact]
+      });
+      await testCase.verify({ service, artifact: artifacts[0]! });
+    });
+  }
 });
 
 test("RuntimeMetrics snapshots copy artifact byte accounting rows on read", async () => {
