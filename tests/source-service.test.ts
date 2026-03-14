@@ -3108,41 +3108,48 @@ test("SourceService rejects intermediary and yarn mappings when artifact version
   assert.equal(called, false);
 });
 
-test("SourceService findMapping delegates to MappingService and returns lookup payload", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-find-mapping-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  const mappingStub = {
-    async findMapping(input: {
-      version: string;
-      kind: "class" | "field" | "method";
-      name: string;
-      owner?: string;
-      descriptor?: string;
-      sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-      targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-      sourcePriority?: "loom-first" | "maven-first";
-    }) {
-      return {
+test("SourceService delegates representative mapping queries to MappingService", async (t) => {
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    method:
+      | "findMapping"
+      | "resolveMethodMappingExact"
+      | "getClassApiMatrix"
+      | "checkSymbolExists";
+    input: Record<string, unknown>;
+    response: Record<string, unknown>;
+    verifyDelegateInput: (input: Record<string, unknown>) => void;
+    verifyResult: (result: Record<string, unknown>) => void;
+  }> = [
+    {
+      name: "findMapping returns lookup payload",
+      rootPrefix: "service-find-mapping-",
+      method: "findMapping",
+      input: {
+        version: "1.21.10",
+        kind: "class",
+        name: "a.b.C",
+        sourceMapping: "obfuscated",
+        targetMapping: "mojang",
+        maxCandidates: 1
+      },
+      response: {
         querySymbol: {
-          kind: input.kind,
-          name: input.name,
-          owner: input.owner,
-          descriptor: input.descriptor,
-          symbol: input.kind === "class" ? input.name : `${input.owner}.${input.name}${input.descriptor ?? ""}`
+          kind: "class",
+          name: "a.b.C",
+          symbol: "a.b.C"
         },
         mappingContext: {
-          version: input.version,
-          sourceMapping: input.sourceMapping,
-          targetMapping: input.targetMapping
+          version: "1.21.10",
+          sourceMapping: "obfuscated",
+          targetMapping: "mojang"
         },
         resolved: true,
         status: "resolved",
         resolvedSymbol: {
           kind: "class",
           name: "net.minecraft.server.Main",
-          owner: undefined,
           symbol: "net.minecraft.server.Main"
         },
         candidates: [
@@ -3155,46 +3162,31 @@ test("SourceService findMapping delegates to MappingService and returns lookup p
           }
         ],
         warnings: []
-      };
-    }
-  };
-
-  (service as unknown as { mappingService: unknown }).mappingService = mappingStub;
-  const result = await (
-    service as unknown as {
-      findMapping: (input: {
-        version: string;
-        kind: "class" | "field" | "method";
-        name: string;
-        owner?: string;
-        descriptor?: string;
-        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        sourcePriority?: "loom-first" | "maven-first";
-        maxCandidates?: number;
-      }) => Promise<{ candidates: Array<{ symbol: string }> }>;
-    }
-  ).findMapping({
-    version: "1.21.10",
-    kind: "class",
-    name: "a.b.C",
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang",
-    maxCandidates: 1
-  });
-
-  assert.equal(result.candidates[0]?.symbol, "net.minecraft.server.Main");
-});
-
-test("SourceService resolveMethodMappingExact delegates to MappingService", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-method-exact-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async resolveMethodMappingExact(input: { maxCandidates?: number }) {
-      assert.equal(input.maxCandidates, 1);
-      return {
+      },
+      verifyDelegateInput: (input) => {
+        assert.equal(input.version, "1.21.10");
+        assert.equal(input.kind, "class");
+        assert.equal(input.maxCandidates, 1);
+      },
+      verifyResult: (result) => {
+        assert.equal((result.candidates as Array<{ symbol: string }>)[0]?.symbol, "net.minecraft.server.Main");
+      }
+    },
+    {
+      name: "resolveMethodMappingExact forwards maxCandidates",
+      rootPrefix: "service-method-exact-",
+      method: "resolveMethodMappingExact",
+      input: {
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "f",
+        descriptor: "(Ljava/lang/String;)V",
+        sourceMapping: "obfuscated",
+        targetMapping: "mojang",
+        maxCandidates: 1
+      },
+      response: {
         querySymbol: {
           kind: "method",
           owner: "a.b.C",
@@ -3229,47 +3221,30 @@ test("SourceService resolveMethodMappingExact delegates to MappingService", asyn
           }
         ],
         warnings: []
-      };
-    }
-  };
-
-  const result = await (
-    service as unknown as {
-      resolveMethodMappingExact: (input: {
-        version: string;
-        kind: "class" | "field" | "method";
-        name: string;
-        owner: string;
-        descriptor: string;
-        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        maxCandidates?: number;
-      }) => Promise<{ resolved: boolean; resolvedSymbol?: { name: string } }>;
-    }
-  ).resolveMethodMappingExact({
-    version: "1.21.10",
-    kind: "method",
-    owner: "a.b.C",
-    name: "f",
-    descriptor: "(Ljava/lang/String;)V",
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang",
-    maxCandidates: 1
-  });
-
-  assert.equal(result.resolved, true);
-  assert.equal(result.resolvedSymbol?.name, "remove");
-});
-
-test("SourceService getClassApiMatrix delegates to MappingService", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-class-matrix-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async getClassApiMatrix(input: { maxRows?: number }) {
-      assert.equal(input.maxRows, 2);
-      return {
+      },
+      verifyDelegateInput: (input) => {
+        assert.equal(input.maxCandidates, 1);
+        assert.equal(input.owner, "a.b.C");
+      },
+      verifyResult: (result) => {
+        assert.equal(result.resolved, true);
+        assert.equal(
+          (result.resolvedSymbol as { name?: string } | undefined)?.name,
+          "remove"
+        );
+      }
+    },
+    {
+      name: "getClassApiMatrix forwards maxRows",
+      rootPrefix: "service-class-matrix-",
+      method: "getClassApiMatrix",
+      input: {
+        version: "1.21.10",
+        className: "a.b.C",
+        classNameMapping: "obfuscated",
+        maxRows: 2
+      },
+      response: {
         classIdentity: {
           obfuscated: "a.b.C",
           mojang: "com.example.ValueOutput",
@@ -3278,69 +3253,67 @@ test("SourceService getClassApiMatrix delegates to MappingService", async () => 
         },
         rows: [],
         warnings: []
-      };
-    }
-  };
-
-  const result = await (
-    service as unknown as {
-      getClassApiMatrix: (input: {
-        version: string;
-        className: string;
-        classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        maxRows?: number;
-      }) => Promise<{ classIdentity: Record<string, string | undefined> }>;
-    }
-  ).getClassApiMatrix({
-    version: "1.21.10",
-    className: "a.b.C",
-    classNameMapping: "obfuscated",
-    maxRows: 2
-  });
-
-  assert.equal(result.classIdentity.mojang, "com.example.ValueOutput");
-});
-
-test("SourceService checkSymbolExists delegates to MappingService", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-symbol-exists-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async checkSymbolExists(input: { maxCandidates?: number }) {
-      assert.equal(input.maxCandidates, 1);
-      return {
+      },
+      verifyDelegateInput: (input) => {
+        assert.equal(input.className, "a.b.C");
+        assert.equal(input.maxRows, 2);
+      },
+      verifyResult: (result) => {
+        assert.equal(
+          (result.classIdentity as Record<string, string | undefined>).mojang,
+          "com.example.ValueOutput"
+        );
+      }
+    },
+    {
+      name: "checkSymbolExists forwards maxCandidates",
+      rootPrefix: "service-symbol-exists-",
+      method: "checkSymbolExists",
+      input: {
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "f",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated",
+        maxCandidates: 1
+      },
+      response: {
         resolved: true,
         status: "resolved",
         warnings: []
+      },
+      verifyDelegateInput: (input) => {
+        assert.equal(input.maxCandidates, 1);
+        assert.equal(input.name, "f");
+      },
+      verifyResult: (result) => {
+        assert.equal(result.resolved, true);
+        assert.equal(result.status, "resolved");
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const { SourceService } = await import("../src/source-service.ts");
+      const root = await mkdtemp(join(tmpdir(), testCase.rootPrefix));
+      const service = new SourceService(buildTestConfig(root));
+
+      (service as unknown as { mappingService: Record<string, (input: unknown) => Promise<unknown>> }).mappingService = {
+        [testCase.method]: async (input: unknown) => {
+          testCase.verifyDelegateInput(input as Record<string, unknown>);
+          return testCase.response;
+        }
       };
-    }
-  };
 
-  const result = await (
-    service as unknown as {
-      checkSymbolExists: (input: {
-        version: string;
-        kind: "class" | "field" | "method";
-        owner: string;
-        name: string;
-        descriptor?: string;
-        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        maxCandidates?: number;
-      }) => Promise<{ resolved: boolean; status: string }>;
-    }
-  ).checkSymbolExists({
-    version: "1.21.10",
-    kind: "method",
-    owner: "a.b.C",
-    name: "f",
-    descriptor: "(I)V",
-    sourceMapping: "obfuscated",
-    maxCandidates: 1
-  });
+      const result = await (
+        service as unknown as Record<string, (input: Record<string, unknown>) => Promise<Record<string, unknown>>>
+      )[testCase.method](testCase.input);
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
+      testCase.verifyResult(result);
+    });
+  }
 });
 
 test("SourceService resolveWorkspaceSymbol rejects owner for class input", async () => {
