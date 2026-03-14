@@ -3,264 +3,141 @@ import test from "node:test";
 
 import { parseMixinSource } from "../src/mixin-parser.ts";
 
-test("parseMixinSource parses single target class", () => {
-  const source = `
+type TargetCase = {
+  name: string;
+  source: string;
+  targets: string[];
+  priority?: number;
+  className?: string;
+  warningCount?: number;
+};
+
+type InjectionCase = {
+  name: string;
+  source: string;
+  annotation: string;
+  methods: string[];
+  lines?: number[];
+  warningCount?: number;
+};
+
+type ShadowCase = {
+  name: string;
+  source: string;
+  entries: Array<{ kind: "field" | "method"; name: string }>;
+  warningCount?: number;
+};
+
+type AccessorCase = {
+  name: string;
+  source: string;
+  entry: {
+    annotation: "Accessor" | "Invoker";
+    name: string;
+    targetName: string;
+  };
+  warningCount?: number;
+};
+
+type ImportCase = {
+  name: string;
+  source: string;
+  entries: Record<string, string>;
+};
+
+type WarningCase = {
+  name: string;
+  source: string;
+  expectedTargets: number;
+  warningFragment: string;
+  expectedInjections?: number;
+};
+
+const TARGET_CASES: TargetCase[] = [
+  {
+    name: "single target class",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerEntityMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "PlayerEntity");
-  assert.equal(result.className, "PlayerEntityMixin");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses multiple target classes", () => {
-  const source = `
+`,
+    targets: ["PlayerEntity"],
+    className: "PlayerEntityMixin",
+    warningCount: 0
+  },
+  {
+    name: "multiple target classes",
+    source: `
 @Mixin({LivingEntity.class, PlayerEntity.class})
 public abstract class MultiTargetMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 2);
-  assert.equal(result.targets[0].className, "LivingEntity");
-  assert.equal(result.targets[1].className, "PlayerEntity");
-});
-
-test("parseMixinSource parses @Mixin with value attribute and priority", () => {
-  const source = `
+`,
+    targets: ["LivingEntity", "PlayerEntity"]
+  },
+  {
+    name: "@Mixin with value attribute and priority",
+    source: `
 @Mixin(value = ServerPlayerEntity.class, priority = 900)
 public abstract class PriorityMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "ServerPlayerEntity");
-  assert.equal(result.priority, 900);
-});
-
-test("parseMixinSource parses @Inject with method attribute", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Inject(method = "tick", at = @At("HEAD"))
-  private void onTick(CallbackInfo ci) {}
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].annotation, "Inject");
-  assert.equal(result.injections[0].method, "tick");
-  assert.equal(result.injections[0].line, 4);
-});
-
-test("parseMixinSource parses @Redirect annotation", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Redirect(method = "attack", at = @At(value = "INVOKE", target = "Foo"))
-  private void redirectAttack() {}
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].annotation, "Redirect");
-  assert.equal(result.injections[0].method, "attack");
-});
-
-test("parseMixinSource parses @Shadow field", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  private int health;
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "health");
-});
-
-test("parseMixinSource parses @Shadow method", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  public abstract void doSomething();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "method");
-  assert.equal(result.shadows[0].name, "doSomething");
-});
-
-test("parseMixinSource parses @Accessor with explicit target", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor("health")
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].annotation, "Accessor");
-  assert.equal(result.accessors[0].name, "getHealth");
-  assert.equal(result.accessors[0].targetName, "health");
-});
-
-test("parseMixinSource infers @Accessor target from getter naming convention", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor
-  int getMaxHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "maxHealth");
-});
-
-test("parseMixinSource infers @Accessor target from boolean is-getter", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor
-  boolean isDead();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "dead");
-});
-
-test("parseMixinSource infers @Invoker target from naming convention", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerInvoker {
-  @Invoker
-  void invokeDamage();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].annotation, "Invoker");
-  assert.equal(result.accessors[0].targetName, "damage");
-});
-
-test("parseMixinSource handles multi-line @Inject annotation", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Inject(
-    method = "tick",
-    at = @At("HEAD"),
-    cancellable = true
-  )
-  private void onTick(CallbackInfo ci) {}
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].method, "tick");
-});
-
-test("parseMixinSource warns when @Mixin target is missing", () => {
-  const source = `
-public abstract class BadMixin {
-  @Shadow
-  private int field;
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 0);
-  assert.ok(result.parseWarnings.some((w) => w.includes("No @Mixin annotation target")));
-});
-
-test("parseMixinSource warns when @Inject missing method attribute", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Inject(at = @At("HEAD"))
-  private void onTick(CallbackInfo ci) {}
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 0);
-  assert.ok(result.parseWarnings.some((w) => w.includes("missing method attribute")));
-});
-
-test("parseMixinSource parses fully-qualified target class names", () => {
-  const source = `
+`,
+    targets: ["ServerPlayerEntity"],
+    priority: 900
+  },
+  {
+    name: "fully-qualified target class names",
+    source: `
 @Mixin(net.minecraft.entity.player.PlayerEntity.class)
 public abstract class PlayerMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "net.minecraft.entity.player.PlayerEntity");
-});
-
-test("parseMixinSource handles multi-line @Mixin with value array", () => {
-  const source = `
+`,
+    targets: ["net.minecraft.entity.player.PlayerEntity"]
+  },
+  {
+    name: "multi-line @Mixin with value array",
+    source: `
 @Mixin(
   value = {LivingEntity.class, PlayerEntity.class},
   priority = 1100
 )
 public abstract class MultiMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 2);
-  assert.equal(result.priority, 1100);
-});
-
-/* ------------------------------------------------------------------ */
-/*  String-form targets: @Mixin(targets = "...")                       */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses single string target", () => {
-  const source = `
+`,
+    targets: ["LivingEntity", "PlayerEntity"],
+    priority: 1100
+  },
+  {
+    name: "single string target",
+    source: `
 @Mixin(targets = "net.minecraft.server.MinecraftServer")
 public abstract class ServerMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses array string targets", () => {
-  const source = `
+`,
+    targets: ["net.minecraft.server.MinecraftServer"],
+    warningCount: 0
+  },
+  {
+    name: "array string targets",
+    source: `
 @Mixin(targets = {"net.minecraft.server.MinecraftServer", "net.minecraft.client.Minecraft"})
 public abstract class MultiMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 2);
-  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
-  assert.equal(result.targets[1].className, "net.minecraft.client.Minecraft");
-});
-
-test("parseMixinSource parses string targets with priority", () => {
-  const source = `
+`,
+    targets: ["net.minecraft.server.MinecraftServer", "net.minecraft.client.Minecraft"]
+  },
+  {
+    name: "string targets with priority",
+    source: `
 @Mixin(targets = "net.minecraft.server.MinecraftServer", priority = 900)
 public abstract class PriorityMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
-  assert.equal(result.priority, 900);
-});
-
-test("parseMixinSource parses multi-line string targets", () => {
-  const source = `
+`,
+    targets: ["net.minecraft.server.MinecraftServer"],
+    priority: 900
+  },
+  {
+    name: "multi-line string targets",
+    source: `
 @Mixin(
   targets = {
     "net.minecraft.server.MinecraftServer",
@@ -270,279 +147,79 @@ test("parseMixinSource parses multi-line string targets", () => {
 )
 public abstract class MultiLineMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 2);
-  assert.equal(result.targets[0].className, "net.minecraft.server.MinecraftServer");
-  assert.equal(result.targets[1].className, "net.minecraft.client.Minecraft");
-  assert.equal(result.priority, 1000);
-});
-
-test("parseMixinSource prefers .class format over string targets", () => {
-  const source = `
+`,
+    targets: ["net.minecraft.server.MinecraftServer", "net.minecraft.client.Minecraft"],
+    priority: 1000
+  },
+  {
+    name: "prefers .class format over string targets",
+    source: `
 @Mixin(value = PlayerEntity.class, targets = "net.minecraft.Foo")
 public abstract class PreferClassMixin {
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.targets.length, 1);
-  assert.equal(result.targets[0].className, "PlayerEntity");
-});
+`,
+    targets: ["PlayerEntity"]
+  }
+];
 
-/* ------------------------------------------------------------------ */
-/*  Import parsing tests                                               */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource extracts single import", () => {
-  const source = `
-import net.minecraft.world.entity.item.ItemEntity;
-
-@Mixin(ItemEntity.class)
-public abstract class ItemEntityMixin {
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.imports.size, 1);
-  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
-});
-
-test("parseMixinSource extracts multiple imports", () => {
-  const source = `
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.player.Player;
-import org.spongepowered.asm.mixin.Mixin;
-
-@Mixin(ItemEntity.class)
-public abstract class ItemEntityMixin {
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.imports.size, 3);
-  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
-  assert.equal(result.imports.get("Player"), "net.minecraft.world.entity.player.Player");
-  assert.equal(result.imports.get("Mixin"), "org.spongepowered.asm.mixin.Mixin");
-});
-
-test("parseMixinSource ignores wildcard imports", () => {
-  const source = `
-import java.util.*;
-import net.minecraft.world.entity.item.ItemEntity;
-
-@Mixin(ItemEntity.class)
-public abstract class ItemEntityMixin {
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.imports.size, 1);
-  assert.equal(result.imports.get("ItemEntity"), "net.minecraft.world.entity.item.ItemEntity");
-});
-
-test("parseMixinSource returns empty imports map when no imports", () => {
-  const source = `
-@Mixin(net.minecraft.world.entity.item.ItemEntity.class)
-public abstract class ItemEntityMixin {
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.imports.size, 0);
-});
-
-/* ------------------------------------------------------------------ */
-/*  Multi-line annotation skip / inline annotation strip               */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Shadow @Final field", () => {
-  const source = `
+const INJECTION_CASES: InjectionCase[] = [
+  {
+    name: "@Inject with method attribute",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
-  @Shadow
-  @Final
-  private int maxHealth;
+  @Inject(method = "tick", at = @At("HEAD"))
+  private void onTick(CallbackInfo ci) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "maxHealth");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow with multi-line annotation in between", () => {
-  const source = `
+`,
+    annotation: "Inject",
+    methods: ["tick"],
+    lines: [4]
+  },
+  {
+    name: "@Redirect annotation",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
-  @Shadow
-  @Unique(value = "test"
+  @Redirect(method = "attack", at = @At(value = "INVOKE", target = "Foo"))
+  private void redirectAttack() {}
+}
+`,
+    annotation: "Redirect",
+    methods: ["attack"]
+  },
+  {
+    name: "multi-line @Inject annotation",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Inject(
+    method = "tick",
+    at = @At("HEAD"),
+    cancellable = true
   )
-  private int health;
+  private void onTick(CallbackInfo ci) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses declaration with inline annotation", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  @Final
-  @Nullable private int health;
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].name, "health");
-});
-
-test("parseMixinSource parses @Accessor after multi-line annotation", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor("health")
-  @Unique(
-    value = "test"
-  )
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow field with FQN annotation on separate line", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  @org.jetbrains.annotations.Nullable
-  private int health;
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "health");
-});
-
-test("parseMixinSource parses @Accessor with FQN annotation", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor("health")
-  @org.jetbrains.annotations.Nullable
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "health");
-});
-
-test("parseMixinSource strips FQN inline annotation with parens", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  @org.example.Nullable() private int health;
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].name, "health");
-});
-
-test("parseMixinSource parses @Shadow method with inline annotation on declaration", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public abstract class PlayerMixin {
-  @Shadow
-  @Deprecated public abstract void doWork();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "method");
-  assert.equal(result.shadows[0].name, "doWork");
-});
-
-/* ------------------------------------------------------------------ */
-/*  default/synchronized modifier tests                                */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Accessor with default method modifier", () => {
-  const source = `
-import net.minecraft.world.entity.player.Player;
-
-@Mixin(Player.class)
-public interface PlayerAccessor {
-  @Accessor("health")
-  default int getHealth() { throw new AssertionError(); }
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "getHealth");
-  assert.equal(result.accessors[0].targetName, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow with synchronized method", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public abstract class SomeMixin {
-  @Shadow
-  public synchronized void doWork() {}
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "method");
-  assert.equal(result.shadows[0].name, "doWork");
-});
-
-/* ------------------------------------------------------------------ */
-/*  interface class name capture test                                   */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource captures class name from interface declaration", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor("health")
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.className, "PlayerAccessor");
-});
-
-/* ------------------------------------------------------------------ */
-/*  Phase 2: array-form method targets                                 */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Inject with array method attribute", () => {
-  const source = `
+`,
+    annotation: "Inject",
+    methods: ["tick"]
+  },
+  {
+    name: "@Inject with array method attribute",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @Inject(method = {"tick", "attack"}, at = @At("HEAD"))
   private void onTickOrAttack(CallbackInfo ci) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 2);
-  assert.equal(result.injections[0].method, "tick");
-  assert.equal(result.injections[1].method, "attack");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses multi-line array method attribute", () => {
-  const source = `
+`,
+    annotation: "Inject",
+    methods: ["tick", "attack"],
+    warningCount: 0
+  },
+  {
+    name: "multi-line array method attribute",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @Inject(
@@ -554,385 +231,718 @@ public abstract class PlayerMixin {
   )
   private void onTickOrAttack(CallbackInfo ci) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 2);
-  assert.equal(result.injections[0].method, "tick");
-  assert.equal(result.injections[1].method, "attack");
-});
-
-test("parseMixinSource parses array method with descriptors", () => {
-  const source = `
+`,
+    annotation: "Inject",
+    methods: ["tick", "attack"]
+  },
+  {
+    name: "array method with descriptors",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @Inject(method = {"playerTouch(Lnet/minecraft/world/entity/player/Player;)V", "tick()V"}, at = @At("HEAD"))
   private void hook(CallbackInfo ci) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 2);
-  assert.equal(result.injections[0].method, "playerTouch(Lnet/minecraft/world/entity/player/Player;)V");
-  assert.equal(result.injections[1].method, "tick()V");
-});
-
-/* ------------------------------------------------------------------ */
-/*  Phase 3: @Accessor with value= attribute                           */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Accessor with value= attribute", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor(value = "health")
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Invoker with value= attribute", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerInvoker {
-  @Invoker(value = "damage")
-  void invokeDamage();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].annotation, "Invoker");
-  assert.equal(result.accessors[0].targetName, "damage");
-});
-
-/* ------------------------------------------------------------------ */
-/*  @Accessor with remap=false and trailing comments                   */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Accessor with remap=false", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor(value = "health", remap = false)
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Accessor with trailing comment", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor("health") // access health field
-  int getHealth();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-/* ------------------------------------------------------------------ */
-/*  MixinExtras annotations                                            */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @WrapOperation as injection", () => {
-  const source = `
+`,
+    annotation: "Inject",
+    methods: ["playerTouch(Lnet/minecraft/world/entity/player/Player;)V", "tick()V"]
+  },
+  {
+    name: "@WrapOperation as injection",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @WrapOperation(method = "tick", at = @At(value = "INVOKE", target = "Lfoo;bar()V"))
   private void wrapTick(Operation<Void> op) {}
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].annotation, "WrapOperation");
-  assert.equal(result.injections[0].method, "tick");
-});
-
-test("parseMixinSource parses @ModifyReturnValue as injection", () => {
-  const source = `
+`,
+    annotation: "WrapOperation",
+    methods: ["tick"]
+  },
+  {
+    name: "@ModifyReturnValue as injection",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @ModifyReturnValue(method = "getValue", at = @At("RETURN"))
   private int modifyGetValue(int original) { return original; }
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].annotation, "ModifyReturnValue");
-  assert.equal(result.injections[0].method, "getValue");
-});
-
-test("parseMixinSource parses @WrapWithCondition as injection", () => {
-  const source = `
+`,
+    annotation: "ModifyReturnValue",
+    methods: ["getValue"]
+  },
+  {
+    name: "@WrapWithCondition as injection",
+    source: `
 @Mixin(PlayerEntity.class)
 public abstract class PlayerMixin {
   @WrapWithCondition(method = "attack", at = @At(value = "INVOKE", target = "Lfoo;bar()V"))
   private boolean shouldAttack() { return true; }
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.injections.length, 1);
-  assert.equal(result.injections[0].annotation, "WrapWithCondition");
-  assert.equal(result.injections[0].method, "attack");
-});
+`,
+    annotation: "WrapWithCondition",
+    methods: ["attack"]
+  }
+];
 
-/* ------------------------------------------------------------------ */
-/*  Phase 1D: @Accessor empty-paren and bare annotation                */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Accessor() with empty parentheses", () => {
-  const source = `
+const SHADOW_CASES: ShadowCase[] = [
+  {
+    name: "simple field",
+    source: `
 @Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor()
-  int getHealth();
+public abstract class PlayerMixin {
+  @Shadow
+  private int health;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].annotation, "Accessor");
-  assert.equal(result.accessors[0].name, "getHealth");
-  assert.equal(result.accessors[0].targetName, "health");
-});
-
-test("parseMixinSource parses bare @Accessor without parentheses", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "health" }]
+  },
+  {
+    name: "simple method",
+    source: `
 @Mixin(PlayerEntity.class)
-public interface PlayerAccessor {
-  @Accessor
-  int getMaxHealth();
+public abstract class PlayerMixin {
+  @Shadow
+  public abstract void doSomething();
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].targetName, "maxHealth");
-});
-
-/* ------------------------------------------------------------------ */
-/*  Extended type support: arrays, wildcards, FQN types                 */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Shadow field with array type", () => {
-  const source = `
+`,
+    entries: [{ kind: "method", name: "doSomething" }]
+  },
+  {
+    name: "@Shadow @Final field",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Final
+  private int maxHealth;
+}
+`,
+    entries: [{ kind: "field", name: "maxHealth" }],
+    warningCount: 0
+  },
+  {
+    name: "@Shadow with multi-line annotation in between",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Unique(value = "test"
+  )
+  private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }],
+    warningCount: 0
+  },
+  {
+    name: "inline annotation on field declaration",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Final
+  @Nullable private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }]
+  },
+  {
+    name: "FQN annotation on separate line",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @org.jetbrains.annotations.Nullable
+  private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }]
+  },
+  {
+    name: "FQN inline annotation with parens",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @org.example.Nullable() private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }]
+  },
+  {
+    name: "inline annotation on method declaration",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @Deprecated public abstract void doWork();
+}
+`,
+    entries: [{ kind: "method", name: "doWork" }]
+  },
+  {
+    name: "synchronized method",
+    source: `
+@Mixin(SomeClass.class)
+public abstract class SomeMixin {
+  @Shadow
+  public synchronized void doWork() {}
+}
+`,
+    entries: [{ kind: "method", name: "doWork" }]
+  },
+  {
+    name: "field with array type",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow
   private int[][] matrix;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "matrix");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow field with FQN type and generics", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "matrix" }],
+    warningCount: 0
+  },
+  {
+    name: "field with FQN type and generics",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow
   private java.util.Map<ResourceKey<Level>, ServerLevel> levels;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "levels");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Accessor with array return type", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public interface SomeAccessor {
-  @Accessor
-  Slot[] getSlots();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "getSlots");
-  assert.equal(result.accessors[0].targetName, "slots");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Accessor with wildcard return type", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public interface SomeAccessor {
-  @Accessor
-  List<?> getItems();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "getItems");
-  assert.equal(result.accessors[0].targetName, "items");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Accessor with bounded wildcard return type", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public interface SomeAccessor {
-  @Accessor
-  List<? extends Item> getItems();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "getItems");
-  assert.equal(result.accessors[0].targetName, "items");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow method with FQN return type", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "levels" }],
+    warningCount: 0
+  },
+  {
+    name: "method with FQN return type",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow
   public abstract net.minecraft.world.item.ItemStack getMainHandItem();
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "method");
-  assert.equal(result.shadows[0].name, "getMainHandItem");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Accessor with no-modifier return type", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public interface SomeAccessor {
-  @Accessor
-  ServerTickRateManager tickRateManager();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "tickRateManager");
-  assert.equal(result.accessors[0].targetName, "tickRateManager");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow method with type parameter prefix", () => {
-  const source = `
+`,
+    entries: [{ kind: "method", name: "getMainHandItem" }],
+    warningCount: 0
+  },
+  {
+    name: "method with type parameter prefix",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow
   public abstract <T extends Entity> List<T> getEntities();
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "method");
-  assert.equal(result.shadows[0].name, "getEntities");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Invoker() with empty parentheses", () => {
-  const source = `
-@Mixin(PlayerEntity.class)
-public interface PlayerInvoker {
-  @Invoker()
-  void invokeDamage();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].annotation, "Invoker");
-  assert.equal(result.accessors[0].targetName, "damage");
-});
-
-/* ------------------------------------------------------------------ */
-/*  $ in member names                                                   */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Accessor with $ in method name", () => {
-  const source = `
-@Mixin(SomeClass.class)
-public interface SomeAccessor {
-  @Accessor
-  Player metaStorage$getPlayer();
-}
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.accessors.length, 1);
-  assert.equal(result.accessors[0].name, "metaStorage$getPlayer");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow field with $ in name", () => {
-  const source = `
+`,
+    entries: [{ kind: "method", name: "getEntities" }],
+    warningCount: 0
+  },
+  {
+    name: "field with $ in name",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow
   private int some$field;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "some$field");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-/* ------------------------------------------------------------------ */
-/*  @Shadow same-line declarations                                      */
-/* ------------------------------------------------------------------ */
-
-test("parseMixinSource parses @Shadow @Final same-line field declaration", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "some$field" }],
+    warningCount: 0
+  },
+  {
+    name: "@Shadow @Final same-line field declaration",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow @Final private static Component TOO_EXPENSIVE_TEXT;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "TOO_EXPENSIVE_TEXT");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses @Shadow same-line field (no extra annotations)", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "TOO_EXPENSIVE_TEXT" }],
+    warningCount: 0
+  },
+  {
+    name: "@Shadow same-line field without extra annotations",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow private int health;
 }
-`;
-  const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 1);
-  assert.equal(result.shadows[0].kind, "field");
-  assert.equal(result.shadows[0].name, "health");
-  assert.equal(result.parseWarnings.length, 0);
-});
-
-test("parseMixinSource parses multiple consecutive same-line @Shadow declarations", () => {
-  const source = `
+`,
+    entries: [{ kind: "field", name: "health" }],
+    warningCount: 0
+  },
+  {
+    name: "multiple consecutive same-line @Shadow declarations",
+    source: `
 @Mixin(SomeClass.class)
 public abstract class SomeMixin {
   @Shadow @Final private static Component TOO_EXPENSIVE_TEXT;
   @Shadow private int repairItemCountCost;
   @Shadow private String itemName;
 }
+`,
+    entries: [
+      { kind: "field", name: "TOO_EXPENSIVE_TEXT" },
+      { kind: "field", name: "repairItemCountCost" },
+      { kind: "field", name: "itemName" }
+    ],
+    warningCount: 0
+  }
+];
+
+const ACCESSOR_CASES: AccessorCase[] = [
+  {
+    name: "explicit target",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" }
+  },
+  {
+    name: "getter naming convention",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  int getMaxHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getMaxHealth", targetName: "maxHealth" }
+  },
+  {
+    name: "boolean is-getter",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  boolean isDead();
+}
+`,
+    entry: { annotation: "Accessor", name: "isDead", targetName: "dead" }
+  },
+  {
+    name: "after multi-line annotation",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  @Unique(
+    value = "test"
+  )
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
+    name: "FQN annotation",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  @org.jetbrains.annotations.Nullable
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" }
+  },
+  {
+    name: "default method modifier",
+    source: `
+import net.minecraft.world.entity.player.Player;
+
+@Mixin(Player.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  default int getHealth() { throw new AssertionError(); }
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
+    name: "value attribute",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor(value = "health")
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
+    name: "remap=false",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor(value = "health", remap = false)
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
+    name: "trailing comment",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health") // access health field
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
+    name: "empty parentheses",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor()
+  int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" }
+  },
+  {
+    name: "bare annotation without parentheses",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  int getMaxHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getMaxHealth", targetName: "maxHealth" }
+  },
+  {
+    name: "array return type",
+    source: `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  Slot[] getSlots();
+}
+`,
+    entry: { annotation: "Accessor", name: "getSlots", targetName: "slots" },
+    warningCount: 0
+  },
+  {
+    name: "wildcard return type",
+    source: `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  List<?> getItems();
+}
+`,
+    entry: { annotation: "Accessor", name: "getItems", targetName: "items" },
+    warningCount: 0
+  },
+  {
+    name: "bounded wildcard return type",
+    source: `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  List<? extends Item> getItems();
+}
+`,
+    entry: { annotation: "Accessor", name: "getItems", targetName: "items" },
+    warningCount: 0
+  },
+  {
+    name: "no-modifier return type",
+    source: `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  ServerTickRateManager tickRateManager();
+}
+`,
+    entry: { annotation: "Accessor", name: "tickRateManager", targetName: "tickRateManager" },
+    warningCount: 0
+  },
+  {
+    name: "$ in method name",
+    source: `
+@Mixin(SomeClass.class)
+public interface SomeAccessor {
+  @Accessor
+  Player metaStorage$getPlayer();
+}
+`,
+    entry: { annotation: "Accessor", name: "metaStorage$getPlayer", targetName: "metaStorage$getPlayer" },
+    warningCount: 0
+  }
+];
+
+const INVOKER_CASES: AccessorCase[] = [
+  {
+    name: "naming convention",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerInvoker {
+  @Invoker
+  void invokeDamage();
+}
+`,
+    entry: { annotation: "Invoker", name: "invokeDamage", targetName: "damage" }
+  },
+  {
+    name: "value attribute",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerInvoker {
+  @Invoker(value = "damage")
+  void invokeDamage();
+}
+`,
+    entry: { annotation: "Invoker", name: "invokeDamage", targetName: "damage" }
+  },
+  {
+    name: "empty parentheses",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerInvoker {
+  @Invoker()
+  void invokeDamage();
+}
+`,
+    entry: { annotation: "Invoker", name: "invokeDamage", targetName: "damage" }
+  }
+];
+
+const IMPORT_CASES: ImportCase[] = [
+  {
+    name: "single import",
+    source: `
+import net.minecraft.world.entity.item.ItemEntity;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`,
+    entries: {
+      ItemEntity: "net.minecraft.world.entity.item.ItemEntity"
+    }
+  },
+  {
+    name: "multiple imports",
+    source: `
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import org.spongepowered.asm.mixin.Mixin;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`,
+    entries: {
+      ItemEntity: "net.minecraft.world.entity.item.ItemEntity",
+      Player: "net.minecraft.world.entity.player.Player",
+      Mixin: "org.spongepowered.asm.mixin.Mixin"
+    }
+  },
+  {
+    name: "wildcard imports are ignored",
+    source: `
+import java.util.*;
+import net.minecraft.world.entity.item.ItemEntity;
+
+@Mixin(ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`,
+    entries: {
+      ItemEntity: "net.minecraft.world.entity.item.ItemEntity"
+    }
+  },
+  {
+    name: "no imports",
+    source: `
+@Mixin(net.minecraft.world.entity.item.ItemEntity.class)
+public abstract class ItemEntityMixin {
+}
+`,
+    entries: {}
+  }
+];
+
+const WARNING_CASES: WarningCase[] = [
+  {
+    name: "@Mixin target is missing",
+    source: `
+public abstract class BadMixin {
+  @Shadow
+  private int field;
+}
+`,
+    expectedTargets: 0,
+    warningFragment: "No @Mixin annotation target"
+  },
+  {
+    name: "@Inject method attribute is missing",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Inject(at = @At("HEAD"))
+  private void onTick(CallbackInfo ci) {}
+}
+`,
+    expectedTargets: 1,
+    expectedInjections: 0,
+    warningFragment: "missing method attribute"
+  }
+];
+
+test("parseMixinSource parses @Mixin targets across supported annotation forms", () => {
+  for (const testCase of TARGET_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.deepEqual(
+      result.targets.map((entry) => entry.className),
+      testCase.targets,
+      `${testCase.name}: targets`
+    );
+    assert.equal(result.priority, testCase.priority, `${testCase.name}: priority`);
+    if (testCase.className !== undefined) {
+      assert.equal(result.className, testCase.className, `${testCase.name}: className`);
+    }
+    if (testCase.warningCount !== undefined) {
+      assert.equal(result.parseWarnings.length, testCase.warningCount, `${testCase.name}: warnings`);
+    }
+  }
+});
+
+test("parseMixinSource parses injection annotations and method arrays", () => {
+  for (const testCase of INJECTION_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.equal(result.injections.length, testCase.methods.length, `${testCase.name}: injection count`);
+    assert.deepEqual(
+      result.injections.map((entry) => entry.annotation),
+      testCase.methods.map(() => testCase.annotation),
+      `${testCase.name}: annotations`
+    );
+    assert.deepEqual(
+      result.injections.map((entry) => entry.method),
+      testCase.methods,
+      `${testCase.name}: methods`
+    );
+    if (testCase.lines !== undefined) {
+      assert.deepEqual(
+        result.injections.map((entry) => entry.line),
+        testCase.lines,
+        `${testCase.name}: lines`
+      );
+    }
+    if (testCase.warningCount !== undefined) {
+      assert.equal(result.parseWarnings.length, testCase.warningCount, `${testCase.name}: warnings`);
+    }
+  }
+});
+
+test("parseMixinSource parses @Shadow declarations across field and method forms", () => {
+  for (const testCase of SHADOW_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.deepEqual(
+      result.shadows.map((entry) => ({ kind: entry.kind, name: entry.name })),
+      testCase.entries,
+      `${testCase.name}: shadow entries`
+    );
+    if (testCase.warningCount !== undefined) {
+      assert.equal(result.parseWarnings.length, testCase.warningCount, `${testCase.name}: warnings`);
+    }
+  }
+});
+
+test("parseMixinSource parses @Accessor declarations across target inference variants", () => {
+  for (const testCase of ACCESSOR_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.equal(result.accessors.length, 1, `${testCase.name}: accessor count`);
+    assert.deepEqual(
+      {
+        annotation: result.accessors[0].annotation,
+        name: result.accessors[0].name,
+        targetName: result.accessors[0].targetName
+      },
+      testCase.entry,
+      `${testCase.name}: accessor entry`
+    );
+    if (testCase.warningCount !== undefined) {
+      assert.equal(result.parseWarnings.length, testCase.warningCount, `${testCase.name}: warnings`);
+    }
+  }
+});
+
+test("parseMixinSource parses @Invoker declarations across explicit and inferred targets", () => {
+  for (const testCase of INVOKER_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.equal(result.accessors.length, 1, `${testCase.name}: invoker count`);
+    assert.deepEqual(
+      {
+        annotation: result.accessors[0].annotation,
+        name: result.accessors[0].name,
+        targetName: result.accessors[0].targetName
+      },
+      testCase.entry,
+      `${testCase.name}: invoker entry`
+    );
+  }
+});
+
+test("parseMixinSource extracts imports and ignores wildcard imports", () => {
+  for (const testCase of IMPORT_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.equal(result.imports.size, Object.keys(testCase.entries).length, `${testCase.name}: import count`);
+    assert.deepEqual(
+      Object.fromEntries(result.imports.entries()),
+      testCase.entries,
+      `${testCase.name}: imports`
+    );
+  }
+});
+
+test("parseMixinSource reports parse warnings for missing required annotations", () => {
+  for (const testCase of WARNING_CASES) {
+    const result = parseMixinSource(testCase.source);
+
+    assert.equal(result.targets.length, testCase.expectedTargets, `${testCase.name}: target count`);
+    if (testCase.expectedInjections !== undefined) {
+      assert.equal(result.injections.length, testCase.expectedInjections, `${testCase.name}: injection count`);
+    }
+    assert.ok(
+      result.parseWarnings.some((warning) => warning.includes(testCase.warningFragment)),
+      `${testCase.name}: warning`
+    );
+  }
+});
+
+test("parseMixinSource captures class name from interface declaration", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health")
+  int getHealth();
+}
 `;
   const result = parseMixinSource(source);
-  assert.equal(result.shadows.length, 3);
-  assert.equal(result.shadows[0].name, "TOO_EXPENSIVE_TEXT");
-  assert.equal(result.shadows[1].name, "repairItemCountCost");
-  assert.equal(result.shadows[2].name, "itemName");
-  assert.equal(result.parseWarnings.length, 0);
+
+  assert.equal(result.className, "PlayerAccessor");
 });

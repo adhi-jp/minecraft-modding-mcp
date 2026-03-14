@@ -67,41 +67,74 @@ function makeParsedMixin(overrides: Partial<ParsedMixin> = {}): ParsedMixin {
 /*  Levenshtein tests                                                  */
 /* ------------------------------------------------------------------ */
 
-test("levenshteinDistance returns 0 for identical strings", () => {
-  assert.equal(levenshteinDistance("tick", "tick"), 0);
+test("levenshteinDistance handles representative edit-distance cases", () => {
+  const cases = [
+    { name: "identical strings", a: "tick", b: "tick", distance: 0 },
+    { name: "single edit", a: "tick", b: "tack", distance: 1 },
+    { name: "insertion", a: "tick", b: "thick", distance: 1 },
+    { name: "empty lhs", a: "", b: "abc", distance: 3 },
+    { name: "empty rhs", a: "abc", b: "", distance: 3 },
+    { name: "both empty", a: "", b: "", distance: 0 }
+  ];
+
+  for (const testCase of cases) {
+    assert.equal(
+      levenshteinDistance(testCase.a, testCase.b),
+      testCase.distance,
+      testCase.name
+    );
+  }
 });
 
-test("levenshteinDistance returns correct distance for single edit", () => {
-  assert.equal(levenshteinDistance("tick", "tack"), 1);
-});
+test("suggestSimilar handles ranking, truncation, and empty results", () => {
+  const cases = [
+    {
+      name: "close matches stay sorted by distance",
+      input: "tik",
+      candidates: ["tick", "tack", "attack", "method", "tickRate"],
+      maxDistance: 3,
+      first: "tick",
+      minLength: 1
+    },
+    {
+      name: "maxResults caps output length",
+      input: "a",
+      candidates: ["a", "ab", "abc", "abcd", "abcde"],
+      maxDistance: 3,
+      maxResults: 2,
+      maxLength: 2
+    },
+    {
+      name: "no close matches returns empty list",
+      input: "tick",
+      candidates: ["completelyDifferent"],
+      maxDistance: 3,
+      expected: []
+    }
+  ];
 
-test("levenshteinDistance returns correct distance for insertions", () => {
-  assert.equal(levenshteinDistance("tick", "thick"), 1);
-});
+  for (const testCase of cases) {
+    const suggestions = suggestSimilar(
+      testCase.input,
+      testCase.candidates,
+      testCase.maxDistance,
+      testCase.maxResults
+    );
 
-test("levenshteinDistance handles empty strings", () => {
-  assert.equal(levenshteinDistance("", "abc"), 3);
-  assert.equal(levenshteinDistance("abc", ""), 3);
-  assert.equal(levenshteinDistance("", ""), 0);
-});
-
-test("suggestSimilar returns close matches sorted by distance", () => {
-  const candidates = ["tick", "tack", "attack", "method", "tickRate"];
-  const suggestions = suggestSimilar("tik", candidates);
-  assert.ok(suggestions.length > 0);
-  assert.equal(suggestions[0], "tick");
-});
-
-test("suggestSimilar returns at most maxResults", () => {
-  const candidates = ["a", "ab", "abc", "abcd", "abcde"];
-  const suggestions = suggestSimilar("a", candidates, 3, 2);
-  assert.ok(suggestions.length <= 2);
-});
-
-test("suggestSimilar returns empty for no close matches", () => {
-  const candidates = ["completelyDifferent"];
-  const suggestions = suggestSimilar("tick", candidates, 3);
-  assert.equal(suggestions.length, 0);
+    if (testCase.expected !== undefined) {
+      assert.deepEqual(suggestions, testCase.expected, testCase.name);
+      continue;
+    }
+    if (testCase.first !== undefined) {
+      assert.equal(suggestions[0], testCase.first, testCase.name);
+    }
+    if (testCase.minLength !== undefined) {
+      assert.ok(suggestions.length >= testCase.minLength, testCase.name);
+    }
+    if (testCase.maxLength !== undefined) {
+      assert.ok(suggestions.length <= testCase.maxLength, testCase.name);
+    }
+  }
 });
 
 test("suggestSimilar skips candidates whose length gap already exceeds maxDistance", async () => {
@@ -751,106 +784,133 @@ test("validateParsedMixin structuredWarnings have category", () => {
 /*  Phase 1: extractMethodName / extractMethodDescriptor tests         */
 /* ------------------------------------------------------------------ */
 
-test("extractMethodName strips JVM descriptor from method reference", () => {
-  assert.equal(extractMethodName("playerTouch(Lnet/minecraft/world/entity/player/Player;)V"), "playerTouch");
+test("extractMethodName strips descriptors and owner prefixes across supported forms", () => {
+  const cases = [
+    {
+      name: "descriptor-bearing method reference",
+      ref: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V",
+      expected: "playerTouch"
+    },
+    {
+      name: "owner-prefixed method reference",
+      ref: "Lnet/minecraft/SomeClass;tick(I)V",
+      expected: "tick"
+    },
+    {
+      name: "method name starting with L",
+      ref: "Load(Lfoo/Bar;)V",
+      expected: "Load"
+    },
+    {
+      name: "plain method name",
+      ref: "tick",
+      expected: "tick"
+    },
+    {
+      name: "<init> with descriptor",
+      ref: "<init>()V",
+      expected: "<init>"
+    },
+    {
+      name: "<init> without descriptor",
+      ref: "<init>",
+      expected: "<init>"
+    }
+  ];
+
+  for (const testCase of cases) {
+    assert.equal(extractMethodName(testCase.ref), testCase.expected, testCase.name);
+  }
 });
 
-test("extractMethodName strips owner prefix and descriptor", () => {
-  assert.equal(extractMethodName("Lnet/minecraft/SomeClass;tick(I)V"), "tick");
-});
+test("extractMethodDescriptor returns the descriptor portion when present", () => {
+  const cases = [
+    {
+      name: "descriptor-bearing method reference",
+      ref: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V",
+      expected: "(Lnet/minecraft/world/entity/player/Player;)V"
+    },
+    {
+      name: "plain method name",
+      ref: "tick",
+      expected: undefined
+    },
+    {
+      name: "owner-prefixed method reference",
+      ref: "Lnet/minecraft/SomeClass;tick(I)V",
+      expected: "(I)V"
+    },
+    {
+      name: "method name starting with L",
+      ref: "Load(Lfoo/Bar;)V",
+      expected: "(Lfoo/Bar;)V"
+    }
+  ];
 
-test("extractMethodName keeps method names that start with L", () => {
-  assert.equal(extractMethodName("Load(Lfoo/Bar;)V"), "Load");
-});
-
-test("extractMethodName returns plain method name as-is", () => {
-  assert.equal(extractMethodName("tick"), "tick");
-});
-
-test("extractMethodName handles <init> with descriptor", () => {
-  assert.equal(extractMethodName("<init>()V"), "<init>");
-});
-
-test("extractMethodName handles <init> without descriptor", () => {
-  assert.equal(extractMethodName("<init>"), "<init>");
-});
-
-test("extractMethodDescriptor extracts descriptor portion", () => {
-  assert.equal(
-    extractMethodDescriptor("playerTouch(Lnet/minecraft/world/entity/player/Player;)V"),
-    "(Lnet/minecraft/world/entity/player/Player;)V"
-  );
-});
-
-test("extractMethodDescriptor returns undefined for plain name", () => {
-  assert.equal(extractMethodDescriptor("tick"), undefined);
-});
-
-test("extractMethodDescriptor extracts descriptor after owner prefix", () => {
-  assert.equal(extractMethodDescriptor("Lnet/minecraft/SomeClass;tick(I)V"), "(I)V");
-});
-
-test("extractMethodDescriptor keeps descriptor for method names that start with L", () => {
-  assert.equal(extractMethodDescriptor("Load(Lfoo/Bar;)V"), "(Lfoo/Bar;)V");
+  for (const testCase of cases) {
+    assert.equal(extractMethodDescriptor(testCase.ref), testCase.expected, testCase.name);
+  }
 });
 
 /* ------------------------------------------------------------------ */
 /*  Phase 1: validateInjection with descriptor-bearing references       */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin passes injection with descriptor-bearing method reference", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V", line: 10 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["playerTouch", "tick"] })]
-  ]);
-  const warnings: string[] = [];
+test("validateParsedMixin handles descriptor-bearing and owner-prefixed method references", () => {
+  const cases = [
+    {
+      name: "descriptor-bearing method reference",
+      annotation: "Inject",
+      method: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V",
+      availableMethods: ["playerTouch", "tick"],
+      valid: true
+    },
+    {
+      name: "owner-prefixed method reference",
+      annotation: "Redirect",
+      method: "Lnet/minecraft/SomeClass;tick(I)V",
+      availableMethods: ["tick"],
+      valid: true
+    },
+    {
+      name: "method name starting with L",
+      annotation: "Inject",
+      method: "Load(Lfoo/Bar;)V",
+      availableMethods: ["Load"],
+      valid: true
+    },
+    {
+      name: "missing method keeps descriptor hint",
+      annotation: "Inject",
+      method: "missingMethod(I)V",
+      availableMethods: ["tick"],
+      valid: false,
+      issueMessageIncludes: "(descriptor: (I)V)"
+    }
+  ] as const;
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, true);
-  assert.equal(result.issues.length, 0);
-});
+  for (const testCase of cases) {
+    const parsed = makeParsedMixin({
+      injections: [{ annotation: testCase.annotation, method: testCase.method, line: 10 }]
+    });
+    const targetMembers = new Map<string, ResolvedTargetMembers>([
+      ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: testCase.availableMethods })]
+    ]);
+    const warnings: string[] = [];
 
-test("validateParsedMixin passes injection with owner-prefixed method reference", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Redirect", method: "Lnet/minecraft/SomeClass;tick(I)V", line: 10 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
+    const result = validateParsedMixin(parsed, targetMembers, warnings);
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, true);
-});
-
-test("validateParsedMixin passes injection when method name starts with L", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "Load(Lfoo/Bar;)V", line: 10 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["Load"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, true);
-  assert.equal(result.issues.length, 0);
-});
-
-test("validateParsedMixin error message includes descriptor hint", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "missingMethod(I)V", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.ok(result.issues[0].message.includes("(descriptor: (I)V)"));
+    assert.equal(result.valid, testCase.valid, testCase.name);
+    if (testCase.valid) {
+      assert.equal(result.issues.length, 0, testCase.name);
+      continue;
+    }
+    assert.equal(result.issues.length, 1, testCase.name);
+    assert.ok(
+      result.issues[0].message.includes(testCase.issueMessageIncludes!),
+      testCase.name
+    );
+  }
 });
 
 /* ------------------------------------------------------------------ */
