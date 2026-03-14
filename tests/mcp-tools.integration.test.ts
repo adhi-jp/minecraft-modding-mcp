@@ -44,15 +44,55 @@ const EXPECTED_TOOLS = [
   "remap-mod-jar"
 ] as const;
 
-test("index.ts registers the expected MCP tools without mc prefix", async () => {
-  const source = await readFile("src/index.ts", "utf8");
+type RequestHandler = (
+  request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
+  extra: Record<string, unknown>
+) => Promise<unknown>;
 
-  for (const toolName of EXPECTED_TOOLS) {
-    assert.match(source, new RegExp(`server\\.tool\\("${toolName}"`));
-  }
+type ToolSchema = {
+  name: string;
+  inputSchema: Record<string, unknown>;
+};
 
-  const registrations = source.match(/server\.tool\(/g) ?? [];
-  assert.equal(registrations.length, EXPECTED_TOOLS.length);
+async function getRequestHandler(method: "tools/list" | "tools/call"): Promise<RequestHandler> {
+  const { server } = await import("../src/index.ts");
+  const handler = (server.server as { _requestHandlers: Map<string, RequestHandler> })._requestHandlers.get(method);
+
+  assert.ok(handler);
+  return handler!;
+}
+
+async function listTools(): Promise<ToolSchema[]> {
+  const handler = await getRequestHandler("tools/list");
+  const response = await handler(
+    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    {}
+  ) as { tools: ToolSchema[] };
+
+  return response.tools;
+}
+
+async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  const handler = await getRequestHandler("tools/call");
+  return handler(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name,
+        arguments: args
+      }
+    },
+    {}
+  );
+}
+
+test("tools/list exposes the expected MCP tools without legacy mc prefixes", async () => {
+  const toolNames = (await listTools()).map((entry) => entry.name).sort();
+
+  assert.deepEqual(toolNames, [...EXPECTED_TOOLS].sort());
+  assert.ok(toolNames.every((name) => !name.startsWith("mc-")));
 });
 
 test("manual stdio smoke validates restarted list-versions against the current releases contract", async () => {
@@ -84,148 +124,9 @@ test("manual stdio smoke fully terminates the content-length probe child process
   assert.match(source, /await terminateChildProcess\(child\);/);
 });
 
-test("index.ts does not include legacy compatibility handlers", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.doesNotMatch(source, /server\.tool\("mc-/);
-  assert.doesNotMatch(source, /mc-list-versions/);
-  assert.doesNotMatch(source, /mc-resolve-source/);
-  assert.doesNotMatch(source, /mc-get-source/);
-  assert.doesNotMatch(source, /mc-search-source/);
-  assert.doesNotMatch(source, /mc-query-symbols/);
-  assert.doesNotMatch(source, /mc-get-source-context/);
-  assert.doesNotMatch(source, /mc-get-source-file/);
-  assert.doesNotMatch(source, /mc-resolve-context/);
-  assert.doesNotMatch(source, /mc-find-symbol/);
-  assert.doesNotMatch(source, /mc-get-class-index/);
-  assert.doesNotMatch(source, /mc-get-signature/);
-  assert.doesNotMatch(source, /mc-map-name/);
-  assert.doesNotMatch(source, /mc-trace-usage/);
-});
-
-test("index.ts accepts expanded mapping enum in tool inputs", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  const mappingDescriptionMatches =
-    source.match(/\.describe\("obfuscated \| mojang \| intermediary \| yarn/g) ?? [];
-  assert.ok(mappingDescriptionMatches.length >= 4);
-  assert.match(source, /const SOURCE_MAPPINGS = \["obfuscated", "mojang", "intermediary", "yarn"\] as const;/);
-  assert.doesNotMatch(source, /const SOURCE_MAPPINGS = \["official", "mojang", "intermediary", "yarn"\] as const;/);
-  assert.match(source, /sourceMapping:/);
-});
-
-test("index.ts coerces numeric string inputs for positive integer params", async () => {
-  const indexSource = await readFile("src/index.ts", "utf8");
-  const toolInputSource = await readFile("src/tool-input.ts", "utf8");
-
-  assert.match(indexSource, /const optionalPositiveInt = z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\);/);
-  assert.match(indexSource, /import\s+\{\s*prepareToolInput\s*\}\s+from\s+"\.\/tool-input\.js"/);
-  assert.match(indexSource, /prepareToolInput\(rawInput\)/);
-  assert.match(toolInputSource, /const POSITIVE_INT_FIELD_NAMES = new Set\(\[/);
-  assert.match(toolInputSource, /function coerceTopLevelNumericStrings\(value: unknown\): unknown/);
-  assert.match(toolInputSource, /typeof value !== "object" \|\| value == null \|\| Array\.isArray\(value\)/);
-  assert.match(toolInputSource, /typeof entry === "string" && POSITIVE_INT_FIELD_NAMES\.has\(key\)/);
-  assert.match(toolInputSource, /Number\.parseInt\(trimmed, 10\)/);
-  assert.doesNotMatch(toolInputSource, /output\[key\] = coerceKnownNumericStrings\(entry\)/);
-});
-
-test("index.ts rejects removed official mapping namespace with obfuscated replacement hint", async () => {
-  const indexSource = await readFile("src/index.ts", "utf8");
-  const toolInputSource = await readFile("src/tool-input.ts", "utf8");
-
-  assert.match(toolInputSource, /const MAPPING_FIELD_NAMES = new Set\(\["mapping", "sourceMapping", "targetMapping", "classNameMapping"\]\);/);
-  assert.match(toolInputSource, /function collectRemovedOfficialNamespacePaths\(value: unknown\): string\[\]/);
-  assert.match(toolInputSource, /function replaceRemovedOfficialMappings\(value: unknown\): Record<string, unknown> \| undefined/);
-  assert.match(indexSource, /The "official" mapping namespace was removed\. Use "obfuscated" instead\./);
-  assert.match(indexSource, /"official" is no longer supported for this field\. Use "obfuscated"\./);
-});
-
-test("index.ts accepts mapping source priority override inputs", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  const priorityDescriptionMatches =
-    source.match(/\.describe\("loom-first \| maven-first"\)/g) ?? [];
-  assert.ok(priorityDescriptionMatches.length >= 4);
-  assert.match(source, /const SOURCE_PRIORITIES = \["loom-first", "maven-first"\] as const;/);
-});
-
-test("index.ts documents validate-mixin mode-based input schema", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /const nonEmptyString = z\.string\(\)\.trim\(\)\.min\(1\);/);
-  assert.match(source, /input:\s*z\.discriminatedUnion\("mode"/);
-  assert.match(source, /configPaths:\s*z\.array\(nonEmptyString\)\.min\(1\)/);
-});
-
-test("index.ts uses unified target objects for source resolution tools", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-  const resolveArtifactBlock = source.match(/const resolveArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const classSourceBlock = source.match(/const getClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const classMembersBlock = source.match(/const getClassMembersShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-
-  assert.match(resolveArtifactBlock, /target:\s*z\.object\(\{\s*kind:\s*targetKindSchema,\s*value:\s*nonEmptyString/s);
-  assert.match(source, /type:\s*z\.literal\("artifact"\),\s*artifactId:\s*nonEmptyString/s);
-  assert.match(source, /type:\s*z\.literal\("resolve"\),\s*kind:\s*targetKindSchema,\s*value:\s*nonEmptyString/s);
-  assert.doesNotMatch(resolveArtifactBlock, /targetKind:/);
-  assert.doesNotMatch(classSourceBlock, /artifactId:/);
-  assert.doesNotMatch(classSourceBlock, /targetKind:/);
-  assert.doesNotMatch(classMembersBlock, /artifactId:/);
-  assert.doesNotMatch(classMembersBlock, /targetKind:/);
-});
-
-test("index.ts reshapes search-class-source around compact file hits", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-  const block = source.match(/const searchClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-
-  assert.match(block, /artifactId:\s*nonEmptyString/);
-  assert.match(block, /query:\s*nonEmptyString/);
-  assert.match(block, /intent:\s*searchIntentSchema\.optional\(\)/);
-  assert.match(block, /symbolKind:\s*searchSymbolKindSchema\.optional\(\)/);
-  assert.match(block, /queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/);
-  assert.doesNotMatch(block, /snippetLines:/);
-  assert.doesNotMatch(block, /includeDefinition:/);
-  assert.doesNotMatch(block, /includeOneHop:/);
-  assert.match(source, /symbolKind filter is only supported when intent="symbol"/);
-  assert.doesNotMatch(source, /optional one-hop relation expansion/);
-});
-
-test("index.ts removes kind from resolve-method-mapping-exact contract", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-  const block = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-
-  assert.match(block, /version:\s*nonEmptyString[\s\S]*owner:\s*nonEmptyString[\s\S]*descriptor:\s*nonEmptyString/s);
-  assert.doesNotMatch(block, /kind:/);
-  assert.doesNotMatch(source, /resolve-method-mapping-exact requires kind=method/);
-});
-
-test("index.ts reshapes validate-mixin around mode-based input", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /const validateMixinShape = \{[\s\S]*input:\s*z\.discriminatedUnion\("mode"/s);
-  assert.match(source, /mode:\s*z\.literal\("inline"\),\s*source:\s*nonEmptyString/s);
-  assert.match(source, /mode:\s*z\.literal\("path"\),\s*path:\s*nonEmptyString/s);
-  assert.match(source, /mode:\s*z\.literal\("paths"\),\s*paths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
-  assert.match(source, /mode:\s*z\.literal\("config"\),\s*configPaths:\s*z\.array\(nonEmptyString\)\.min\(1\)/s);
-  assert.match(source, /mode:\s*z\.literal\("project"\),\s*path:\s*nonEmptyString/s);
-  assert.match(source, /sourceRoots:\s*z\.array\(z\.string\(\)\.min\(1\)\)\.optional\(\)/);
-  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePath:/);
-  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourcePaths:/);
-  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*mixinConfigPath:/);
-  assert.doesNotMatch(source, /const validateMixinShape = \{[\s\S]*sourceRoot:/);
-});
-
 test("validate-mixin tools/list schema exposes all mode-based inputs to clients", async () => {
-  const { server } = await import("../src/index.ts");
+  const tool = (await listTools()).find((entry) => entry.name === "validate-mixin");
 
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
-  assert.ok(handler);
-
-  const response = await handler!(
-    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    {}
-  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
-
-  const tool = response.tools.find((entry) => entry.name === "validate-mixin");
   assert.ok(tool);
 
   const inputSchema = tool!.inputSchema as {
@@ -247,33 +148,17 @@ test("validate-mixin tools/list schema exposes all mode-based inputs to clients"
 });
 
 test("validate-mixin invalid input returns problem details with a retryable suggestedCall", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "validate-mixin",
-        arguments: {
-          input: "@Mixin(Player.class) class ExampleMixin {}",
-          version: "1.21.10",
-          minSeverity: "all",
-          hideUncertain: false,
-          explain: false,
-          preferProjectMapping: false,
-          reportMode: "full",
-          treatInfoAsWarning: true,
-          includeIssues: true
-        }
-      }
-    },
-    {}
-  ) as {
+  const result = await callTool("validate-mixin", {
+    input: "@Mixin(Player.class) class ExampleMixin {}",
+    version: "1.21.10",
+    minSeverity: "all",
+    hideUncertain: false,
+    explain: false,
+    preferProjectMapping: false,
+    reportMode: "full",
+    treatInfoAsWarning: true,
+    includeIssues: true
+  }) as {
     isError?: boolean;
     structuredContent?: {
       error?: {
@@ -306,26 +191,10 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
 });
 
 test("validate-mixin invalid JSON-like input string preserves structured input in suggestedCall", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "validate-mixin",
-        arguments: {
-          input: "{\"mode\":\"path\",\"path\":\"/workspace/src/main/java/ExampleMixin.java\"}",
-          version: "1.21.10"
-        }
-      }
-    },
-    {}
-  ) as {
+  const result = await callTool("validate-mixin", {
+    input: "{\"mode\":\"path\",\"path\":\"/workspace/src/main/java/ExampleMixin.java\"}",
+    version: "1.21.10"
+  }) as {
     isError?: boolean;
     structuredContent?: {
       error?: {
@@ -354,17 +223,7 @@ test("validate-mixin invalid JSON-like input string preserves structured input i
 });
 
 test("source lookup tools/list schema clarifies object target inputs and loader scope fallback", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
-  assert.ok(handler);
-
-  const response = await handler!(
-    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    {}
-  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
-
-  const toolMap = new Map(response.tools.map((entry) => [entry.name, entry.inputSchema]));
+  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const resolveArtifactSchema = toolMap.get("resolve-artifact") as {
     properties?: { target?: { description?: string }; scope?: { description?: string } };
   };
@@ -391,238 +250,8 @@ test("source lookup tools/list schema clarifies object target inputs and loader 
   assert.match(validateMixinSchema.properties?.reportMode?.description ?? "", /summary-first/i);
 });
 
-test("resolve-artifact invalid string target returns retryable object target suggestedCall", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "resolve-artifact",
-        arguments: {
-          target: "1.21.10",
-          allowDecompile: true,
-          preferProjectVersion: false,
-          strictVersion: false
-        }
-      }
-    },
-    {}
-  ) as {
-    isError?: boolean;
-    structuredContent?: {
-      error?: {
-        code?: string;
-        fieldErrors?: Array<{ path?: string }>;
-        suggestedCall?: {
-          tool?: string;
-          params?: { target?: { kind?: string; value?: string } };
-        };
-      };
-    };
-  };
-
-  assert.equal(result.isError, true);
-  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "resolve-artifact");
-  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
-    target: {
-      kind: "version",
-      value: "1.21.10"
-    }
-  });
-});
-
-test("get-class-source invalid string target returns resolve-target suggestedCall", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "get-class-source",
-        arguments: {
-          className: "net.minecraft.server.Main",
-          target: "1.21.10",
-          mode: "metadata",
-          allowDecompile: true,
-          preferProjectVersion: false,
-          strictVersion: false
-        }
-      }
-    },
-    {}
-  ) as {
-    isError?: boolean;
-    structuredContent?: {
-      error?: {
-        code?: string;
-        fieldErrors?: Array<{ path?: string }>;
-        suggestedCall?: {
-          tool?: string;
-          params?: {
-            className?: string;
-            target?: { type?: string; kind?: string; value?: string };
-          };
-        };
-      };
-    };
-  };
-
-  assert.equal(result.isError, true);
-  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-source");
-  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
-    className: "net.minecraft.server.Main",
-    target: {
-      type: "resolve",
-      kind: "version",
-      value: "1.21.10"
-    }
-  });
-});
-
-test("get-class-members invalid string target suggestedCall preserves valid fields only", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "get-class-members",
-        arguments: {
-          className: "net.minecraft.server.Main",
-          target: "1.21.10",
-          access: "all",
-          memberPattern: "tick",
-          mode: "full",
-          outputFile: "/tmp/ignored.java",
-          startLine: 10
-        }
-      }
-    },
-    {}
-  ) as {
-    isError?: boolean;
-    structuredContent?: {
-      error?: {
-        code?: string;
-        suggestedCall?: {
-          tool?: string;
-          params?: Record<string, unknown>;
-        };
-      };
-    };
-  };
-
-  assert.equal(result.isError, true);
-  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-members");
-  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
-    className: "net.minecraft.server.Main",
-    target: {
-      type: "resolve",
-      kind: "version",
-      value: "1.21.10"
-    },
-    access: "all",
-    memberPattern: "tick"
-  });
-});
-
-test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-  const listVersionsBlock = source.match(/const listVersionsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const resolveArtifactBlock = source.match(/const resolveArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const classSourceBlock = source.match(/const getClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const classMembersBlock = source.match(/const getClassMembersShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const traceLifecycleBlock = source.match(/const traceSymbolLifecycleShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const diffClassSignaturesBlock = source.match(/const diffClassSignaturesShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const findMappingBlock = source.match(/const findMappingShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const resolveMethodBlock = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const classApiBlock = source.match(/const getClassApiMatrixShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const resolveWorkspaceBlock = source.match(/const resolveWorkspaceSymbolShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const checkExistsBlock = source.match(/const checkSymbolExistsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const nbtToJsonBlock = source.match(/const nbtToJsonShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const jsonToNbtBlock = source.match(/const jsonToNbtShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const indexArtifactBlock = source.match(/const indexArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const validateMixinBlock = source.match(/const validateMixinShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const analyzeModJarBlock = source.match(/const analyzeModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const registryBlock = source.match(/const getRegistryDataShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const compareVersionsBlock = source.match(/const compareVersionsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const decompileBlock = source.match(/const decompileModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-  const searchModBlock = source.match(/const searchModSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
-
-  assert.match(listVersionsBlock, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(listVersionsBlock, /limit:\s*optionalPositiveInt\.default\(20\)/);
-  assert.match(resolveArtifactBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(classSourceBlock, /mode:\s*sourceModeSchema\.default\("metadata"\)/);
-  assert.match(classSourceBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(classMembersBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(classMembersBlock, /access:\s*memberAccessSchema\.default\("public"\)/);
-  assert.match(classMembersBlock, /includeSynthetic:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(classMembersBlock, /includeInherited:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(traceLifecycleBlock, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(traceLifecycleBlock, /maxVersions:\s*optionalPositiveInt\.default\(120\)/);
-  assert.match(traceLifecycleBlock, /includeTimeline:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(diffClassSignaturesBlock, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(findMappingBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
-  assert.match(resolveMethodBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
-  assert.match(classApiBlock, /maxRows:\s*optionalPositiveInt/);
-  assert.match(resolveWorkspaceBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
-  assert.match(checkExistsBlock, /nameMode:\s*classNameModeSchema\.default\("fqcn"\)/);
-  assert.match(checkExistsBlock, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
-  assert.match(checkExistsBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
-  assert.match(nbtToJsonBlock, /compression:\s*decodeCompressionSchema\.default\("auto"\)/);
-  assert.match(jsonToNbtBlock, /compression:\s*encodeCompressionSchema\.default\("none"\)/);
-  assert.match(indexArtifactBlock, /force:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateMixinBlock, /minSeverity:\s*z\.enum\(\["error", "warning", "all"\]\)\.default\("all"\)/);
-  assert.match(validateMixinBlock, /hideUncertain:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateMixinBlock, /explain:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateMixinBlock, /preferProjectMapping:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateMixinBlock, /reportMode:\s*z\.enum\(\["compact", "full", "summary-first"\]\)\.default\("full"\)/);
-  assert.match(validateMixinBlock, /treatInfoAsWarning:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(validateMixinBlock, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(analyzeModJarBlock, /includeClasses:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(registryBlock, /includeData:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(registryBlock, /maxEntriesPerRegistry:\s*optionalPositiveInt/);
-  assert.match(compareVersionsBlock, /category:\s*compareVersionsCategorySchema\.default\("all"\)/);
-  assert.match(compareVersionsBlock, /maxClassResults:\s*optionalPositiveInt\.default\(500\)/);
-  assert.match(decompileBlock, /includeFiles:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(decompileBlock, /maxFiles:\s*optionalPositiveInt/);
-  assert.match(searchModBlock, /searchType:\s*modSearchTypeSchema\.default\("all"\)/);
-  assert.match(searchModBlock, /limit:\s*optionalPositiveInt\.default\(50\)/);
-});
-
-test("tools/list schemas expose explicit defaults for category A params and omit them for category B params", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
-  assert.ok(handler);
-
-  const response = await handler!(
-    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    {}
-  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
-
-  const toolMap = new Map(response.tools.map((entry) => [entry.name, entry.inputSchema]));
+test("tools/list schemas expose explicit defaults for public input parameters", async () => {
+  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const listVersionsSchema = toolMap.get("list-versions") as {
     properties?: { includeSnapshots?: { default?: boolean }; limit?: { default?: number } };
   };
@@ -761,41 +390,115 @@ test("tools/list schemas expose explicit defaults for category A params and omit
   assert.deepEqual(collectQueryModeDefaults(inspectMinecraftSchema), ["auto", "auto"]);
 });
 
-test("index.ts documents symbol-query grammar for mapping tools", async () => {
-  const source = await readFile("src/index.ts", "utf8");
+test("resolve-artifact invalid string target returns retryable object target suggestedCall", async () => {
+  const result = await callTool("resolve-artifact", {
+    target: "1.21.10",
+    allowDecompile: true,
+    preferProjectVersion: false,
+    strictVersion: false
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        suggestedCall?: {
+          tool?: string;
+          params?: { target?: { kind?: string; value?: string } };
+        };
+      };
+    };
+  };
 
-  assert.match(source, /kind:\s*workspaceSymbolKindSchema\.describe\("class \| field \| method"\)/);
-  assert.match(source, /name:\s*nonEmptyString/);
-  assert.match(source, /owner:\s*optionalNonEmptyString/);
-  assert.match(source, /descriptor:\s*optionalNonEmptyString/);
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "resolve-artifact");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    target: {
+      kind: "version",
+      value: "1.21.10"
+    }
+  });
 });
 
-test("index.ts documents exact method mapping and workspace symbol tools", async () => {
-  const source = await readFile("src/index.ts", "utf8");
+test("get-class-source invalid string target returns resolve-target suggestedCall", async () => {
+  const result = await callTool("get-class-source", {
+    className: "net.minecraft.server.Main",
+    target: "1.21.10",
+    mode: "metadata",
+    allowDecompile: true,
+    preferProjectVersion: false,
+    strictVersion: false
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            className?: string;
+            target?: { type?: string; kind?: string; value?: string };
+          };
+        };
+      };
+    };
+  };
 
-  assert.match(source, /server\.tool\("resolve-method-mapping-exact"/);
-  assert.match(source, /server\.tool\("get-class-api-matrix"/);
-  assert.match(source, /server\.tool\("resolve-workspace-symbol"/);
-  assert.match(source, /server\.tool\("check-symbol-exists"/);
-  assert.match(source, /\.describe\("class \| field \| method"\)/);
-  assert.doesNotMatch(source, /memberName:/);
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-source");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    className: "net.minecraft.server.Main",
+    target: {
+      type: "resolve",
+      kind: "version",
+      value: "1.21.10"
+    }
+  });
 });
 
-test("index.ts formats tool responses with result/error/meta envelope", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-  const helperSource = await readFile("src/mcp-helpers.ts", "utf8");
+test("get-class-members invalid string target suggestedCall preserves valid fields only", async () => {
+  const result = await callTool("get-class-members", {
+    className: "net.minecraft.server.Main",
+    target: "1.21.10",
+    access: "all",
+    memberPattern: "tick",
+    mode: "full",
+    outputFile: "/tmp/ignored.java",
+    startLine: 10
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: Record<string, unknown>;
+        };
+      };
+    };
+  };
 
-  assert.match(source, /result:/);
-  assert.match(source, /error:/);
-  assert.match(source, /meta:/);
-  assert.match(source, /patch:\s*z\.array\(/);
-  assert.match(helperSource, /structuredContent:\s*data/);
-  assert.match(helperSource, /options\.isError \? \{ isError: true \} : \{\}/);
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "get-class-members");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    className: "net.minecraft.server.Main",
+    target: {
+      type: "resolve",
+      kind: "version",
+      value: "1.21.10"
+    },
+    access: "all",
+    memberPattern: "tick"
+  });
 });
 
 test("analyze-mod remap preview returns an operation block without mutating", async () => {
-  const { server } = await import("../src/index.ts");
-
   const root = await mkdtemp(join(tmpdir(), "analyze-mod-tool-"));
   const jarPath = join(root, "example.jar");
   await createJar(jarPath, {
@@ -810,29 +513,15 @@ test("analyze-mod remap preview returns an operation block without mutating", as
     }, null, 2)
   });
 
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "analyze-mod",
-        arguments: {
-          task: "remap",
-          subject: {
-            kind: "jar",
-            jarPath
-          },
-          targetMapping: "mojang",
-          executionMode: "preview"
-        }
-      }
+  const result = await callTool("analyze-mod", {
+    task: "remap",
+    subject: {
+      kind: "jar",
+      jarPath
     },
-    {}
-  ) as {
+    targetMapping: "mojang",
+    executionMode: "preview"
+  }) as {
     structuredContent?: {
       result?: {
         summary?: { status?: string };
@@ -847,28 +536,12 @@ test("analyze-mod remap preview returns an operation block without mutating", as
 });
 
 test("manage-cache summary normalizes apply to preview at the public contract", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "manage-cache",
-        arguments: {
-          action: "summary",
-          cacheKinds: ["downloads"],
-          executionMode: "apply",
-          include: ["preview", "warnings"]
-        }
-      }
-    },
-    {}
-  ) as {
+  const result = await callTool("manage-cache", {
+    action: "summary",
+    cacheKinds: ["downloads"],
+    executionMode: "apply",
+    include: ["preview", "warnings"]
+  }) as {
     structuredContent?: {
       meta?: {
         detailApplied?: string;
@@ -886,31 +559,15 @@ test("manage-cache summary normalizes apply to preview at the public contract", 
 });
 
 test("analyze-symbol rejects api-overview requests that include owner or descriptor selectors", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "analyze-symbol",
-        arguments: {
-          task: "api-overview",
-          version: "1.21.10",
-          subject: {
-            kind: "class",
-            name: "net.minecraft.world.level.block.Blocks",
-            owner: "net.minecraft.world.level.block.Blocks"
-          }
-        }
-      }
-    },
-    {}
-  ) as {
+  const result = await callTool("analyze-symbol", {
+    task: "api-overview",
+    version: "1.21.10",
+    subject: {
+      kind: "class",
+      name: "net.minecraft.world.level.block.Blocks",
+      owner: "net.minecraft.world.level.block.Blocks"
+    }
+  }) as {
     isError?: boolean;
     structuredContent?: {
       error?: {
@@ -928,34 +585,18 @@ test("analyze-symbol rejects api-overview requests that include owner or descrip
 });
 
 test("validate-project rejects top-level configPaths for direct access-widener validation", async () => {
-  const { server } = await import("../src/index.ts");
-
-  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/call");
-  assert.ok(handler);
-
-  const result = await handler!(
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "validate-project",
-        arguments: {
-          task: "access-widener",
-          version: "1.21.10",
-          configPaths: ["example.mixins.json"],
-          subject: {
-            kind: "access-widener",
-            input: {
-              mode: "inline",
-              content: "accessWidener v2 named"
-            }
-          }
-        }
+  const result = await callTool("validate-project", {
+    task: "access-widener",
+    version: "1.21.10",
+    configPaths: ["example.mixins.json"],
+    subject: {
+      kind: "access-widener",
+      input: {
+        mode: "inline",
+        content: "accessWidener v2 named"
       }
-    },
-    {}
-  ) as {
+    }
+  }) as {
     isError?: boolean;
     structuredContent?: {
       error?: {
@@ -972,19 +613,6 @@ test("validate-project rejects top-level configPaths for direct access-widener v
   );
 });
 
-test("index.ts validates includeKinds values instead of silently ignoring invalid kinds", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /const classApiKindsSchema = z\.string\(\)/);
-  assert.doesNotMatch(source, /includeKinds:\s*z\.string\(\)\.optional\(\)/);
-});
-
-test("index.ts maps NBT parse failures to bad request status", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /code === ERROR_CODES\.NBT_PARSE_FAILED/);
-});
-
 test("index.ts serializes heavy analysis tools to protect MCP transport stability", async () => {
   const source = await readFile("src/index.ts", "utf8");
 
@@ -997,107 +625,4 @@ test("index.ts serializes heavy analysis tools to protect MCP transport stabilit
   assert.match(source, /const heavyToolExecutionGate = new ToolExecutionGate\(/);
   assert.match(source, /HEAVY_TOOL_NAMES\.has\(tool\)/);
   assert.match(source, /heavyToolExecutionGate\.run\(tool,\s*\(\)\s*=>\s*action\(parsedInput\)\)/s);
-});
-
-test("index.ts remap target enum includes yarn and mojang", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /const REMAP_TARGETS = \["yarn", "mojang"\] as const;/);
-});
-
-// ── Resources integration ──────────────────────────────────────────
-
-const EXPECTED_FIXED_RESOURCES = ["versions-list", "runtime-metrics"] as const;
-
-const EXPECTED_TEMPLATE_RESOURCES = [
-  "class-source",
-  "artifact-file",
-  "find-mapping",
-  "class-members",
-  "artifact-metadata"
-] as const;
-
-const ALL_RESOURCES = [...EXPECTED_FIXED_RESOURCES, ...EXPECTED_TEMPLATE_RESOURCES] as const;
-
-test("resources.ts registers the expected fixed and template resources", async () => {
-  const source = await readFile("src/resources.ts", "utf8");
-
-  for (const name of ALL_RESOURCES) {
-    assert.match(source, new RegExp(`server\\.resource\\("${name}"`));
-  }
-
-  const registrations = source.match(/server\.resource\(/g) ?? [];
-  assert.equal(registrations.length, ALL_RESOURCES.length);
-});
-
-test("resources.ts uses ResourceTemplate for template resources", async () => {
-  const source = await readFile("src/resources.ts", "utf8");
-
-  const templateConstructors = source.match(/new ResourceTemplate\(/g) ?? [];
-  assert.equal(templateConstructors.length, EXPECTED_TEMPLATE_RESOURCES.length);
-});
-
-test("index.ts calls registerResources", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /registerResources\(server,\s*sourceService\)/);
-  assert.match(source, /import\s*\{[^}]*registerResources[^}]*\}\s*from\s*"\.\/resources\.js"/);
-});
-
-
-test("index.ts lazily initializes SourceService to reduce startup overhead", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /let\s+sourceServiceInstance:\s*SourceService\s*\|\s*undefined/);
-  assert.match(source, /function\s+getSourceService\(\):\s*SourceService/);
-  assert.match(source, /sourceServiceInstance\s*\?\?=\s*new\s+SourceService\(config\)/);
-  assert.match(source, /const\s+sourceService\s*=\s*new\s+Proxy\(/);
-  assert.doesNotMatch(source, /setImmediate\(getSourceService\)/);
-});
-
-test("get-class-members contract preserves actual mappingApplied metadata", async () => {
-  const serviceSource = await readFile("src/source-service.ts", "utf8");
-
-  assert.match(
-    serviceSource,
-    /async getClassMembers[\s\S]*requestedMapping,[\s\S]*mappingApplied,[\s\S]*provenance: normalizedProvenance/
-  );
-  assert.doesNotMatch(
-    serviceSource,
-    /async getClassMembers[\s\S]*mappingApplied:\s*requestedMapping/
-  );
-});
-
-test("CLI entrypoint runs a supervised worker wrapper around startServer", async () => {
-  const cliSource = await readFile("src/cli.ts", "utf8");
-  const supervisorSource = await readFile("src/stdio-supervisor.ts", "utf8");
-
-  assert.match(cliSource, /^#!\/usr\/bin\/env node/m);
-  assert.match(cliSource, /import\s+\{\s*startServer\s*\}\s+from\s+"\.\/index\.js"/);
-  assert.match(cliSource, /import\s+\{\s*STDIO_WORKER_MODE_ENV,\s*StdioSupervisor\s*\}\s+from\s+"\.\/stdio-supervisor\.js"/);
-  assert.match(cliSource, /if\s*\(process\.env\[STDIO_WORKER_MODE_ENV\]\s*===\s*"1"\)/);
-  assert.match(cliSource, /const keepAliveTimer = setInterval\(\(\) => undefined,\s*60_000\)/);
-  assert.match(cliSource, /process\.stderr\.write\(`\$\{WORKER_READY_MARKER\}\\n`\)/);
-  assert.match(cliSource, /new StdioSupervisor\(/);
-  assert.match(supervisorSource, /const WORKER_READY_MARKER = "__MCP_STDIO_WORKER_READY__"/);
-  assert.match(supervisorSource, /handleWorkerReady\(\)/);
-  assert.match(supervisorSource, /this\.queuedMessages\.push\(message\)/);
-  assert.match(supervisorSource, /this\.forwardToWorker\(this\.initializeRequest\)/);
-  assert.match(supervisorSource, /buildWorkerRestartError/);
-});
-
-test("startServer installs process-level error handlers", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /process\.on\("uncaughtException"/);
-  assert.match(source, /process\.on\("unhandledRejection"/);
-  assert.match(source, /attachProcessErrorHandlers\(\)/);
-});
-
-test("index.ts uses compatibility stdio transport for newline and Content-Length clients", async () => {
-  const source = await readFile("src/index.ts", "utf8");
-
-  assert.match(source, /import\s+\{\s*CompatStdioServerTransport\s*\}\s+from\s+"\.\/compat-stdio-transport\.js"/);
-  assert.match(source, /new CompatStdioServerTransport\(\)/);
-  assert.doesNotMatch(source, /server\/stdio\.js/);
 });

@@ -2,216 +2,124 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("README documents analyze-mod-jar inputs that match implementation", async () => {
+function assertMatchesAll(content: string, patterns: RegExp[]): void {
+  for (const pattern of patterns) {
+    assert.match(content, pattern);
+  }
+}
+
+const ENGLISH_NARRATIVE_PATTERNS = [
+  /always return `result\.summary`/,
+  /`summary\.subject` plus `summary\.nextActions`/,
+  /share `detail: "summary" \| "standard" \| "full"` plus opt-in `include\[\]` groups/,
+  /`executionMode: "preview" \| "apply"`/,
+  /Start with `inspect-minecraft`/,
+  /Start with `manage-cache`/,
+  /`registry-diff` can only load one side of detailed registry data, it returns `summary.status="partial"`/,
+  /`selector\.olderThan` accepts ISO-8601 durations such as `P30D`/,
+  /`get-class-source` mode defaults to `metadata`/,
+  /Error `suggestedCall` payloads now use the same `target` object schema/,
+  /include `artifactContents`/,
+  /include `returnedNamespace`/,
+  /resources are indexed \(`resourcesIncluded=false` today\)/,
+  /Heavy analysis tools .* are serialized inside the server/,
+  /CLI stdio entrypoint now runs a supervised worker process/,
+  /replays MCP initialization for the current session/,
+  /Registry deltas are returned under `result\.registry` \(not `registryDiff`\)\./,
+  /`scope="loader"` currently resolves the same artifact class as `scope="merged"`/,
+  /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, `config`, or `project`/,
+  /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/,
+  /`validate-mixin` supports `includeIssues=false`/,
+  /`validate-mixin` per-result responses now include `validationStatus`/,
+  /`validate-mixin` batch `summary` now includes `partial`/,
+  /`validate-mixin` now reports `validation-incomplete` when target metadata cannot be loaded reliably/,
+  /`validate-mixin` responses now include `confidenceBreakdown`/,
+  /`reportMode=summary-first` hoists shared provenance, warnings, and incomplete-reason summaries/,
+  /`validate-mixin` provenance now exposes `requestedScope` \/ `appliedScope` and `requestedSourcePriority` \/ `appliedSourcePriority`/,
+  /`validate-mixin` automatically retries with `sourcePriority="maven-first"`/,
+  /Schema validation failures now also return the standard `ERR_INVALID_INPUT` envelope/,
+  /Bare string `target` values now return `ERR_INVALID_INPUT` with a schema-correct `suggestedCall` wrapper/,
+  /generated `check-symbol-exists` recovery payloads now stay within that tool's public schema/,
+  /`check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version .*` noise/,
+  /`reportMode=compact` and `warningMode=aggregated`/,
+  /`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`/,
+  /Use `get-artifact-file` or `get-class-source` to inspect returned files after search/,
+  /Replace `resolve-artifact` `targetKind` \+ `targetValue` with `target: \{ kind, value \}`/,
+  /Replace `get-class-source` \/ `get-class-members` top-level `artifactId` \/ `targetKind` \/ `targetValue`/,
+  /`resolve-method-mapping-exact` is method-only and no longer accepts `kind`/,
+  /Use `summary\.processingErrors` instead of `summary\.errors`/,
+  /`maxCandidates` to cap `candidates\[\]`/,
+  /`get-class-api-matrix` accepts `maxRows`/,
+  /`decompile-mod-jar` supports `includeFiles=false`/,
+  /`get-registry-data` supports `includeData=false`/,
+  /`diff-class-signatures` supports `includeFullDiff=false`/,
+  /nameMode=auto/,
+  /numeric-string coercion only applies to documented top-level tool arguments/,
+  /mirrored in MCP `structuredContent`/,
+  /failures also set `isError=true`/,
+  /#### Validate all Mixins in a project/,
+  /"mode": "project"/
+] as const;
+
+const JAPANESE_NARRATIVE_PATTERNS = [
+  /常に `result\.summary` を返します/,
+  /`summary\.subject` と `summary\.nextActions`/,
+  /`detail: "summary" \| "standard" \| "full"` と opt-in の `include\[\]` を共有/,
+  /`executionMode: "preview" \| "apply"`/,
+  /まず `inspect-minecraft` を使い/,
+  /まず `manage-cache` を使い/,
+  /`registry-diff` で detailed registry data を片側しか読めない場合でも、ツール全体を失敗させず `summary.status="partial"`/,
+  /`selector\.olderThan` は `P30D` のような ISO-8601 duration を受け付け/,
+  /`resolve-artifact` は `target: \{ kind, value \}` を受け取ります。/,
+  /エラーの `suggestedCall` も、旧 `targetKind` \/ `targetValue` ではなく同じ `target` オブジェクト形状/,
+  /4つの命名空間（`obfuscated`、`mojang`、`intermediary`、`yarn`）/,
+  /`artifactContents` を返し/,
+  /`resourcesIncluded=false`/,
+  /`returnedNamespace` を返します/,
+  /重い解析系ツール.*直列化されます/,
+  /CLI の stdio entrypoint は supervised worker process として動作します/,
+  /MCP initialize を replay して同じ stdio 接続を継続します/,
+  /`validate-mixin` は `input\.mode` が `inline` \/ `path` \/ `paths` \/ `config` \/ `project` のいずれか/,
+  /`validate-mixin` は常に `mode`、`results\[\]`、`summary` を返し/,
+  /`validate-mixin` は `includeIssues=false` をサポートし/,
+  /`validate-mixin` の各結果は `validationStatus`/,
+  /`validate-mixin` のバッチ `summary` には `partial` が追加され/,
+  /`validate-mixin` は、target metadata を十分に取得できない場合に `validation-incomplete` を返します/,
+  /`validate-mixin` のレスポンスには `confidenceBreakdown` が追加され/,
+  /`reportMode=summary-first` は共有 provenance、warnings、incomplete reason をトップレベルへ集約/,
+  /`validate-mixin` の provenance には `requestedScope` \/ `appliedScope` と `requestedSourcePriority` \/ `appliedSourcePriority`/,
+  /`validate-mixin` は、マッピング\/署名解決の制約で `loom-first` の結果が partial になった場合、自動で `sourcePriority="maven-first"` に再試行/,
+  /Schema validation failure でも標準の `ERR_INVALID_INPUT` エンベロープ/,
+  /bare string の `target` を渡した場合も `ERR_INVALID_INPUT` と schema-valid な `suggestedCall` を返します/,
+  /`scope="loader"` は現時点では `scope="merged"` と同じ解決クラスを使います/,
+  /`check-symbol-exists` 向け recovery payload は、そのツールの公開 schema に収まる引数だけ/,
+  /`check-symbol-exists` は、Maven tiny mapping fallback が成功した場合に raw な `No Loom tiny mapping files matched version .*` warning を繰り返さず/,
+  /`reportMode=compact` と `warningMode=aggregated`/,
+  /`summary\.errors` は削除されました/,
+  /`search-class-source` は snippets、行ウィンドウ、relation expansion、`totalApprox` を含まない/,
+  /`structuredContent`/,
+  /`isError=true`/,
+  /旧来の公開名前空間名 `official` は削除されました/,
+  /レジストリ差分は `result\.registry` に返ります（`registryDiff` ではありません）。/,
+  /`maxCandidates` で `candidates\[\]` を上限付きにできます/,
+  /`get-class-api-matrix` は `maxRows` を受け付けます/,
+  /`decompile-mod-jar` は `includeFiles=false`/,
+  /`get-registry-data` は `includeData=false`/,
+  /`diff-class-signatures` は `includeFullDiff=false`/,
+  /#### プロジェクト内の Mixin を一括バリデーション/,
+  /"mode": "project"/
+] as const;
+
+test("README documents narrative contract outside generated tables", async () => {
   const readme = await readFile("README.md", "utf8");
 
-  assert.match(readme, /\| `analyze-mod-jar` \|.*`jarPath`, `includeClasses\?` \|/);
-  assert.doesNotMatch(readme, /includeAllClasses\?/);
-  assert.doesNotMatch(readme, /includeRawMetadata\?/);
+  assertMatchesAll(readme, ENGLISH_NARRATIVE_PATTERNS);
 });
 
-test("README documents source resolution options and source-mode behavior", async () => {
-  const readme = await readFile("README.md", "utf8");
-
-  assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
-  assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`sourcePriority\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`fromVersion\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`toVersion\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
-  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `subject\.kind="class"\.sourcePriority\?`, `maxClassResults\?`/);
-  assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
-  assert.match(
-    readme,
-    /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `sourcePriority\?`, `scope\?`.*`sourceRoots\?`, `configPaths\?`.*`detail\?`, `include\?`/
-  );
-  assert.doesNotMatch(readme, /\| `validate-project` \|.*`projectPath\?`/);
-  assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
-  assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
-  assert.match(readme, /always return `result\.summary`/);
-  assert.match(readme, /`summary\.subject` plus `summary\.nextActions`/);
-  assert.match(readme, /share `detail: "summary" \| "standard" \| "full"` plus opt-in `include\[\]` groups/);
-  assert.match(readme, /`executionMode: "preview" \| "apply"`/);
-  assert.match(readme, /Start with `inspect-minecraft`/);
-  assert.match(readme, /Start with `manage-cache`/);
-  assert.match(readme, /`registry-diff` can only load one side of detailed registry data, it returns `summary.status="partial"`/);
-  assert.match(readme, /`selector\.olderThan` accepts ISO-8601 durations such as `P30D`/);
-  assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
-  assert.match(
-    readme,
-    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`.*`results\[\]\.validationStatus`.*`summary\.partial`/
-  );
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`mixinConfigPath\?`/);
-  assert.match(readme, /\| `find-class` \|/);
-  assert.match(readme, /\| `resolve-artifact` \|.*`artifactContents`/);
-  assert.match(readme, /\| `get-class-source` \|.*`target`.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `get-class-members` \|.*`target`.*`mapping\?`.*`access\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `get-artifact-file` \|.*`artifactId`.*`filePath`.*`maxBytes\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `list-artifact-files` \|.*`artifactId`.*`prefix\?`.*`cursor\?`.*`artifactContents`.*`warnings\[\]`/);
-  assert.match(readme, /\| `diff-class-signatures` \|.*`includeFullDiff\?`.*`modified`/);
-  assert.match(readme, /\| `compare-versions` \|.*`classes`, `registry`, `summary`, `warnings\[\]` \|/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
-  assert.match(
-    readme,
-    /\| `resolve-method-mapping-exact` \|.*`version`.*`name`.*`owner`.*`descriptor`.*`sourceMapping`.*`targetMapping`/
-  );
-  assert.doesNotMatch(readme, /\| `resolve-method-mapping-exact` \|.*`kind`/);
-  assert.match(readme, /\| `find-mapping` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `resolve-method-mapping-exact` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `get-class-api-matrix` \|.*`maxRows\?`.*`rowCount`.*`rowsTruncated\?`/);
-  assert.match(readme, /\| `resolve-workspace-symbol` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `check-symbol-exists` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `decompile-mod-jar` \|.*`includeFiles\?`.*`maxFiles\?`.*`returnedFileCount\?`.*`filesTruncated\?`.*`filesOmitted\?`/);
-  assert.match(readme, /\| `get-registry-data` \|.*`includeData\?`.*`maxEntriesPerRegistry\?`.*`returnedEntryCount\?`.*`registryEntryCounts\?`.*`dataTruncated\?`/);
-  assert.match(readme, /`get-class-source` mode defaults to `metadata`/);
-  assert.match(readme, /Error `suggestedCall` payloads now use the same `target` object schema/);
-  assert.match(readme, /include `artifactContents`/);
-  assert.match(readme, /include `returnedNamespace`/);
-  assert.match(readme, /resources are indexed \(`resourcesIncluded=false` today\)/);
-  assert.match(readme, /Heavy analysis tools .* are serialized inside the server/);
-  assert.match(readme, /CLI stdio entrypoint now runs a supervised worker process/);
-  assert.match(readme, /replays MCP initialization for the current session/);
-  assert.match(readme, /Registry deltas are returned under `result\.registry` \(not `registryDiff`\)\./);
-  assert.match(readme, /`validate-mixin` requires `input\.mode` to be exactly one of `inline`, `path`, `paths`, `config`, or `project`/);
-  assert.match(readme, /`validate-mixin` always returns `mode`, `results\[\]`, and `summary`/);
-  assert.match(readme, /`validate-mixin` supports `includeIssues=false`/);
-  assert.match(readme, /`validate-mixin` per-result responses now include `validationStatus`/);
-  assert.match(readme, /`validate-mixin` batch `summary` now includes `partial`/);
-  assert.match(readme, /`validate-mixin` now reports `validation-incomplete` when target metadata cannot be loaded reliably/);
-  assert.match(readme, /`validate-mixin` responses now include `confidenceBreakdown`/);
-  assert.match(readme, /`reportMode=summary-first` hoists shared provenance, warnings, and incomplete-reason summaries/);
-  assert.match(readme, /`validate-mixin` provenance now exposes `requestedScope` \/ `appliedScope` and `requestedSourcePriority` \/ `appliedSourcePriority`/);
-  assert.match(readme, /`validate-mixin` automatically retries with `sourcePriority="maven-first"`/);
-  assert.match(readme, /Schema validation failures now also return the standard `ERR_INVALID_INPUT` envelope/);
-  assert.match(readme, /Bare string `target` values now return `ERR_INVALID_INPUT` with a schema-correct `suggestedCall` wrapper/);
-  assert.match(readme, /`scope="loader"` currently resolves the same artifact class as `scope="merged"`/);
-  assert.match(readme, /#### Validate all Mixins in a project/);
-  assert.match(readme, /"mode": "project"/);
-  assert.match(readme, /generated `check-symbol-exists` recovery payloads now stay within that tool's public schema/);
-  assert.match(readme, /`check-symbol-exists` suppresses raw `No Loom tiny mapping files matched version .*` noise/);
-  assert.match(readme, /`reportMode=compact` and `warningMode=aggregated`/);
-  assert.match(readme, /`search-class-source` now returns compact file hits without snippets, line windows, relation expansion, or `totalApprox`/);
-  assert.match(readme, /Use `get-artifact-file` or `get-class-source` to inspect returned files after search/);
-  assert.match(readme, /Replace `resolve-artifact` `targetKind` \+ `targetValue` with `target: \{ kind, value \}`/);
-  assert.match(readme, /Replace `get-class-source` \/ `get-class-members` top-level `artifactId` \/ `targetKind` \/ `targetValue`/);
-  assert.match(readme, /`resolve-method-mapping-exact` is method-only and no longer accepts `kind`/);
-  assert.match(readme, /Use `summary\.processingErrors` instead of `summary\.errors`/);
-  assert.match(readme, /\| `check-symbol-exists` \|.*`nameMode\?`/);
-  assert.match(readme, /`maxCandidates` to cap `candidates\[\]`/);
-  assert.match(readme, /`get-class-api-matrix` accepts `maxRows`/);
-  assert.match(readme, /`decompile-mod-jar` supports `includeFiles=false`/);
-  assert.match(readme, /`get-registry-data` supports `includeData=false`/);
-  assert.match(readme, /`diff-class-signatures` supports `includeFullDiff=false`/);
-  assert.match(readme, /nameMode=auto/);
-  assert.match(readme, /numeric-string coercion only applies to documented top-level tool arguments/);
-  assert.match(readme, /mirrored in MCP `structuredContent`/);
-  assert.match(readme, /failures also set `isError=true`/);
-});
-
-test("Japanese README documents the current public contract", async () => {
+test("Japanese README documents narrative contract outside generated tables", async () => {
   const readme = await readFile("docs/README-ja.md", "utf8");
 
-  assert.match(readme, /\| `inspect-minecraft` \|.*`task\?`, `subject\?`, `detail\?`, `include\?`/);
-  assert.match(readme, /\| `analyze-symbol` \|.*`task`, `subject`, `version\?`, `sourceMapping\?`, `targetMapping\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`sourcePriority\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`fromVersion\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`toVersion\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`maxVersions\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeTimeline\?`/);
-  assert.doesNotMatch(readme, /\| `analyze-symbol` \|.*`includeSnapshots\?`/);
-  assert.match(readme, /\| `compare-minecraft` \|.*`task\?`, `subject`, `detail\?`, `include\?`, `subject\.kind="class"\.sourcePriority\?`, `maxClassResults\?`/);
-  assert.match(readme, /\| `analyze-mod` \|.*`task`, `subject`, `query\?`, `searchType\?`, `targetMapping\?`, `outputJar\?`, `executionMode\?`/);
-  assert.match(
-    readme,
-    /\| `validate-project` \|.*`task`, `subject`, `version\?`, `mapping\?`, `sourcePriority\?`, `scope\?`.*`sourceRoots\?`, `configPaths\?`.*`detail\?`, `include\?`/
-  );
-  assert.doesNotMatch(readme, /\| `validate-project` \|.*`projectPath\?`/);
-  assert.match(readme, /\| `manage-cache` \|.*`action`, `cacheKinds\?`, `selector\?`, `executionMode\?`, `detail\?`, `include\?`/);
-  assert.match(readme, /\| `manage-cache` \|.*`meta\.pagination\.nextCursor\?`/);
-  assert.match(readme, /常に `result\.summary` を返します/);
-  assert.match(readme, /`summary\.subject` と `summary\.nextActions`/);
-  assert.match(readme, /`detail: "summary" \| "standard" \| "full"` と opt-in の `include\[\]` を共有/);
-  assert.match(readme, /`executionMode: "preview" \| "apply"`/);
-  assert.match(readme, /まず `inspect-minecraft` を使い/);
-  assert.match(readme, /まず `manage-cache` を使い/);
-  assert.match(readme, /`registry-diff` で detailed registry data を片側しか読めない場合でも、ツール全体を失敗させず `summary.status="partial"`/);
-  assert.match(readme, /`selector\.olderThan` は `P30D` のような ISO-8601 duration を受け付け/);
-  assert.match(readme, /4つの命名空間（`obfuscated`、`mojang`、`intermediary`、`yarn`）/);
-  assert.match(readme, /\| `resolve-artifact` \|.*`target`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`/);
-  assert.match(
-    readme,
-    /\| `validate-mixin` \|.*`input`.*`sourceRoots\?`.*`projectPath\?`.*`scope\?`.*`preferProjectVersion\?`.*`explain\?`.*`includeIssues\?`.*`results\[\]\.validationStatus`.*`summary\.partial`/
-  );
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePath\?`/);
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`sourcePaths\?`/);
-  assert.doesNotMatch(readme, /\| `validate-mixin` \|.*`mixinConfigPath\?`/);
-  assert.match(readme, /\| `resolve-artifact` \|.*`artifactContents`/);
-  assert.match(readme, /\| `get-class-source` \|.*`target`.*`mode\?`.*`projectPath\?`.*`maxChars\?`.*`outputFile\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `get-class-members` \|.*`target`.*`mapping\?`.*`access\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `search-class-source` \|.*`artifactId`.*`query`.*`intent\?`.*`symbolKind\?`.*`queryMode\?`.*`limit\?`.*`cursor\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `get-artifact-file` \|.*`artifactId`.*`filePath`.*`maxBytes\?`.*`returnedNamespace`.*`artifactContents`/);
-  assert.match(readme, /\| `list-artifact-files` \|.*`artifactId`.*`prefix\?`.*`cursor\?`.*`artifactContents`.*`warnings\[\]`/);
-  assert.match(readme, /\| `diff-class-signatures` \|.*`includeFullDiff\?`.*`modified`/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`snippetLines\?`/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeDefinition\?`/);
-  assert.doesNotMatch(readme, /\| `search-class-source` \|.*`includeOneHop\?`/);
-  assert.match(
-    readme,
-    /\| `resolve-method-mapping-exact` \|.*`version`.*`name`.*`owner`.*`descriptor`.*`sourceMapping`.*`targetMapping`/
-  );
-  assert.doesNotMatch(readme, /\| `resolve-method-mapping-exact` \|.*`kind`/);
-  assert.match(readme, /\| `find-mapping` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `resolve-method-mapping-exact` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `get-class-api-matrix` \|.*`maxRows\?`.*`rowCount`.*`rowsTruncated\?`/);
-  assert.match(readme, /\| `resolve-workspace-symbol` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `check-symbol-exists` \|.*`maxCandidates\?`.*`candidateCount`.*`candidatesTruncated\?`/);
-  assert.match(readme, /\| `decompile-mod-jar` \|.*`includeFiles\?`.*`maxFiles\?`.*`returnedFileCount\?`.*`filesTruncated\?`.*`filesOmitted\?`/);
-  assert.match(readme, /\| `get-registry-data` \|.*`includeData\?`.*`maxEntriesPerRegistry\?`.*`returnedEntryCount\?`.*`registryEntryCounts\?`.*`dataTruncated\?`/);
-  assert.match(readme, /\| `compare-versions` \|.*`classes`, `registry`, `summary`, `warnings\[\]` \|/);
-  assert.match(readme, /`resolve-artifact` は `target: \{ kind, value \}` を受け取ります。/);
-  assert.match(readme, /エラーの `suggestedCall` も、旧 `targetKind` \/ `targetValue` ではなく同じ `target` オブジェクト形状/);
-  assert.match(readme, /`artifactContents` を返し/);
-  assert.match(readme, /`returnedNamespace` を返します/);
-  assert.match(readme, /`resourcesIncluded=false`/);
-  assert.match(readme, /重い解析系ツール.*直列化されます/);
-  assert.match(readme, /CLI の stdio entrypoint は supervised worker process として動作します/);
-  assert.match(readme, /MCP initialize を replay して同じ stdio 接続を継続します/);
-  assert.match(readme, /`validate-mixin` は `input\.mode` が `inline` \/ `path` \/ `paths` \/ `config` \/ `project` のいずれか/);
-  assert.match(readme, /`validate-mixin` は常に `mode`、`results\[\]`、`summary` を返し/);
-  assert.match(readme, /`validate-mixin` は `includeIssues=false` をサポートし/);
-  assert.match(readme, /`validate-mixin` の各結果は `validationStatus`/);
-  assert.match(readme, /`validate-mixin` のバッチ `summary` には `partial` が追加され/);
-  assert.match(readme, /`validate-mixin` は、target metadata を十分に取得できない場合に `validation-incomplete` を返します/);
-  assert.match(readme, /`validate-mixin` のレスポンスには `confidenceBreakdown` が追加され/);
-  assert.match(readme, /`reportMode=summary-first` は共有 provenance、warnings、incomplete reason をトップレベルへ集約/);
-  assert.match(readme, /`validate-mixin` の provenance には `requestedScope` \/ `appliedScope` と `requestedSourcePriority` \/ `appliedSourcePriority`/);
-  assert.match(readme, /`validate-mixin` は、マッピング\/署名解決の制約で `loom-first` の結果が partial になった場合、自動で `sourcePriority="maven-first"` に再試行/);
-  assert.match(readme, /Schema validation failure でも標準の `ERR_INVALID_INPUT` エンベロープ/);
-  assert.match(readme, /bare string の `target` を渡した場合も `ERR_INVALID_INPUT` と schema-valid な `suggestedCall` を返します/);
-  assert.match(readme, /`scope="loader"` は現時点では `scope="merged"` と同じ解決クラスを使います/);
-  assert.match(readme, /#### プロジェクト内の Mixin を一括バリデーション/);
-  assert.match(readme, /"mode": "project"/);
-  assert.match(readme, /`check-symbol-exists` 向け recovery payload は、そのツールの公開 schema に収まる引数だけ/);
-  assert.match(readme, /`check-symbol-exists` は、Maven tiny mapping fallback が成功した場合に raw な `No Loom tiny mapping files matched version .*` warning を繰り返さず/);
-  assert.match(readme, /`reportMode=compact` と `warningMode=aggregated`/);
-  assert.match(readme, /`summary\.errors` は削除されました/);
-  assert.match(readme, /`search-class-source` は snippets、行ウィンドウ、relation expansion、`totalApprox` を含まない/);
-  assert.match(readme, /`structuredContent`/);
-  assert.match(readme, /`isError=true`/);
-  assert.match(readme, /旧来の公開名前空間名 `official` は削除されました/);
-  assert.match(readme, /レジストリ差分は `result\.registry` に返ります（`registryDiff` ではありません）。/);
-  assert.match(readme, /`maxCandidates` で `candidates\[\]` を上限付きにできます/);
-  assert.match(readme, /`get-class-api-matrix` は `maxRows` を受け付けます/);
-  assert.match(readme, /`decompile-mod-jar` は `includeFiles=false`/);
-  assert.match(readme, /`get-registry-data` は `includeData=false`/);
-  assert.match(readme, /`diff-class-signatures` は `includeFullDiff=false`/);
+  assertMatchesAll(readme, JAPANESE_NARRATIVE_PATTERNS);
 });
 
 test("README documents CLI agent MCP quick start commands", async () => {
