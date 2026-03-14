@@ -5976,12 +5976,6 @@ export class SourceService {
   private publishCacheMetrics(): void {
     this.metrics.setCacheEntries(this.cacheMetricsState.entries);
     this.metrics.setCacheTotalContentBytes(this.cacheMetricsState.totalContentBytes);
-    this.metrics.setCacheArtifactByteAccounting(
-      this.cacheMetricsState.lru.map((row) => ({
-        artifact_id: row.artifactId,
-        content_bytes: row.totalContentBytes,
-        updated_at: row.updatedAt
-      }))
-    );
+    this.metrics.setCacheArtifactByteAccountingRef(this.cacheMetricsState.lru);
   }
 }

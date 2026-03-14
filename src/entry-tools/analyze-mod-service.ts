@@ -33,15 +33,15 @@ export const analyzeModShape = {
   task: z.enum(["summary", "decompile", "search", "class-source", "remap"]),
   subject: subjectSchema,
   query: nonEmptyString.optional(),
-  searchType: z.enum(["class", "method", "field", "content", "all"]).optional(),
-  limit: positiveIntSchema.optional(),
-  includeFiles: z.boolean().optional(),
+  searchType: z.enum(["class", "method", "field", "content", "all"]).default("all"),
+  limit: positiveIntSchema.default(50),
+  includeFiles: z.boolean().default(true),
   maxFiles: positiveIntSchema.optional(),
   maxLines: positiveIntSchema.optional(),
   maxChars: positiveIntSchema.optional(),
   targetMapping: z.enum(["yarn", "mojang"]).optional(),
   outputJar: nonEmptyString.optional(),
-  executionMode: executionModeSchema.optional(),
+  executionMode: executionModeSchema.default("preview"),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS)
 };
@@ -151,9 +151,10 @@ export class AnalyzeModService {
         };
       }
       case "decompile": {
+        const includeFiles = input.includeFiles ?? true;
         const output = await this.deps.decompileModJar({
           jarPath: input.subject.jarPath,
-          includeFiles: input.includeFiles,
+          includeFiles,
           maxFiles: input.maxFiles
         });
         return {
@@ -168,7 +169,7 @@ export class AnalyzeModService {
                 task: "decompile",
                 kind: input.subject.kind,
                 jarPath: input.subject.jarPath,
-                includeFiles: input.includeFiles,
+                includeFiles: includeFiles === true ? undefined : includeFiles,
                 maxFiles: input.maxFiles
               })
             },
@@ -180,11 +181,13 @@ export class AnalyzeModService {
         };
       }
       case "search": {
+        const searchType = input.searchType ?? "all";
+        const limit = input.limit ?? 50;
         const output = await this.deps.searchModSource({
           jarPath: input.subject.jarPath,
           query: input.query!,
-          searchType: input.searchType,
-          limit: input.limit
+          searchType,
+          limit
         });
         return {
           ...buildEntryToolResult({
@@ -199,8 +202,8 @@ export class AnalyzeModService {
                 kind: input.subject.kind,
                 jarPath: input.subject.jarPath,
                 query: input.query,
-                searchType: input.searchType,
-                limit: input.limit
+                searchType: searchType === "all" ? undefined : searchType,
+                limit: limit === 50 ? undefined : limit
               })
             },
             blocks: {

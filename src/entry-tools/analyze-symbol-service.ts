@@ -35,11 +35,11 @@ export const analyzeSymbolShape = {
   targetMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   classNameMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   projectPath: nonEmptyString.optional(),
-  signatureMode: z.enum(["exact", "name-only"]).optional(),
-  nameMode: z.enum(["fqcn", "auto"]).optional(),
+  signatureMode: z.enum(["exact", "name-only"]).default("exact"),
+  nameMode: z.enum(["fqcn", "auto"]).default("fqcn"),
   includeKinds: z.array(z.enum(["class", "field", "method"])).optional(),
   maxRows: positiveIntSchema.optional(),
-  maxCandidates: positiveIntSchema.optional(),
+  maxCandidates: positiveIntSchema.default(200),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS)
 };

@@ -43,9 +43,9 @@ export const manageCacheShape = {
   }).optional(),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS),
-  limit: positiveIntSchema.optional(),
+  limit: positiveIntSchema.default(50),
   cursor: nonEmptyString.optional(),
-  executionMode: executionModeSchema.optional()
+  executionMode: executionModeSchema.default("preview")
 };
 
 export const manageCacheSchema = z.object(manageCacheShape);

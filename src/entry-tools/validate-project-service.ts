@@ -49,18 +49,18 @@ export const validateProjectShape = {
   sourcePriority: z.enum(["loom-first", "maven-first"]).optional(),
   scope: z.enum(["vanilla", "merged", "loader"]).optional(),
   preferProjectVersion: z.boolean().optional(),
-  preferProjectMapping: z.boolean().optional(),
+  preferProjectMapping: z.boolean().default(false),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS),
   sourceRoots: z.array(nonEmptyString).optional(),
   configPaths: z.array(nonEmptyString).optional(),
-  minSeverity: z.enum(["error", "warning", "all"]).optional(),
-  hideUncertain: z.boolean().optional(),
-  explain: z.boolean().optional(),
+  minSeverity: z.enum(["error", "warning", "all"]).default("all"),
+  hideUncertain: z.boolean().default(false),
+  explain: z.boolean().default(false),
   warningMode: z.enum(["full", "aggregated"]).optional(),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional(),
-  treatInfoAsWarning: z.boolean().optional(),
-  includeIssues: z.boolean().optional()
+  treatInfoAsWarning: z.boolean().default(true),
+  includeIssues: z.boolean().default(true)
 };
 
 export const validateProjectSchema = z.object(validateProjectShape).superRefine((value, ctx) => {

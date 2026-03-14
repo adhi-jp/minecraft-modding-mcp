@@ -13,6 +13,12 @@ export interface CacheArtifactByteAccountingRow {
   updated_at: string;
 }
 
+type CacheArtifactByteAccountingRefRow = {
+  artifactId: string;
+  totalContentBytes: number;
+  updatedAt: string;
+};
+
 export interface RuntimeMetricSnapshot {
   resolve_duration_ms: MetricTimingSnapshot;
   search_duration_ms: MetricTimingSnapshot;
@@ -100,7 +106,7 @@ export class RuntimeMetrics {
   private cacheEvictions = 0;
   private cacheEntries = 0;
   private cacheTotalContentBytes = 0;
-  private cacheArtifactBytesLru: CacheArtifactByteAccountingRow[] = [];
+  private cacheArtifactBytesLruRef: ReadonlyArray<CacheArtifactByteAccountingRefRow> = [];
 
   constructor() {
     const names: DurationMetricName[] = [
@@ -231,12 +237,8 @@ export class RuntimeMetrics {
     this.cacheTotalContentBytes = Math.max(0, Math.trunc(totalBytes));
   }
 
-  setCacheArtifactByteAccounting(entries: CacheArtifactByteAccountingRow[]): void {
-    this.cacheArtifactBytesLru = entries.map((entry) => ({
-      artifact_id: entry.artifact_id,
-      content_bytes: Math.max(0, Math.trunc(entry.content_bytes)),
-      updated_at: entry.updated_at
-    }));
+  setCacheArtifactByteAccountingRef(entries: ReadonlyArray<CacheArtifactByteAccountingRefRow>): void {
+    this.cacheArtifactBytesLruRef = entries;
   }
 
   snapshot(): RuntimeMetricSnapshot {
@@ -268,7 +270,11 @@ export class RuntimeMetrics {
       cache_evictions: this.cacheEvictions,
       cache_entries: this.cacheEntries,
       cache_total_content_bytes: this.cacheTotalContentBytes,
-      cache_artifact_bytes_lru: this.cacheArtifactBytesLru,
+      cache_artifact_bytes_lru: this.cacheArtifactBytesLruRef.map((entry) => ({
+        artifact_id: entry.artifactId,
+        content_bytes: Math.max(0, Math.trunc(entry.totalContentBytes)),
+        updated_at: entry.updatedAt
+      })),
       cache_hit_rate: this.resolveCacheHitRate(),
       repo_failover_count: this.repoFailoverCount
     };

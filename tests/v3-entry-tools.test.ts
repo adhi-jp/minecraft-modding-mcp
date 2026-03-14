@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,9 +8,94 @@ import { ERROR_CODES } from "../src/errors.ts";
 import { AnalyzeModService } from "../src/entry-tools/analyze-mod-service.ts";
 import { AnalyzeSymbolService } from "../src/entry-tools/analyze-symbol-service.ts";
 import { CompareMinecraftService } from "../src/entry-tools/compare-minecraft-service.ts";
-import { InspectMinecraftService } from "../src/entry-tools/inspect-minecraft-service.ts";
+import {
+  InspectMinecraftService,
+  inspectMinecraftSchema
+} from "../src/entry-tools/inspect-minecraft-service.ts";
 import { ManageCacheService } from "../src/entry-tools/manage-cache-service.ts";
 import { ValidateProjectService } from "../src/entry-tools/validate-project-service.ts";
+
+test("entry tool schemas expose explicit defaults on safe public parameters", async () => {
+  const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
+  const validateProjectSource = await readFile("src/entry-tools/validate-project-service.ts", "utf8");
+  const analyzeSymbolSource = await readFile("src/entry-tools/analyze-symbol-service.ts", "utf8");
+  const compareMinecraftSource = await readFile("src/entry-tools/compare-minecraft-service.ts", "utf8");
+  const analyzeModSource = await readFile("src/entry-tools/analyze-mod-service.ts", "utf8");
+  const manageCacheSource = await readFile("src/entry-tools/manage-cache-service.ts", "utf8");
+
+  assert.match(validateProjectSource, /preferProjectMapping:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateProjectSource, /minSeverity:\s*z\.enum\(\["error", "warning", "all"\]\)\.default\("all"\)/);
+  assert.match(validateProjectSource, /hideUncertain:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateProjectSource, /explain:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateProjectSource, /treatInfoAsWarning:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(validateProjectSource, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(analyzeSymbolSource, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
+  assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("fqcn"\)/);
+  assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(200\)/);
+  assert.match(compareMinecraftSource, /maxClassResults:\s*positiveIntSchema\.default\(500\)/);
+  assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(inspectMinecraftSource, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.equal(
+    inspectMinecraftSource.match(/queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/g)?.length ?? 0,
+    2
+  );
+  assert.match(analyzeModSource, /searchType:\s*z\.enum\(\["class", "method", "field", "content", "all"\]\)\.default\("all"\)/);
+  assert.match(analyzeModSource, /limit:\s*positiveIntSchema\.default\(50\)/);
+  assert.match(analyzeModSource, /includeFiles:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(analyzeModSource, /executionMode:\s*executionModeSchema\.default\("preview"\)/);
+  assert.match(manageCacheSource, /limit:\s*positiveIntSchema\.default\(50\)/);
+  assert.match(manageCacheSource, /executionMode:\s*executionModeSchema\.default\("preview"\)/);
+});
+
+test("inspectMinecraftSchema applies defaults while keeping non-version includeSnapshots validation precise", () => {
+  const parsedArtifact = inspectMinecraftSchema.parse({
+    task: "artifact",
+    subject: {
+      kind: "version",
+      version: "1.21.10"
+    }
+  });
+  assert.equal(parsedArtifact.includeSnapshots, false);
+
+  const parsedSearch = inspectMinecraftSchema.parse({
+    task: "search",
+    subject: {
+      kind: "search",
+      query: "tickServer"
+    }
+  });
+  if (parsedSearch.subject?.kind !== "search") {
+    throw new Error("Expected search subject");
+  }
+  assert.equal(parsedSearch.subject.queryMode, "auto");
+
+  const parsedWorkspaceSearch = inspectMinecraftSchema.parse({
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/demo-mod",
+      focus: {
+        kind: "search",
+        query: "tickServer"
+      }
+    }
+  });
+  if (parsedWorkspaceSearch.subject?.kind !== "workspace" || parsedWorkspaceSearch.subject.focus?.kind !== "search") {
+    throw new Error("Expected workspace search focus");
+  }
+  assert.equal(parsedWorkspaceSearch.subject.focus.queryMode, "auto");
+
+  assert.throws(
+    () => inspectMinecraftSchema.parse({
+      task: "artifact",
+      includeSnapshots: true,
+      subject: {
+        kind: "version",
+        version: "1.21.10"
+      }
+    }),
+    /includeSnapshots is only supported for task=versions/
+  );
+});
 
 test("InspectMinecraftService returns ambiguous class overview with follow-up candidates", async () => {
   const service = new InspectMinecraftService({
@@ -135,6 +220,7 @@ test("InspectMinecraftService auto routes workspace search focus through project
       searchCalls += 1;
       assert.equal(input.artifactId, "artifact-search");
       assert.equal(input.query, "tickServer");
+      assert.equal(input.queryMode, "auto");
       return {
         artifactId: input.artifactId,
         query: input.query,
@@ -178,6 +264,22 @@ test("InspectMinecraftService auto routes workspace search focus through project
   assert.equal(result.task, "search");
   assert.equal(result.summary.status, "ok");
   assert.equal(searchCalls, 1);
+  assert.deepEqual(result.summary.subject, {
+    task: "search",
+    requested: {
+      kind: "workspace",
+      projectPath: "/workspace/demo-mod",
+      mapping: "mojang",
+      scope: "merged",
+      preferProjectVersion: true,
+      focus: {
+        kind: "search",
+        query: "tickServer"
+      }
+    },
+    query: "tickServer",
+    artifactId: "artifact-search"
+  });
   assert.deepEqual(resolveArtifactCalls, [
     {
       target: { kind: "version", value: "1.21.10" },
@@ -188,6 +290,116 @@ test("InspectMinecraftService auto routes workspace search focus through project
       strictVersion: undefined
     }
   ]);
+});
+
+test("InspectMinecraftService omits includeSnapshots=false from versions summary subject", async () => {
+  const service = new InspectMinecraftService({
+    listVersions: async () => ({
+      latest: {
+        release: "1.21.10",
+        snapshot: "25w10a"
+      },
+      releases: [{ id: "1.21.10", unobfuscated: true }],
+      snapshots: [],
+      cached: ["1.21.10"],
+      totalAvailable: 1
+    }),
+    resolveArtifact: async () => {
+      throw new Error("not used");
+    },
+    findClass: async () => {
+      throw new Error("not used");
+    },
+    getClassSource: async () => {
+      throw new Error("not used");
+    },
+    getClassMembers: async () => {
+      throw new Error("not used");
+    },
+    searchClassSource: async () => {
+      throw new Error("not used");
+    },
+    getArtifactFile: async () => {
+      throw new Error("not used");
+    },
+    listArtifactFiles: async () => {
+      throw new Error("not used");
+    },
+    detectProjectMinecraftVersion: async () => undefined
+  });
+
+  const result = await service.execute({
+    task: "versions",
+    detail: "summary"
+  });
+
+  assert.deepEqual(result.summary.subject, {
+    task: "versions",
+    kind: "versions"
+  });
+});
+
+test("AnalyzeModService omits default search/decompile controls from summary.subject", async () => {
+  const service = new AnalyzeModService({
+    analyzeModJar: async () => ({
+      loader: "fabric",
+      jarKind: "binary",
+      modId: "example",
+      modName: "Example",
+      modVersion: "1.0.0",
+      classCount: 1,
+      dependencies: []
+    }),
+    decompileModJar: async () => ({
+      fileCount: 1,
+      returnedFileCount: 1,
+      warnings: []
+    }),
+    getModClassSource: async () => {
+      throw new Error("not used");
+    },
+    searchModSource: async () => ({
+      query: "tick",
+      searchType: "all",
+      hits: [],
+      totalHits: 0,
+      truncated: false,
+      warnings: []
+    }),
+    remapModJar: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const decompileResult = await service.execute({
+    task: "decompile",
+    detail: "summary",
+    subject: {
+      kind: "jar",
+      jarPath: "/tmp/example.jar"
+    }
+  });
+  assert.deepEqual(decompileResult.summary.subject, {
+    task: "decompile",
+    kind: "jar",
+    jarPath: "/tmp/example.jar"
+  });
+
+  const searchResult = await service.execute({
+    task: "search",
+    detail: "summary",
+    subject: {
+      kind: "jar",
+      jarPath: "/tmp/example.jar"
+    },
+    query: "tick"
+  });
+  assert.deepEqual(searchResult.summary.subject, {
+    task: "search",
+    kind: "jar",
+    jarPath: "/tmp/example.jar",
+    query: "tick"
+  });
 });
 
 test("InspectMinecraftService preserves workspace context for file focus without explicit artifact input", async () => {

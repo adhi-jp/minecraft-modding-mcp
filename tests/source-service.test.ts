@@ -1485,6 +1485,44 @@ test("SourceService updates cache accounting incrementally after artifact ingest
   assert.equal(metrics.lru[0]?.contentBytes, expectedBytes);
 });
 
+test("RuntimeMetrics snapshots copy artifact byte accounting rows on read", async () => {
+  const { RuntimeMetrics } = await import("../src/observability.ts");
+  const metrics = new RuntimeMetrics();
+  const lru = [
+    {
+      artifactId: "artifact-one",
+      totalContentBytes: 12,
+      updatedAt: "2026-03-14T00:00:00.000Z"
+    }
+  ];
+
+  metrics.setCacheArtifactByteAccountingRef(lru);
+
+  const first = metrics.snapshot();
+  assert.deepEqual(first.cache_artifact_bytes_lru, [
+    {
+      artifact_id: "artifact-one",
+      content_bytes: 12,
+      updated_at: "2026-03-14T00:00:00.000Z"
+    }
+  ]);
+
+  first.cache_artifact_bytes_lru[0]!.artifact_id = "mutated";
+  first.cache_artifact_bytes_lru[0]!.content_bytes = 99;
+  lru[0]!.artifactId = "artifact-two";
+  lru[0]!.totalContentBytes = 18;
+  lru[0]!.updatedAt = "2026-03-14T00:00:01.000Z";
+
+  const second = metrics.snapshot();
+  assert.deepEqual(second.cache_artifact_bytes_lru, [
+    {
+      artifact_id: "artifact-two",
+      content_bytes: 18,
+      updated_at: "2026-03-14T00:00:01.000Z"
+    }
+  ]);
+});
+
 test("SourceService returns class source with line range filtering", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-"));

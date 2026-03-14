@@ -181,7 +181,7 @@ test("index.ts reshapes search-class-source around compact file hits", async () 
   assert.match(block, /query:\s*nonEmptyString/);
   assert.match(block, /intent:\s*searchIntentSchema\.optional\(\)/);
   assert.match(block, /symbolKind:\s*searchSymbolKindSchema\.optional\(\)/);
-  assert.match(block, /queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.optional\(\)/);
+  assert.match(block, /queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/);
   assert.doesNotMatch(block, /snippetLines:/);
   assert.doesNotMatch(block, /includeDefinition:/);
   assert.doesNotMatch(block, /includeOneHop:/);
@@ -261,7 +261,14 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
         name: "validate-mixin",
         arguments: {
           input: "@Mixin(Player.class) class ExampleMixin {}",
-          version: "1.21.10"
+          version: "1.21.10",
+          minSeverity: "all",
+          hideUncertain: false,
+          explain: false,
+          preferProjectMapping: false,
+          reportMode: "full",
+          treatInfoAsWarning: true,
+          includeIssues: true
         }
       }
     },
@@ -398,7 +405,10 @@ test("resolve-artifact invalid string target returns retryable object target sug
       params: {
         name: "resolve-artifact",
         arguments: {
-          target: "1.21.10"
+          target: "1.21.10",
+          allowDecompile: true,
+          preferProjectVersion: false,
+          strictVersion: false
         }
       }
     },
@@ -444,7 +454,11 @@ test("get-class-source invalid string target returns resolve-target suggestedCal
         name: "get-class-source",
         arguments: {
           className: "net.minecraft.server.Main",
-          target: "1.21.10"
+          target: "1.21.10",
+          mode: "metadata",
+          allowDecompile: true,
+          preferProjectVersion: false,
+          strictVersion: false
         }
       }
     },
@@ -535,27 +549,216 @@ test("get-class-members invalid string target suggestedCall preserves valid fiel
 
 test("index.ts exposes token-efficiency options on relevant tool schemas", async () => {
   const source = await readFile("src/index.ts", "utf8");
+  const listVersionsBlock = source.match(/const listVersionsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const resolveArtifactBlock = source.match(/const resolveArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const classSourceBlock = source.match(/const getClassSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const classMembersBlock = source.match(/const getClassMembersShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const traceLifecycleBlock = source.match(/const traceSymbolLifecycleShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const diffClassSignaturesBlock = source.match(/const diffClassSignaturesShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const findMappingBlock = source.match(/const findMappingShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const resolveMethodBlock = source.match(/const resolveMethodMappingExactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const classApiBlock = source.match(/const getClassApiMatrixShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const resolveWorkspaceBlock = source.match(/const resolveWorkspaceSymbolShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const checkExistsBlock = source.match(/const checkSymbolExistsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const nbtToJsonBlock = source.match(/const nbtToJsonShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const jsonToNbtBlock = source.match(/const jsonToNbtShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const indexArtifactBlock = source.match(/const indexArtifactShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const validateMixinBlock = source.match(/const validateMixinShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const analyzeModJarBlock = source.match(/const analyzeModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const registryBlock = source.match(/const getRegistryDataShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const compareVersionsBlock = source.match(/const compareVersionsShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
   const decompileBlock = source.match(/const decompileModJarShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
+  const searchModBlock = source.match(/const searchModSourceShape = \{[\s\S]*?\n\};/)?.[0] ?? "";
 
-  assert.match(diffClassSignaturesBlock, /includeFullDiff:\s*z\.boolean\(\)\.optional\(\)/);
-  assert.match(findMappingBlock, /maxCandidates:\s*optionalPositiveInt/);
-  assert.match(resolveMethodBlock, /maxCandidates:\s*optionalPositiveInt/);
+  assert.match(listVersionsBlock, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(listVersionsBlock, /limit:\s*optionalPositiveInt\.default\(20\)/);
+  assert.match(resolveArtifactBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(classSourceBlock, /mode:\s*sourceModeSchema\.default\("metadata"\)/);
+  assert.match(classSourceBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(classMembersBlock, /allowDecompile:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(classMembersBlock, /access:\s*memberAccessSchema\.default\("public"\)/);
+  assert.match(classMembersBlock, /includeSynthetic:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(classMembersBlock, /includeInherited:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(traceLifecycleBlock, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(traceLifecycleBlock, /maxVersions:\s*optionalPositiveInt\.default\(120\)/);
+  assert.match(traceLifecycleBlock, /includeTimeline:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(diffClassSignaturesBlock, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(findMappingBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
+  assert.match(resolveMethodBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
   assert.match(classApiBlock, /maxRows:\s*optionalPositiveInt/);
-  assert.match(resolveWorkspaceBlock, /maxCandidates:\s*optionalPositiveInt/);
-  assert.match(checkExistsBlock, /maxCandidates:\s*optionalPositiveInt/);
-  assert.match(validateMixinBlock, /includeIssues:\s*z\.boolean\(\)\.optional\(\)/);
-  assert.match(registryBlock, /includeData:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(resolveWorkspaceBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
+  assert.match(checkExistsBlock, /nameMode:\s*classNameModeSchema\.default\("fqcn"\)/);
+  assert.match(checkExistsBlock, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
+  assert.match(checkExistsBlock, /maxCandidates:\s*optionalPositiveInt\.default\(200\)/);
+  assert.match(nbtToJsonBlock, /compression:\s*decodeCompressionSchema\.default\("auto"\)/);
+  assert.match(jsonToNbtBlock, /compression:\s*encodeCompressionSchema\.default\("none"\)/);
+  assert.match(indexArtifactBlock, /force:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateMixinBlock, /minSeverity:\s*z\.enum\(\["error", "warning", "all"\]\)\.default\("all"\)/);
+  assert.match(validateMixinBlock, /hideUncertain:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateMixinBlock, /explain:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateMixinBlock, /preferProjectMapping:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(validateMixinBlock, /reportMode:\s*z\.enum\(\["compact", "full", "summary-first"\]\)\.default\("full"\)/);
+  assert.match(validateMixinBlock, /treatInfoAsWarning:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(validateMixinBlock, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
+  assert.match(analyzeModJarBlock, /includeClasses:\s*z\.boolean\(\)\.default\(false\)/);
+  assert.match(registryBlock, /includeData:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(registryBlock, /maxEntriesPerRegistry:\s*optionalPositiveInt/);
-  assert.match(decompileBlock, /includeFiles:\s*z\.boolean\(\)\.optional\(\)/);
+  assert.match(compareVersionsBlock, /category:\s*compareVersionsCategorySchema\.default\("all"\)/);
+  assert.match(compareVersionsBlock, /maxClassResults:\s*optionalPositiveInt\.default\(500\)/);
+  assert.match(decompileBlock, /includeFiles:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(decompileBlock, /maxFiles:\s*optionalPositiveInt/);
+  assert.match(searchModBlock, /searchType:\s*modSearchTypeSchema\.default\("all"\)/);
+  assert.match(searchModBlock, /limit:\s*optionalPositiveInt\.default\(50\)/);
+});
+
+test("tools/list schemas expose explicit defaults for category A params and omit them for category B params", async () => {
+  const { server } = await import("../src/index.ts");
+
+  const handler = (server.server as { _requestHandlers: Map<string, Function> })._requestHandlers.get("tools/list");
+  assert.ok(handler);
+
+  const response = await handler!(
+    { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+    {}
+  ) as { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
+
+  const toolMap = new Map(response.tools.map((entry) => [entry.name, entry.inputSchema]));
+  const listVersionsSchema = toolMap.get("list-versions") as {
+    properties?: { includeSnapshots?: { default?: boolean }; limit?: { default?: number } };
+  };
+  const resolveArtifactSchema = toolMap.get("resolve-artifact") as {
+    properties?: { allowDecompile?: { default?: boolean }; scope?: { default?: string } };
+  };
+  const validateMixinSchema = toolMap.get("validate-mixin") as {
+    properties?: {
+      minSeverity?: { default?: string };
+      hideUncertain?: { default?: boolean };
+      explain?: { default?: boolean };
+      warningMode?: { default?: string };
+      preferProjectMapping?: { default?: boolean };
+      reportMode?: { default?: string };
+      treatInfoAsWarning?: { default?: boolean };
+      includeIssues?: { default?: boolean };
+    };
+  };
+  const searchClassSourceSchema = toolMap.get("search-class-source") as {
+    properties?: { queryMode?: { default?: string }; limit?: { default?: number } };
+  };
+  const inspectMinecraftSchema = toolMap.get("inspect-minecraft") as {
+    properties?: { includeSnapshots?: { default?: boolean }; limit?: { default?: number } };
+  };
+  const analyzeSymbolSchema = toolMap.get("analyze-symbol") as {
+    properties?: {
+      nameMode?: { default?: string };
+      signatureMode?: { default?: string };
+      maxCandidates?: { default?: number };
+      sourceMapping?: { default?: string };
+    };
+  };
+  const compareMinecraftSchema = toolMap.get("compare-minecraft") as {
+    properties?: {
+      includeFullDiff?: { default?: boolean };
+      maxClassResults?: { default?: number };
+      limit?: { default?: number };
+    };
+  };
+  const analyzeModSchema = toolMap.get("analyze-mod") as {
+    properties?: {
+      searchType?: { default?: string };
+      includeFiles?: { default?: boolean };
+      limit?: { default?: number };
+      executionMode?: { default?: string };
+    };
+  };
+  const validateProjectSchema = toolMap.get("validate-project") as {
+    properties?: {
+      preferProjectMapping?: { default?: boolean };
+      minSeverity?: { default?: string };
+      hideUncertain?: { default?: boolean };
+      explain?: { default?: boolean };
+      warningMode?: { default?: string };
+      treatInfoAsWarning?: { default?: boolean };
+      includeIssues?: { default?: boolean };
+    };
+  };
+  const manageCacheSchema = toolMap.get("manage-cache") as {
+    properties?: {
+      executionMode?: { default?: string };
+      limit?: { default?: number };
+      cacheKinds?: { default?: unknown };
+    };
+  };
+
+  function collectQueryModeDefaults(schema: unknown): string[] {
+    const collected: string[] = [];
+    const visit = (node: unknown) => {
+      if (typeof node !== "object" || node === null) {
+        return;
+      }
+      const record = node as Record<string, unknown>;
+      const properties = record.properties;
+      if (typeof properties === "object" && properties !== null && !Array.isArray(properties)) {
+        const queryMode = (properties as Record<string, unknown>).queryMode;
+        if (typeof queryMode === "object" && queryMode !== null) {
+          const defaultValue = (queryMode as { default?: unknown }).default;
+          if (typeof defaultValue === "string") {
+            collected.push(defaultValue);
+          }
+        }
+      }
+      for (const value of Object.values(record)) {
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            visit(entry);
+          }
+          continue;
+        }
+        visit(value);
+      }
+    };
+
+    visit(schema);
+    return collected;
+  }
+
+  assert.equal(listVersionsSchema.properties?.includeSnapshots?.default, false);
+  assert.equal(listVersionsSchema.properties?.limit?.default, 20);
+  assert.equal(resolveArtifactSchema.properties?.allowDecompile?.default, true);
+  assert.equal(resolveArtifactSchema.properties?.scope?.default, undefined);
+  assert.equal(searchClassSourceSchema.properties?.queryMode?.default, "auto");
+  assert.equal(searchClassSourceSchema.properties?.limit?.default, 20);
+  assert.equal(validateMixinSchema.properties?.minSeverity?.default, "all");
+  assert.equal(validateMixinSchema.properties?.hideUncertain?.default, false);
+  assert.equal(validateMixinSchema.properties?.explain?.default, false);
+  assert.equal(validateMixinSchema.properties?.warningMode?.default, undefined);
+  assert.equal(validateMixinSchema.properties?.preferProjectMapping?.default, false);
+  assert.equal(validateMixinSchema.properties?.reportMode?.default, "full");
+  assert.equal(validateMixinSchema.properties?.treatInfoAsWarning?.default, true);
+  assert.equal(validateMixinSchema.properties?.includeIssues?.default, true);
+  assert.equal(inspectMinecraftSchema.properties?.includeSnapshots?.default, false);
+  assert.equal(inspectMinecraftSchema.properties?.limit?.default, undefined);
+  assert.equal(analyzeSymbolSchema.properties?.nameMode?.default, "fqcn");
+  assert.equal(analyzeSymbolSchema.properties?.signatureMode?.default, "exact");
+  assert.equal(analyzeSymbolSchema.properties?.maxCandidates?.default, 200);
+  assert.equal(analyzeSymbolSchema.properties?.sourceMapping?.default, undefined);
+  assert.equal(compareMinecraftSchema.properties?.includeFullDiff?.default, true);
+  assert.equal(compareMinecraftSchema.properties?.maxClassResults?.default, 500);
+  assert.equal(compareMinecraftSchema.properties?.limit?.default, undefined);
+  assert.equal(analyzeModSchema.properties?.searchType?.default, "all");
+  assert.equal(analyzeModSchema.properties?.includeFiles?.default, true);
+  assert.equal(analyzeModSchema.properties?.limit?.default, 50);
+  assert.equal(analyzeModSchema.properties?.executionMode?.default, "preview");
+  assert.equal(validateProjectSchema.properties?.preferProjectMapping?.default, false);
+  assert.equal(validateProjectSchema.properties?.minSeverity?.default, "all");
+  assert.equal(validateProjectSchema.properties?.hideUncertain?.default, false);
+  assert.equal(validateProjectSchema.properties?.explain?.default, false);
+  assert.equal(validateProjectSchema.properties?.warningMode?.default, undefined);
+  assert.equal(validateProjectSchema.properties?.treatInfoAsWarning?.default, true);
+  assert.equal(validateProjectSchema.properties?.includeIssues?.default, true);
+  assert.equal(manageCacheSchema.properties?.executionMode?.default, "preview");
+  assert.equal(manageCacheSchema.properties?.limit?.default, 50);
+  assert.equal(manageCacheSchema.properties?.cacheKinds?.default, undefined);
+  assert.deepEqual(collectQueryModeDefaults(inspectMinecraftSchema), ["auto", "auto"]);
 });
 
 test("index.ts documents symbol-query grammar for mapping tools", async () => {

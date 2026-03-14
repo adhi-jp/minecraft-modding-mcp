@@ -47,9 +47,9 @@ export const compareMinecraftShape = {
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS),
   limit: positiveIntSchema.optional(),
-  maxClassResults: positiveIntSchema.optional(),
+  maxClassResults: positiveIntSchema.default(500),
   maxEntriesPerRegistry: positiveIntSchema.optional(),
-  includeFullDiff: z.boolean().optional()
+  includeFullDiff: z.boolean().default(true)
 };
 
 export const compareMinecraftSchema = z.object(compareMinecraftShape);

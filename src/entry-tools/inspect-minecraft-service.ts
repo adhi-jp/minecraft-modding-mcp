@@ -66,7 +66,7 @@ const workspaceFocusSchema = z.discriminatedUnion("kind", [
     symbolKind: z.enum(["class", "interface", "enum", "record", "method", "field"]).optional(),
     packagePrefix: nonEmptyString.optional(),
     fileGlob: nonEmptyString.optional(),
-    queryMode: z.enum(["auto", "token", "literal"]).optional()
+    queryMode: z.enum(["auto", "token", "literal"]).default("auto")
   })
 ]);
 
@@ -113,7 +113,7 @@ const subjectSchema = z.discriminatedUnion("kind", [
     symbolKind: z.enum(["class", "interface", "enum", "record", "method", "field"]).optional(),
     packagePrefix: nonEmptyString.optional(),
     fileGlob: nonEmptyString.optional(),
-    queryMode: z.enum(["auto", "token", "literal"]).optional()
+    queryMode: z.enum(["auto", "token", "literal"]).default("auto")
   }),
   z.object({
     kind: z.literal("workspace"),
@@ -129,7 +129,7 @@ const subjectSchema = z.discriminatedUnion("kind", [
 export const inspectMinecraftShape = {
   task: z.enum(TASKS).optional(),
   subject: subjectSchema.optional(),
-  includeSnapshots: z.boolean().optional(),
+  includeSnapshots: z.boolean().default(false),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS),
   limit: positiveIntSchema.optional(),
@@ -144,7 +144,7 @@ export const inspectMinecraftSchema = z.object(inspectMinecraftShape).superRefin
       message: "subject is required unless task=versions."
     });
   }
-  if (value.includeSnapshots !== undefined && value.task && value.task !== "versions") {
+  if (value.includeSnapshots && value.task && value.task !== "versions") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["includeSnapshots"],
@@ -377,6 +377,27 @@ export class InspectMinecraftService {
     }
   }
 
+  private summarizeRequestedSubject(subject: Subject): Record<string, unknown> {
+    if (subject.kind === "search") {
+      if (subject.queryMode !== "auto") {
+        return subject;
+      }
+      const { queryMode: _queryMode, ...requestedSubject } = subject;
+      return requestedSubject;
+    }
+    if (subject.kind === "workspace" && subject.focus?.kind === "search") {
+      if (subject.focus.queryMode !== "auto") {
+        return subject;
+      }
+      const { queryMode: _queryMode, ...requestedFocus } = subject.focus;
+      return {
+        ...subject,
+        focus: requestedFocus
+      };
+    }
+    return subject;
+  }
+
   private async resolveArtifactReference(
     subject: Subject
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
@@ -473,7 +494,7 @@ export class InspectMinecraftService {
       subject: createSummarySubject({
         task: "versions",
         kind: "versions",
-        includeSnapshots: input.includeSnapshots,
+        includeSnapshots: input.includeSnapshots === false ? undefined : input.includeSnapshots,
         limit: input.limit
       }),
       counts: {
@@ -952,6 +973,8 @@ export class InspectMinecraftService {
     }
 
     const searchSubject = subject.kind === "search" ? subject : this.requireWorkspaceSearchFocus(subject);
+    const requestedSubject = this.summarizeRequestedSubject(subject);
+    const queryMode = searchSubject.queryMode ?? "auto";
     const artifact = subject.kind === "search"
       ? await this.resolveArtifactReference(subject)
       : await this.resolveWorkspaceArtifactReference(subject, searchSubject.artifact);
@@ -960,7 +983,7 @@ export class InspectMinecraftService {
       query: searchSubject.query,
       intent: searchSubject.intent,
       match: searchSubject.match,
-      queryMode: searchSubject.queryMode,
+      queryMode,
       limit,
       cursor,
       scope: searchSubject.packagePrefix || searchSubject.fileGlob || searchSubject.symbolKind
@@ -975,7 +998,7 @@ export class InspectMinecraftService {
     const sampledHits = capArray(search.hits, 5);
     const isAutoSeparatorMiss =
       search.hits.length === 0 &&
-      (searchSubject.queryMode ?? "auto") === "auto" &&
+      queryMode === "auto" &&
       /[._$]/.test(searchSubject.query);
     const literalRetrySubject = subject.kind === "search"
       ? {
@@ -997,7 +1020,7 @@ export class InspectMinecraftService {
         : `No source hits were found for ${searchSubject.query}.`,
       subject: createSummarySubject({
         task: "search",
-        requested: subject,
+        requested: requestedSubject,
         query: searchSubject.query,
         artifactId: artifact.artifactId
       }),
@@ -1046,7 +1069,7 @@ export class InspectMinecraftService {
         include,
         blocks: {
           subject: {
-            requested: subject,
+            requested: requestedSubject,
             resolved: {
               artifactId: artifact.artifactId
             }

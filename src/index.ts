@@ -193,10 +193,33 @@ const SOURCE_LOOKUP_TARGET_DESCRIPTION =
   "Object: {\"type\":\"resolve\",\"kind\":\"version\",\"value\":\"1.21.10\"} or {\"type\":\"artifact\",\"artifactId\":\"...\"}. Must be an object, not a string.";
 const SOURCE_SCOPE_DESCRIPTION =
   'vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = currently behaves the same as "merged".';
+const SUGGESTED_CALL_DEFAULTS = {
+  allowDecompile: true,
+  preferProjectVersion: false,
+  strictVersion: false,
+  mode: "metadata",
+  access: "public",
+  includeSynthetic: false,
+  includeInherited: false,
+  hideUncertain: false,
+  explain: false,
+  preferProjectMapping: false,
+  minSeverity: "all",
+  reportMode: "full",
+  treatInfoAsWarning: true,
+  includeIssues: true
+} as const;
+
+function isSuggestedCallDefault(
+  field: keyof typeof SUGGESTED_CALL_DEFAULTS,
+  value: unknown
+): boolean {
+  return value === SUGGESTED_CALL_DEFAULTS[field];
+}
 
 const listVersionsShape = {
-  includeSnapshots: z.boolean().optional().describe("default false"),
-  limit: optionalPositiveInt.describe("default 20, max 200")
+  includeSnapshots: z.boolean().default(false),
+  limit: optionalPositiveInt.default(20).describe("max 200")
 };
 const listVersionsSchema = z.object(listVersionsShape);
 
@@ -207,7 +230,7 @@ const resolveArtifactShape = {
   }).describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  allowDecompile: z.boolean().optional().describe("default true"),
+  allowDecompile: z.boolean().default(true),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
@@ -217,11 +240,11 @@ const resolveArtifactSchema = z.object(resolveArtifactShape);
 
 const getClassSourceShape = {
   className: nonEmptyString,
-  mode: sourceModeSchema.optional().describe("metadata (default) = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
+  mode: sourceModeSchema.default("metadata").describe("metadata = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
   target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  allowDecompile: z.boolean().optional().describe("default true"),
+  allowDecompile: z.boolean().default(true),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
@@ -253,10 +276,10 @@ const getClassMembersShape = {
   target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  allowDecompile: z.boolean().optional().describe("default true"),
-  access: memberAccessSchema.optional().describe("public | all (default public)"),
-  includeSynthetic: z.boolean().optional().describe("default false"),
-  includeInherited: z.boolean().optional().describe("default false"),
+  allowDecompile: z.boolean().default(true),
+  access: memberAccessSchema.default("public").describe("public | all"),
+  includeSynthetic: z.boolean().default(false),
+  includeInherited: z.boolean().default(false),
   memberPattern: optionalNonEmptyString,
   maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
   projectPath: optionalNonEmptyString,
@@ -274,8 +297,8 @@ const searchClassSourceShape = {
   packagePrefix: optionalNonEmptyString,
   fileGlob: optionalNonEmptyString,
   symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
-  queryMode: z.enum(["auto", "token", "literal"]).optional().describe("auto (default): indexed search, including separator queries like foo.bar; token: indexed-only; literal: explicit substring scan only"),
-  limit: optionalPositiveInt.describe("default 20"),
+  queryMode: z.enum(["auto", "token", "literal"]).default("auto").describe("auto: indexed search, including separator queries like foo.bar; token: indexed-only; literal: explicit substring scan only"),
+  limit: optionalPositiveInt.default(20),
   cursor: optionalNonEmptyString
 };
 const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
@@ -310,9 +333,9 @@ const traceSymbolLifecycleShape = {
   toVersion: optionalNonEmptyString,
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  includeSnapshots: z.boolean().optional().describe("default false"),
-  maxVersions: optionalPositiveInt.describe("default 120, max 400"),
-  includeTimeline: z.boolean().optional().describe("default false")
+  includeSnapshots: z.boolean().default(false),
+  maxVersions: optionalPositiveInt.default(120).describe("max 400"),
+  includeTimeline: z.boolean().default(false)
 };
 const traceSymbolLifecycleSchema = z.object(traceSymbolLifecycleShape);
 
@@ -322,7 +345,7 @@ const diffClassSignaturesShape = {
   toVersion: nonEmptyString,
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  includeFullDiff: z.boolean().optional().describe("When false, omit from/to snapshots from modified entries and keep only key+changed")
+  includeFullDiff: z.boolean().default(true).describe("When false, omit from/to snapshots from modified entries and keep only key+changed")
 };
 const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
 
@@ -342,7 +365,7 @@ const findMappingShape = {
     })
     .partial()
     .optional(),
-  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -413,7 +436,7 @@ const resolveMethodMappingExactShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
 };
 const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
@@ -471,7 +494,7 @@ const resolveWorkspaceSymbolShape = {
   descriptor: optionalNonEmptyString,
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.describe("Limit returned candidates for field/method lookups (default 200, max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)")
 };
 const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
@@ -541,10 +564,10 @@ const checkSymbolExistsShape = {
   descriptor: optionalNonEmptyString.describe("required for kind=method unless signatureMode=name-only"),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  nameMode: classNameModeSchema.optional().describe("fqcn | auto (default fqcn)"),
-  signatureMode: z.enum(["exact", "name-only"]).optional()
-    .describe("exact (default): require descriptor for methods; name-only: match by owner+name only"),
-  maxCandidates: optionalPositiveInt.describe("Limit returned candidates (default 200, max 200)")
+  nameMode: classNameModeSchema.default("fqcn").describe("fqcn | auto"),
+  signatureMode: z.enum(["exact", "name-only"]).default("exact")
+    .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -607,7 +630,7 @@ const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((va
 
 const nbtToJsonShape = {
   nbtBase64: nonEmptyString,
-  compression: decodeCompressionSchema.optional().describe("none | gzip | auto (default auto)")
+  compression: decodeCompressionSchema.default("auto").describe("none | gzip | auto")
 };
 const nbtToJsonSchema = z.object(nbtToJsonShape);
 
@@ -627,13 +650,13 @@ const nbtApplyJsonPatchSchema = z.object(nbtApplyJsonPatchShape);
 
 const jsonToNbtShape = {
   typedJson: z.unknown(),
-  compression: encodeCompressionSchema.optional().describe("none | gzip (default none)")
+  compression: encodeCompressionSchema.default("none").describe("none | gzip")
 };
 const jsonToNbtSchema = z.object(jsonToNbtShape);
 
 const indexArtifactShape = {
   artifactId: nonEmptyString,
-  force: z.boolean().optional().describe("default false")
+  force: z.boolean().default(false)
 };
 const indexArtifactSchema = z.object(indexArtifactShape);
 
@@ -668,23 +691,23 @@ const validateMixinShape = {
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
-  minSeverity: z.enum(["error", "warning", "all"]).optional()
-    .describe("'error'=errors only, 'warning'=errors+warnings, 'all'=everything (default 'all')"),
-  hideUncertain: z.boolean().optional()
-    .describe("Omit issues with confidence='uncertain' (default false)"),
-  explain: z.boolean().optional()
-    .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery (default false)"),
+  minSeverity: z.enum(["error", "warning", "all"]).default("all")
+    .describe("'error'=errors only, 'warning'=errors+warnings, 'all'=everything"),
+  hideUncertain: z.boolean().default(false)
+    .describe("Omit issues with confidence='uncertain'"),
+  explain: z.boolean().default(false)
+    .describe("When true, enrich each issue with explanation and suggestedCall for agent recovery"),
   warningMode: z.enum(["full", "aggregated"]).optional()
-    .describe("'full'=all warnings (default), 'aggregated'=group warnings by category with counts and samples"),
-  preferProjectMapping: z.boolean().optional()
+    .describe("'full'=all warnings; 'aggregated'=group warnings by category with counts and samples. Single validation uses the provided value as-is; batch validation defaults to 'aggregated'"),
+  preferProjectMapping: z.boolean().default(false)
     .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
-  reportMode: z.enum(["compact", "full", "summary-first"]).optional()
-    .describe("'compact' omits heavy per-result detail, 'summary-first' hoists shared provenance/warnings/incomplete reasons, 'full'=everything (default)"),
+  reportMode: z.enum(["compact", "full", "summary-first"]).default("full")
+    .describe("'compact' omits heavy per-result detail, 'summary-first' hoists shared provenance/warnings/incomplete reasons, 'full'=everything"),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
     .describe("Only include warnings/issues matching these categories (default: all)"),
-  treatInfoAsWarning: z.boolean().optional()
-    .describe("When false, suppress info-severity structured warnings from output (default true)"),
-  includeIssues: z.boolean().optional()
+  treatInfoAsWarning: z.boolean().default(true)
+    .describe("When false, suppress info-severity structured warnings from output"),
+  includeIssues: z.boolean().default(true)
     .describe("When false, keep summary fields but omit per-result issues[] payloads")
 };
 const validateMixinSchema = z.object(validateMixinShape);
@@ -699,14 +722,14 @@ const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
 
 const analyzeModJarShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
-  includeClasses: z.boolean().optional().describe("Include full class listing (default false)")
+  includeClasses: z.boolean().default(false).describe("Include full class listing")
 };
 const analyzeModJarSchema = z.object(analyzeModJarShape);
 
 const getRegistryDataShape = {
   version: nonEmptyString.describe("Minecraft version (e.g. 1.21)"),
   registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.'),
-  includeData: z.boolean().optional().describe("When false, return registry names/counts without full entry bodies"),
+  includeData: z.boolean().default(true).describe("When false, return registry names/counts without full entry bodies"),
   maxEntriesPerRegistry: optionalPositiveInt.describe("Limit returned entries per registry body")
 };
 const getRegistryDataSchema = z.object(getRegistryDataShape);
@@ -717,16 +740,16 @@ const compareVersionsCategorySchema = z.enum(COMPARE_VERSIONS_CATEGORIES);
 const compareVersionsShape = {
   fromVersion: nonEmptyString.describe("Older Minecraft version (e.g. 1.20.4)"),
   toVersion: nonEmptyString.describe("Newer Minecraft version (e.g. 1.21)"),
-  category: compareVersionsCategorySchema.optional().describe("classes | registry | all (default all)"),
+  category: compareVersionsCategorySchema.default("all").describe("classes | registry | all"),
   packageFilter: optionalNonEmptyString.describe("Filter classes to a package prefix (e.g. net.minecraft.world.item)"),
-  maxClassResults: optionalPositiveInt.describe("Max class results per direction (default 500, max 5000)")
+  maxClassResults: optionalPositiveInt.default(500).describe("Max class results per direction (max 5000)")
 };
 const compareVersionsSchema = z.object(compareVersionsShape);
 
 const decompileModJarShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
   className: optionalNonEmptyString.describe("Optional fully-qualified class name to view source. Omit to list all classes."),
-  includeFiles: z.boolean().optional().describe("When false, omit the full class list and return counts only"),
+  includeFiles: z.boolean().default(true).describe("When false, omit the full class list and return counts only"),
   maxFiles: optionalPositiveInt.describe("Limit returned class names when files are included")
 };
 const decompileModJarSchema = z.object(decompileModJarShape);
@@ -746,8 +769,8 @@ const modSearchTypeSchema = z.enum(MOD_SEARCH_TYPES);
 const searchModSourceShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
   query: nonEmptyString.describe("Search pattern (regex or literal string)"),
-  searchType: modSearchTypeSchema.optional().describe("class | method | field | content | all (default all)"),
-  limit: optionalPositiveInt.describe("Max results (default 50, max 200)")
+  searchType: modSearchTypeSchema.default("all").describe("class | method | field | content | all"),
+  limit: optionalPositiveInt.default(50).describe("Max results (max 200)")
 };
 const searchModSourceSchema = z.object(searchModSourceShape);
 
@@ -1127,7 +1150,12 @@ function copySourceLookupSuggestionFields(
     : ["className", "mapping", "sourcePriority", "projectPath", "scope", "access", "memberPattern"] as const;
   for (const field of stringFields) {
     const value = source[field];
-    if (typeof value === "string" && value.trim()) {
+    if (
+      typeof value === "string" &&
+      value.trim() &&
+      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+        !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
+    ) {
       result[field] = value;
     }
   }
@@ -1147,7 +1175,11 @@ function copySourceLookupSuggestionFields(
     : ["allowDecompile", "preferProjectVersion", "strictVersion", "includeSynthetic", "includeInherited"] as const;
   for (const field of booleanFields) {
     const value = source[field];
-    if (typeof value === "boolean") {
+    if (
+      typeof value === "boolean" &&
+      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+        !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
+    ) {
       result[field] = value;
     }
   }
@@ -1170,7 +1202,12 @@ function copyValidateMixinSharedParams(source: Record<string, unknown>): Record<
   ] as const;
   for (const field of stringFields) {
     const value = source[field];
-    if (typeof value === "string" && value.trim()) {
+    if (
+      typeof value === "string" &&
+      value.trim() &&
+      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+        !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
+    ) {
       result[field] = value;
     }
   }
@@ -1185,7 +1222,11 @@ function copyValidateMixinSharedParams(source: Record<string, unknown>): Record<
   ] as const;
   for (const field of booleanFields) {
     const value = source[field];
-    if (typeof value === "boolean") {
+    if (
+      typeof value === "boolean" &&
+      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+        !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
+    ) {
       result[field] = value;
     }
   }
@@ -1344,7 +1385,10 @@ function buildResolveArtifactSuggestedParams(normalizedInput: unknown): Record<s
   const booleanFields = ["allowDecompile", "preferProjectVersion", "strictVersion"] as const;
   for (const field of booleanFields) {
     const value = record[field];
-    if (typeof value === "boolean") {
+    if (
+      typeof value === "boolean" &&
+      !isSuggestedCallDefault(field, value)
+    ) {
       result[field] = value;
     }
   }
@@ -1645,7 +1689,7 @@ server.tool("inspect-minecraft",
   inspectMinecraftShape,
   { readOnlyHint: true },
   async (args) => runTool("inspect-minecraft", args, inspectMinecraftSchema, async (input) =>
-    inspectMinecraftService.execute(input) as Promise<Record<string, unknown>>
+    inspectMinecraftService.execute(input as z.infer<typeof inspectMinecraftSchema>) as Promise<Record<string, unknown>>
   )
 );
 
@@ -1654,7 +1698,7 @@ server.tool("analyze-symbol",
   analyzeSymbolShape,
   { readOnlyHint: true },
   async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>
-    analyzeSymbolService.execute(input) as Promise<Record<string, unknown>>
+    analyzeSymbolService.execute(input as z.infer<typeof analyzeSymbolSchema>) as Promise<Record<string, unknown>>
   )
 );
 
@@ -1663,7 +1707,7 @@ server.tool("compare-minecraft",
   compareMinecraftShape,
   { readOnlyHint: true },
   async (args) => runTool("compare-minecraft", args, compareMinecraftSchema, async (input) =>
-    compareMinecraftService.execute(input) as Promise<Record<string, unknown>>
+    compareMinecraftService.execute(input as z.infer<typeof compareMinecraftSchema>) as Promise<Record<string, unknown>>
   )
 );
 
@@ -1672,7 +1716,7 @@ server.tool("analyze-mod",
   analyzeModShape,
   { readOnlyHint: false },
   async (args) => runTool("analyze-mod", args, analyzeModSchema, async (input) =>
-    analyzeModService.execute(input) as Promise<Record<string, unknown>>
+    analyzeModService.execute(input as z.infer<typeof analyzeModSchema>) as Promise<Record<string, unknown>>
   )
 );
 
@@ -1681,7 +1725,7 @@ server.tool("validate-project",
   validateProjectShape,
   { readOnlyHint: true },
   async (args) => runTool("validate-project", args, validateProjectSchema, async (input) =>
-    validateProjectService.execute(input) as Promise<Record<string, unknown>>
+    validateProjectService.execute(input as z.infer<typeof validateProjectSchema>) as Promise<Record<string, unknown>>
   )
 );
 
@@ -1690,7 +1734,7 @@ server.tool("manage-cache",
   manageCacheShape,
   { readOnlyHint: false },
   async (args) => runTool("manage-cache", args, manageCacheSchema, async (input) =>
-    manageCacheService.execute(input) as Promise<Record<string, unknown>>
+    manageCacheService.execute(input as z.infer<typeof manageCacheSchema>) as Promise<Record<string, unknown>>
   )
 );
 
