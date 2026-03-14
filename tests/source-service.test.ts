@@ -6813,134 +6813,213 @@ test("SourceService validateMixin handles representative scope and mapping resol
   }
 });
 
-test("SourceService validateMixin falls back to vanilla when scope=merged resolution fails", async () => {
+test("SourceService validateMixin handles representative scope fallback and reporting flows", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-scope-fallback-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
 
-  const service = new SourceService(buildTestConfig(root));
+  type ValidateMixinReportContext = {
+    root: string;
+    jarPath: string;
+    service: SourceServiceFixture;
+  };
 
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [{ ownerFqn: "net.minecraft.server.Main", name: "tick", javaSignature: "void tick()", jvmDescriptor: "()V", accessFlags: 1, isSynthetic: false }],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-  // resolveArtifact throws to simulate Loom cache miss
-  (service as any).resolveArtifact = async () => {
-    throw new Error("Loom cache not found for version 1.21");
-  };
-  (service as any).workspaceMappingService = {
-    async detectCompileMapping() {
-      return { resolved: false, evidence: [], warnings: [] };
+  function buildClassOnlyMixinSource(): string {
+    return [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class MainMixin {}"
+    ].join("\n");
+  }
+
+  function buildBadAccessorSource(): string {
+    return [
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "import org.spongepowered.asm.mixin.gen.Accessor;",
+      "",
+      "@Mixin(Main.class)",
+      "public interface BadAccessorMixin {",
+      "  @Accessor",
+      "  int notAMethod;",
+      "}"
+    ].join("\n");
+  }
+
+  function makeSignature(methodNames: string[] = []) {
+    return {
+      className: "net.minecraft.server.Main",
+      constructors: [],
+      methods: methodNames.map((name) => ({
+        ownerFqn: "net.minecraft.server.Main",
+        name,
+        javaSignature: `void ${name}()`,
+        jvmDescriptor: "()V",
+        accessFlags: 1,
+        isSynthetic: false
+      })),
+      fields: [],
+      warnings: []
+    };
+  }
+
+  async function createValidateMixinReportContext(
+    rootPrefix: string,
+    jarBaseName = "client"
+  ): Promise<ValidateMixinReportContext> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const jarPath = join(root, `${jarBaseName}.jar`);
+    await createJar(jarPath, {});
+    return {
+      root,
+      jarPath,
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
+
+  const cases: Array<{
+    name: string;
+    jarBaseName?: string;
+    run: (ctx: ValidateMixinReportContext) => Promise<void>;
+  }> = [
+    {
+      name: "falls back to vanilla when merged resolution fails",
+      run: async ({ root, jarPath, service }) => {
+        (service as any).versionService = {
+          async resolveVersionJar(version: string) {
+            return { version, jarPath };
+          }
+        };
+        (service as any).explorerService = {
+          async getSignature() {
+            return makeSignature(["tick"]);
+          }
+        };
+        (service as any).resolveArtifact = async () => {
+          throw new Error("Loom cache not found for version 1.21");
+        };
+        (service as any).workspaceMappingService = {
+          async detectCompileMapping() {
+            return { resolved: false, evidence: [], warnings: [] };
+          },
+          async detectProjectMinecraftVersion() {
+            return undefined;
+          }
+        };
+
+        const result = await service.validateMixin({
+          input: {
+            mode: "inline",
+            source: buildClassOnlyMixinSource()
+          },
+          version: "1.21",
+          mapping: "obfuscated",
+          scope: "merged",
+          projectPath: root
+        });
+
+        const single = result.results[0]?.result;
+        assert.ok(single?.provenance?.scopeFallback);
+        assert.equal(single?.provenance?.scopeFallback?.requested, "merged");
+        assert.equal(single?.provenance?.scopeFallback?.applied, "vanilla");
+        assert.ok(single?.provenance?.scopeFallback?.reason.includes("Loom cache"));
+        assert.equal(single?.provenance?.jarType, "vanilla-client");
+        assert.ok(single?.warnings.some((w) => w.includes("falling back to vanilla")));
+      }
     },
-    async detectProjectMinecraftVersion() { return undefined; }
-  };
+    {
+      name: "reports requested loader scope separately from applied merged scope",
+      jarBaseName: "minecraft-merged-1.21",
+      run: async ({ root, jarPath, service }) => {
+        (service as any).resolveArtifact = async () => ({
+          artifactId: "artifact:test",
+          origin: "loom-cache",
+          warnings: [],
+          mappingApplied: "obfuscated",
+          requestedMapping: "obfuscated",
+          resolvedSourceJarPath: join(root, "minecraft-merged-1.21-sources.jar"),
+          binaryJarPath: jarPath,
+          provenance: {
+            target: { kind: "version", value: "1.21" }
+          },
+          qualityFlags: [],
+          version: "1.21"
+        });
+        (service as any).mappingService = {
+          async checkMappingHealth() {
+            return {
+              mojangMappingsAvailable: true,
+              tinyMappingsAvailable: true,
+              memberRemapAvailable: true,
+              degradations: []
+            };
+          }
+        };
+        (service as any).explorerService = {
+          async getSignature() {
+            return makeSignature();
+          }
+        };
 
-  const result = await service.validateMixin({
-    input: {
-      mode: "inline",
-      source: [
-        "import net.minecraft.server.Main;",
-        "import org.spongepowered.asm.mixin.Mixin;",
-        "",
-        "@Mixin(Main.class)",
-        "public abstract class MainMixin {}"
-      ].join("\n")
+        const result = await service.validateMixin({
+          input: {
+            mode: "inline",
+            source: buildClassOnlyMixinSource()
+          },
+          version: "1.21",
+          mapping: "obfuscated",
+          scope: "loader",
+          projectPath: root
+        });
+
+        const single = result.results[0]?.result;
+        assert.equal(single?.provenance?.requestedScope, "loader");
+        assert.equal(single?.provenance?.appliedScope, "merged");
+        assert.equal(single?.provenance?.jarType, "merged");
+      }
     },
-    version: "1.21",
-    mapping: "obfuscated",
-    scope: "merged",
-    projectPath: root
-  });
+    {
+      name: "hideUncertain recomputes parseWarnings summary",
+      run: async ({ jarPath, service }) => {
+        (service as any).versionService = {
+          async resolveVersionJar(version: string) {
+            return { version, jarPath };
+          }
+        };
+        (service as any).explorerService = {
+          async getSignature() {
+            return makeSignature();
+          }
+        };
 
-  const single = result.results[0]?.result;
+        const result = await service.validateMixin({
+          input: {
+            mode: "inline",
+            source: buildBadAccessorSource()
+          },
+          version: "1.21",
+          mapping: "obfuscated",
+          hideUncertain: true
+        });
 
-  // Should have fallen back to vanilla scope
-  assert.ok(single?.provenance?.scopeFallback);
-  assert.equal(single?.provenance?.scopeFallback?.requested, "merged");
-  assert.equal(single?.provenance?.scopeFallback?.applied, "vanilla");
-  assert.ok(single?.provenance?.scopeFallback?.reason.includes("Loom cache"));
-  assert.equal(single?.provenance?.jarType, "vanilla-client");
-  assert.ok(single?.warnings.some((w) => w.includes("falling back to vanilla")));
-});
-
-test("SourceService validateMixin reports requested loader scope separately from applied merged scope", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-loader-scope-"));
-  const mergedJarPath = join(root, "minecraft-merged-1.21.jar");
-  await createJar(mergedJarPath, {});
-
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as any).resolveArtifact = async () => ({
-    artifactId: "artifact:test",
-    origin: "loom-cache",
-    warnings: [],
-    mappingApplied: "obfuscated",
-    requestedMapping: "obfuscated",
-    resolvedSourceJarPath: join(root, "minecraft-merged-1.21-sources.jar"),
-    binaryJarPath: mergedJarPath,
-    provenance: {
-      target: { kind: "version", value: "1.21" }
-    },
-    qualityFlags: [],
-    version: "1.21"
-  });
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: true,
-        tinyMappingsAvailable: true,
-        memberRemapAvailable: true,
-        degradations: []
-      };
+        const single = result.results[0]?.result;
+        assert.equal(single?.issues.length, 0);
+        assert.equal(single?.summary.warnings, 0);
+        assert.equal(single?.summary.parseWarnings, 0);
+        assert.equal(single?.unfilteredSummary?.parseWarnings, 1);
+      }
     }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
+  ];
 
-  const result = await service.validateMixin({
-    input: {
-      mode: "inline",
-      source: [
-        "import net.minecraft.server.Main;",
-        "import org.spongepowered.asm.mixin.Mixin;",
-        "",
-        "@Mixin(Main.class)",
-        "public abstract class MainMixin {}"
-      ].join("\n")
-    },
-    version: "1.21",
-    mapping: "obfuscated",
-    scope: "loader",
-    projectPath: root
-  });
-
-  const single = result.results[0]?.result;
-  assert.equal(single?.provenance?.requestedScope, "loader");
-  assert.equal(single?.provenance?.appliedScope, "merged");
-  assert.equal(single?.provenance?.jarType, "merged");
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const ctx = await createValidateMixinReportContext(
+        `service-${testCase.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-`,
+        testCase.jarBaseName
+      );
+      await testCase.run(ctx);
+    });
+  }
 });
 
 test("SourceService validateMixin summary-first hoists shared provenance and incomplete reasons", async () => {
@@ -7106,57 +7185,6 @@ test("SourceService validateMixin summary-first preserves per-result provenance 
   assert.equal(result.results[1]?.result?.provenance?.appliedSourcePriority, "maven-first");
   assert.deepEqual(result.results[0]?.result?.warnings, ["Player validation warning"]);
   assert.deepEqual(result.results[1]?.result?.warnings, ["World validation warning"]);
-});
-
-test("SourceService validateMixin hideUncertain recomputes parseWarnings summary", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-hide-uncertain-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
-
-  const service = new SourceService(buildTestConfig(root));
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-
-  const result = await service.validateMixin({
-    input: {
-      mode: "inline",
-      source: [
-        "import net.minecraft.server.Main;",
-        "import org.spongepowered.asm.mixin.Mixin;",
-        "import org.spongepowered.asm.mixin.gen.Accessor;",
-        "",
-        "@Mixin(Main.class)",
-        "public interface BadAccessorMixin {",
-        "  @Accessor",
-        "  int notAMethod;",
-        "}"
-      ].join("\n")
-    },
-    version: "1.21",
-    mapping: "obfuscated",
-    hideUncertain: true
-  });
-
-  const single = result.results[0]?.result;
-  assert.equal(single?.issues.length, 0);
-  assert.equal(single?.summary.warnings, 0);
-  assert.equal(single?.summary.parseWarnings, 0);
-  assert.equal(single?.unfilteredSummary?.parseWarnings, 1);
 });
 
 test("SourceService validateMixin can omit per-result issues while preserving summaries", async () => {
