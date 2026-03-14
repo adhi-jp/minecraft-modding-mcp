@@ -160,135 +160,141 @@ test("validateParsedMixin hoists warning-classifier regexes out of the hot funct
 /*  Mixin validation tests                                             */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin reports target-not-found when class is missing", () => {
-  const parsed = makeParsedMixin({ targets: [{ className: "NonExistentClass" }] });
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const warnings: string[] = [];
+test("validateParsedMixin reports representative member-validation outcomes", () => {
+  const cases = [
+    {
+      name: "target-not-found when class is missing",
+      parsed: makeParsedMixin({ targets: [{ className: "NonExistentClass" }] }),
+      targetMembers: new Map<string, ResolvedTargetMembers>(),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "target-not-found", target: "NonExistentClass" }
+    },
+    {
+      name: "method-not-found for @Inject with suggestions",
+      parsed: makeParsedMixin({
+        injections: [{ annotation: "Inject", method: "tik", line: 5 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack", "jump"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "method-not-found", suggestionsInclude: "tick" }
+    },
+    {
+      name: "field-not-found for @Shadow field",
+      parsed: makeParsedMixin({
+        shadows: [{ kind: "field", name: "healht", line: 8 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "hunger", "xp"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "field-not-found", suggestionsInclude: "health" }
+    },
+    {
+      name: "method-not-found for @Shadow method",
+      parsed: makeParsedMixin({
+        shadows: [{ kind: "method", name: "tik", line: 10 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "method-not-found", annotation: "@Shadow" }
+    },
+    {
+      name: "field-not-found for @Accessor target",
+      parsed: makeParsedMixin({
+        accessors: [{ annotation: "Accessor", name: "getSpeed", targetName: "speed", line: 12 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "hunger"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "field-not-found", annotation: "@Accessor" }
+    },
+    {
+      name: "method-not-found for @Invoker target",
+      parsed: makeParsedMixin({
+        accessors: [{ annotation: "Invoker", name: "invokeDamage", targetName: "damage", line: 14 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "method-not-found", annotation: "@Invoker" }
+    },
+    {
+      name: "@Invoker stays method-not-found when only matching field exists",
+      parsed: makeParsedMixin({
+        accessors: [{ annotation: "Invoker", name: "invokeDamage", targetName: "damage", line: 16 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["damage"] })]
+      ]),
+      expectedValid: false,
+      expectedIssueCount: 1,
+      expectedIssue: { kind: "method-not-found", annotation: "@Invoker" }
+    },
+    {
+      name: "all members valid",
+      parsed: makeParsedMixin({
+        injections: [{ annotation: "Inject", method: "tick", line: 5 }],
+        shadows: [
+          { kind: "field", name: "health", line: 8 },
+          { kind: "method", name: "attack", line: 10 }
+        ],
+        accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
+      }),
+      targetMembers: new Map<string, ResolvedTargetMembers>([
+        ["PlayerEntity", makeTargetMembers("PlayerEntity", {
+          methods: ["tick", "attack"],
+          fields: ["health", "hunger"]
+        })]
+      ]),
+      expectedValid: true,
+      expectedIssueCount: 0,
+      expectedSummary: { injections: 1, shadows: 2, accessors: 1, total: 4 }
+    }
+  ] as const;
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].kind, "target-not-found");
-  assert.equal(result.issues[0].target, "NonExistentClass");
-});
+  for (const testCase of cases) {
+    const warnings: string[] = [];
+    const result = validateParsedMixin(testCase.parsed, testCase.targetMembers, warnings);
 
-test("validateParsedMixin reports method-not-found for @Inject with suggestions", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "tik", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack", "jump"] })]
-  ]);
-  const warnings: string[] = [];
+    assert.equal(result.valid, testCase.expectedValid, `${testCase.name}: valid`);
+    assert.equal(result.issues.length, testCase.expectedIssueCount, `${testCase.name}: issue count`);
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].kind, "method-not-found");
-  assert.ok(result.issues[0].suggestions?.includes("tick"));
-});
+    if (testCase.expectedIssueCount > 0) {
+      const issue = result.issues[0];
+      assert.equal(issue.kind, testCase.expectedIssue?.kind, `${testCase.name}: issue kind`);
+      if (testCase.expectedIssue?.target !== undefined) {
+        assert.equal(issue.target, testCase.expectedIssue.target, `${testCase.name}: issue target`);
+      }
+      if (testCase.expectedIssue?.annotation !== undefined) {
+        assert.equal(issue.annotation, testCase.expectedIssue.annotation, `${testCase.name}: issue annotation`);
+      }
+      if (testCase.expectedIssue?.suggestionsInclude !== undefined) {
+        assert.ok(
+          issue.suggestions?.includes(testCase.expectedIssue.suggestionsInclude),
+          `${testCase.name}: suggestions`
+        );
+      }
+    }
 
-test("validateParsedMixin reports field-not-found for @Shadow field", () => {
-  const parsed = makeParsedMixin({
-    shadows: [{ kind: "field", name: "healht", line: 8 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "hunger", "xp"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues[0].kind, "field-not-found");
-  assert.ok(result.issues[0].suggestions?.includes("health"));
-});
-
-test("validateParsedMixin reports method-not-found for @Shadow method", () => {
-  const parsed = makeParsedMixin({
-    shadows: [{ kind: "method", name: "tik", line: 10 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues[0].kind, "method-not-found");
-  assert.equal(result.issues[0].annotation, "@Shadow");
-});
-
-test("validateParsedMixin reports error for @Accessor with missing target", () => {
-  const parsed = makeParsedMixin({
-    accessors: [{ annotation: "Accessor", name: "getSpeed", targetName: "speed", line: 12 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health", "hunger"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues[0].kind, "field-not-found");
-  assert.equal(result.issues[0].annotation, "@Accessor");
-});
-
-test("validateParsedMixin reports error for @Invoker with missing target", () => {
-  const parsed = makeParsedMixin({
-    accessors: [{ annotation: "Invoker", name: "invokeDamage", targetName: "damage", line: 14 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues[0].kind, "method-not-found");
-  assert.equal(result.issues[0].annotation, "@Invoker");
-});
-
-test("validateParsedMixin reports method-not-found for @Invoker when only matching field exists", () => {
-  const parsed = makeParsedMixin({
-    accessors: [{ annotation: "Invoker", name: "invokeDamage", targetName: "damage", line: 16 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["damage"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, false);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].kind, "method-not-found");
-  assert.equal(result.issues[0].annotation, "@Invoker");
-});
-
-
-test("validateParsedMixin passes when all members are valid", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "tick", line: 5 }],
-    shadows: [
-      { kind: "field", name: "health", line: 8 },
-      { kind: "method", name: "attack", line: 10 }
-    ],
-    accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", {
-      methods: ["tick", "attack"],
-      fields: ["health", "hunger"]
-    })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.valid, true);
-  assert.equal(result.issues.length, 0);
-  assert.equal(result.summary.injections, 1);
-  assert.equal(result.summary.shadows, 2);
-  assert.equal(result.summary.accessors, 1);
-  assert.equal(result.summary.total, 4);
+    if (testCase.expectedSummary !== undefined) {
+      assert.equal(result.summary.injections, testCase.expectedSummary.injections, `${testCase.name}: injections`);
+      assert.equal(result.summary.shadows, testCase.expectedSummary.shadows, `${testCase.name}: shadows`);
+      assert.equal(result.summary.accessors, testCase.expectedSummary.accessors, `${testCase.name}: accessors`);
+      assert.equal(result.summary.total, testCase.expectedSummary.total, `${testCase.name}: total`);
+    }
+  }
 });
 
 test("validateParsedMixin includes parse warnings in output", () => {
