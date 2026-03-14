@@ -257,6 +257,39 @@ function seedIndexedArtifact(
   repos.symbolsRepo.insertSymbolsForArtifact(input.artifactId, input.symbols);
 }
 
+async function createResolvedSearchFixture(input: {
+  rootPrefix: string;
+  jarBaseName: string;
+  sourceEntries: Record<string, string>;
+  binaryEntries?: Record<string, Buffer>;
+  configOverrides?: Partial<Config>;
+  mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+}): Promise<{
+  service: InstanceType<(typeof import("../src/source-service.ts"))["SourceService"]>;
+  resolved: Awaited<ReturnType<InstanceType<(typeof import("../src/source-service.ts"))["SourceService"]>["resolveArtifact"]>>;
+}> {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+  const binaryJarPath = join(root, `${input.jarBaseName}.jar`);
+  const sourcesJarPath = join(root, `${input.jarBaseName}-sources.jar`);
+
+  await createJar(
+    binaryJarPath,
+    input.binaryEntries ?? {
+      "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    }
+  );
+  await createJar(sourcesJarPath, input.sourceEntries);
+
+  const service = new SourceService(buildTestConfig(root, input.configOverrides));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    ...(input.mapping === undefined ? {} : { mapping: input.mapping })
+  });
+
+  return { service, resolved };
+}
+
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-main-"));
@@ -698,21 +731,14 @@ test("SourceService records list-files duration metric", async () => {
   assert.ok(metric.lastMs >= 0);
 });
 
-test("SourceService uses indexed search path for contains text/path queries without scope", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-contains-"));
-  const binaryJarPath = join(root, "server-indexed.jar");
-  const sourcesJarPath = join(root, "server-indexed-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
+test("SourceService routes representative search queries through indexed and fallback paths", async (t) => {
+  const sourceEntries = {
     "net/minecraft/server/Main.java": [
       "package net.minecraft.server;",
       "public class Main {",
       "  void tickServer() {",
       "    String indexedNeedle = \"needleValueToken\";",
+      "    String fallbackNeedle = \"needleValueToken\";",
       "  }",
       "}"
     ].join("\n"),
@@ -720,213 +746,232 @@ test("SourceService uses indexed search path for contains text/path queries with
       "package net.minecraft.server;",
       "public class NeedlePath {}"
     ].join("\n")
-  });
+  };
 
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    jarBaseName: string;
+    configOverrides?: Partial<Config>;
+    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    search: Parameters<
+      Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]
+    >[0];
+    expectedFilePath: string;
+    expectedPathMetrics: { indexedHits: number; fallbackHits: number };
+    expectSnippetsOmitted?: boolean;
+  }> = [
+    {
+      name: "contains text uses indexed search",
+      rootPrefix: "service-indexed-contains-text-",
+      jarBaseName: "server-indexed-text",
+      mapping: "obfuscated",
+      search: {
+        query: "needleValueToken",
+        intent: "text",
+        match: "contains",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/Main.java",
+      expectedPathMetrics: { indexedHits: 1, fallbackHits: 0 },
+      expectSnippetsOmitted: true
+    },
+    {
+      name: "contains path uses indexed search",
+      rootPrefix: "service-indexed-contains-path-",
+      jarBaseName: "server-indexed-path",
+      mapping: "obfuscated",
+      search: {
+        query: "NeedlePath",
+        intent: "path",
+        match: "contains",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/NeedlePath.java",
+      expectedPathMetrics: { indexedHits: 1, fallbackHits: 0 },
+      expectSnippetsOmitted: true
+    },
+    {
+      name: "exact path uses indexed search",
+      rootPrefix: "service-indexed-exact-path-",
+      jarBaseName: "server-indexed-exact",
+      mapping: "obfuscated",
+      search: {
+        query: "net/minecraft/server/NeedlePath.java",
+        intent: "path",
+        match: "exact",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/NeedlePath.java",
+      expectedPathMetrics: { indexedHits: 1, fallbackHits: 0 },
+      expectSnippetsOmitted: true
+    },
+    {
+      name: "prefix path uses indexed search",
+      rootPrefix: "service-indexed-prefix-path-",
+      jarBaseName: "server-indexed-prefix",
+      mapping: "obfuscated",
+      search: {
+        query: "net/minecraft/server/Needle",
+        intent: "path",
+        match: "prefix",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/NeedlePath.java",
+      expectedPathMetrics: { indexedHits: 1, fallbackHits: 0 },
+      expectSnippetsOmitted: true
+    },
+    {
+      name: "regex text falls back to scan path",
+      rootPrefix: "service-indexed-regex-fallback-",
+      jarBaseName: "server-indexed-regex",
+      search: {
+        query: "needleValue[A-Za-z]+",
+        intent: "text",
+        match: "regex",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/Main.java",
+      expectedPathMetrics: { indexedHits: 0, fallbackHits: 1 }
+    },
+    {
+      name: "config can disable indexed search",
+      rootPrefix: "service-indexed-disabled-",
+      jarBaseName: "server-indexed-disabled",
+      configOverrides: { indexedSearchEnabled: false },
+      search: {
+        query: "needleValueToken",
+        intent: "text",
+        match: "contains",
+        limit: 10
+      },
+      expectedFilePath: "net/minecraft/server/Main.java",
+      expectedPathMetrics: { indexedHits: 0, fallbackHits: 1 }
+    }
+  ];
 
-  const textSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "needleValueToken",
-    intent: "text",
-    match: "contains",
-    limit: 10
-  });
-  assert.ok(textSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/Main.java"));
-  assert.equal(textSearch.hits.every((hit) => !("snippet" in hit)), true);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const { service, resolved } = await createResolvedSearchFixture({
+        rootPrefix: testCase.rootPrefix,
+        jarBaseName: testCase.jarBaseName,
+        sourceEntries,
+        configOverrides: testCase.configOverrides,
+        mapping: testCase.mapping
+      });
 
-  const pathSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "NeedlePath",
-    intent: "path",
-    match: "contains",
-    limit: 10
-  });
-  assert.ok(pathSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
-  assert.equal(pathSearch.hits.every((hit) => !("snippet" in hit)), true);
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        ...testCase.search
+      });
 
-  const metrics = readSearchPathMetrics(service);
-  assert.equal(metrics.indexedHits, 2);
-  assert.equal(metrics.fallbackHits, 0);
+      assert.ok(result.hits.some((hit) => hit.filePath === testCase.expectedFilePath));
+      if (testCase.expectSnippetsOmitted === true) {
+        assert.equal(result.hits.every((hit) => !("snippet" in hit)), true);
+      }
+
+      const metrics = readSearchPathMetrics(service);
+      assert.deepEqual(metrics, testCase.expectedPathMetrics);
+    });
+  }
 });
 
-test("SourceService path indexed search avoids file-content hydration for hit construction", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-path-compact-"));
-  const binaryJarPath = join(root, "server-indexed-path-compact.jar");
-  const sourcesJarPath = join(root, "server-indexed-path-compact-sources.jar");
+test("SourceService indexed search reports compact path hits and db I/O metrics", async (t) => {
+  const cases: Array<{
+    name: string;
+    fixture: Parameters<typeof createResolvedSearchFixture>[0];
+    beforeMetrics?: (service: Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]) => {
+      dbRoundtrips: number;
+      rowsScanned: number;
+      rowsReturned: number;
+    };
+    search: Parameters<
+      Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]
+    >[0];
+    verify: (
+      result: Awaited<
+        ReturnType<Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]>
+      >,
+      before:
+        | { dbRoundtrips: number; rowsScanned: number; rowsReturned: number }
+        | undefined,
+      after: { dbRoundtrips: number; rowsScanned: number; rowsReturned: number }
+    ) => void;
+  }> = [
+    {
+      name: "path indexed search avoids file-content hydration for hit construction",
+      fixture: {
+        rootPrefix: "service-indexed-path-compact-",
+        jarBaseName: "server-indexed-path-compact",
+        mapping: "obfuscated",
+        sourceEntries: {
+          "net/minecraft/server/NeedlePath.java": [
+            "package net.minecraft.server;",
+            "public class NeedlePath {",
+            `  // ${"x".repeat(5_000)}`,
+            "  void afterLongLine() {}",
+            "}"
+          ].join("\n")
+        }
+      },
+      beforeMetrics: readSearchIoMetrics,
+      search: {
+        query: "NeedlePath",
+        intent: "path",
+        match: "contains",
+        limit: 10
+      },
+      verify: (result, before, after) => {
+        const hit = result.hits.find((entry) => entry.filePath === "net/minecraft/server/NeedlePath.java");
+        assert.ok(hit);
+        assert.equal("snippet" in hit, false);
+        assert.equal(after.dbRoundtrips - (before?.dbRoundtrips ?? 0), 1);
+      }
+    },
+    {
+      name: "indexed text search records search db I/O metrics",
+      fixture: {
+        rootPrefix: "service-indexed-io-metrics-",
+        jarBaseName: "server-indexed-io",
+        mapping: "obfuscated",
+        sourceEntries: {
+          "net/minecraft/server/Main.java": [
+            "package net.minecraft.server;",
+            "public class Main {",
+            "  void tickServer() {",
+            "    String token = \"indexedMetricsToken\";",
+            "  }",
+            "}"
+          ].join("\n")
+        }
+      },
+      search: {
+        query: "indexedMetricsToken",
+        intent: "text",
+        match: "contains",
+        limit: 10
+      },
+      verify: (result, _before, after) => {
+        assert.ok(result.hits.length > 0);
+        assert.ok(after.dbRoundtrips > 0);
+        assert.ok(after.rowsScanned > 0);
+        assert.ok(after.rowsReturned > 0);
+      }
+    }
+  ];
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/NeedlePath.java": [
-      "package net.minecraft.server;",
-      "public class NeedlePath {",
-      `  // ${"x".repeat(5_000)}`,
-      "  void afterLongLine() {}",
-      "}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  const before = readSearchIoMetrics(service);
-  const pathSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "NeedlePath",
-    intent: "path",
-    match: "contains",
-    limit: 10
-  });
-  const after = readSearchIoMetrics(service);
-
-  const hit = pathSearch.hits.find((entry) => entry.filePath === "net/minecraft/server/NeedlePath.java");
-  assert.ok(hit);
-  assert.equal("snippet" in hit, false);
-  assert.equal(after.dbRoundtrips - before.dbRoundtrips, 1);
-});
-
-test("SourceService uses indexed search path for exact and prefix path queries without scope", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-exact-prefix-"));
-  const binaryJarPath = join(root, "server-indexed-mixed.jar");
-  const sourcesJarPath = join(root, "server-indexed-mixed-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      "  void tickServer() {",
-      "    String indexedNeedle = \"needleValueToken\";",
-      "  }",
-      "}"
-    ].join("\n"),
-    "net/minecraft/server/NeedlePath.java": [
-      "package net.minecraft.server;",
-      "public class NeedlePath {}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  const pathExactSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "net/minecraft/server/NeedlePath.java",
-    intent: "path",
-    match: "exact",
-    limit: 10
-  });
-  assert.ok(pathExactSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
-
-  const pathPrefixSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "net/minecraft/server/Needle",
-    intent: "path",
-    match: "prefix",
-    limit: 10
-  });
-  assert.ok(pathPrefixSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
-
-  const metrics = readSearchPathMetrics(service);
-  assert.equal(metrics.indexedHits, 2);
-  assert.equal(metrics.fallbackHits, 0);
-});
-
-test("SourceService records search db I/O metrics for indexed searches", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-io-metrics-"));
-  const binaryJarPath = join(root, "server-indexed-io.jar");
-  const sourcesJarPath = join(root, "server-indexed-io-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      "  void tickServer() {",
-      "    String token = \"indexedMetricsToken\";",
-      "  }",
-      "}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "indexedMetricsToken",
-    intent: "text",
-    match: "contains",
-    limit: 10
-  });
-  assert.ok(result.hits.length > 0);
-
-  const ioMetrics = readSearchIoMetrics(service);
-  assert.ok(ioMetrics.dbRoundtrips > 0);
-  assert.ok(ioMetrics.rowsScanned > 0);
-  assert.ok(ioMetrics.rowsReturned > 0);
-});
-
-test("SourceService can disable indexed path via config flag", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-disabled-"));
-  const binaryJarPath = join(root, "server-indexed-disabled.jar");
-  const sourcesJarPath = join(root, "server-indexed-disabled-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      "  void tickServer() {",
-      "    String indexedNeedle = \"needleValueToken\";",
-      "  }",
-      "}"
-    ].join("\n")
-  });
-
-  const config = buildTestConfig(root) as Config & Record<string, unknown>;
-  config.indexedSearchEnabled = false;
-  const service = new SourceService(config);
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath }
-  });
-
-  const search = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "needleValueToken",
-    intent: "text",
-    match: "contains",
-    limit: 10
-  });
-  assert.ok(search.hits.length > 0);
-
-  const metrics = readSearchPathMetrics(service);
-  assert.equal(metrics.indexedHits, 0);
-  assert.equal(metrics.fallbackHits, 1);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const { service, resolved } = await createResolvedSearchFixture(testCase.fixture);
+      const before = testCase.beforeMetrics?.(service);
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        ...testCase.search
+      });
+      const after = readSearchIoMetrics(service);
+      testCase.verify(result, before, after);
+    });
+  }
 });
 
 test("SourceService can manually reindex an artifact", async () => {
@@ -969,46 +1014,6 @@ test("SourceService can manually reindex an artifact", async () => {
   assert.ok(result.counts.files >= 1);
   assert.ok(result.counts.symbols >= 1);
   assert.ok(result.counts.ftsRows >= 1);
-});
-
-test("SourceService falls back to scan path for regex queries", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-indexed-fallback-"));
-  const binaryJarPath = join(root, "server-fallback.jar");
-  const sourcesJarPath = join(root, "server-fallback-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": [
-      "package net.minecraft.server;",
-      "public class Main {",
-      "  void tickServer() {",
-      "    String fallbackNeedle = \"needleValueToken\";",
-      "  }",
-      "}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath }
-  });
-
-  const regexSearch = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "needleValue[A-Za-z]+",
-    intent: "text",
-    match: "regex",
-    limit: 10
-  });
-  assert.ok(regexSearch.hits.length > 0);
-
-  const metrics = readSearchPathMetrics(service);
-  // regex always falls back to scan
-  assert.equal(metrics.indexedHits, 0);
-  assert.equal(metrics.fallbackHits, 1);
 });
 
 test("SourceService rejects symbolKind scope filters for text and path intents", async () => {
