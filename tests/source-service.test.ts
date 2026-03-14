@@ -290,6 +290,15 @@ async function createResolvedSearchFixture(input: {
   return { service, resolved };
 }
 
+type SearchFixture = Awaited<ReturnType<typeof createResolvedSearchFixture>>;
+type SearchClassSourceCaseInput = Omit<
+  Parameters<SearchFixture["service"]["searchClassSource"]>[0],
+  "artifactId"
+>;
+type SearchClassSourceCaseResult = Awaited<
+  ReturnType<SearchFixture["service"]["searchClassSource"]>
+>;
+
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-main-"));
@@ -754,9 +763,7 @@ test("SourceService routes representative search queries through indexed and fal
     jarBaseName: string;
     configOverrides?: Partial<Config>;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    search: Parameters<
-      Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]
-    >[0];
+    search: SearchClassSourceCaseInput;
     expectedFilePath: string;
     expectedPathMetrics: { indexedHits: number; fallbackHits: number };
     expectSnippetsOmitted?: boolean;
@@ -876,22 +883,64 @@ test("SourceService routes representative search queries through indexed and fal
   }
 });
 
+test("SourceService accumulates indexed path metrics across multiple queries on one service", async () => {
+  const sourceEntries = {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {",
+      "  void tickServer() {",
+      "    String indexedNeedle = \"needleValueToken\";",
+      "  }",
+      "}"
+    ].join("\n"),
+    "net/minecraft/server/NeedlePath.java": [
+      "package net.minecraft.server;",
+      "public class NeedlePath {}"
+    ].join("\n")
+  };
+
+  const { service, resolved } = await createResolvedSearchFixture({
+    rootPrefix: "service-indexed-accumulate-",
+    jarBaseName: "server-indexed-accumulate",
+    sourceEntries,
+    mapping: "obfuscated"
+  });
+
+  const textSearch = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "needleValueToken",
+    intent: "text",
+    match: "contains",
+    limit: 10
+  });
+  assert.ok(textSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/Main.java"));
+
+  const pathSearch = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "NeedlePath",
+    intent: "path",
+    match: "contains",
+    limit: 10
+  });
+  assert.ok(pathSearch.hits.some((hit) => hit.filePath === "net/minecraft/server/NeedlePath.java"));
+
+  const metrics = readSearchPathMetrics(service);
+  assert.equal(metrics.indexedHits, 2);
+  assert.equal(metrics.fallbackHits, 0);
+});
+
 test("SourceService indexed search reports compact path hits and db I/O metrics", async (t) => {
   const cases: Array<{
     name: string;
     fixture: Parameters<typeof createResolvedSearchFixture>[0];
-    beforeMetrics?: (service: Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]) => {
+    beforeMetrics?: (service: SearchFixture["service"]) => {
       dbRoundtrips: number;
       rowsScanned: number;
       rowsReturned: number;
     };
-    search: Parameters<
-      Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]
-    >[0];
+    search: SearchClassSourceCaseInput;
     verify: (
-      result: Awaited<
-        ReturnType<Awaited<ReturnType<typeof createResolvedSearchFixture>>["service"]["searchClassSource"]>
-      >,
+      result: SearchClassSourceCaseResult,
       before:
         | { dbRoundtrips: number; rowsScanned: number; rowsReturned: number }
         | undefined,
