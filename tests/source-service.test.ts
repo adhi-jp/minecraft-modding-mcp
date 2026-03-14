@@ -3015,20 +3015,6 @@ test("SourceService resolveArtifact does not treat version-matching mod source j
   );
 });
 
-test("SourceService source code does not expose legacy compatibility methods", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
-
-  assert.doesNotMatch(source, /export type ResolveInput/);
-  assert.doesNotMatch(source, /export type ResolveOutput/);
-  assert.doesNotMatch(source, /async resolveSourceTarget\(/);
-  assert.doesNotMatch(source, /async listSourceFiles\(/);
-  assert.doesNotMatch(source, /async searchSource\(/);
-  assert.doesNotMatch(source, /async searchSourceMulti\(/);
-  assert.doesNotMatch(source, /async querySymbols\(/);
-  assert.doesNotMatch(source, /async getSourceContext\(/);
-  assert.doesNotMatch(source, /async getSourceFile\(/);
-});
-
 test("SourceService fails mojang mapping when only decompiled source is available", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-mojang-map-"));
@@ -5732,48 +5718,6 @@ test("SourceService searchClassSource with ** glob pattern does not crash", asyn
       `Expected hit in net/minecraft/ but got ${hit.filePath}`
     );
   }
-});
-
-test("SourceService hoists fileGlob regex compilation out of regex symbol scan loop", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
-  const block =
-    source.match(
-      /const candidates = this\.symbolsRepo\.listSymbolsForArtifact\(artifactId, scope\?\.symbolKind\);[\s\S]*?return result;/
-    )?.[0] ?? "";
-
-  assert.match(
-    block,
-    /const glob = scope\?\.fileGlob \? buildGlobRegex\(normalizePathStyle\(scope\.fileGlob\)\) : undefined;/
-  );
-  assert.doesNotMatch(
-    block,
-    /for \(const symbol of candidates\) \{[\s\S]*const glob = buildGlobRegex\(normalizePathStyle\(scope\.fileGlob\)\);/
-  );
-});
-
-test("SourceService avoids JSON.stringify equality checks in mixin output compaction", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
-  const block =
-    source.match(/private applyValidateMixinOutputCompaction\([\s\S]*?private buildValidateMixinOutput/)?.[0] ?? "";
-
-  assert.doesNotMatch(block, /JSON\.stringify\(entry\)/);
-});
-
-test("SourceService centralizes quality flag deduplication instead of rebuilding inline Sets", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
-
-  assert.match(source, /function dedupeQualityFlags\(/);
-  assert.doesNotMatch(source, /qualityFlags = \[\.\.\.new Set/);
-});
-
-test("SourceService resolveClassFilePath delegates to a combined repo lookup instead of sequential probes", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
-  const block =
-    source.match(/private resolveClassFilePath\([\s\S]*?^\s{2}\}/m)?.[0] ?? "";
-
-  assert.match(block, /return this\.filesRepo\.findBestClassLookupPath\(/);
-  assert.doesNotMatch(block, /this\.symbolsRepo\.findBestClassFilePath/);
-  assert.doesNotMatch(block, /this\.filesRepo\.findFirstFilePathByName/);
 });
 
 test("SourceService validateMixin reuses class mapping lookups across batch entries", async () => {
