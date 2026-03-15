@@ -9,8 +9,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 - `search-class-source` `queryMode="auto" | "token"` now keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path instead of silently retrying a full substring scan; `queryMode="literal"` remains the explicit opt-in scan mode.
-- v3 entry tools now include `result.summary.subject` consistently, and high-confidence follow-up flows such as migration overviews, remap previews, cache previews, and entry-tool search misses now surface `summary.nextActions`.
-- `tools/list` now exposes JSON Schema `default` values for fixed MCP tool parameters such as `list-versions.includeSnapshots=false`, `search-class-source.queryMode="auto"`, `inspect-minecraft.includeSnapshots=false`, `analyze-mod.searchType="all"` / `includeFiles=true` / `limit=50`, `validate-mixin.reportMode="full"`, and selected entry-tool controls like `manage-cache.executionMode="preview"` / `limit=50`, so clients can rely on schema metadata instead of parsing prose descriptions.
+- The top-level workflow tools now include `result.summary.subject` consistently, and high-confidence follow-up flows such as migration overviews, remap previews, cache previews, and search misses from those tools now surface `summary.nextActions`.
+- `tools/list` now exposes JSON Schema `default` values for fixed MCP tool parameters such as `list-versions.includeSnapshots=false`, `search-class-source.queryMode="auto"`, `inspect-minecraft.includeSnapshots=false`, `analyze-mod.searchType="all"` / `includeFiles=true` / `limit=50`, `validate-mixin.reportMode="full"`, and selected controls on the top-level workflow tools like `manage-cache.executionMode="preview"` / `limit=50`, so clients can rely on schema metadata instead of parsing prose descriptions.
 
 ### Fixed
 - Error recovery payloads (`suggestedCall`) now omit parameters when the supplied value matches the tool's default behavior, keeping retryable calls smaller without changing their semantics.
@@ -21,8 +21,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Documentation
 - README tool tables are now validated from a shared contract manifest in code, correcting the documented `compare-minecraft` class-only `subject.kind="class".sourcePriority` input and aligning the published `inspect-minecraft` / `validate-project` output summaries with the implementation.
-- Clarified the updated `search-class-source` `queryMode` behavior and the summary-first entry-tool follow-up contract in both READMEs.
+- Clarified the updated `search-class-source` `queryMode` behavior and the summary-first follow-up contract for the top-level workflow tools in both READMEs.
 - Documented that safe fixed defaults now appear in `tools/list` schema output and that `suggestedCall` omits default-valued parameters.
+- Reorganized the English README around package-user quick start, start-here examples, and linked reference docs so setup guidance is easier to scan without losing detailed contract notes.
+- Synchronized the Japanese README with the current English README structure, examples, quick-start guidance, and tool-surface summary.
 
 ## [3.0.0] - 2026-03-09
 
