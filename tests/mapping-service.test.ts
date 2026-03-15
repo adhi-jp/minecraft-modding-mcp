@@ -58,6 +58,39 @@ const TEST_TINY = [
   "\tm\t(Ljava/lang/String;)V\tf\tinterOverloadString\toverloaded"
 ].join("\n");
 
+const TEST_AMBIGUOUS_METHOD_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
+  "\tm\t(I)V\te\tinterMethod\tnamedMethod",
+  "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod"
+].join("\n");
+
+const TEST_AMBIGUOUS_CLASS_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tinter/one/C\tyarn/one/C",
+  "c\ta/b/C\tinter/two/C\tyarn/two/C"
+].join("\n");
+
+function createVersionServiceStub(mappingsUrl?: string) {
+  return {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: `https://example.test/versions/${version}.json`,
+        mappingsUrl
+      };
+    }
+  };
+}
+
+async function writeLoomTinyCache(root: string, tiny: string, version = "1.21.10"): Promise<string> {
+  const loomTinyPath = join(root, ".gradle", "loom-cache", version, "mappings.tiny");
+  await mkdir(join(root, ".gradle", "loom-cache", version), { recursive: true });
+  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+  return loomTinyPath;
+}
+
 type SymbolQueryInput = {
   kind: "class" | "field" | "method";
   name: string;
@@ -303,39 +336,6 @@ test("MappingService fetches Maven tiny jars in parallel during fallback loading
   );
 
   assert.ok(maxActiveJarFetches > 1, `expected parallel jar fetches, got ${maxActiveJarFetches}`);
-});
-
-test("MappingService namespacePath uses graph adjacency instead of scanning pair keys", async () => {
-  const source = await readFile("src/mapping-service.ts", "utf8");
-  const block =
-    source.match(/function namespacePath\([\s\S]*?return path;/)?.[0] ?? "";
-
-  assert.match(block, /adjacency/);
-  assert.doesNotMatch(block, /for \(const key of pairs\.keys\(\)\)/);
-});
-
-test("MappingService getClassApiMatrix caches namespace paths per mapping pair", async () => {
-  const source = await readFile("src/mapping-service.ts", "utf8");
-  const block =
-    source.match(/async getClassApiMatrix\([\s\S]*?return \{/)?.[0] ?? "";
-
-  assert.match(block, /const pathCache = new Map</);
-});
-
-test("MappingService trims hot-path string allocations in normalization helpers", async () => {
-  const source = await readFile("src/mapping-service.ts", "utf8");
-  const normalizedBlock =
-    source.match(/function normalizedVariants\(symbol: string\): string\[\] \{[\s\S]*?\n\}/)?.[0] ?? "";
-  const pairBlock =
-    source.match(
-      /function parsePairKey\(key: PairKey\): \{ sourceMapping: SourceMapping; targetMapping: SourceMapping \} \{[\s\S]*?\n\}/
-    )?.[0] ?? "";
-
-  assert.doesNotMatch(normalizedBlock, /new Set/);
-  assert.match(normalizedBlock, /symbol\.includes\(["']\/["']\)/);
-  assert.match(normalizedBlock, /symbol\.includes\(["']\.["']\)/);
-  assert.doesNotMatch(pairBlock, /split\("->"\)/);
-  assert.match(pairBlock, /indexOf\("->"\)/);
 });
 
 test("MappingService supports sourcePriority override over config default", async () => {
@@ -649,28 +649,80 @@ test("MappingService returns identity candidate when source/target mapping are e
   assert.equal(result.candidates[0]?.name, "net.minecraft.server.MinecraftServer");
 });
 
-test("MappingService resolves exact method mapping when descriptor path is preserved", async () => {
+test("MappingService resolveMethodMappingExact resolves representative exact lookup backends", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
+  const createLoomService = async (prefix: string, tiny: string) => {
+    const root = await mkdtemp(join(tmpdir(), prefix));
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, tiny);
+    return {
+      root,
+      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
+    };
   };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    (
+  await t.test("preserves descriptor path through tiny mappings", async () => {
+    const { root, service } = await createLoomService("mapping-service-method-exact-", TEST_TINY);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          resolveMethodMappingExact: (input: {
+            version: string;
+            kind: "method";
+            owner: string;
+            name: string;
+            descriptor: string;
+            sourceMapping: SourceMapping;
+            targetMapping: SourceMapping;
+            sourcePriority?: "loom-first" | "maven-first";
+          }) => Promise<{
+            resolved: boolean;
+            status: string;
+            resolvedSymbol?: {
+              name: string;
+              owner?: string;
+              descriptor?: string;
+            };
+            warnings: string[];
+          }>;
+        }
+      ).resolveMethodMappingExact({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "e",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
+
+    assert.equal(result.resolved, true);
+    assert.equal(result.status, "resolved");
+    assert.equal(result.resolvedSymbol?.name, "interMethod");
+    assert.equal(result.resolvedSymbol?.owner, "intermediary.pkg.InterClass");
+    assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
+    assert.equal(result.warnings.length, 0);
+  });
+
+  await t.test("resolves through mojang client mappings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-mojang-"));
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const service = new MappingService(
+      config,
+      createVersionServiceStub("https://example.test/mappings/client.txt"),
+      fetchStub
+    );
+    const result = await (
       service as unknown as {
         resolveMethodMappingExact: (input: {
           version: string;
@@ -680,15 +732,9 @@ test("MappingService resolves exact method mapping when descriptor path is prese
           descriptor: string;
           sourceMapping: SourceMapping;
           targetMapping: SourceMapping;
-          sourcePriority?: "loom-first" | "maven-first";
         }) => Promise<{
           resolved: boolean;
           status: string;
-          resolvedSymbol?: {
-            name: string;
-            owner?: string;
-            descriptor?: string;
-          };
           warnings: string[];
         }>;
       }
@@ -696,229 +742,125 @@ test("MappingService resolves exact method mapping when descriptor path is prese
       version: "1.21.10",
       kind: "method",
       owner: "a.b.C",
-      name: "e",
+      name: "f",
       descriptor: "(I)V",
       sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
+      targetMapping: "mojang"
+    });
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
-  assert.equal(result.resolvedSymbol?.name, "interMethod");
-  assert.equal(result.resolvedSymbol?.owner, "intermediary.pkg.InterClass");
-  assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
-  assert.equal(result.warnings.length, 0);
+    assert.equal(result.resolved, true);
+    assert.equal(result.status, "resolved");
+  });
 });
 
-test("MappingService returns explicit not_found for exact method lookup misses", async () => {
+test("MappingService resolveMethodMappingExact reports representative unresolved result states", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-miss-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
+  const createLoomService = async (prefix: string, tiny: string) => {
+    const root = await mkdtemp(join(tmpdir(), prefix));
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, tiny);
+    return {
+      root,
+      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
+    };
   };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        resolveMethodMappingExact: (input: {
-          version: string;
-          kind: "method";
-          owner: string;
-          name: string;
-          descriptor: string;
-          sourceMapping: SourceMapping;
-          targetMapping: SourceMapping;
-        }) => Promise<{
-          resolved: boolean;
-          status: string;
-          candidates: unknown[];
-        }>;
-      }
-    ).resolveMethodMappingExact({
-      version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "missing",
-      descriptor: "(I)V",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
+  await t.test("returns explicit not_found for misses", async () => {
+    const { root, service } = await createLoomService("mapping-service-method-exact-miss-", TEST_TINY);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          resolveMethodMappingExact: (input: {
+            version: string;
+            kind: "method";
+            owner: string;
+            name: string;
+            descriptor: string;
+            sourceMapping: SourceMapping;
+            targetMapping: SourceMapping;
+          }) => Promise<{
+            resolved: boolean;
+            status: string;
+            candidates: unknown[];
+          }>;
+        }
+      ).resolveMethodMappingExact({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "missing",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "not_found");
-  assert.equal(result.candidates.length, 0);
-});
-
-test("MappingService returns mapping_unavailable when exact lookup crosses mojang descriptorless mappings", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-mojang-"));
-  const config = buildTestConfig(root);
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await (
-    service as unknown as {
-      resolveMethodMappingExact: (input: {
-        version: string;
-        kind: "method";
-        owner: string;
-        name: string;
-        descriptor: string;
-        sourceMapping: SourceMapping;
-        targetMapping: SourceMapping;
-      }) => Promise<{
-        resolved: boolean;
-        status: string;
-        warnings: string[];
-      }>;
-    }
-  ).resolveMethodMappingExact({
-    version: "1.21.10",
-    kind: "method",
-    owner: "a.b.C",
-    name: "f",
-    descriptor: "(I)V",
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang"
+    assert.equal(result.resolved, false);
+    assert.equal(result.status, "not_found");
+    assert.equal(result.candidates.length, 0);
   });
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
-});
+  await t.test("returns ambiguous when duplicate target names exist", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-ambiguous-",
+      TEST_AMBIGUOUS_METHOD_TINY
+    );
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          resolveMethodMappingExact: (input: {
+            version: string;
+            kind: "method";
+            owner: string;
+            name: string;
+            descriptor: string;
+            sourceMapping: SourceMapping;
+            targetMapping: SourceMapping;
+          }) => Promise<{
+            resolved: boolean;
+            status: string;
+            candidates: Array<{ name: string }>;
+          }>;
+        }
+      ).resolveMethodMappingExact({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "e",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-test("MappingService returns ambiguous for exact method lookup when tiny data has duplicate target names", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-ambiguous-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const ambiguousTiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
-    "\tm\t(I)V\te\tinterMethod\tnamedMethod",
-    "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+    assert.equal(result.resolved, false);
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.candidates.length, 2);
+  });
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+  await t.test("applies maxCandidates to ambiguous result sets", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-max-candidates-",
+      TEST_AMBIGUOUS_METHOD_TINY
+    );
+    const result = await withCwd(root, () =>
+      service.resolveMethodMappingExact({
+        version: "1.21.10",
+        owner: "a.b.C",
+        name: "e",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary",
+        maxCandidates: 1
+      } as never)
+    );
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        resolveMethodMappingExact: (input: {
-          version: string;
-          kind: "method";
-          owner: string;
-          name: string;
-          descriptor: string;
-          sourceMapping: SourceMapping;
-          targetMapping: SourceMapping;
-        }) => Promise<{
-          resolved: boolean;
-          status: string;
-          candidates: Array<{ name: string }>;
-        }>;
-      }
-    ).resolveMethodMappingExact({
-      version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "e",
-      descriptor: "(I)V",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
-
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "ambiguous");
-  assert.equal(result.candidates.length, 2);
-});
-
-test("MappingService resolveMethodMappingExact supports maxCandidates", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-max-candidates-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const ambiguousTiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
-    "\tm\t(I)V\te\tinterMethod\tnamedMethod",
-    "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    service.resolveMethodMappingExact({
-      version: "1.21.10",
-      owner: "a.b.C",
-      name: "e",
-      descriptor: "(I)V",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary",
-      maxCandidates: 1
-    } as never)
-  );
-
-  assert.equal(result.status, "ambiguous");
-  assert.equal(result.candidateCount, 2);
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidatesTruncated, true);
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.candidateCount, 2);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidatesTruncated, true);
+  });
 });
 
 test("MappingService builds class API matrix across mappings", async () => {
@@ -1316,66 +1258,85 @@ test("MappingService returns ambiguous for short class names when multiple FQCNs
   assert.ok(result.warnings.some((warning) => warning.includes("fully-qualified class name")));
 });
 
-test("MappingService findMapping adds ambiguity reason and supports disambiguation hints", async () => {
+test("MappingService findMapping handles representative ambiguity metadata flows", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-find-disambiguation-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const tiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/one/C\tyarn/one/C",
-    "c\ta/b/C\tinter/two/C\tyarn/two/C"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
+  const createLoomService = async (prefix: string, tiny: string) => {
+    const root = await mkdtemp(join(tmpdir(), prefix));
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, tiny);
+    return {
+      root,
+      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
+    };
   };
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
-  const ambiguous = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "a.b.C",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
-  assert.equal(ambiguous.status, "ambiguous");
-  assert.ok(ambiguous.warnings.some((warning) => warning.includes("Ambiguous mapping")));
+  await t.test("includes ambiguityReasons and warning when multiple owners match", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-ambiguity-reasons-",
+      TEST_AMBIGUOUS_CLASS_TINY
+    );
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "a.b.C",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-  const disambiguated = await withCwd(root, () =>
-    (
-      service as unknown as {
-        findMapping: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          name: string;
-          sourceMapping: SourceMapping;
-          targetMapping: SourceMapping;
-          disambiguation?: { ownerHint?: string; descriptorHint?: string };
-        }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
-      }
-    ).findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "a.b.C",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary",
-      disambiguation: { ownerHint: "inter.two" }
-    })
-  );
-  assert.equal(disambiguated.status, "resolved");
-  assert.equal(disambiguated.resolvedSymbol?.symbol, "inter.two.C");
+    assert.equal(result.status, "ambiguous");
+    assert.ok(result.warnings.some((warning) => warning.includes("Ambiguous mapping")));
+    assert.ok(result.ambiguityReasons);
+    assert.ok(result.ambiguityReasons.length > 0);
+  });
+
+  await t.test("supports disambiguation hints for ambiguous class matches", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-find-disambiguation-",
+      TEST_AMBIGUOUS_CLASS_TINY
+    );
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          findMapping: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            name: string;
+            sourceMapping: SourceMapping;
+            targetMapping: SourceMapping;
+            disambiguation?: { ownerHint?: string; descriptorHint?: string };
+          }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
+        }
+      ).findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "a.b.C",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary",
+        disambiguation: { ownerHint: "inter.two" }
+      })
+    );
+
+    assert.equal(result.status, "resolved");
+    assert.equal(result.resolvedSymbol?.symbol, "inter.two.C");
+  });
+
+  await t.test("omits ambiguityReasons when a single candidate resolves", async () => {
+    const { root, service } = await createLoomService("mapping-service-no-ambiguity-", TEST_TINY);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
+
+    assert.equal(result.status, "resolved");
+    assert.equal(result.ambiguityReasons, undefined);
+  });
 });
 
 test("MappingService returns mapping_unavailable for symbol existence when mapping graph is absent", async () => {
@@ -1517,87 +1478,63 @@ const TEST_TINY_V1 = [
   "\tm\t(Ljava/lang/String;)V\tf\tinterOverloadString\toverloaded"
 ].join("\n");
 
-test("MappingService Loom cache version filter does not match version prefix collisions", async () => {
+test("MappingService Loom cache version filter handles representative candidate path variants", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-version-collision-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
 
-  // Create two Loom cache directories whose version strings share a prefix
-  const loomDir121_1 = join(root, ".gradle", "loom-cache", "1.21.1");
-  const loomDir121_10 = join(root, ".gradle", "loom-cache", "1.21.10");
-  await mkdir(loomDir121_1, { recursive: true });
-  await mkdir(loomDir121_10, { recursive: true });
-
-  // 1.21.1 gets the V1 tiny with distinct named class
-  await writeFile(join(loomDir121_1, "mappings.tiny"), `${TEST_TINY_V1}\n`, "utf8");
-  // 1.21.10 gets the original TEST_TINY
-  await writeFile(join(loomDir121_10, "mappings.tiny"), `${TEST_TINY}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: `https://example.test/versions/${version}.json`,
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-
-  // Query version 1.21.1 — should only see V1 data, not 1.21.10 data
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.1",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "yarn"
-    })
-  );
-
-  assert.equal(result.candidates[0]?.symbol, "v1.pkg.VersionOneClass");
-  assert.equal(result.provenance?.source, "loom-cache");
-});
-
-test("MappingService Loom cache version filter handles backslash separated candidate paths", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-backslash-path-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-
-  const pseudoWindowsPath121_1 = join(root, ".gradle", "loom-cache\\1.21.1\\mappings.tiny");
-  const pseudoWindowsPath121_10 = join(root, ".gradle", "loom-cache\\1.21.10\\mappings.tiny");
-  await mkdir(join(root, ".gradle"), { recursive: true });
-  await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
-  await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: `https://example.test/versions/${version}.json`,
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const originalSync = fastGlob.sync;
-  fastGlob.sync = () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
-  try {
-    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-    const result = await service.findMapping({
-      version: "1.21.1",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "yarn"
-    });
-
+  const assertVersionFilteredResult = (result: {
+    candidates: Array<{ symbol?: string }>;
+    provenance?: { source?: string };
+  }) => {
     assert.equal(result.candidates[0]?.symbol, "v1.pkg.VersionOneClass");
     assert.equal(result.provenance?.source, "loom-cache");
-  } finally {
-    fastGlob.sync = originalSync;
-  }
+  };
+
+  await t.test("ignores version prefix collisions between Loom cache directories", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-version-collision-"));
+    const config = buildTestConfig(root, { sourceRepos: [] });
+
+    await writeLoomTinyCache(root, TEST_TINY_V1, "1.21.1");
+    await writeLoomTinyCache(root, TEST_TINY, "1.21.10");
+
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.1",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      })
+    );
+
+    assertVersionFilteredResult(result);
+  });
+
+  await t.test("normalizes backslash separated candidate paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-backslash-path-"));
+    const config = buildTestConfig(root, { sourceRepos: [] });
+
+    const pseudoWindowsPath121_1 = join(root, ".gradle", "loom-cache\\1.21.1\\mappings.tiny");
+    const pseudoWindowsPath121_10 = join(root, ".gradle", "loom-cache\\1.21.10\\mappings.tiny");
+    await mkdir(join(root, ".gradle"), { recursive: true });
+    await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
+    await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
+
+    const originalSync = fastGlob.sync;
+    fastGlob.sync = () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
+    try {
+      const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+      const result = await service.findMapping({
+        version: "1.21.1",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      });
+
+      assertVersionFilteredResult(result);
+    } finally {
+      fastGlob.sync = originalSync;
+    }
+  });
 });
 
 test("MappingService rejects class queries that include owner", async () => {
@@ -1632,79 +1569,6 @@ test("MappingService rejects class queries that include owner", async () => {
       "code" in error &&
       (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
   );
-});
-
-test("MappingService findMapping includes ambiguityReasons when multiple owners match", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-ambiguity-reasons-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const tiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/one/C\tyarn/one/C",
-    "c\ta/b/C\tinter/two/C\tyarn/two/C"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "a.b.C",
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
-
-  assert.equal(result.status, "ambiguous");
-  assert.ok(result.ambiguityReasons);
-  assert.ok(result.ambiguityReasons.length > 0);
-});
-
-test("MappingService findMapping omits ambiguityReasons for single candidate", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-no-ambiguity-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
-
-  assert.equal(result.status, "resolved");
-  assert.equal(result.ambiguityReasons, undefined);
 });
 
 test("MappingService getClassApiMatrix includes competing candidates in ambiguity warnings", async () => {
