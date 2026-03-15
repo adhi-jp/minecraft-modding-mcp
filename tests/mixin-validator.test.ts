@@ -327,50 +327,64 @@ test("validateParsedMixin includes parse warnings in output", () => {
 /*  Provenance tests                                                   */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin includes provenance when provided", () => {
-  const parsed = makeParsedMixin();
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-  const provenance: MixinValidationProvenance = {
-    version: "1.21",
-    jarPath: "/path/to/client.jar",
-    requestedMapping: "mojang",
-    mappingApplied: "mojang"
-  };
+test("validateParsedMixin handles representative provenance output", async (t) => {
+  const cases: Array<{
+    name: string;
+    run: () => void;
+  }> = [
+    {
+      name: "includes provenance when provided",
+      run: () => {
+        const parsed = makeParsedMixin();
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
+        const provenance = makeProvenance();
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
-  assert.deepEqual(result.provenance, provenance);
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
+        assert.deepEqual(result.provenance, provenance);
+      }
+    },
+    {
+      name: "omits provenance when not provided",
+      run: () => {
+        const parsed = makeParsedMixin();
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin omits provenance when not provided", () => {
-  const parsed = makeParsedMixin();
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.provenance, undefined);
+      }
+    },
+    {
+      name: "provenance reflects mapping fallback",
+      run: () => {
+        const parsed = makeParsedMixin();
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.provenance, undefined);
-});
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          makeProvenance({ requestedMapping: "yarn", mappingApplied: "obfuscated" })
+        );
+        assert.equal(result.provenance?.requestedMapping, "yarn");
+        assert.equal(result.provenance?.mappingApplied, "obfuscated");
+      }
+    }
+  ];
 
-test("validateParsedMixin provenance reflects mapping fallback", () => {
-  const parsed = makeParsedMixin();
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-  const provenance: MixinValidationProvenance = {
-    version: "1.21",
-    jarPath: "/path/to/client.jar",
-    requestedMapping: "yarn",
-    mappingApplied: "obfuscated"
-  };
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance);
-  assert.equal(result.provenance?.requestedMapping, "yarn");
-  assert.equal(result.provenance?.mappingApplied, "obfuscated");
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      testCase.run();
+    });
+  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -527,104 +541,169 @@ test("validateParsedAccessWidener summary counts", () => {
 /*  resolvedMembers tracking                                           */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin includes resolvedMembers for resolved injection", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
-  ]);
-  const warnings: string[] = [];
+test("validateParsedMixin tracks representative resolvedMembers states", async (t) => {
+  const cases: Array<{
+    name: string;
+    run: () => void;
+  }> = [
+    {
+      name: "includes resolvedMembers for resolved injection",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.ok(result.resolvedMembers);
-  assert.equal(result.resolvedMembers!.length, 1);
-  assert.equal(result.resolvedMembers![0].status, "resolved");
-  assert.equal(result.resolvedMembers![0].resolvedTo, "PlayerEntity#tick");
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.ok(result.resolvedMembers);
+        assert.equal(result.resolvedMembers.length, 1);
+        assert.equal(result.resolvedMembers[0].status, "resolved");
+        assert.equal(result.resolvedMembers[0].resolvedTo, "PlayerEntity#tick");
+      }
+    },
+    {
+      name: "includes resolvedMembers for not-found shadow",
+      run: () => {
+        const parsed = makeParsedMixin({
+          shadows: [{ kind: "field", name: "missing", line: 8 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin includes resolvedMembers for not-found shadow", () => {
-  const parsed = makeParsedMixin({
-    shadows: [{ kind: "field", name: "missing", line: 8 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.ok(result.resolvedMembers);
+        assert.equal(result.resolvedMembers[0].status, "not-found");
+        assert.equal(result.resolvedMembers[0].annotation, "@Shadow");
+      }
+    },
+    {
+      name: "resolvedMembers tracks accessors",
+      run: () => {
+        const parsed = makeParsedMixin({
+          accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.ok(result.resolvedMembers);
-  assert.equal(result.resolvedMembers![0].status, "not-found");
-  assert.equal(result.resolvedMembers![0].annotation, "@Shadow");
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.ok(result.resolvedMembers);
+        assert.equal(result.resolvedMembers[0].status, "resolved");
+        assert.equal(result.resolvedMembers[0].annotation, "@Accessor");
+      }
+    },
+    {
+      name: "omits resolvedMembers when no members to validate",
+      run: () => {
+        const parsed = makeParsedMixin();
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin resolvedMembers tracks accessors", () => {
-  const parsed = makeParsedMixin({
-    accessors: [{ annotation: "Accessor", name: "getHealth", targetName: "health", line: 12 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.resolvedMembers, undefined);
+      }
+    }
+  ];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.ok(result.resolvedMembers);
-  assert.equal(result.resolvedMembers![0].status, "resolved");
-  assert.equal(result.resolvedMembers![0].annotation, "@Accessor");
-});
-
-test("validateParsedMixin omits resolvedMembers when no members to validate", () => {
-  const parsed = makeParsedMixin();
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.resolvedMembers, undefined);
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      testCase.run();
+    });
+  }
 });
 
 /* ------------------------------------------------------------------ */
 /*  target-mapping-failed: mapping failure ≠ target-not-found          */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin reports target-mapping-failed when target is in mappingFailedTargets", () => {
-  const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const warnings: string[] = [];
-  const mappingFailedTargets = new Set(["SomeClass"]);
+test("validateParsedMixin distinguishes mapping-failed and missing targets", async (t) => {
+  const cases: Array<{
+    name: string;
+    run: () => void;
+  }> = [
+    {
+      name: "reports target-mapping-failed when target is in mappingFailedTargets",
+      run: () => {
+        const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
+        const targetMembers = new Map<string, ResolvedTargetMembers>();
+        const warnings: string[] = [];
+        const mappingFailedTargets = new Set(["SomeClass"]);
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].kind, "target-mapping-failed");
-  assert.equal(result.issues[0].severity, "warning");
-  assert.equal(result.issues[0].confidence, "uncertain");
-  assert.equal(result.valid, true); // warning, not error
-});
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          undefined,
+          mappingFailedTargets
+        );
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].kind, "target-mapping-failed");
+        assert.equal(result.issues[0].severity, "warning");
+        assert.equal(result.issues[0].confidence, "uncertain");
+        assert.equal(result.valid, true);
+      }
+    },
+    {
+      name: "reports target-not-found for non-mapping failures",
+      run: () => {
+        const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
+        const targetMembers = new Map<string, ResolvedTargetMembers>();
+        const warnings: string[] = [];
+        const mappingFailedTargets = new Set(["OtherClass"]);
 
-test("validateParsedMixin reports target-not-found for non-mapping failures", () => {
-  const parsed = makeParsedMixin({ targets: [{ className: "MissingClass" }] });
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const warnings: string[] = [];
-  const mappingFailedTargets = new Set(["OtherClass"]);
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          undefined,
+          mappingFailedTargets
+        );
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].kind, "target-not-found");
+        assert.equal(result.issues[0].severity, "error");
+      }
+    },
+    {
+      name: "distinguishes mapping-failed and not-found in same batch",
+      run: () => {
+        const parsed = makeParsedMixin({
+          targets: [{ className: "MappedClass" }, { className: "GoneClass" }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>();
+        const warnings: string[] = [];
+        const mappingFailedTargets = new Set(["MappedClass"]);
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].kind, "target-not-found");
-  assert.equal(result.issues[0].severity, "error");
-});
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          undefined,
+          mappingFailedTargets
+        );
+        assert.equal(result.issues.length, 2);
+        const kinds = result.issues.map((issue) => issue.kind);
+        assert.ok(kinds.includes("target-mapping-failed"));
+        assert.ok(kinds.includes("target-not-found"));
+      }
+    }
+  ];
 
-test("validateParsedMixin distinguishes mapping-failed and not-found in same batch", () => {
-  const parsed = makeParsedMixin({ targets: [{ className: "MappedClass" }, { className: "GoneClass" }] });
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const warnings: string[] = [];
-  const mappingFailedTargets = new Set(["MappedClass"]);
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailedTargets);
-  assert.equal(result.issues.length, 2);
-  const kinds = result.issues.map((i) => i.kind);
-  assert.ok(kinds.includes("target-mapping-failed"));
-  assert.ok(kinds.includes("target-not-found"));
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      testCase.run();
+    });
+  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -978,111 +1057,138 @@ test("validateParsedMixin handles descriptor-bearing and owner-prefixed method r
 /*  Phase 3: @Accessor/@Invoker parse warning escalation               */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin escalates @Accessor parse warning to issue with parse category", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: ["Line 5: Could not parse @Accessor method declaration."]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
+test("validateParsedMixin handles representative parse warning flows", async (t) => {
+  const cases: Array<{
+    name: string;
+    run: () => void;
+  }> = [
+    {
+      name: "escalates @Accessor parse warning to issue with parse category",
+      run: () => {
+        const parsed = makeParsedMixin({
+          parseWarnings: ["Line 5: Could not parse @Accessor method declaration."]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].severity, "warning");
-  assert.equal(result.issues[0].annotation, "@Accessor");
-  assert.equal(result.issues[0].category, "parse");
-  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
-  assert.equal(result.issues[0].falsePositiveRisk, "high");
-  assert.equal(warnings.length, 0);
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].severity, "warning");
+        assert.equal(result.issues[0].annotation, "@Accessor");
+        assert.equal(result.issues[0].category, "parse");
+        assert.equal(result.issues[0].issueOrigin, "parser_limitation");
+        assert.equal(result.issues[0].falsePositiveRisk, "high");
+        assert.equal(warnings.length, 0);
+      }
+    },
+    {
+      name: "escalates @Invoker parse warning to issue with parse category",
+      run: () => {
+        const parsed = makeParsedMixin({
+          parseWarnings: ["Line 8: Could not parse @Invoker method declaration."]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin escalates @Invoker parse warning to issue with parse category", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: ["Line 8: Could not parse @Invoker method declaration."]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].annotation, "@Invoker");
+        assert.equal(result.issues[0].category, "parse");
+        assert.equal(result.issues[0].issueOrigin, "parser_limitation");
+      }
+    },
+    {
+      name: "escalates @Shadow parse warning to issue",
+      run: () => {
+        const parsed = makeParsedMixin({
+          parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].annotation, "@Invoker");
-  assert.equal(result.issues[0].category, "parse");
-  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].severity, "warning");
+        assert.equal(result.issues[0].annotation, "@Shadow");
+        assert.equal(result.issues[0].category, "parse");
+        assert.equal(result.issues[0].issueOrigin, "parser_limitation");
+        assert.equal(result.issues[0].falsePositiveRisk, "high");
+        assert.equal(warnings.length, 0);
+      }
+    },
+    {
+      name: "adds contradiction note when parse fails but same annotation resolves",
+      run: () => {
+        const parsed: ParsedMixin = {
+          className: "TestMixin",
+          targets: [{ className: "PlayerEntity" }],
+          imports: new Map(),
+          injections: [],
+          shadows: [{ kind: "field", name: "health", line: 5 }],
+          accessors: [],
+          parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
+        };
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin escalates @Shadow parse warning to issue", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        const parseIssue = result.issues.find((issue) => issue.category === "parse");
+        assert.ok(parseIssue);
+        assert.ok(
+          parseIssue.message.includes("other members with the same annotation resolved successfully")
+        );
+      }
+    },
+    {
+      name: "summary includes parseWarnings count",
+      run: () => {
+        const parsed = makeParsedMixin({
+          parseWarnings: [
+            "Line 5: Could not parse @Accessor method declaration.",
+            "Line 8: Could not parse @Shadow member declaration."
+          ]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].severity, "warning");
-  assert.equal(result.issues[0].annotation, "@Shadow");
-  assert.equal(result.issues[0].category, "parse");
-  assert.equal(result.issues[0].issueOrigin, "parser_limitation");
-  assert.equal(result.issues[0].falsePositiveRisk, "high");
-  assert.equal(warnings.length, 0);
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.summary.parseWarnings, 2);
+      }
+    },
+    {
+      name: "keeps non-accessor/shadow parse warnings in warnings[]",
+      run: () => {
+        const parsed = makeParsedMixin({
+          parseWarnings: ["Line 3: @Inject missing method attribute."]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", {})]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin adds contradiction note when parse fails but same annotation resolves", () => {
-  const parsed: ParsedMixin = {
-    className: "TestMixin",
-    targets: [{ className: "PlayerEntity" }],
-    imports: new Map(),
-    injections: [],
-    shadows: [{ kind: "field", name: "health", line: 5 }],
-    accessors: [],
-    parseWarnings: ["Line 10: Could not parse @Shadow member declaration."]
-  };
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.issues.length, 0);
+        assert.ok(warnings.some((warning) => warning.includes("@Inject")));
+        assert.equal(result.summary.parseWarnings, 0);
+      }
+    }
+  ];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  // The @Shadow field "health" should resolve, and the parse warning should note the contradiction
-  const parseIssue = result.issues.find((i) => i.category === "parse");
-  assert.ok(parseIssue);
-  assert.ok(parseIssue!.message.includes("other members with the same annotation resolved successfully"));
-});
-
-test("validateParsedMixin summary includes parseWarnings count", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: [
-      "Line 5: Could not parse @Accessor method declaration.",
-      "Line 8: Could not parse @Shadow member declaration."
-    ]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.summary.parseWarnings, 2);
-});
-
-test("validateParsedMixin keeps non-accessor/shadow parse warnings in warnings[]", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: ["Line 3: @Inject missing method attribute."]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", {})]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.issues.length, 0);
-  assert.ok(warnings.some((w) => w.includes("@Inject")));
-  assert.equal(result.summary.parseWarnings, 0);
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      testCase.run();
+    });
+  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -1145,64 +1251,203 @@ test("validateParsedMixin omits structuredWarnings when no warnings", () => {
 /*  Confidence classification tests                                    */
 /* ------------------------------------------------------------------ */
 
-test("validateParsedMixin with definite confidence marks issues as definite", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-  const provenance: MixinValidationProvenance = {
-    version: "1.21",
-    jarPath: "/path/to/client.jar",
-    requestedMapping: "mojang",
-    mappingApplied: "mojang"
-  };
+test("validateParsedMixin handles representative confidence and remap-failed flows", async (t) => {
+  const cases: Array<{
+    name: string;
+    run: () => void;
+  }> = [
+    {
+      name: "with definite confidence marks issues as definite",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, "definite");
-  assert.equal(result.valid, false);
-  assert.equal(result.issues[0].confidence, "definite");
-  assert.equal(result.summary.definiteErrors, 1);
-  assert.equal(result.summary.uncertainErrors, 0);
-});
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          makeProvenance(),
+          "definite"
+        );
+        assert.equal(result.valid, false);
+        assert.equal(result.issues[0].confidence, "definite");
+        assert.equal(result.summary.definiteErrors, 1);
+        assert.equal(result.summary.uncertainErrors, 0);
+      }
+    },
+    {
+      name: "with uncertain confidence marks issues as uncertain",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin with uncertain confidence marks issues as uncertain", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-  const provenance: MixinValidationProvenance = {
-    version: "1.21",
-    jarPath: "/path/to/client.jar",
-    requestedMapping: "yarn",
-    mappingApplied: "obfuscated"
-  };
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          makeProvenance({ requestedMapping: "yarn", mappingApplied: "obfuscated" }),
+          "uncertain"
+        );
+        assert.equal(result.valid, true);
+        assert.equal(result.issues[0].confidence, "uncertain");
+        assert.ok(result.issues[0].confidenceReason?.includes("fallback"));
+        assert.equal(result.summary.definiteErrors, 0);
+        assert.equal(result.summary.uncertainErrors, 1);
+      }
+    },
+    {
+      name: "with likely confidence keeps issue definite-counted",
+      run: () => {
+        const parsed = makeParsedMixin({
+          shadows: [{ kind: "field", name: "noSuchField", line: 8 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
+        ]);
+        const warnings: string[] = [];
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, provenance, "uncertain");
-  assert.equal(result.valid, true); // uncertain errors only => valid
-  assert.equal(result.issues[0].confidence, "uncertain");
-  assert.ok(result.issues[0].confidenceReason?.includes("fallback"));
-  assert.equal(result.summary.definiteErrors, 0);
-  assert.equal(result.summary.uncertainErrors, 1);
-});
+        const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "likely");
+        assert.equal(result.valid, false);
+        assert.equal(result.issues[0].confidence, "likely");
+        assert.equal(result.summary.definiteErrors, 1);
+      }
+    },
+    {
+      name: "without confidence arg defaults to no confidence on issues",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "missing", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
 
-test("validateParsedMixin with likely confidence", () => {
-  const parsed = makeParsedMixin({
-    shadows: [{ kind: "field", name: "noSuchField", line: 8 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { fields: ["health"] })]
-  ]);
-  const warnings: string[] = [];
+        const result = validateParsedMixin(parsed, targetMembers, warnings);
+        assert.equal(result.issues[0].confidence, undefined);
+        assert.equal(result.summary.definiteErrors, 1);
+        assert.equal(result.summary.uncertainErrors, 0);
+      }
+    },
+    {
+      name: "downgrades confidence to uncertain for remap-failed members",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "obfuscatedName", line: 5 }],
+          shadows: [{ kind: "field", name: "obfField", line: 10 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"], fields: ["health"] })]
+        ]);
+        const warnings: string[] = [];
+        const remapFailedMembers = new Map<string, Set<string>>([
+          ["PlayerEntity", new Set(["obfuscatedName", "obfField"])]
+        ]);
 
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "likely");
-  assert.equal(result.valid, false); // likely is not uncertain, so definiteError
-  assert.equal(result.issues[0].confidence, "likely");
-  assert.equal(result.summary.definiteErrors, 1);
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          "definite",
+          undefined,
+          false,
+          remapFailedMembers
+        );
+
+        assert.equal(result.issues.length, 2);
+        for (const issue of result.issues) {
+          assert.equal(issue.confidence, "uncertain");
+          assert.ok(issue.confidenceReason?.includes("remap artifact"));
+          assert.equal(issue.resolutionPath, "member-remap-failed");
+        }
+        assert.equal(result.summary.uncertainErrors, 2);
+        assert.equal(result.summary.definiteErrors, 0);
+      }
+    },
+    {
+      name: "keeps definite confidence for non-remap-failed members",
+      run: () => {
+        const parsed = makeParsedMixin({
+          injections: [{ annotation: "Inject", method: "trulyMissing", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+        ]);
+        const warnings: string[] = [];
+        const remapFailedMembers = new Map<string, Set<string>>([
+          ["PlayerEntity", new Set(["otherMethod"])]
+        ]);
+
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          "definite",
+          undefined,
+          false,
+          remapFailedMembers
+        );
+        assert.equal(result.issues.length, 1);
+        assert.equal(result.issues[0].confidence, "definite");
+        assert.equal(result.issues[0].resolutionPath, undefined);
+      }
+    },
+    {
+      name: "applies remap-failed downgrade per target only",
+      run: () => {
+        const parsed = makeParsedMixin({
+          targets: [{ className: "PlayerEntity" }, { className: "MobEntity" }],
+          injections: [{ annotation: "Inject", method: "missingMethod", line: 5 }]
+        });
+        const targetMembers = new Map<string, ResolvedTargetMembers>([
+          ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })],
+          ["MobEntity", makeTargetMembers("MobEntity", { methods: ["move"] })]
+        ]);
+        const warnings: string[] = [];
+        const remapFailedMembers = new Map<string, Set<string>>([
+          ["PlayerEntity", new Set(["missingMethod"])]
+        ]);
+
+        const result = validateParsedMixin(
+          parsed,
+          targetMembers,
+          warnings,
+          undefined,
+          "definite",
+          undefined,
+          false,
+          remapFailedMembers
+        );
+        assert.equal(result.issues.length, 2);
+
+        const playerIssue = result.issues.find((issue) => issue.target.startsWith("PlayerEntity#"));
+        const mobIssue = result.issues.find((issue) => issue.target.startsWith("MobEntity#"));
+
+        assert.equal(playerIssue?.confidence, "uncertain");
+        assert.equal(playerIssue?.resolutionPath, "member-remap-failed");
+        assert.equal(mobIssue?.confidence, "definite");
+        assert.equal(mobIssue?.resolutionPath, undefined);
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      testCase.run();
+    });
+  }
 });
 
 test("validateParsedMixin provenance supports enriched fields", () => {
@@ -1227,21 +1472,6 @@ test("validateParsedMixin provenance supports enriched fields", () => {
   assert.equal(result.provenance?.remapFailures, 3);
 });
 
-test("validateParsedMixin without confidence arg defaults to no confidence on issues", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "missing", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.equal(result.issues[0].confidence, undefined);
-  assert.equal(result.summary.definiteErrors, 1); // undefined confidence counts as definite
-  assert.equal(result.summary.uncertainErrors, 0);
-});
-
 /* ------------------------------------------------------------------ */
 /*  unfilteredSummary type support                                     */
 /* ------------------------------------------------------------------ */
@@ -1264,77 +1494,6 @@ test("validateParsedMixin result supports unfilteredSummary field", () => {
 /* ------------------------------------------------------------------ */
 /*  P2: remap-failed false positive fix                                */
 /* ------------------------------------------------------------------ */
-
-test("validateParsedMixin downgrades confidence to uncertain for remap-failed members", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "obfuscatedName", line: 5 }],
-    shadows: [{ kind: "field", name: "obfField", line: 10 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick", "attack"], fields: ["health"] })]
-  ]);
-  const warnings: string[] = [];
-  const remapFailedMembers = new Map<string, Set<string>>([
-    ["PlayerEntity", new Set(["obfuscatedName", "obfField"])]
-  ]);
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
-
-  // Both issues should be downgraded to uncertain due to remap failure
-  assert.equal(result.issues.length, 2);
-  for (const issue of result.issues) {
-    assert.equal(issue.confidence, "uncertain");
-    assert.ok(issue.confidenceReason?.includes("remap artifact"));
-    assert.equal(issue.resolutionPath, "member-remap-failed");
-  }
-  assert.equal(result.summary.uncertainErrors, 2);
-  assert.equal(result.summary.definiteErrors, 0);
-});
-
-test("validateParsedMixin keeps definite confidence for non-remap-failed members", () => {
-  const parsed = makeParsedMixin({
-    injections: [{ annotation: "Inject", method: "trulyMissing", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
-  ]);
-  const warnings: string[] = [];
-  // remapFailedMembers has a different name — not the one in the injection
-  const remapFailedMembers = new Map<string, Set<string>>([
-    ["PlayerEntity", new Set(["otherMethod"])]
-  ]);
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
-  assert.equal(result.issues.length, 1);
-  assert.equal(result.issues[0].confidence, "definite");
-  assert.equal(result.issues[0].resolutionPath, undefined);
-});
-
-test("validateParsedMixin applies remap-failed downgrade per target only", () => {
-  const parsed = makeParsedMixin({
-    targets: [{ className: "PlayerEntity" }, { className: "MobEntity" }],
-    injections: [{ annotation: "Inject", method: "missingMethod", line: 5 }]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })],
-    ["MobEntity", makeTargetMembers("MobEntity", { methods: ["move"] })]
-  ]);
-  const warnings: string[] = [];
-  const remapFailedMembers = new Map<string, Set<string>>([
-    ["PlayerEntity", new Set(["missingMethod"])]
-  ]);
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, "definite", undefined, false, remapFailedMembers);
-  assert.equal(result.issues.length, 2);
-
-  const playerIssue = result.issues.find((i) => i.target.startsWith("PlayerEntity#"));
-  const mobIssue = result.issues.find((i) => i.target.startsWith("MobEntity#"));
-
-  assert.equal(playerIssue?.confidence, "uncertain");
-  assert.equal(playerIssue?.resolutionPath, "member-remap-failed");
-  assert.equal(mobIssue?.confidence, "definite");
-  assert.equal(mobIssue?.resolutionPath, undefined);
-});
 
 /* ------------------------------------------------------------------ */
 /*  P3: resolutionPath values                                          */
