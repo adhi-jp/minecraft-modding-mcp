@@ -6205,83 +6205,124 @@ test("B2/B3: resolveArtifact preserves representative suggestedCall hint variant
 // ---------------------------------------------------------------------------
 // B1: CLASS_NOT_FOUND includes scope, target context, and retry hints
 // ---------------------------------------------------------------------------
-test("B1: getClassSource CLASS_NOT_FOUND includes scope and target context", async () => {
+test("B1: getClassSource CLASS_NOT_FOUND preserves representative context details", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b1-class-"));
-  const binaryJarPath = join(root, "server-b1.jar");
-  const sourcesJarPath = join(root, "server-b1-sources.jar");
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
-  });
+  type ClassNotFoundFixture = {
+    root: string;
+    binaryJarPath: string;
+    service: InstanceType<typeof SourceService>;
+  };
 
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
+  async function createClassNotFoundFixture(input: {
+    rootPrefix: string;
+    binaryJarName: string;
+    binaryEntries: Record<string, Buffer>;
+    sourceEntries: Record<string, string>;
+  }): Promise<ClassNotFoundFixture> {
+    const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+    const binaryJarPath = join(root, input.binaryJarName);
+    const sourcesJarPath = join(root, input.binaryJarName.replace(/\.jar$/, "-sources.jar"));
+    await createJar(binaryJarPath, input.binaryEntries);
+    await createJar(sourcesJarPath, input.sourceEntries);
 
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        artifactId: resolved.artifactId,
-        className: "net.minecraft.world.level.block.Blocks",
-        mode: "full"
-      }),
-    (error: unknown) => {
+    return {
+      root,
+      binaryJarPath,
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
+
+  async function expectClassNotFound(
+    action: () => Promise<unknown>,
+    verify: (details: Record<string, unknown>) => void
+  ): Promise<void> {
+    await assert.rejects(action, (error: unknown) => {
       if (typeof error !== "object" || error === null || !("code" in error)) return false;
       if ((error as { code: string }).code !== ERROR_CODES.CLASS_NOT_FOUND) return false;
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.artifactId === resolved.artifactId &&
-        details.mapping === "obfuscated" &&
-        typeof details.nextAction === "string" &&
-        details.suggestedCall != null
-      );
+      verify((error as { details?: Record<string, unknown> }).details ?? {});
+      return true;
+    });
+  }
+
+  const cases: Array<{
+    name: string;
+    createFixture: () => Promise<ClassNotFoundFixture>;
+    run: (fixture: ClassNotFoundFixture) => Promise<void>;
+  }> = [
+    {
+      name: "includes scope-independent artifact context and retry hints",
+      createFixture: () =>
+        createClassNotFoundFixture({
+          rootPrefix: "service-b1-class-",
+          binaryJarName: "server-b1.jar",
+          binaryEntries: {
+            "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+          },
+          sourceEntries: {
+            "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
+          }
+        }),
+      run: async ({ binaryJarPath, service }) => {
+        const resolved = await service.resolveArtifact({
+          target: { kind: "jar", value: binaryJarPath },
+          mapping: "obfuscated"
+        });
+
+        await expectClassNotFound(
+          () =>
+            service.getClassSource({
+              artifactId: resolved.artifactId,
+              className: "net.minecraft.world.level.block.Blocks",
+              mode: "full"
+            }),
+          (details) => {
+            assert.equal(details.artifactId, resolved.artifactId);
+            assert.equal(details.mapping, "obfuscated");
+            assert.equal(typeof details.nextAction, "string");
+            assert.ok(details.suggestedCall != null);
+          }
+        );
+      }
+    },
+    {
+      name: "includes target scope and explicit target coordinates",
+      createFixture: () =>
+        createClassNotFoundFixture({
+          rootPrefix: "service-b1-target-",
+          binaryJarName: "server-b1t.jar",
+          binaryEntries: {
+            "com/example/Existing.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+          },
+          sourceEntries: {
+            "com/example/Existing.java": "package com.example;\npublic class Existing {}"
+          }
+        }),
+      run: async ({ binaryJarPath, service }) => {
+        await expectClassNotFound(
+          () =>
+            service.getClassSource({
+              target: { kind: "jar", value: binaryJarPath },
+              className: "com.example.Missing",
+              scope: "vanilla",
+              mode: "full"
+            } as any),
+          (details) => {
+            assert.equal(details.scope, "vanilla");
+            assert.equal(details.targetKind, "jar");
+            assert.equal(details.targetValue, binaryJarPath);
+          }
+        );
+      }
     }
-  );
-});
+  ];
 
-// ---------------------------------------------------------------------------
-// B1: CLASS_NOT_FOUND with target includes scope and targetKind
-// ---------------------------------------------------------------------------
-test("B1: getClassSource CLASS_NOT_FOUND with target includes scope/targetKind/targetValue", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b1-target-"));
-  const binaryJarPath = join(root, "server-b1t.jar");
-  const sourcesJarPath = join(root, "server-b1t-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "com/example/Existing.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "com/example/Existing.java": "package com.example;\npublic class Existing {}"
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        target: { kind: "jar", value: binaryJarPath },
-        className: "com.example.Missing",
-        scope: "vanilla",
-        mode: "full"
-      } as any),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) return false;
-      if ((error as { code: string }).code !== ERROR_CODES.CLASS_NOT_FOUND) return false;
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.scope === "vanilla" &&
-        details.targetKind === "jar" &&
-        details.targetValue === binaryJarPath
-      );
-    }
-  );
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fixture = await testCase.createFixture();
+      await testCase.run(fixture);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
