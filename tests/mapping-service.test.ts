@@ -6,6 +6,7 @@ import test from "node:test";
 import fastGlob from "fast-glob";
 
 import { ERROR_CODES } from "../src/errors.ts";
+import type { MappingService as MappingServiceType } from "../src/mapping-service.ts";
 import type { Config, SourceMapping } from "../src/types.ts";
 import { createJar } from "./helpers/zip.ts";
 
@@ -89,6 +90,20 @@ async function writeLoomTinyCache(root: string, tiny: string, version = "1.21.10
   await mkdir(join(root, ".gradle", "loom-cache", version), { recursive: true });
   await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
   return loomTinyPath;
+}
+
+async function createLoomService(
+  prefix: string,
+  tiny: string
+): Promise<{ root: string; service: MappingServiceType }> {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  await writeLoomTinyCache(root, tiny);
+  return {
+    root,
+    service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
+  };
 }
 
 type SymbolQueryInput = {
@@ -652,16 +667,6 @@ test("MappingService returns identity candidate when source/target mapping are e
 test("MappingService resolveMethodMappingExact resolves representative exact lookup backends", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
 
-  const createLoomService = async (prefix: string, tiny: string) => {
-    const root = await mkdtemp(join(tmpdir(), prefix));
-    const config = buildTestConfig(root, { sourceRepos: [] });
-    await writeLoomTinyCache(root, tiny);
-    return {
-      root,
-      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
-    };
-  };
-
   await t.test("preserves descriptor path through tiny mappings", async () => {
     const { root, service } = await createLoomService("mapping-service-method-exact-", TEST_TINY);
     const result = await withCwd(root, () =>
@@ -754,18 +759,6 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
 });
 
 test("MappingService resolveMethodMappingExact reports representative unresolved result states", async (t) => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-
-  const createLoomService = async (prefix: string, tiny: string) => {
-    const root = await mkdtemp(join(tmpdir(), prefix));
-    const config = buildTestConfig(root, { sourceRepos: [] });
-    await writeLoomTinyCache(root, tiny);
-    return {
-      root,
-      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
-    };
-  };
-
   await t.test("returns explicit not_found for misses", async () => {
     const { root, service } = await createLoomService("mapping-service-method-exact-miss-", TEST_TINY);
     const result = await withCwd(root, () =>
@@ -1259,18 +1252,6 @@ test("MappingService returns ambiguous for short class names when multiple FQCNs
 });
 
 test("MappingService findMapping handles representative ambiguity metadata flows", async (t) => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-
-  const createLoomService = async (prefix: string, tiny: string) => {
-    const root = await mkdtemp(join(tmpdir(), prefix));
-    const config = buildTestConfig(root, { sourceRepos: [] });
-    await writeLoomTinyCache(root, tiny);
-    return {
-      root,
-      service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
-    };
-  };
-
   await t.test("includes ambiguityReasons and warning when multiple owners match", async () => {
     const { root, service } = await createLoomService(
       "mapping-service-ambiguity-reasons-",
