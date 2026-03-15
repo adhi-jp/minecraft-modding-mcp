@@ -5937,167 +5937,184 @@ test("SourceService resolveArtifact returns undefined sampleEntries for decompil
 });
 
 // ---------------------------------------------------------------------------
-// B2: suggestedCall preserves scope in MAPPING_NOT_APPLIED errors
+// B2/B3: resolveArtifact suggestedCall preserves representative scope/mapping hints
 // ---------------------------------------------------------------------------
-test("B2: resolveArtifact preserves scope in suggestedCall when mapping fails", async () => {
+test("B2/B3: resolveArtifact preserves representative suggestedCall hint variants", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b2-scope-"));
-  const binaryJarPath = join(root, "server-b2.jar");
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
+  type ResolveArtifactHintFixture = {
+    root: string;
+    jarPath: string;
+    service: InstanceType<typeof SourceService>;
+  };
 
-  const service = new SourceService(buildTestConfig(root));
+  async function createResolveArtifactHintFixture(input: {
+    rootPrefix: string;
+    jarName: string;
+    jarEntries: Record<string, string | Buffer>;
+  }): Promise<ResolveArtifactHintFixture> {
+    const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+    const jarPath = join(root, input.jarName);
+    await createJar(jarPath, input.jarEntries);
 
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: binaryJarPath },
-        mapping: "mojang",
-        scope: "vanilla",
-        allowDecompile: false
-      } as any),
-    (error: unknown) => {
+    return {
+      root,
+      jarPath,
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
+
+  async function expectMappingNotApplied(
+    action: () => Promise<unknown>,
+    verify: (details: Record<string, unknown>, suggested: { tool: string; params: Record<string, unknown> }) => void
+  ): Promise<void> {
+    await assert.rejects(action, (error: unknown) => {
       if (typeof error !== "object" || error === null || !("code" in error)) return false;
       if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
       const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
-      return (
-        suggested != null &&
-        suggested.params.scope === "vanilla"
-      );
+      const suggested = details.suggestedCall as
+        | { tool: string; params: Record<string, unknown> }
+        | undefined;
+      assert.ok(suggested != null);
+      verify(details, suggested);
+      return true;
+    });
+  }
+
+  const cases: Array<{
+    name: string;
+    createFixture: () => Promise<ResolveArtifactHintFixture>;
+    run: (fixture: ResolveArtifactHintFixture) => Promise<void>;
+  }> = [
+    {
+      name: "preserves scope in suggestedCall when mapping fails",
+      createFixture: () =>
+        createResolveArtifactHintFixture({
+          rootPrefix: "service-b2-scope-",
+          jarName: "server-b2.jar",
+          jarEntries: {
+            "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+          }
+        }),
+      run: async ({ jarPath, service }) => {
+        await expectMappingNotApplied(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "jar", value: jarPath },
+              mapping: "mojang",
+              scope: "vanilla",
+              allowDecompile: false
+            } as any),
+          (_details, suggested) => {
+            assert.equal(suggested.params.scope, "vanilla");
+          }
+        );
+      }
+    },
+    {
+      name: "preserves scope in intermediary no-version suggestedCall",
+      createFixture: () =>
+        createResolveArtifactHintFixture({
+          rootPrefix: "service-b2-intermediary-",
+          jarName: "demo-sources.jar",
+          jarEntries: {
+            "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+          }
+        }),
+      run: async ({ jarPath, service }) => {
+        await expectMappingNotApplied(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "jar", value: jarPath },
+              mapping: "intermediary",
+              scope: "merged"
+            } as any),
+          (_details, suggested) => {
+            assert.equal(suggested.params.scope, "merged");
+            assert.equal(typeof suggested.params.target, "object");
+            assert.equal((suggested.params.target as { kind?: string }).kind, "version");
+            assert.equal("targetKind" in suggested.params, false);
+            assert.equal("targetValue" in suggested.params, false);
+          }
+        );
+      }
+    },
+    {
+      name: "vanilla+mojang with projectPath suggests scope=merged",
+      createFixture: () =>
+        createResolveArtifactHintFixture({
+          rootPrefix: "service-b3-vanilla-mojang-",
+          jarName: "server-b3.jar",
+          jarEntries: {
+            "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+          }
+        }),
+      run: async ({ root, jarPath, service }) => {
+        await expectMappingNotApplied(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "jar", value: jarPath },
+              mapping: "mojang",
+              scope: "vanilla",
+              projectPath: root,
+              allowDecompile: false
+            } as any),
+          (details, suggested) => {
+            assert.equal(suggested.params.scope, "merged");
+            assert.equal(suggested.params.mapping, "mojang");
+            assert.equal(typeof suggested.params.target, "object");
+            assert.equal((suggested.params.target as { kind?: string; value?: string }).kind, "jar");
+            assert.equal((suggested.params.target as { kind?: string; value?: string }).value, jarPath);
+            assert.equal("targetKind" in suggested.params, false);
+            assert.equal("targetValue" in suggested.params, false);
+            assert.equal(typeof suggested.params.projectPath, "string");
+            assert.equal(typeof details.nextAction, "string");
+            assert.match(details.nextAction as string, /scope=vanilla blocks Loom/);
+          }
+        );
+      }
+    },
+    {
+      name: "vanilla+mojang without projectPath suggests mapping=obfuscated",
+      createFixture: () =>
+        createResolveArtifactHintFixture({
+          rootPrefix: "service-b3-no-project-",
+          jarName: "server-b3np.jar",
+          jarEntries: {
+            "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+          }
+        }),
+      run: async ({ jarPath, service }) => {
+        await expectMappingNotApplied(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "jar", value: jarPath },
+              mapping: "mojang",
+              scope: "vanilla",
+              allowDecompile: false
+            } as any),
+          (details, suggested) => {
+            assert.equal(suggested.params.mapping, "obfuscated");
+            assert.equal(suggested.params.scope, "vanilla");
+            assert.equal(typeof suggested.params.target, "object");
+            assert.equal((suggested.params.target as { kind?: string; value?: string }).kind, "jar");
+            assert.equal((suggested.params.target as { kind?: string; value?: string }).value, jarPath);
+            assert.equal("targetKind" in suggested.params, false);
+            assert.equal("targetValue" in suggested.params, false);
+            assert.equal(typeof details.nextAction, "string");
+            assert.match(details.nextAction as string, /mapping=obfuscated/);
+          }
+        );
+      }
     }
-  );
-});
+  ];
 
-// ---------------------------------------------------------------------------
-// B2: suggestedCall preserves scope in intermediary/yarn no-version error
-// ---------------------------------------------------------------------------
-test("B2: resolveArtifact preserves scope in intermediary no-version suggestedCall", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b2-intermediary-"));
-  const sourceJarPath = join(root, "demo-sources.jar");
-
-  await createJar(sourceJarPath, {
-    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: sourceJarPath },
-        mapping: "intermediary",
-        scope: "merged"
-      } as any),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) return false;
-      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
-      return (
-        suggested != null &&
-        suggested.params.scope === "merged" &&
-        typeof suggested.params.target === "object" &&
-        suggested.params.target !== null &&
-        (suggested.params.target as { kind?: string }).kind === "version" &&
-        !("targetKind" in suggested.params) &&
-        !("targetValue" in suggested.params)
-      );
-    }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// B3: vanilla + mojang error suggests scope=merged when projectPath present
-// ---------------------------------------------------------------------------
-test("B3: resolveArtifact vanilla+mojang with projectPath suggests scope=merged", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b3-vanilla-mojang-"));
-  const binaryJarPath = join(root, "server-b3.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: binaryJarPath },
-        mapping: "mojang",
-        scope: "vanilla",
-        projectPath: root,
-        allowDecompile: false
-      } as any),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) return false;
-      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
-      return (
-        suggested != null &&
-        suggested.params.scope === "merged" &&
-        suggested.params.mapping === "mojang" &&
-        typeof suggested.params.target === "object" &&
-        suggested.params.target !== null &&
-        (suggested.params.target as { kind?: string; value?: string }).kind === "jar" &&
-        (suggested.params.target as { kind?: string; value?: string }).value === binaryJarPath &&
-        !("targetKind" in suggested.params) &&
-        !("targetValue" in suggested.params) &&
-        typeof suggested.params.projectPath === "string" &&
-        typeof details.nextAction === "string" &&
-        (details.nextAction as string).includes("scope=vanilla blocks Loom")
-      );
-    }
-  );
-});
-
-// ---------------------------------------------------------------------------
-// B3: vanilla + mojang without projectPath suggests mapping=obfuscated
-// ---------------------------------------------------------------------------
-test("B3: resolveArtifact vanilla+mojang without projectPath suggests mapping=obfuscated", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b3-no-project-"));
-  const binaryJarPath = join(root, "server-b3np.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: binaryJarPath },
-        mapping: "mojang",
-        scope: "vanilla",
-        allowDecompile: false
-      } as any),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) return false;
-      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      const suggested = details.suggestedCall as { tool: string; params: Record<string, unknown> } | undefined;
-      return (
-        suggested != null &&
-        suggested.params.mapping === "obfuscated" &&
-        suggested.params.scope === "vanilla" &&
-        typeof suggested.params.target === "object" &&
-        suggested.params.target !== null &&
-        (suggested.params.target as { kind?: string; value?: string }).kind === "jar" &&
-        (suggested.params.target as { kind?: string; value?: string }).value === binaryJarPath &&
-        !("targetKind" in suggested.params) &&
-        !("targetValue" in suggested.params) &&
-        typeof details.nextAction === "string" &&
-        (details.nextAction as string).includes("mapping=obfuscated")
-      );
-    }
-  );
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fixture = await testCase.createFixture();
+      await testCase.run(fixture);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
