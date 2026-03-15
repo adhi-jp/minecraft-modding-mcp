@@ -700,72 +700,116 @@ test("SourceService getClassSource falls back to sibling binary artifact when so
   assert.ok(source.warnings.some((warning) => warning.includes("Falling back to binary artifact")));
 });
 
-test("SourceService targetKind=jar does not adopt unrelated *-sources.jar files", async () => {
+test("SourceService targetKind=jar handles representative sibling sources-jar adoption rules", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-jar-unrelated-sources-"));
-  const binaryJarPath = join(root, "a.jar");
-  const unrelatedSourcesJarPath = join(root, "b-sources.jar");
 
-  await createJar(binaryJarPath, {
-    "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(unrelatedSourcesJarPath, {
-    "com/example/B.java": [
-      "package com.example;",
-      "public class B {}"
-    ].join("\n")
-  });
+  type JarSiblingFixture = {
+    binaryJarPath: string;
+    root: string;
+    service: InstanceType<typeof SourceService>;
+  };
 
-  const service = new SourceService(buildTestConfig(root));
+  async function createJarSiblingFixture(input: {
+    rootPrefix: string;
+    extraSourcesJars: Array<{ fileName: string; entries: Record<string, string> }>;
+  }): Promise<JarSiblingFixture> {
+    const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+    const binaryJarPath = join(root, "a.jar");
+    await createJar(binaryJarPath, {
+      "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    });
 
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: binaryJarPath },
-        allowDecompile: false
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
-      );
+    for (const sourceJar of input.extraSourcesJars) {
+      await createJar(join(root, sourceJar.fileName), sourceJar.entries);
     }
-  );
-});
 
-test("SourceService targetKind=jar only adopts <basename>-sources.jar", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-jar-exact-sources-"));
-  const binaryJarPath = join(root, "a.jar");
-  const exactSourcesJarPath = join(root, "a-sources.jar");
-  const unrelatedSourcesJarPath = join(root, "b-sources.jar");
+    return {
+      binaryJarPath,
+      root,
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
 
-  await createJar(binaryJarPath, {
-    "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(exactSourcesJarPath, {
-    "com/example/A.java": [
-      "package com.example;",
-      "public class A {}"
-    ].join("\n")
-  });
-  await createJar(unrelatedSourcesJarPath, {
-    "com/example/B.java": [
-      "package com.example;",
-      "public class B {}"
-    ].join("\n")
-  });
+  const cases: Array<{
+    name: string;
+    createFixture: () => Promise<JarSiblingFixture>;
+    run: (fixture: JarSiblingFixture) => Promise<void>;
+  }> = [
+    {
+      name: "does not adopt unrelated *-sources.jar files",
+      createFixture: () =>
+        createJarSiblingFixture({
+          rootPrefix: "service-jar-unrelated-sources-",
+          extraSourcesJars: [
+            {
+              fileName: "b-sources.jar",
+              entries: {
+                "com/example/B.java": [
+                  "package com.example;",
+                  "public class B {}"
+                ].join("\n")
+              }
+            }
+          ]
+        }),
+      run: async ({ binaryJarPath, service }) => {
+        await assert.rejects(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "jar", value: binaryJarPath },
+              allowDecompile: false
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
+        );
+      }
+    },
+    {
+      name: "only adopts <basename>-sources.jar",
+      createFixture: () =>
+        createJarSiblingFixture({
+          rootPrefix: "service-jar-exact-sources-",
+          extraSourcesJars: [
+            {
+              fileName: "a-sources.jar",
+              entries: {
+                "com/example/A.java": [
+                  "package com.example;",
+                  "public class A {}"
+                ].join("\n")
+              }
+            },
+            {
+              fileName: "b-sources.jar",
+              entries: {
+                "com/example/B.java": [
+                  "package com.example;",
+                  "public class B {}"
+                ].join("\n")
+              }
+            }
+          ]
+        }),
+      run: async ({ binaryJarPath, root, service }) => {
+        const resolved = await service.resolveArtifact({
+          target: { kind: "jar", value: binaryJarPath }
+        });
 
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath }
-  });
+        assert.equal(resolved.origin, "local-jar");
+        assert.equal(resolved.isDecompiled, false);
+        assert.equal(resolved.resolvedSourceJarPath, join(root, "a-sources.jar"));
+      }
+    }
+  ];
 
-  assert.equal(resolved.origin, "local-jar");
-  assert.equal(resolved.isDecompiled, false);
-  assert.equal(resolved.resolvedSourceJarPath, exactSourcesJarPath);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run(await testCase.createFixture());
+    });
+  }
 });
 
 test("SourceService mod APIs align missing-jar existence errors with analyze-mod-jar", async () => {
@@ -1922,176 +1966,200 @@ test("SourceService findClass warns when obfuscated mapping is queried with deob
   assert.ok(result.warnings.some((warning) => warning.includes("mapping=\"mojang\"")));
 });
 
-test("SourceService rejects invalid class source line range", async () => {
+test("SourceService getClassSource rejects representative invalid input combinations", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-range-invalid-"));
-  const binaryJarPath = join(root, "server-4.0.0.jar");
-  const sourcesJarPath = join(root, "server-4.0.0-sources.jar");
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
-  });
+  type ClassSourceInvalidFixture = {
+    binaryJarPath: string;
+    resolvedArtifactId: string;
+    service: InstanceType<typeof SourceService>;
+  };
 
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath }
-  });
+  async function createClassSourceInvalidFixture(rootPrefix: string): Promise<ClassSourceInvalidFixture> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const binaryJarPath = join(root, "server.jar");
+    const sourcesJarPath = join(root, "server-sources.jar");
 
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        artifactId: resolved.artifactId,
-        className: "net.minecraft.server.Main",
-        startLine: 10,
-        endLine: 2
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_LINE_RANGE
-      );
+    await createJar(binaryJarPath, {
+      "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    });
+    await createJar(sourcesJarPath, {
+      "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
+    });
+
+    const service = new SourceService(buildTestConfig(root));
+    const resolved = await service.resolveArtifact({
+      target: { kind: "jar", value: binaryJarPath }
+    });
+
+    return {
+      binaryJarPath,
+      resolvedArtifactId: resolved.artifactId,
+      service
+    };
+  }
+
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    run: (fixture: ClassSourceInvalidFixture) => Promise<void>;
+  }> = [
+    {
+      name: "rejects invalid class source line range",
+      rootPrefix: "service-range-invalid-",
+      run: async ({ resolvedArtifactId, service }) => {
+        await assert.rejects(
+          () =>
+            service.getClassSource({
+              artifactId: resolvedArtifactId,
+              className: "net.minecraft.server.Main",
+              startLine: 10,
+              endLine: 2
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.INVALID_LINE_RANGE
+        );
+      }
+    },
+    {
+      name: "rejects getClassSource when artifactId and target are both provided",
+      rootPrefix: "service-class-source-exclusive-",
+      run: async ({ binaryJarPath, resolvedArtifactId, service }) => {
+        await assert.rejects(
+          () =>
+            service.getClassSource({
+              artifactId: resolvedArtifactId,
+              target: {
+                kind: "jar",
+                value: binaryJarPath
+              },
+              className: "net.minecraft.server.Main"
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+        );
+      }
     }
-  );
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run(await createClassSourceInvalidFixture(testCase.rootPrefix));
+    });
+  }
 });
 
-test("SourceService rejects getClassSource when artifactId and target are both provided", async () => {
+test("SourceService getClassMembers rejects representative unresolved preconditions", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-class-source-exclusive-"));
-  const binaryJarPath = join(root, "server-exclusive.jar");
-  const sourcesJarPath = join(root, "server-exclusive-sources.jar");
 
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
-  });
+  const cases: Array<{
+    name: string;
+    run: () => Promise<void>;
+  }> = [
+    {
+      name: "rejects non-obfuscated mapping without version",
+      run: async () => {
+        const root = await mkdtemp(join(tmpdir(), "service-members-map-"));
+        const binaryJarPath = join(root, "server-members.jar");
+        const sourcesJarPath = join(root, "server-members-sources.jar");
 
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath }
-  });
+        await createJar(binaryJarPath, {
+          "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+        });
+        await createJar(sourcesJarPath, {
+          "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
+        });
 
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        artifactId: resolved.artifactId,
-        target: {
-          kind: "jar",
-          value: binaryJarPath
-        },
-        className: "net.minecraft.server.Main"
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
+        const service = new SourceService(buildTestConfig(root));
+        const resolved = await service.resolveArtifact({
+          target: {
+            kind: "jar",
+            value: binaryJarPath
+          }
+        });
+
+        await assert.rejects(
+          () =>
+            (service as unknown as {
+              getClassMembers: (input: {
+                artifactId: string;
+                className: string;
+                mapping: "mojang";
+              }) => Promise<unknown>;
+            }).getClassMembers({
+              artifactId: resolved.artifactId,
+              className: "net.minecraft.server.Main",
+              mapping: "mojang"
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
+        );
+      }
+    },
+    {
+      name: "rejects source-only artifacts without binary jar",
+      run: async () => {
+        const root = await mkdtemp(join(tmpdir(), "service-members-source-only-"));
+        const coordinate = "com.example:demo:1.0.0";
+        const sourceJarPath = join(
+          root,
+          "m2",
+          "com",
+          "example",
+          "demo",
+          "1.0.0",
+          "demo-1.0.0-sources.jar"
+        );
+        await createJar(sourceJarPath, {
+          "com/example/Demo.java": [
+            "package com.example;",
+            "public class Demo {}"
+          ].join("\n")
+        });
+
+        const service = new SourceService(buildTestConfig(root));
+        const resolved = await service.resolveArtifact({
+          target: {
+            kind: "coordinate",
+            value: coordinate
+          }
+        });
+
+        await assert.rejects(
+          () =>
+            (service as unknown as {
+              getClassMembers: (input: {
+                artifactId: string;
+                className: string;
+              }) => Promise<unknown>;
+            }).getClassMembers({
+              artifactId: resolved.artifactId,
+              className: "com.example.Demo"
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
+        );
+      }
     }
-  );
-});
+  ];
 
-test("SourceService getClassMembers rejects non-obfuscated mapping without version", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-members-map-"));
-  const binaryJarPath = join(root, "server-members.jar");
-  const sourcesJarPath = join(root, "server-members-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: {
-      kind: "jar",
-      value: binaryJarPath
-    }
-  });
-
-  // Artifact from jar has no version, so non-obfuscated mapping should fail with MAPPING_NOT_APPLIED
-  await assert.rejects(
-    () =>
-      (service as unknown as {
-        getClassMembers: (input: {
-          artifactId: string;
-          className: string;
-          mapping: "mojang";
-        }) => Promise<unknown>;
-      }).getClassMembers({
-        artifactId: resolved.artifactId,
-        className: "net.minecraft.server.Main",
-        mapping: "mojang"
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
-      );
-    }
-  );
-});
-
-test("SourceService getClassMembers rejects source-only artifacts without binary jar", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-members-source-only-"));
-  const coordinate = "com.example:demo:1.0.0";
-  const sourceJarPath = join(
-    root,
-    "m2",
-    "com",
-    "example",
-    "demo",
-    "1.0.0",
-    "demo-1.0.0-sources.jar"
-  );
-  await createJar(sourceJarPath, {
-    "com/example/Demo.java": [
-      "package com.example;",
-      "public class Demo {}"
-    ].join("\n")
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: {
-      kind: "coordinate",
-      value: coordinate
-    }
-  });
-
-  await assert.rejects(
-    () =>
-      (service as unknown as {
-        getClassMembers: (input: {
-          artifactId: string;
-          className: string;
-        }) => Promise<unknown>;
-      }).getClassMembers({
-        artifactId: resolved.artifactId,
-        className: "com.example.Demo"
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
-      );
-    }
-  );
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run();
+    });
+  }
 });
 
 test("SourceService getClassMembers delegates to explorer and returns member payload", async () => {
@@ -3448,217 +3516,245 @@ test("SourceService delegates representative mapping queries to MappingService",
   }
 });
 
-test("SourceService resolveWorkspaceSymbol rejects owner for class input", async () => {
+test("SourceService resolveWorkspaceSymbol handles representative compile-visible symbol flows", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-workspace-symbol-class-invalid-owner-"));
-  const service = new SourceService(buildTestConfig(root));
 
-  await assert.rejects(
-    () =>
-      (
-        service as unknown as {
-          resolveWorkspaceSymbol: (input: {
-            projectPath: string;
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-          }) => Promise<unknown>;
-        }
-      ).resolveWorkspaceSymbol({
-        projectPath: root,
-        version: "1.21.10",
-        kind: "class",
-        owner: "a.b",
-        name: "a.b.C",
-        sourceMapping: "obfuscated"
-      }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
-});
-
-test("SourceService resolveWorkspaceSymbol applies workspace mapping and returns compile-visible symbol", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-workspace-symbol-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as unknown as { workspaceMappingService: unknown }).workspaceMappingService = {
-    async detectCompileMapping() {
-      return {
-        resolved: true,
-        mappingApplied: "mojang",
-        warnings: [],
-        evidence: [
-          {
-            filePath: join(root, "build.gradle"),
-            mapping: "mojang",
-            reason: "officialMojangMappings()"
-          }
-        ]
-      };
-    }
+  type WorkspaceSymbolFixture = {
+    root: string;
+    service: InstanceType<typeof SourceService>;
   };
 
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async resolveMethodMappingExact(input: {
-      targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    }) {
-      assert.equal(input.targetMapping, "mojang");
-      return {
-        querySymbol: {
+  async function createWorkspaceSymbolFixture(rootPrefix: string): Promise<WorkspaceSymbolFixture> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    return {
+      root,
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
+
+  const cases: Array<{
+    name: string;
+    createFixture: () => Promise<WorkspaceSymbolFixture>;
+    run: (fixture: WorkspaceSymbolFixture) => Promise<void>;
+  }> = [
+    {
+      name: "rejects owner for class input",
+      createFixture: () =>
+        createWorkspaceSymbolFixture("service-workspace-symbol-class-invalid-owner-"),
+      run: async ({ root, service }) => {
+        await assert.rejects(
+          () =>
+            (
+              service as unknown as {
+                resolveWorkspaceSymbol: (input: {
+                  projectPath: string;
+                  version: string;
+                  kind: "class" | "field" | "method";
+                  owner?: string;
+                  name: string;
+                  sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+                }) => Promise<unknown>;
+              }
+            ).resolveWorkspaceSymbol({
+              projectPath: root,
+              version: "1.21.10",
+              kind: "class",
+              owner: "a.b",
+              name: "a.b.C",
+              sourceMapping: "obfuscated"
+            }),
+          (error: unknown) =>
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+        );
+      }
+    },
+    {
+      name: "applies workspace mapping and returns compile-visible method symbol",
+      createFixture: () => createWorkspaceSymbolFixture("service-workspace-symbol-"),
+      run: async ({ root, service }) => {
+        (service as unknown as { workspaceMappingService: unknown }).workspaceMappingService = {
+          async detectCompileMapping() {
+            return {
+              resolved: true,
+              mappingApplied: "mojang",
+              warnings: [],
+              evidence: [
+                {
+                  filePath: join(root, "build.gradle"),
+                  mapping: "mojang",
+                  reason: "officialMojangMappings()"
+                }
+              ]
+            };
+          }
+        };
+
+        (service as unknown as { mappingService: unknown }).mappingService = {
+          async resolveMethodMappingExact(input: {
+            targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+          }) {
+            assert.equal(input.targetMapping, "mojang");
+            return {
+              querySymbol: {
+                kind: "method",
+                owner: "a.b.C",
+                name: "f",
+                descriptor: "(Ljava/lang/String;)V",
+                symbol: "a.b.C.f(Ljava/lang/String;)V"
+              },
+              mappingContext: {
+                version: "1.21.10",
+                sourceMapping: "obfuscated",
+                targetMapping: "mojang",
+                sourcePriorityApplied: "loom-first"
+              },
+              resolved: true,
+              status: "resolved",
+              resolvedSymbol: {
+                kind: "method",
+                owner: "com.example.ValueOutput",
+                name: "remove",
+                descriptor: "(Ljava/lang/String;)V",
+                symbol: "com.example.ValueOutput.remove(Ljava/lang/String;)V"
+              },
+              candidates: [
+                {
+                  kind: "method",
+                  owner: "com.example.ValueOutput",
+                  name: "remove",
+                  descriptor: "(Ljava/lang/String;)V",
+                  symbol: "com.example.ValueOutput.remove(Ljava/lang/String;)V",
+                  matchKind: "exact",
+                  confidence: 1
+                }
+              ],
+              warnings: []
+            };
+          }
+        };
+
+        const result = await (
+          service as unknown as {
+            resolveWorkspaceSymbol: (input: {
+              projectPath: string;
+              version: string;
+              kind: "class" | "field" | "method";
+              owner: string;
+              name: string;
+              descriptor?: string;
+              sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+            }) => Promise<{
+              resolved: boolean;
+              mappingContext: { targetMapping?: string };
+              resolvedSymbol?: { name: string; owner?: string; descriptor?: string };
+            }>;
+          }
+        ).resolveWorkspaceSymbol({
+          projectPath: root,
+          version: "1.21.10",
           kind: "method",
           owner: "a.b.C",
           name: "f",
           descriptor: "(Ljava/lang/String;)V",
-          symbol: "a.b.C.f(Ljava/lang/String;)V"
-        },
-        mappingContext: {
-          version: "1.21.10",
-          sourceMapping: "obfuscated",
-          targetMapping: "mojang",
-          sourcePriorityApplied: "loom-first"
-        },
-        resolved: true,
-        status: "resolved",
-        resolvedSymbol: {
-          kind: "method",
-          owner: "com.example.ValueOutput",
-          name: "remove",
-          descriptor: "(Ljava/lang/String;)V",
-          symbol: "com.example.ValueOutput.remove(Ljava/lang/String;)V"
-        },
-        candidates: [
-          {
-            kind: "method",
-            owner: "com.example.ValueOutput",
-            name: "remove",
-            descriptor: "(Ljava/lang/String;)V",
-            symbol: "com.example.ValueOutput.remove(Ljava/lang/String;)V",
-            matchKind: "exact",
-            confidence: 1
-          }
-        ],
-        warnings: []
-      };
-    }
-  };
+          sourceMapping: "obfuscated"
+        });
 
-  const result = await (
-    service as unknown as {
-      resolveWorkspaceSymbol: (input: {
-        projectPath: string;
-        version: string;
-        kind: "class" | "field" | "method";
-        owner: string;
-        name: string;
-        descriptor?: string;
-        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-      }) => Promise<{
-        resolved: boolean;
-        mappingContext: { targetMapping?: string };
-        resolvedSymbol?: { name: string; owner?: string; descriptor?: string };
-      }>;
-    }
-  ).resolveWorkspaceSymbol({
-    projectPath: root,
-    version: "1.21.10",
-    kind: "method",
-    owner: "a.b.C",
-    name: "f",
-    descriptor: "(Ljava/lang/String;)V",
-    sourceMapping: "obfuscated"
-  });
-
-  assert.equal(result.resolved, true);
-  assert.equal(result.mappingContext.targetMapping, "mojang");
-  assert.equal(result.resolvedSymbol?.name, "remove");
-  assert.equal(result.resolvedSymbol?.owner, "com.example.ValueOutput");
-  assert.equal(result.resolvedSymbol?.descriptor, "(Ljava/lang/String;)V");
-});
-
-test("SourceService resolveWorkspaceSymbol resolves class via class identity mapping", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-workspace-symbol-class-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as unknown as { workspaceMappingService: unknown }).workspaceMappingService = {
-    async detectCompileMapping() {
-      return {
-        resolved: true,
-        mappingApplied: "mojang",
-        warnings: ["workspace warning"],
-        evidence: [
-          {
-            filePath: join(root, "build.gradle"),
-            mapping: "mojang",
-            reason: "officialMojangMappings()"
-          }
-        ]
-      };
-    }
-  };
-
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async getClassApiMatrix(input: {
-      className: string;
-      classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-      sourcePriority?: "loom-first" | "maven-first";
-    }) {
-      assert.equal(input.className, "a.b.c");
-      assert.equal(input.classNameMapping, "obfuscated");
-      assert.equal(input.sourcePriority, "loom-first");
-      return {
-        classIdentity: {
-          obfuscated: "a.b.c",
-          mojang: "com.example.valueoutput"
-        },
-        rows: [],
-        warnings: ["matrix warning"]
-      };
+        assert.equal(result.resolved, true);
+        assert.equal(result.mappingContext.targetMapping, "mojang");
+        assert.equal(result.resolvedSymbol?.name, "remove");
+        assert.equal(result.resolvedSymbol?.owner, "com.example.ValueOutput");
+        assert.equal(result.resolvedSymbol?.descriptor, "(Ljava/lang/String;)V");
+      }
     },
-    async findMapping() {
-      throw new Error("findMapping should not be used for kind=class");
-    }
-  };
+    {
+      name: "resolves class via class identity mapping",
+      createFixture: () => createWorkspaceSymbolFixture("service-workspace-symbol-class-"),
+      run: async ({ root, service }) => {
+        (service as unknown as { workspaceMappingService: unknown }).workspaceMappingService = {
+          async detectCompileMapping() {
+            return {
+              resolved: true,
+              mappingApplied: "mojang",
+              warnings: ["workspace warning"],
+              evidence: [
+                {
+                  filePath: join(root, "build.gradle"),
+                  mapping: "mojang",
+                  reason: "officialMojangMappings()"
+                }
+              ]
+            };
+          }
+        };
 
-  const result = await (
-    service as unknown as {
-      resolveWorkspaceSymbol: (input: {
-        projectPath: string;
-        version: string;
-        kind: "class" | "field" | "method";
-        owner?: string;
-        name: string;
-        descriptor?: string;
-        sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        sourcePriority?: "loom-first" | "maven-first";
-      }) => Promise<{
-        resolved: boolean;
-        status: string;
-        mappingContext: { targetMapping?: string };
-        resolvedSymbol?: { name: string };
-        warnings: string[];
-      }>;
-    }
-  ).resolveWorkspaceSymbol({
-    projectPath: root,
-    version: "1.21.10",
-    kind: "class",
-    name: "a.b.c",
-    sourceMapping: "obfuscated",
-    sourcePriority: "loom-first"
-  });
+        (service as unknown as { mappingService: unknown }).mappingService = {
+          async getClassApiMatrix(input: {
+            className: string;
+            classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+            sourcePriority?: "loom-first" | "maven-first";
+          }) {
+            assert.equal(input.className, "a.b.c");
+            assert.equal(input.classNameMapping, "obfuscated");
+            assert.equal(input.sourcePriority, "loom-first");
+            return {
+              classIdentity: {
+                obfuscated: "a.b.c",
+                mojang: "com.example.valueoutput"
+              },
+              rows: [],
+              warnings: ["matrix warning"]
+            };
+          },
+          async findMapping() {
+            throw new Error("findMapping should not be used for kind=class");
+          }
+        };
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
-  assert.equal(result.mappingContext.targetMapping, "mojang");
-  assert.equal(result.resolvedSymbol?.name, "com.example.valueoutput");
-  assert.deepEqual(result.warnings, ["workspace warning", "matrix warning"]);
+        const result = await (
+          service as unknown as {
+            resolveWorkspaceSymbol: (input: {
+              projectPath: string;
+              version: string;
+              kind: "class" | "field" | "method";
+              owner?: string;
+              name: string;
+              descriptor?: string;
+              sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+              sourcePriority?: "loom-first" | "maven-first";
+            }) => Promise<{
+              resolved: boolean;
+              status: string;
+              mappingContext: { targetMapping?: string };
+              resolvedSymbol?: { name: string };
+              warnings: string[];
+            }>;
+          }
+        ).resolveWorkspaceSymbol({
+          projectPath: root,
+          version: "1.21.10",
+          kind: "class",
+          name: "a.b.c",
+          sourceMapping: "obfuscated",
+          sourcePriority: "loom-first"
+        });
+
+        assert.equal(result.resolved, true);
+        assert.equal(result.status, "resolved");
+        assert.equal(result.mappingContext.targetMapping, "mojang");
+        assert.equal(result.resolvedSymbol?.name, "com.example.valueoutput");
+        assert.deepEqual(result.warnings, ["workspace warning", "matrix warning"]);
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run(await testCase.createFixture());
+    });
+  }
 });
 
 test("SourceService resolveArtifact handles unobfuscated version fallback warnings", async (t) => {
@@ -4764,130 +4860,120 @@ test("SourceService diffClassSignatures validates version range order", async ()
   );
 });
 
-test("SourceService validateAccessWidener normalizes named namespace to yarn", async () => {
+test("SourceService validateAccessWidener chooses the expected mapping namespace", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-aw-named-"));
-  const service = new SourceService(buildTestConfig(root));
 
-  const mappingCalls: string[] = [];
-
-  (service as unknown as { versionService: unknown }).versionService = {
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
+  type ValidateAccessWidenerFixture = {
+    mappingCalls: string[];
+    service: InstanceType<typeof SourceService>;
   };
 
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async findMapping(input: { sourceMapping: string }) {
-      mappingCalls.push(input.sourceMapping);
-      return {
-        resolved: true,
-        resolvedSymbol: {
-          kind: "class",
-          name: "a.b.c",
-          symbol: "a.b.c"
-        }
-      };
+  async function createValidateAccessWidenerFixture(
+    rootPrefix: string
+  ): Promise<ValidateAccessWidenerFixture> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const service = new SourceService(buildTestConfig(root));
+    const mappingCalls: string[] = [];
+
+    (service as unknown as { versionService: unknown }).versionService = {
+      async resolveVersionJar(version: string) {
+        return {
+          version,
+          jarPath: join(root, `${version}.jar`),
+          source: "downloaded" as const,
+          clientJarUrl: `https://example.test/${version}.jar`
+        };
+      }
+    };
+
+    (service as unknown as { mappingService: unknown }).mappingService = {
+      async findMapping(input: { sourceMapping: string }) {
+        mappingCalls.push(input.sourceMapping);
+        return {
+          resolved: true,
+          resolvedSymbol: {
+            kind: "class",
+            name: "a.b.c",
+            symbol: "a.b.c"
+          }
+        };
+      }
+    };
+
+    (service as unknown as { explorerService: unknown }).explorerService = {
+      async getSignature() {
+        return {
+          constructors: [],
+          methods: [],
+          fields: [],
+          warnings: []
+        };
+      }
+    };
+
+    return { mappingCalls, service };
+  }
+
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    run: (fixture: ValidateAccessWidenerFixture) => Promise<void>;
+  }> = [
+    {
+      name: "normalizes named namespace to yarn",
+      rootPrefix: "service-validate-aw-named-",
+      run: async ({ mappingCalls, service }) => {
+        const result = await (
+          service as unknown as {
+            validateAccessWidener: (input: {
+              content: string;
+              version: string;
+            }) => Promise<{ valid: boolean }>;
+          }
+        ).validateAccessWidener({
+          content: [
+            "accessWidener v2 named",
+            "accessible class net/minecraft/server/MinecraftServer"
+          ].join("\n"),
+          version: "1.21.10"
+        });
+
+        assert.equal(result.valid, true);
+        assert.deepEqual(mappingCalls, ["yarn"]);
+      }
+    },
+    {
+      name: "prefers explicit mapping override over header namespace",
+      rootPrefix: "service-validate-aw-override-",
+      run: async ({ mappingCalls, service }) => {
+        const result = await (
+          service as unknown as {
+            validateAccessWidener: (input: {
+              content: string;
+              version: string;
+              mapping: "mojang";
+            }) => Promise<{ valid: boolean }>;
+          }
+        ).validateAccessWidener({
+          content: [
+            "accessWidener v2 intermediary",
+            "accessible class net/minecraft/server/MinecraftServer"
+          ].join("\n"),
+          version: "1.21.10",
+          mapping: "mojang"
+        });
+
+        assert.equal(result.valid, true);
+        assert.deepEqual(mappingCalls, ["mojang"]);
+      }
     }
-  };
+  ];
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-
-  const result = await (
-    service as unknown as {
-      validateAccessWidener: (input: {
-        content: string;
-        version: string;
-      }) => Promise<{ valid: boolean }>;
-    }
-  ).validateAccessWidener({
-    content: [
-      "accessWidener v2 named",
-      "accessible class net/minecraft/server/MinecraftServer"
-    ].join("\n"),
-    version: "1.21.10"
-  });
-
-  assert.equal(result.valid, true);
-  assert.deepEqual(mappingCalls, ["yarn"]);
-});
-
-test("SourceService validateAccessWidener prefers explicit mapping override over header namespace", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-validate-aw-override-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  const mappingCalls: string[] = [];
-
-  (service as unknown as { versionService: unknown }).versionService = {
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
-
-  (service as unknown as { mappingService: unknown }).mappingService = {
-    async findMapping(input: { sourceMapping: string }) {
-      mappingCalls.push(input.sourceMapping);
-      return {
-        resolved: true,
-        resolvedSymbol: {
-          kind: "class",
-          name: "a.b.c",
-          symbol: "a.b.c"
-        }
-      };
-    }
-  };
-
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-
-  const result = await (
-    service as unknown as {
-      validateAccessWidener: (input: {
-        content: string;
-        version: string;
-        mapping: "mojang";
-      }) => Promise<{ valid: boolean }>;
-    }
-  ).validateAccessWidener({
-    content: [
-      "accessWidener v2 intermediary",
-      "accessible class net/minecraft/server/MinecraftServer"
-    ].join("\n"),
-    version: "1.21.10",
-    mapping: "mojang"
-  });
-
-  assert.equal(result.valid, true);
-  assert.deepEqual(mappingCalls, ["mojang"]);
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await testCase.run(await createValidateAccessWidenerFixture(testCase.rootPrefix));
+    });
+  }
 });
 
 test("SourceService getClassMembers with mojang mapping remaps className and member names", async () => {
