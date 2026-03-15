@@ -402,6 +402,88 @@ function instrumentCacheAccountingRepo(service: SourceServiceFixture): {
   };
 }
 
+async function withVersionApproximationFixture(
+  input: {
+    rootPrefix: string;
+    requestedVersion: string;
+    loomSourceVersion: string;
+  },
+  run: (args: { service: SourceServiceFixture; projectPath: string }) => Promise<void>
+): Promise<void> {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
+  const projectPath = join(root, "workspace");
+  const loomCache = join(projectPath, ".gradle", "loom-cache");
+  await mkdir(loomCache, { recursive: true });
+  const loomSourceJarPath = join(
+    loomCache,
+    `minecraft-${input.loomSourceVersion}-merged-sources.jar`
+  );
+  await createJar(loomSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java":
+      "package net.minecraft.world.level.block;\npublic class Blocks {}"
+  });
+
+  const remoteJarPath = join(root, `remote-${input.requestedVersion}.jar`);
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+
+  globalThis.fetch = (async (requestInput: string | URL | Request) => {
+    const url =
+      typeof requestInput === "string"
+        ? requestInput
+        : requestInput instanceof URL
+          ? requestInput.toString()
+          : requestInput.url;
+    if (url === "https://example.test/version_manifest_v2.json") {
+      return new Response(
+        JSON.stringify({
+          latest: { release: input.requestedVersion },
+          versions: [
+            {
+              id: input.requestedVersion,
+              type: "release",
+              url: `https://example.test/versions/${input.requestedVersion}.json`
+            }
+          ]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === `https://example.test/versions/${input.requestedVersion}.json`) {
+      return new Response(
+        JSON.stringify({
+          id: input.requestedVersion,
+          downloads: { client: { url: `https://example.test/downloads/client-${input.requestedVersion}.jar` } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === `https://example.test/downloads/client-${input.requestedVersion}.jar`) {
+      return new Response(remoteJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(buildTestConfig(root));
+    await run({ service, projectPath });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalManifestUrl === undefined) {
+      delete process.env.MCP_VERSION_MANIFEST_URL;
+    } else {
+      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    }
+  }
+}
+
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-main-"));
@@ -6206,89 +6288,6 @@ test("B1: getClassSource CLASS_NOT_FOUND with target includes scope/targetKind/t
 // B4: version-approximated flag when source jar doesn't contain exact version
 // ---------------------------------------------------------------------------
 test("B4: resolveArtifact flags representative version-approximated mismatches", { concurrency: false }, async (t) => {
-  const { SourceService } = await import("../src/source-service.ts");
-
-  async function withVersionApproximationFixture(
-    input: {
-      rootPrefix: string;
-      requestedVersion: string;
-      loomSourceVersion: string;
-    },
-    run: (args: { service: SourceServiceFixture; projectPath: string }) => Promise<void>
-  ): Promise<void> {
-    const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
-    const projectPath = join(root, "workspace");
-    const loomCache = join(projectPath, ".gradle", "loom-cache");
-    await mkdir(loomCache, { recursive: true });
-    const loomSourceJarPath = join(
-      loomCache,
-      `minecraft-${input.loomSourceVersion}-merged-sources.jar`
-    );
-    await createJar(loomSourceJarPath, {
-      "net/minecraft/world/level/block/Blocks.java":
-        "package net.minecraft.world.level.block;\npublic class Blocks {}"
-    });
-
-    const remoteJarPath = join(root, `remote-${input.requestedVersion}.jar`);
-    await createJar(remoteJarPath, {
-      "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-    });
-    const remoteJarBytes = await readFile(remoteJarPath);
-
-    const originalFetch = globalThis.fetch;
-    const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-    process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-    globalThis.fetch = (async (requestInput: string | URL | Request) => {
-      const url =
-        typeof requestInput === "string"
-          ? requestInput
-          : requestInput instanceof URL
-            ? requestInput.toString()
-            : requestInput.url;
-      if (url === "https://example.test/version_manifest_v2.json") {
-        return new Response(
-          JSON.stringify({
-            latest: { release: input.requestedVersion },
-            versions: [
-              {
-                id: input.requestedVersion,
-                type: "release",
-                url: `https://example.test/versions/${input.requestedVersion}.json`
-              }
-            ]
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        );
-      }
-      if (url === `https://example.test/versions/${input.requestedVersion}.json`) {
-        return new Response(
-          JSON.stringify({
-            id: input.requestedVersion,
-            downloads: { client: { url: `https://example.test/downloads/client-${input.requestedVersion}.jar` } }
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        );
-      }
-      if (url === `https://example.test/downloads/client-${input.requestedVersion}.jar`) {
-        return new Response(remoteJarBytes, { status: 200 });
-      }
-      return new Response("not found", { status: 404 });
-    }) as typeof fetch;
-
-    try {
-      const service = new SourceService(buildTestConfig(root));
-      await run({ service, projectPath });
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalManifestUrl === undefined) {
-        delete process.env.MCP_VERSION_MANIFEST_URL;
-      } else {
-        process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-      }
-    }
-  }
-
   const cases: Array<{
     name: string;
     rootPrefix: string;
@@ -7537,156 +7536,64 @@ test("SourceService validateMixin discovers representative config and project la
 // ---------------------------------------------------------------------------
 // F-01: strictVersion rejects version-approximated results
 // ---------------------------------------------------------------------------
-test("F-01: resolveArtifact with strictVersion=true throws on version mismatch", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f01-strict-"));
-  const projectPath = join(root, "workspace");
-
-  // Create Loom cache with a jar named for version 1.21.10 (not 1.21.11)
-  const loomCache = join(projectPath, ".gradle", "loom-cache");
-  await mkdir(loomCache, { recursive: true });
-  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
-  await createJar(loomSourceJarPath, {
-    "net/minecraft/world/level/block/Blocks.java":
-      "package net.minecraft.world.level.block;\npublic class Blocks {}"
-  });
-
-  const remoteJarPath = join(root, "remote-1.21.11.jar");
-  await createJar(remoteJarPath, {
-    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  const remoteJarBytes = await readFile(remoteJarPath);
-
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: "1.21.11" },
-          versions: [
-            { id: "1.21.11", type: "release", url: "https://example.test/versions/1.21.11.json" }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/versions/1.21.11.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.11",
-          downloads: { client: { url: "https://example.test/downloads/client-1.21.11.jar" } }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/downloads/client-1.21.11.jar") {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
-    const service = new SourceService(buildTestConfig(root));
-    await assert.rejects(
-      () => service.resolveArtifact({
-        target: { kind: "version", value: "1.21.11" },
-        mapping: "mojang",
-        projectPath,
-        strictVersion: true
-      } as any),
-      (error: any) => {
-        assert.equal(error.code, ERROR_CODES.VERSION_NOT_FOUND);
-        assert.ok(error.message.includes("Strict version match failed"));
-        assert.equal(error.details.requestedVersion, "1.21.11");
-        assert.ok(error.details.suggestedCall);
-        assert.equal(error.details.suggestedCall.tool, "resolve-artifact");
-        return true;
+test("F-01: resolveArtifact handles strictVersion for approximated version results", { concurrency: false }, async (t) => {
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    verify: (args: { service: SourceServiceFixture; projectPath: string }) => Promise<void>;
+  }> = [
+    {
+      name: "strictVersion=true throws on version mismatch",
+      rootPrefix: "service-f01-strict-",
+      verify: async ({ service, projectPath }) => {
+        await assert.rejects(
+          () =>
+            service.resolveArtifact({
+              target: { kind: "version", value: "1.21.11" },
+              mapping: "mojang",
+              projectPath,
+              strictVersion: true
+            } as any),
+          (error: any) => {
+            assert.equal(error.code, ERROR_CODES.VERSION_NOT_FOUND);
+            assert.match(String(error.message), /Strict version match failed/);
+            assert.equal(error.details.requestedVersion, "1.21.11");
+            assert.ok(error.details.suggestedCall);
+            assert.equal(error.details.suggestedCall.tool, "resolve-artifact");
+            return true;
+          }
+        );
       }
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+    },
+    {
+      name: "strictVersion=false still returns version-approximated flag",
+      rootPrefix: "service-f01-lax-",
+      verify: async ({ service, projectPath }) => {
+        const resolved = await service.resolveArtifact({
+          target: { kind: "version", value: "1.21.11" },
+          mapping: "mojang",
+          projectPath,
+          strictVersion: false
+        } as any);
+        assert.ok(
+          resolved.qualityFlags.includes("version-approximated"),
+          `Expected version-approximated flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+        );
+      }
     }
-  }
-});
+  ];
 
-test("F-01: resolveArtifact with strictVersion=false still returns version-approximated flag", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-f01-lax-"));
-  const projectPath = join(root, "workspace");
-
-  const loomCache = join(projectPath, ".gradle", "loom-cache");
-  await mkdir(loomCache, { recursive: true });
-  const loomSourceJarPath = join(loomCache, "minecraft-1.21.10-merged-sources.jar");
-  await createJar(loomSourceJarPath, {
-    "net/minecraft/world/level/block/Blocks.java":
-      "package net.minecraft.world.level.block;\npublic class Blocks {}"
-  });
-
-  const remoteJarPath = join(root, "remote-1.21.11.jar");
-  await createJar(remoteJarPath, {
-    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  const remoteJarBytes = await readFile(remoteJarPath);
-
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: "1.21.11" },
-          versions: [
-            { id: "1.21.11", type: "release", url: "https://example.test/versions/1.21.11.json" }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      await withVersionApproximationFixture(
+        {
+          rootPrefix: testCase.rootPrefix,
+          requestedVersion: "1.21.11",
+          loomSourceVersion: "1.21.10"
+        },
+        testCase.verify
       );
-    }
-    if (url === "https://example.test/versions/1.21.11.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.11",
-          downloads: { client: { url: "https://example.test/downloads/client-1.21.11.jar" } }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/downloads/client-1.21.11.jar") {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
-    const service = new SourceService(buildTestConfig(root));
-    const resolved = await service.resolveArtifact({
-      target: { kind: "version", value: "1.21.11" },
-      mapping: "mojang",
-      projectPath,
-      strictVersion: false
-    } as any);
-    assert.ok(
-      resolved.qualityFlags.includes("version-approximated"),
-      `Expected version-approximated flag, got: ${JSON.stringify(resolved.qualityFlags)}`
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
+    });
   }
 });
 
