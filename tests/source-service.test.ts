@@ -6032,6 +6032,7 @@ test("B2/B3: resolveArtifact preserves representative suggestedCall hint variant
           (_details, suggested) => {
             assert.equal(suggested.params.scope, "merged");
             assert.equal(typeof suggested.params.target, "object");
+            assert.notEqual(suggested.params.target, null);
             assert.equal((suggested.params.target as { kind?: string }).kind, "version");
             assert.equal("targetKind" in suggested.params, false);
             assert.equal("targetValue" in suggested.params, false);
@@ -6063,6 +6064,7 @@ test("B2/B3: resolveArtifact preserves representative suggestedCall hint variant
             assert.equal(suggested.params.scope, "merged");
             assert.equal(suggested.params.mapping, "mojang");
             assert.equal(typeof suggested.params.target, "object");
+            assert.notEqual(suggested.params.target, null);
             assert.equal((suggested.params.target as { kind?: string; value?: string }).kind, "jar");
             assert.equal((suggested.params.target as { kind?: string; value?: string }).value, jarPath);
             assert.equal("targetKind" in suggested.params, false);
@@ -6097,6 +6099,7 @@ test("B2/B3: resolveArtifact preserves representative suggestedCall hint variant
             assert.equal(suggested.params.mapping, "obfuscated");
             assert.equal(suggested.params.scope, "vanilla");
             assert.equal(typeof suggested.params.target, "object");
+            assert.notEqual(suggested.params.target, null);
             assert.equal((suggested.params.target as { kind?: string; value?: string }).kind, "jar");
             assert.equal((suggested.params.target as { kind?: string; value?: string }).value, jarPath);
             assert.equal("targetKind" in suggested.params, false);
