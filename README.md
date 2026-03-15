@@ -137,6 +137,13 @@ These six top-level workflow tools cover the common workflows and return summary
 | `validate-project` | workspace summaries plus direct Mixin and Access Widener validation |
 | `manage-cache` | cache inventory, verification, and preview/apply cleanup workflows |
 
+### Workflow Notes
+
+- These top-level workflow tools return `result.summary` first and include `summary.nextActions` when there is a clear follow-up step.
+- `search-class-source` defaults to `queryMode="auto"` and keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path. Use `queryMode="literal"` for an explicit full substring scan.
+- When a public parameter has a fixed safe default, `tools/list` exposes it through the JSON Schema `default` field.
+- Error recovery `suggestedCall` payloads omit parameters when the supplied value already matches the tool default, keeping retry calls smaller without changing behavior.
+
 ### Inspect Minecraft source from a version
 
 ```json
