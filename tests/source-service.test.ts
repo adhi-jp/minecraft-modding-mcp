@@ -7786,41 +7786,64 @@ test("F-03: search-class-source handles representative queryMode behavior for se
   }
 });
 
-test("resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND", async () => {
+test("target.kind=jar preserves ERR_JAR_NOT_FOUND across representative entry points", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-missing-jar-resolve-"));
-  const service = new SourceService(buildTestConfig(root));
-  const missingJarPath = join(root, "missing.jar");
 
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: missingJarPath }
-      } as any),
-    (error: unknown) => {
+  type MissingJarFixture = {
+    missingJarPath: string;
+    service: InstanceType<typeof SourceService>;
+  };
+
+  async function createMissingJarFixture(rootPrefix: string): Promise<MissingJarFixture> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    return {
+      missingJarPath: join(root, "missing.jar"),
+      service: new SourceService(buildTestConfig(root))
+    };
+  }
+
+  async function expectJarNotFound(action: () => Promise<unknown>): Promise<void> {
+    await assert.rejects(action, (error: unknown) => {
       assert.equal((error as { code?: string }).code, ERROR_CODES.JAR_NOT_FOUND);
       assert.match(String((error as { message?: string }).message), /missing\.jar/);
       return true;
-    }
-  );
-});
+    });
+  }
 
-test("getClassSource preserves ERR_JAR_NOT_FOUND for missing target.kind=jar paths", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-missing-jar-source-"));
-  const service = new SourceService(buildTestConfig(root));
-  const missingJarPath = join(root, "missing.jar");
-
-  await assert.rejects(
-    () =>
-      service.getClassSource({
-        className: "net.minecraft.world.level.block.Block",
-        target: { kind: "jar", value: missingJarPath }
-      } as any),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.JAR_NOT_FOUND);
-      assert.match(String((error as { message?: string }).message), /missing\.jar/);
-      return true;
+  const cases: Array<{
+    name: string;
+    rootPrefix: string;
+    run: (fixture: MissingJarFixture) => Promise<void>;
+  }> = [
+    {
+      name: "resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND",
+      rootPrefix: "service-missing-jar-resolve-",
+      run: async ({ missingJarPath, service }) => {
+        await expectJarNotFound(() =>
+          service.resolveArtifact({
+            target: { kind: "jar", value: missingJarPath }
+          } as any)
+        );
+      }
+    },
+    {
+      name: "getClassSource preserves ERR_JAR_NOT_FOUND for missing target.kind=jar paths",
+      rootPrefix: "service-missing-jar-source-",
+      run: async ({ missingJarPath, service }) => {
+        await expectJarNotFound(() =>
+          service.getClassSource({
+            className: "net.minecraft.world.level.block.Block",
+            target: { kind: "jar", value: missingJarPath }
+          } as any)
+        );
+      }
     }
-  );
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const fixture = await createMissingJarFixture(testCase.rootPrefix);
+      await testCase.run(fixture);
+    });
+  }
 });
