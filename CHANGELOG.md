@@ -9,11 +9,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 - `analyze-symbol task="api-overview"` now inherits `sourceMapping` as the default `classNameMapping`, avoiding unintended fallback to `obfuscated` when callers omit `classNameMapping`.
+- `get-class-api-matrix` now builds rows from the explicitly requested `classNameMapping` instead of silently pivoting to `obfuscated` when both identities are available.
 - `find-mapping` now accepts short obfuscated class ids such as `dhl` when `sourceMapping="obfuscated"` instead of rejecting them at input validation.
 - `trace-symbol-lifecycle` now strips an accidental inline signature suffix from `symbol` before splitting `Class.method`, preventing misparsed lifecycle lookups while keeping the separate `descriptor` field as the exact-match path.
+- `validate-mixin` and `validate-project task="project-summary"` now treat empty mixin configs as warning-only discovery results with zero validated classes instead of `ERR_INVALID_INPUT`.
 
 ### Documentation
-- Documented the `api-overview` mapping inheritance, short obfuscated `find-mapping` inputs, and the lifecycle symbol parsing safeguard in the English and Japanese READMEs plus the tool reference.
+- Documented the `api-overview` mapping inheritance, explicit API-matrix base namespace behavior, short obfuscated `find-mapping` inputs, empty mixin-config warning semantics, and the lifecycle symbol parsing safeguard in the English and Japanese READMEs plus the tool reference.
 
 ## [3.1.0] - 2026-03-15
 

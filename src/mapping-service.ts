@@ -1733,7 +1733,7 @@ export class MappingService {
       }
     }
 
-    const baseMapping: SourceMapping = classByMapping.obfuscated ? "obfuscated" : classNameMapping;
+    const baseMapping: SourceMapping = classNameMapping;
     const baseClass = classByMapping[baseMapping];
     if (!baseClass) {
       return {

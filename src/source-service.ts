@@ -720,6 +720,11 @@ type ValidateMixinConfigSource = {
   configPath: string;
 };
 
+type ResolvedValidateMixinConfigSources = {
+  sources: ValidateMixinConfigSource[];
+  warnings: string[];
+};
+
 export type ValidateAccessWidenerInput = {
   content: string;
   version: string;
@@ -3765,12 +3770,13 @@ export class SourceService {
     const resolvedInput = mode === "project"
       ? this.createProjectValidateMixinConfigInput(input)
       : input;
-    const configSources = await this.resolveMixinConfigSources(resolvedInput);
+    const { sources: configSources, warnings: configWarnings } = await this.resolveMixinConfigSources(resolvedInput);
     if (configSources.length === 0) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Mixin config(s) contain no mixin class entries."
-      });
+      const emptyOutput = this.buildValidateMixinOutput(mode, []);
+      return this.applyValidateMixinOutputCompaction({
+        ...emptyOutput,
+        warnings: [...new Set([...emptyOutput.warnings, ...configWarnings])]
+      }, input);
     }
 
     return this.validateMixinMany(
@@ -3784,7 +3790,8 @@ export class SourceService {
         },
         sourcePath: entry.sourcePath
       })),
-      resolvedInput
+      resolvedInput,
+      configWarnings
     );
   }
 
@@ -4398,12 +4405,16 @@ export class SourceService {
       : resolvePath(process.cwd(), normalizedPath);
   }
 
-  private async resolveMixinConfigSources(input: ValidateMixinInput): Promise<ValidateMixinConfigSource[]> {
+  private async resolveMixinConfigSources(input: ValidateMixinInput): Promise<ResolvedValidateMixinConfigSources> {
     if (input.input.mode !== "config") {
-      return [];
+      return {
+        sources: [],
+        warnings: []
+      };
     }
 
     const results: ValidateMixinConfigSource[] = [];
+    const warnings: string[] = [];
 
     for (const rawConfigPath of input.input.configPaths) {
       const resolvedConfigPath = this.resolveMixinInputPath(rawConfigPath, "configPath");
@@ -4425,6 +4436,7 @@ export class SourceService {
         ...(configJson.server ?? [])
       ];
       if (classNames.length === 0) {
+        warnings.push(`Mixin config "${resolvedConfigPath}" contains no mixin class entries.`);
         continue;
       }
 
@@ -4462,13 +4474,17 @@ export class SourceService {
       }
     }
 
-    return results;
+    return {
+      sources: results,
+      warnings
+    };
   }
 
   private async validateMixinMany(
     mode: "paths" | "config" | "project",
     entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
-    input: ValidateMixinInput
+    input: ValidateMixinInput,
+    additionalWarnings: string[] = []
   ): Promise<ValidateMixinOutput> {
     const results: ValidateMixinBatchResult[] = [];
     const batchWarningMode = input.warningMode ?? "aggregated";
@@ -4497,7 +4513,13 @@ export class SourceService {
       }
     }
 
-    return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, results), input);
+    const output = this.buildValidateMixinOutput(mode, results);
+    return this.applyValidateMixinOutputCompaction({
+      ...output,
+      warnings: additionalWarnings.length === 0
+        ? output.warnings
+        : [...new Set([...output.warnings, ...additionalWarnings])]
+    }, input);
   }
 
   private applyValidateMixinOutputCompaction(

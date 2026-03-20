@@ -7654,6 +7654,38 @@ test("SourceService validateMixin discovers representative config and project la
       }
     },
     {
+      name: "config mode reports empty mixin configs as warnings instead of invalid input",
+      run: async ({ root, service }) => {
+        const mixinConfigDir = join(root, "src", "main", "resources");
+        const mixinConfigPath = join(mixinConfigDir, "empty.mixins.json");
+
+        await mkdir(mixinConfigDir, { recursive: true });
+        await writeFile(
+          mixinConfigPath,
+          JSON.stringify({ package: "com.example", mixins: [] }, null, 2),
+          "utf8"
+        );
+
+        const result = await service.validateMixin({
+          input: {
+            mode: "config",
+            configPaths: [mixinConfigPath]
+          },
+          projectPath: root,
+          version: "1.21",
+          mapping: "obfuscated"
+        });
+
+        assert.equal(result.mode, "config");
+        assert.equal(result.summary.total, 0);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 0);
+        assert.equal(result.summary.invalid, 0);
+        assert.equal(result.results.length, 0);
+        assert.ok(result.warnings.some((warning) => warning.includes("contains no mixin class entries")));
+      }
+    },
+    {
       name: "project mode auto-discovers mixin configs across modules",
       run: async ({ root, service }) => {
         const commonJavaRoot = join(root, "common", "src", "main", "java", "com", "example");
@@ -7705,6 +7737,37 @@ test("SourceService validateMixin discovers representative config and project la
         assert.equal(result.results.filter((entry) => entry.source.configPath === commonConfigPath).length, 1);
         assert.equal(result.results.filter((entry) => entry.source.configPath === neoConfigPath).length, 1);
         assert.equal(result.results.every((entry) => entry.result?.valid === true), true);
+      }
+    },
+    {
+      name: "project mode reports empty discovered mixin configs as warnings",
+      run: async ({ root, service }) => {
+        const resourcesRoot = join(root, "src", "main", "resources");
+        const mixinConfigPath = join(resourcesRoot, "empty.mixins.json");
+
+        await mkdir(resourcesRoot, { recursive: true });
+        await writeFile(
+          mixinConfigPath,
+          JSON.stringify({ package: "com.example", client: [], server: [] }, null, 2),
+          "utf8"
+        );
+
+        const result = await service.validateMixin({
+          input: {
+            mode: "project",
+            path: root
+          },
+          version: "1.21",
+          mapping: "obfuscated"
+        } as never);
+
+        assert.equal(result.mode, "project");
+        assert.equal(result.summary.total, 0);
+        assert.equal(result.summary.processingErrors, 0);
+        assert.equal(result.summary.valid, 0);
+        assert.equal(result.summary.invalid, 0);
+        assert.equal(result.results.length, 0);
+        assert.ok(result.warnings.some((warning) => warning.includes("contains no mixin class entries")));
       }
     }
   ];

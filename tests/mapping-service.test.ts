@@ -965,6 +965,110 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
   assert.equal(result.rowsTruncated, true);
 });
 
+test("MappingService getClassApiMatrix prefers the explicit classNameMapping over obfuscated base rows", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-explicit-base-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+
+  (service as any).loadGraph = async () => ({
+    version: "1.21.10",
+    priority: "loom-first",
+    pairs: new Map(),
+    adjacency: new Map(),
+    pathCache: new Map(),
+    warnings: [],
+    recordsByTarget: new Map([
+      [
+        "mojang",
+        [
+          {
+            kind: "class",
+            symbol: "com.mojang.NamedClass",
+            name: "NamedClass"
+          },
+          {
+            kind: "method",
+            symbol: "com.mojang.NamedClass.namedMethod(I)V",
+            owner: "com.mojang.NamedClass",
+            name: "namedMethod",
+            descriptor: "(I)V"
+          }
+        ]
+      ],
+      ["obfuscated", []],
+      ["intermediary", []],
+      ["yarn", []]
+    ])
+  });
+
+  (service as any).mapRecordBetweenMappings = (
+    _graph: unknown,
+    sourceMapping: SourceMapping,
+    targetMapping: SourceMapping,
+    record: {
+      kind: "class" | "field" | "method";
+      owner?: string;
+      name: string;
+      descriptor?: string;
+      symbol: string;
+    }
+  ) => {
+    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
+      return [{ kind: "class", symbol: "a.b.C", name: "C" }];
+    }
+    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "intermediary") {
+      return [{ kind: "class", symbol: "intermediary.pkg.InterClass", name: "InterClass" }];
+    }
+    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "yarn") {
+      return [{ kind: "class", symbol: "yarn.pkg.NamedClass", name: "NamedClass" }];
+    }
+    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
+      return [{
+        kind: "method",
+        symbol: "a.b.C.e(I)V",
+        owner: "a.b.C",
+        name: "e",
+        descriptor: "(I)V"
+      }];
+    }
+    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "intermediary") {
+      return [{
+        kind: "method",
+        symbol: "intermediary.pkg.InterClass.interMethod(I)V",
+        owner: "intermediary.pkg.InterClass",
+        name: "interMethod",
+        descriptor: "(I)V"
+      }];
+    }
+    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "yarn") {
+      return [{
+        kind: "method",
+        symbol: "yarn.pkg.NamedClass.namedMethod(I)V",
+        owner: "yarn.pkg.NamedClass",
+        name: "namedMethod",
+        descriptor: "(I)V"
+      }];
+    }
+    return [];
+  };
+
+  const result = await service.getClassApiMatrix({
+    version: "1.21.10",
+    className: "com.mojang.NamedClass",
+    classNameMapping: "mojang"
+  } as never);
+
+  assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
+  assert.equal(result.classIdentity.obfuscated, "a.b.C");
+  assert.equal(result.rowCount, 2);
+  assert.ok(
+    result.rows.some(
+      (row) => row.kind === "method" && row.mojang?.name === "namedMethod" && row.obfuscated?.name === "e"
+    )
+  );
+});
+
 test("MappingService checks symbol existence across class/field/method kinds", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-"));

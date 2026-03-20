@@ -1392,6 +1392,43 @@ test("ValidateProjectService project-summary continues when one discovered mixin
   assert.ok(result.warnings?.some((warning) => warning.includes("validated mixin config")));
 });
 
+test("ValidateProjectService project-summary keeps empty mixin configs as warnings", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({
+      summary: {
+        valid: 0,
+        partial: 0,
+        invalid: 0
+      },
+      warnings: ["Mixin config \"/workspace/demo-mod/src/main/resources/empty.mixins.json\" contains no mixin class entries."]
+    }),
+    validateAccessWidener: async () => ({
+      valid: true,
+      header: "accessWidener v2 named",
+      namespace: "named",
+      issues: [],
+      warnings: []
+    }),
+    discoverMixins: async () => ["/workspace/demo-mod/src/main/resources/empty.mixins.json"],
+    discoverAccessWideners: async () => []
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    version: "1.21.10",
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/demo-mod"
+    }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  assert.equal(result.project?.summary?.valid, 0);
+  assert.equal(result.project?.summary?.invalid, 0);
+  assert.ok(result.warnings?.some((warning) => warning.includes("contains no mixin class entries")));
+});
+
 test("CompareMinecraftService forwards sourcePriority for class diffs", async () => {
   const seenInputs: Array<{
     className: string;

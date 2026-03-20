@@ -25,11 +25,13 @@ This document complements [README.md](../README.md). Use it when you need the ex
 - `check-symbol-exists` defaults to strict FQCN class lookup. Use `nameMode="auto"` for short class names.
 - `check-symbol-exists` can use `signatureMode="name-only"` for overload discovery, but exact `descriptor` matching is still the most reliable path.
 - `find-mapping` accepts short class ids such as `dhl` only when `sourceMapping="obfuscated"`. Other class lookup paths still validate class names as fully-qualified.
+- `get-class-api-matrix` now uses the explicit `classNameMapping` as its base namespace even when an obfuscated identity is also available.
 - `scope="loader"` currently resolves through the same lookup path as `scope="merged"`.
 - `remap-mod-jar` requires Java and supports Fabric/Quilt inputs. Mojang-mapped inputs can only be copied through `targetMapping="mojang"`.
 - `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
 - `get-registry-data` can return names and counts only with `includeData=false`, or clip detailed payloads with `maxEntriesPerRegistry`.
 - `validate-mixin` summary-first workflows should combine `includeIssues=false`, `reportMode="compact"`, and `warningMode="aggregated"`.
+- Empty Mixin configs are treated as warning-only discovery results with `summary.total=0` instead of invalid input; malformed JSON still returns `ERR_INVALID_INPUT`.
 
 ## Migration Notes
 
