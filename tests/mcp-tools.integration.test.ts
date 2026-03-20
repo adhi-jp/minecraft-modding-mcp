@@ -222,6 +222,100 @@ test("validate-mixin invalid JSON-like input string preserves structured input i
   });
 });
 
+test("validate-project invalid legacy workspace payload returns a structured suggestedCall", async () => {
+  const result = await callTool("validate-project", {
+    task: "project-summary",
+    subject: "/workspace/architectury",
+    detail: "summary",
+    include: ["projectSummary", "detectedConfig", "validationSummary"],
+    preferProjectMapping: true,
+    preferProjectVersion: true,
+    includeIssues: false,
+    warningMode: "aggregated"
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        hints?: string[];
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: { kind?: string; projectPath?: string };
+            include?: string[];
+            preferProjectMapping?: boolean;
+            preferProjectVersion?: boolean;
+            includeIssues?: boolean;
+            warningMode?: string;
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.ok(result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "subject"));
+  assert.ok(result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "include.0"));
+  assert.ok(result.structuredContent?.error?.hints?.some((hint) => hint.includes("subject.kind=workspace")));
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "validate-project");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    task: "project-summary",
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/architectury"
+    },
+    include: ["workspace"],
+    preferProjectMapping: true,
+    preferProjectVersion: true,
+    includeIssues: false,
+    warningMode: "aggregated"
+  });
+});
+
+test("analyze-mod invalid legacy summary payload returns a structured suggestedCall", async () => {
+  const result = await callTool("analyze-mod", {
+    task: "summary",
+    subject: "/workspace/example.jar",
+    detail: "summary",
+    include: ["metadata", "entrypoints", "mixins", "dependencies"]
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+        hints?: string[];
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            detail?: string;
+            subject?: { kind?: string; jarPath?: string };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.ok(result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "subject"));
+  assert.ok(result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "include.0"));
+  assert.ok(result.structuredContent?.error?.hints?.some((hint) => hint.includes("subject.kind=jar")));
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "analyze-mod");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    task: "summary",
+    detail: "standard",
+    subject: {
+      kind: "jar",
+      jarPath: "/workspace/example.jar"
+    }
+  });
+});
+
 test("source lookup tools/list schema clarifies object target inputs and loader scope fallback", async () => {
   const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const resolveArtifactSchema = toolMap.get("resolve-artifact") as {

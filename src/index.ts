@@ -217,6 +217,11 @@ function isSuggestedCallDefault(
   return value === SUGGESTED_CALL_DEFAULTS[field];
 }
 
+const ANALYZE_MOD_INCLUDE_GROUPS = ["warnings", "files", "source", "samples", "timings"] as const;
+const ANALYZE_MOD_LEGACY_METADATA_INCLUDES = ["metadata", "entrypoints", "mixins", "dependencies"] as const;
+const VALIDATE_PROJECT_INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
+const VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES = ["detectedConfig", "mixins", "accessWideners"] as const;
+
 const listVersionsShape = {
   includeSnapshots: z.boolean().default(false),
   limit: optionalPositiveInt.default(20).describe("max 200")
@@ -1423,6 +1428,226 @@ function buildSourceLookupSuggestedParams(
   return result;
 }
 
+function uniqueStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      result.push(value);
+    }
+  }
+  return result;
+}
+
+function filterAllowedIncludeValues(
+  values: string[] | undefined,
+  allowed: readonly string[]
+): string[] | undefined {
+  if (!values?.length) {
+    return undefined;
+  }
+  const allowedSet = new Set(allowed);
+  const filtered = values.filter((value) => allowedSet.has(value));
+  return filtered.length > 0 ? uniqueStrings(filtered) : undefined;
+}
+
+function buildAnalyzeModSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+  const record = asObjectRecord(normalizedInput);
+  if (!record) {
+    return {
+      task: "summary",
+      detail: "standard",
+      subject: {
+        kind: "jar",
+        jarPath: "<mod-jar-path>"
+      }
+    };
+  }
+
+  const task = asNonEmptyString(record.task) ?? "summary";
+  const result: Record<string, unknown> = { task };
+  const subjectRecord = asObjectRecord(record.subject);
+  const include = asStringArray(record.include);
+  const canonicalInclude = filterAllowedIncludeValues(include, ANALYZE_MOD_INCLUDE_GROUPS);
+  const wantsLegacyMetadata = include?.some((value) =>
+    ANALYZE_MOD_LEGACY_METADATA_INCLUDES.includes(value as typeof ANALYZE_MOD_LEGACY_METADATA_INCLUDES[number])
+  ) ?? false;
+  const detail = asNonEmptyString(record.detail);
+
+  if (task === "summary" && wantsLegacyMetadata) {
+    result.detail = detail && detail !== "summary" ? detail : "standard";
+  } else if (detail && detail !== "summary") {
+    result.detail = detail;
+  }
+
+  if (canonicalInclude?.length) {
+    result.include = canonicalInclude;
+  }
+
+  if (task === "class-source") {
+    result.subject = {
+      kind: "class",
+      jarPath: asNonEmptyString(subjectRecord?.jarPath) ?? asNonEmptyString(record.subject) ?? "<mod-jar-path>",
+      className: asNonEmptyString(subjectRecord?.className) ?? asNonEmptyString(record.className) ?? "<fully-qualified-class-name>"
+    };
+  } else {
+    result.subject = {
+      kind: "jar",
+      jarPath: asNonEmptyString(subjectRecord?.jarPath) ?? asNonEmptyString(record.subject) ?? asNonEmptyString(record.jarPath) ?? "<mod-jar-path>"
+    };
+  }
+
+  const stringFields = ["query", "searchType", "targetMapping", "outputJar", "executionMode"] as const;
+  for (const field of stringFields) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      result[field] = value;
+    }
+  }
+
+  const booleanFields = ["includeFiles"] as const;
+  for (const field of booleanFields) {
+    const value = record[field];
+    if (typeof value === "boolean") {
+      result[field] = value;
+    }
+  }
+
+  const numericFields = ["limit", "maxFiles", "maxLines", "maxChars"] as const;
+  for (const field of numericFields) {
+    const value = record[field];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      result[field] = value;
+    }
+  }
+
+  return result;
+}
+
+function buildValidateProjectSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+  const record = asObjectRecord(normalizedInput);
+  if (!record) {
+    return {
+      task: "project-summary",
+      subject: {
+        kind: "workspace",
+        projectPath: "<workspace-path>"
+      },
+      preferProjectVersion: true
+    };
+  }
+
+  const task = asNonEmptyString(record.task) ?? "project-summary";
+  const result: Record<string, unknown> = { task };
+  const subjectRecord = asObjectRecord(record.subject);
+  const include = asStringArray(record.include);
+  const canonicalInclude = filterAllowedIncludeValues(include, VALIDATE_PROJECT_INCLUDE_GROUPS) ?? [];
+  const wantsWorkspaceInclude = include?.some((value) =>
+    VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES.includes(value as typeof VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES[number])
+  ) ?? false;
+  const detail = asNonEmptyString(record.detail);
+
+  if (detail && detail !== "summary") {
+    result.detail = detail;
+  }
+
+  const includeSuggestion = wantsWorkspaceInclude
+    ? uniqueStrings([...canonicalInclude, "workspace"])
+    : canonicalInclude;
+  if (includeSuggestion.length > 0) {
+    result.include = includeSuggestion;
+  }
+
+  const stringFields = [
+    "version",
+    "mapping",
+    "sourcePriority",
+    "scope",
+    "minSeverity",
+    "warningMode"
+  ] as const;
+  for (const field of stringFields) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      result[field] = value;
+    }
+  }
+
+  const booleanFields = [
+    "preferProjectVersion",
+    "preferProjectMapping",
+    "hideUncertain",
+    "explain",
+    "treatInfoAsWarning",
+    "includeIssues"
+  ] as const;
+  for (const field of booleanFields) {
+    const value = record[field];
+    if (
+      typeof value === "boolean" &&
+      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+        !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
+    ) {
+      result[field] = value;
+    }
+  }
+
+  const sourceRoots = asStringArray(record.sourceRoots);
+  if (sourceRoots?.length) {
+    result.sourceRoots = sourceRoots;
+  }
+
+  const configPaths = asStringArray(record.configPaths);
+  if (configPaths?.length) {
+    result.configPaths = configPaths;
+  }
+
+  const warningCategoryFilter = asStringArray(record.warningCategoryFilter);
+  if (warningCategoryFilter?.length) {
+    result.warningCategoryFilter = warningCategoryFilter;
+  }
+
+  if (task === "project-summary") {
+    const subject: Record<string, unknown> = {
+      kind: "workspace",
+      projectPath:
+        asNonEmptyString(subjectRecord?.projectPath) ??
+        asNonEmptyString(record.subject) ??
+        asNonEmptyString(record.projectPath) ??
+        "<workspace-path>"
+    };
+    const discover = asStringArray(subjectRecord?.discover);
+    if (discover?.length) {
+      subject.discover = discover;
+    }
+    result.subject = subject;
+    return result;
+  }
+
+  if (task === "mixin") {
+    const inputRecord = asObjectRecord(subjectRecord?.input) ?? asObjectRecord(record.input);
+    result.subject = {
+      kind: "mixin",
+      input: inputRecord ?? {
+        mode: "inline",
+        source: "<Mixin Java source>"
+      }
+    };
+    return result;
+  }
+
+  const inputRecord = asObjectRecord(subjectRecord?.input) ?? asObjectRecord(record.input);
+  result.subject = {
+    kind: "access-widener",
+    input: inputRecord ?? {
+      mode: "inline",
+      content: "<access widener contents>"
+    }
+  };
+  return result;
+}
+
 function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
   hints?: string[];
   suggestedCall?: SuggestedCall;
@@ -1465,6 +1690,34 @@ function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
       suggestedCall: {
         tool,
         params: buildSourceLookupSuggestedParams(tool, normalizedInput)
+      }
+    };
+  }
+
+  if (tool === "validate-project") {
+    return {
+      hints: [
+        "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener.",
+        "task=\"project-summary\" uses {\"subject\":{\"kind\":\"workspace\",\"projectPath\":\"/workspace\"}}.",
+        "Legacy include names like projectSummary/detectedConfig/validationSummary are not accepted; use include:[\"workspace\"] only when you need discovery details."
+      ],
+      suggestedCall: {
+        tool,
+        params: buildValidateProjectSuggestedParams(normalizedInput)
+      }
+    };
+  }
+
+  if (tool === "analyze-mod") {
+    return {
+      hints: [
+        "analyze-mod.subject must be an object with subject.kind=jar|class.",
+        "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+        "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings."
+      ],
+      suggestedCall: {
+        tool,
+        params: buildAnalyzeModSuggestedParams(normalizedInput)
       }
     };
   }
