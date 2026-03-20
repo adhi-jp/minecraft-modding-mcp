@@ -383,7 +383,7 @@ const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) =>
         path: ["descriptor"]
       });
     }
-    if (!value.name.includes(".")) {
+    if (value.sourceMapping !== "obfuscated" && !value.name.includes(".")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "name must be fully-qualified class name when kind=class.",

@@ -584,6 +584,34 @@ test("analyze-symbol rejects api-overview requests that include owner or descrip
   );
 });
 
+test("find-mapping accepts short obfuscated class names", async () => {
+  const result = await callTool("find-mapping", {
+    version: "1.21.10",
+    kind: "class",
+    name: "dhl",
+    sourceMapping: "obfuscated",
+    targetMapping: "obfuscated"
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+      };
+      result?: {
+        status?: string;
+        resolvedSymbol?: {
+          name?: string;
+        };
+      };
+    };
+  };
+
+  assert.notEqual(result.isError, true);
+  assert.notEqual(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.result?.status, "resolved");
+  assert.equal(result.structuredContent?.result?.resolvedSymbol?.name, "dhl");
+});
+
 test("validate-project rejects top-level configPaths for direct access-widener validation", async () => {
   const result = await callTool("validate-project", {
     task: "access-widener",

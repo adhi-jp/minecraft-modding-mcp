@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- `analyze-symbol task="api-overview"` now inherits `sourceMapping` as the default `classNameMapping`, avoiding unintended fallback to `obfuscated` when callers omit `classNameMapping`.
+- `find-mapping` now accepts short obfuscated class ids such as `dhl` when `sourceMapping="obfuscated"` instead of rejecting them at input validation.
+- `trace-symbol-lifecycle` now strips an accidental inline signature suffix from `symbol` before splitting `Class.method`, preventing misparsed lifecycle lookups while keeping the separate `descriptor` field as the exact-match path.
+
+### Documentation
+- Documented the `api-overview` mapping inheritance, short obfuscated `find-mapping` inputs, and the lifecycle symbol parsing safeguard in the English and Japanese READMEs plus the tool reference.
+
 ## [3.1.0] - 2026-03-15
 
 ### Changed

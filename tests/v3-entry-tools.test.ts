@@ -869,6 +869,56 @@ test("AnalyzeSymbolService returns matrix rows only when include=matrix is reque
   assert.equal(withMatrix.matrix?.rows?.length, 1);
 });
 
+test("AnalyzeSymbolService api-overview inherits sourceMapping when classNameMapping is omitted", async () => {
+  let seenClassNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn" | undefined;
+
+  const service = new AnalyzeSymbolService({
+    checkSymbolExists: async () => {
+      throw new Error("not used");
+    },
+    findMapping: async () => {
+      throw new Error("not used");
+    },
+    resolveMethodMappingExact: async () => {
+      throw new Error("not used");
+    },
+    traceSymbolLifecycle: async () => {
+      throw new Error("not used");
+    },
+    resolveWorkspaceSymbol: async () => {
+      throw new Error("not used");
+    },
+    getClassApiMatrix: async (input) => {
+      seenClassNameMapping = input.classNameMapping;
+      return {
+        version: "1.21.10",
+        className: "net.minecraft.world.item.Item",
+        classNameMapping: input.classNameMapping,
+        classIdentity: { mojang: "net.minecraft.world.item.Item" },
+        rowCount: 1,
+        rowsTruncated: false,
+        ambiguousRowCount: 0,
+        warnings: [],
+        rows: []
+      };
+    }
+  });
+
+  const result = await service.execute({
+    task: "api-overview",
+    detail: "summary",
+    subject: {
+      kind: "class",
+      name: "net.minecraft.world.item.Item"
+    },
+    version: "1.21.10",
+    sourceMapping: "mojang"
+  });
+
+  assert.equal(seenClassNameMapping, "mojang");
+  assert.equal(result.summary.subject.classNameMapping, "mojang");
+});
+
 test("AnalyzeSymbolService includes summary.subject for mapping flows", async () => {
   const service = new AnalyzeSymbolService({
     checkSymbolExists: async () => {

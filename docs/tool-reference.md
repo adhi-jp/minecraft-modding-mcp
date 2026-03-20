@@ -24,6 +24,7 @@ This document complements [README.md](../README.md). Use it when you need the ex
 - `find-class` and `get-class-source` on `mapping="obfuscated"` expect Mojang obfuscated names. Deobfuscated queries warn and usually need `mapping="mojang"` or a `find-mapping` step first.
 - `check-symbol-exists` defaults to strict FQCN class lookup. Use `nameMode="auto"` for short class names.
 - `check-symbol-exists` can use `signatureMode="name-only"` for overload discovery, but exact `descriptor` matching is still the most reliable path.
+- `find-mapping` accepts short class ids such as `dhl` only when `sourceMapping="obfuscated"`. Other class lookup paths still validate class names as fully-qualified.
 - `scope="loader"` currently resolves through the same lookup path as `scope="merged"`.
 - `remap-mod-jar` requires Java and supports Fabric/Quilt inputs. Mojang-mapped inputs can only be copied through `targetMapping="mojang"`.
 - `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
@@ -99,7 +100,7 @@ The legacy public namespace name `official` was removed. Requests that still sen
 
 Symbol query inputs use `kind` plus `name` plus optional `owner` and `descriptor`:
 
-- class: `kind="class"`, `name="a.b.C"` by default. For existence checks only, `nameMode="auto"` allows short names such as `Blocks`.
+- class: `kind="class"`, `name="a.b.C"` by default. `find-mapping` also accepts short obfuscated runtime ids such as `dhl` when `sourceMapping="obfuscated"`. For existence checks only, `nameMode="auto"` allows short names such as `Blocks`.
 - field: `kind="field"`, `owner="a.b.C"`, `name="fieldName"`
 - method: `kind="method"`, `owner="a.b.C"`, `name="methodName"`, `descriptor="(I)V"`
 
@@ -112,6 +113,8 @@ Symbol query inputs use `kind` plus `name` plus optional `owner` and `descriptor
 - `mojang` requires source-backed artifacts. Decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
 
 When `trace-symbol-lifecycle` omits `descriptor`, the server resolves methods by owner and name and warns if overload ambiguity prevents a unique answer.
+
+If callers accidentally append an inline signature suffix to `trace-symbol-lifecycle.symbol`, the server strips that suffix before splitting `Class.method`. Use the separate `descriptor` field when the workflow needs exact overload matching.
 
 For decompile-only `ERR_MAPPING_NOT_APPLIED` failures, error details include `artifactOrigin`, `nextAction`, and `suggestedCall` so clients can recover without guessing.
 

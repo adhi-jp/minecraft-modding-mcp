@@ -953,8 +953,10 @@ function scopeToJarType(scope: ArtifactScope): "vanilla-client" | "merged" | "lo
 
 function parseQualifiedMethodSymbol(symbol: string): { className: string; methodName: string } {
   const trimmed = symbol.trim();
-  const separator = trimmed.lastIndexOf(".");
-  if (separator <= 0 || separator >= trimmed.length - 1) {
+  const descriptorStart = trimmed.indexOf("(");
+  const qualifiedSymbol = descriptorStart >= 0 ? trimmed.slice(0, descriptorStart) : trimmed;
+  const separator = qualifiedSymbol.lastIndexOf(".");
+  if (separator <= 0 || separator >= qualifiedSymbol.length - 1) {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
       message: `symbol must be in the form "fully.qualified.Class.method".`,
@@ -962,8 +964,8 @@ function parseQualifiedMethodSymbol(symbol: string): { className: string; method
     });
   }
 
-  const className = trimmed.slice(0, separator);
-  const methodName = trimmed.slice(separator + 1);
+  const className = qualifiedSymbol.slice(0, separator);
+  const methodName = qualifiedSymbol.slice(separator + 1);
   if (
     !className ||
     !methodName ||

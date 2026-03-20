@@ -140,6 +140,9 @@ These six top-level workflow tools cover the common workflows and return summary
 ### Workflow Notes
 
 - These top-level workflow tools return `result.summary` first and include `summary.nextActions` when there is a clear follow-up step.
+- `analyze-symbol task="api-overview"` inherits `sourceMapping` as the default `classNameMapping`; it only falls back to `obfuscated` when neither value is provided.
+- `find-mapping` accepts short obfuscated class ids such as `dhl` when `sourceMapping="obfuscated"`. Other class-mapping lookups still expect fully-qualified names.
+- `trace-symbol-lifecycle` still prefers the separate `descriptor` field for exact lookups, but it now strips an accidental inline signature suffix from `symbol` before splitting `Class.method`.
 - `search-class-source` defaults to `queryMode="auto"` and keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path. Use `queryMode="literal"` for an explicit full substring scan.
 - When a public parameter has a fixed safe default, `tools/list` exposes it through the JSON Schema `default` field.
 - Error recovery `suggestedCall` payloads omit parameters when the supplied value already matches the tool default, keeping retry calls smaller without changing behavior.

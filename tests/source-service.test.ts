@@ -4015,6 +4015,66 @@ test("SourceService traceSymbolLifecycle with non-obfuscated mapping resolves sy
   assert.ok(mappingCalls.some((c) => c.name === "yarnTick" && c.targetMapping === "obfuscated"));
 });
 
+test("SourceService traceSymbolLifecycle ignores inline signature suffix when parsing symbol", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-inline-signature-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return ["1.0.0"];
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  let requestedClassName: string | undefined;
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string }) {
+      requestedClassName = input.fqn;
+      assert.equal(input.fqn, "net.minecraft.server.Main");
+      return {
+        constructors: [],
+        fields: [],
+        methods: [
+          {
+            ownerFqn: "net.minecraft.server.Main",
+            name: "tickServer",
+            javaSignature: "public void tickServer(java.lang.String)",
+            jvmDescriptor: "(Ljava/lang/String;)V",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const result = await (service as unknown as {
+    traceSymbolLifecycle: (input: {
+      symbol: string;
+    }) => Promise<{
+      query: { className: string; methodName: string };
+      presence: { existsNow: boolean };
+    }>;
+  }).traceSymbolLifecycle({
+    symbol: "net.minecraft.server.Main.tickServer(java.lang.String)"
+  });
+
+  assert.equal(requestedClassName, "net.minecraft.server.Main");
+  assert.equal(result.query.className, "net.minecraft.server.Main");
+  assert.equal(result.query.methodName, "tickServer");
+  assert.equal(result.presence.existsNow, true);
+});
+
 test("SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanned version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-versioned-map-"));

@@ -388,10 +388,11 @@ export class AnalyzeSymbolService {
         };
       }
       case "api-overview": {
+        const classNameMapping = input.classNameMapping ?? input.sourceMapping ?? "obfuscated";
         const output = await this.deps.getClassApiMatrix({
           version: input.version!,
           className: input.subject.name,
-          classNameMapping: input.classNameMapping ?? "obfuscated",
+          classNameMapping,
           includeKinds: input.includeKinds,
           maxRows: input.maxRows
         });
@@ -408,7 +409,7 @@ export class AnalyzeSymbolService {
                 kind: input.subject.kind,
                 name: input.subject.name,
                 version: input.version,
-                classNameMapping: input.classNameMapping ?? "obfuscated"
+                classNameMapping
               }),
               counts: {
                 rows: output.rowCount,

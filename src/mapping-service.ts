@@ -1085,7 +1085,10 @@ function normalizeMethodDescriptor(descriptor: string | undefined): string {
 
 function normalizeQuerySymbol(
   input: SymbolQueryInput,
-  signatureMode?: "exact" | "name-only"
+  signatureMode?: "exact" | "name-only",
+  options?: {
+    allowShortClassName?: boolean;
+  }
 ): {
   record: MappingSymbolRecord;
   querySymbol: SymbolReference;
@@ -1118,7 +1121,7 @@ function normalizeQuerySymbol(
     }
 
     const className = normalizeMappedSymbolOutput(normalizedName);
-    if (!className.includes(".")) {
+    if (!className.includes(".") && !options?.allowShortClassName) {
       throw invalidInputError("name must be a fully qualified class name when kind=class.", {
         name: input.name
       });
@@ -1336,7 +1339,9 @@ export class MappingService {
       });
     }
 
-    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode);
+    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode, {
+      allowShortClassName: input.kind === "class" && input.sourceMapping === "obfuscated"
+    });
 
     const sourceMapping = input.sourceMapping;
     const targetMapping = input.targetMapping;
