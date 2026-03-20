@@ -316,6 +316,41 @@ test("analyze-mod invalid legacy summary payload returns a structured suggestedC
   });
 });
 
+test("analyze-mod invalid legacy summary payload without detail still promotes metadata retries to standard detail", async () => {
+  const result = await callTool("analyze-mod", {
+    task: "summary",
+    subject: "/workspace/example.jar",
+    include: ["metadata", "entrypoints"]
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            detail?: string;
+            subject?: { kind?: string; jarPath?: string };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "analyze-mod");
+  assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
+    task: "summary",
+    detail: "standard",
+    subject: {
+      kind: "jar",
+      jarPath: "/workspace/example.jar"
+    }
+  });
+});
+
 test("source lookup tools/list schema clarifies object target inputs and loader scope fallback", async () => {
   const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const resolveArtifactSchema = toolMap.get("resolve-artifact") as {

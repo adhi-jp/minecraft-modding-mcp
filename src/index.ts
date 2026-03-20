@@ -1428,28 +1428,16 @@ function buildSourceLookupSuggestedParams(
   return result;
 }
 
-function uniqueStrings(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    if (!seen.has(value)) {
-      seen.add(value);
-      result.push(value);
-    }
-  }
-  return result;
-}
-
 function filterAllowedIncludeValues(
   values: string[] | undefined,
   allowed: readonly string[]
-): string[] | undefined {
+): string[] {
   if (!values?.length) {
-    return undefined;
+    return [];
   }
   const allowedSet = new Set(allowed);
   const filtered = values.filter((value) => allowedSet.has(value));
-  return filtered.length > 0 ? uniqueStrings(filtered) : undefined;
+  return [...new Set(filtered)];
 }
 
 function buildAnalyzeModSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
@@ -1481,7 +1469,7 @@ function buildAnalyzeModSuggestedParams(normalizedInput: unknown): Record<string
     result.detail = detail;
   }
 
-  if (canonicalInclude?.length) {
+  if (canonicalInclude.length > 0) {
     result.include = canonicalInclude;
   }
 
@@ -1542,7 +1530,7 @@ function buildValidateProjectSuggestedParams(normalizedInput: unknown): Record<s
   const result: Record<string, unknown> = { task };
   const subjectRecord = asObjectRecord(record.subject);
   const include = asStringArray(record.include);
-  const canonicalInclude = filterAllowedIncludeValues(include, VALIDATE_PROJECT_INCLUDE_GROUPS) ?? [];
+  const canonicalInclude = filterAllowedIncludeValues(include, VALIDATE_PROJECT_INCLUDE_GROUPS);
   const wantsWorkspaceInclude = include?.some((value) =>
     VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES.includes(value as typeof VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES[number])
   ) ?? false;
@@ -1553,7 +1541,7 @@ function buildValidateProjectSuggestedParams(normalizedInput: unknown): Record<s
   }
 
   const includeSuggestion = wantsWorkspaceInclude
-    ? uniqueStrings([...canonicalInclude, "workspace"])
+    ? [...new Set([...canonicalInclude, "workspace"])]
     : canonicalInclude;
   if (includeSuggestion.length > 0) {
     result.include = includeSuggestion;

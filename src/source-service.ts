@@ -3763,7 +3763,8 @@ export class SourceService {
           },
           sourcePath: path
         })),
-        input
+        input,
+        []
       );
     }
 
@@ -4484,7 +4485,7 @@ export class SourceService {
     mode: "paths" | "config" | "project",
     entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
     input: ValidateMixinInput,
-    additionalWarnings: string[] = []
+    additionalWarnings: string[]
   ): Promise<ValidateMixinOutput> {
     const results: ValidateMixinBatchResult[] = [];
     const batchWarningMode = input.warningMode ?? "aggregated";
