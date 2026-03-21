@@ -38,6 +38,7 @@ This document complements [README.md](../README.md). Use it when you need the ex
 
 - Start with `inspect-minecraft` for version, artifact, class, file, and search workflows before dropping to `list-versions`, `resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, or `list-artifact-files`.
 - Start with `analyze-symbol` for symbol mapping, existence, lifecycle, workspace, and API overview workflows before using `find-mapping`, `resolve-method-mapping-exact`, `check-symbol-exists`, `trace-symbol-lifecycle`, `resolve-workspace-symbol`, or `get-class-api-matrix` directly.
+- `analyze-symbol task="lifecycle"` treats its required `version` as the upper bound for the lifecycle scan. Use `trace-symbol-lifecycle` directly when you need explicit `fromVersion` / `toVersion` control.
 - Start with `compare-minecraft` for version-pair, class diff, registry diff, and migration-summary flows before using `compare-versions`, `diff-class-signatures`, or `get-registry-data` directly.
 - Start with `analyze-mod` for metadata-first mod inspection and safe remap preview/apply flows before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
 - Start with `validate-project` for workspace summaries and direct Mixin or Access Widener validation before using `validate-mixin` or `validate-access-widener` directly.
@@ -118,6 +119,8 @@ Symbol query inputs use `kind` plus `name` plus optional `owner` and `descriptor
 When `trace-symbol-lifecycle` omits `descriptor`, the server resolves methods by owner and name and warns if overload ambiguity prevents a unique answer.
 
 If callers accidentally append an inline signature suffix to `trace-symbol-lifecycle.symbol`, the server strips that suffix before splitting `Class.method`. Use the separate `descriptor` field when the workflow needs exact overload matching.
+
+`trace-symbol-lifecycle` evaluates per-version bytecode checks with bounded parallelism. If you only need a narrower historical window, still prefer explicit `fromVersion` / `toVersion` bounds to reduce work further.
 
 For decompile-only `ERR_MAPPING_NOT_APPLIED` failures, error details include `artifactOrigin`, `nextAction`, and `suggestedCall` so clients can recover without guessing.
 

@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
 
+process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
+
 const EXPECTED_TOOLS = [
   "inspect-minecraft",
   "analyze-symbol",

@@ -4426,6 +4426,94 @@ test("SourceService traceSymbolLifecycle surfaces invalid method mapping input d
   );
 });
 
+test("SourceService traceSymbolLifecycle evaluates versions with bounded parallelism while preserving timeline order", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-parallel-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const versions = ["1.0.7", "1.0.6", "1.0.5", "1.0.4", "1.0.3", "1.0.2", "1.0.1", "1.0.0"];
+  const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return versions;
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  let activeCalls = 0;
+  let maxActiveCalls = 0;
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { jarPath: string }) {
+      const version = versionByJarPath.get(input.jarPath);
+      if (!version) {
+        throw new Error("unknown jar");
+      }
+      activeCalls += 1;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      activeCalls -= 1;
+      return {
+        constructors: [],
+        fields: [],
+        methods: [
+          {
+            ownerFqn: "net.minecraft.server.Main",
+            name: "tickServer",
+            javaSignature: "public void tickServer()",
+            jvmDescriptor: "()V",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const result = await (service as unknown as {
+    traceSymbolLifecycle: (input: {
+      symbol: string;
+      descriptor: string;
+      fromVersion: string;
+      toVersion: string;
+      includeTimeline: boolean;
+    }) => Promise<{
+      timeline?: Array<{ version: string; exists: boolean }>;
+    }>;
+  }).traceSymbolLifecycle({
+    symbol: "net.minecraft.server.Main.tickServer",
+    descriptor: "()V",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.7",
+    includeTimeline: true
+  });
+
+  assert.ok(maxActiveCalls > 1);
+  assert.ok(maxActiveCalls <= 4);
+  assert.deepEqual(
+    result.timeline?.map((entry) => ({ version: entry.version, exists: entry.exists })),
+    [
+      { version: "1.0.0", exists: true },
+      { version: "1.0.1", exists: true },
+      { version: "1.0.2", exists: true },
+      { version: "1.0.3", exists: true },
+      { version: "1.0.4", exists: true },
+      { version: "1.0.5", exists: true },
+      { version: "1.0.6", exists: true },
+      { version: "1.0.7", exists: true }
+    ]
+  );
+});
+
 test("SourceService diffClassSignatures returns member added/removed/modified deltas", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-diff-signatures-"));

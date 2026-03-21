@@ -141,9 +141,11 @@ These six top-level workflow tools cover the common workflows and return summary
 
 - These top-level workflow tools return `result.summary` first and include `summary.nextActions` when there is a clear follow-up step.
 - `analyze-symbol task="api-overview"` inherits `sourceMapping` as the default `classNameMapping`; it only falls back to `obfuscated` when neither value is provided.
+- `analyze-symbol task="lifecycle"` now uses its required `version` as the lifecycle upper bound (`trace-symbol-lifecycle.toVersion`) instead of ignoring it and always scanning the full default range. Use `trace-symbol-lifecycle` directly when you need explicit `fromVersion` / `toVersion` control.
 - `get-class-api-matrix` now anchors rows to the explicitly requested `classNameMapping` instead of silently switching back to `obfuscated` when both namespaces are available.
 - `find-mapping` accepts short obfuscated class ids such as `dhl` when `sourceMapping="obfuscated"`. Other class-mapping lookups still expect fully-qualified names.
 - `trace-symbol-lifecycle` still prefers the separate `descriptor` field for exact lookups, but it now strips an accidental inline signature suffix from `symbol` before splitting `Class.method`.
+- `trace-symbol-lifecycle` now evaluates per-version bytecode checks with bounded parallelism, reducing long stalls on broad lifecycle scans without changing the response contract.
 - `analyze-mod` and `validate-project` still require structured `subject` objects and canonical `include` groups, but stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
 - `validate-mixin` and `validate-project task="project-summary"` now treat empty mixin configs as warning-only discovery results with zero validated classes instead of `ERR_INVALID_INPUT`.
 - `search-class-source` defaults to `queryMode="auto"` and keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path. Use `queryMode="literal"` for an explicit full substring scan.

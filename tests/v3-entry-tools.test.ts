@@ -919,6 +919,79 @@ test("AnalyzeSymbolService api-overview inherits sourceMapping when classNameMap
   assert.equal(result.summary.subject.classNameMapping, "mojang");
 });
 
+test("AnalyzeSymbolService lifecycle scopes traceSymbolLifecycle to the requested version", async () => {
+  let seenInput:
+    | {
+        symbol: string;
+        descriptor?: string;
+        mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        toVersion?: string;
+      }
+    | undefined;
+
+  const service = new AnalyzeSymbolService({
+    checkSymbolExists: async () => {
+      throw new Error("not used");
+    },
+    findMapping: async () => {
+      throw new Error("not used");
+    },
+    resolveMethodMappingExact: async () => {
+      throw new Error("not used");
+    },
+    traceSymbolLifecycle: async (input) => {
+      seenInput = input as typeof input & { toVersion?: string };
+      return {
+        query: {
+          className: "net.minecraft.world.item.Item",
+          methodName: "use",
+          descriptor: "(Lnet/minecraft/world/item/ItemStack;)V",
+          mapping: "mojang"
+        },
+        range: {
+          fromVersion: "1.21.10",
+          toVersion: "1.21.10",
+          scannedCount: 1
+        },
+        presence: {
+          firstSeen: "1.21.10",
+          lastSeen: "1.21.10",
+          missingBetween: [],
+          existsNow: true
+        },
+        warnings: []
+      };
+    },
+    resolveWorkspaceSymbol: async () => {
+      throw new Error("not used");
+    },
+    getClassApiMatrix: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "lifecycle",
+    detail: "summary",
+    version: "1.21.10",
+    sourceMapping: "mojang",
+    subject: {
+      kind: "method",
+      owner: "net.minecraft.world.item.Item",
+      name: "use",
+      descriptor: "(Lnet/minecraft/world/item/ItemStack;)V"
+    }
+  });
+
+  assert.deepEqual(seenInput, {
+    symbol: "net.minecraft.world.item.Item.use",
+    descriptor: "(Lnet/minecraft/world/item/ItemStack;)V",
+    mapping: "mojang",
+    toVersion: "1.21.10"
+  });
+  assert.equal(result.summary.status, "ok");
+});
+
 test("AnalyzeSymbolService includes summary.subject for mapping flows", async () => {
   const service = new AnalyzeSymbolService({
     checkSymbolExists: async () => {

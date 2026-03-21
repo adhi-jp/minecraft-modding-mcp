@@ -792,6 +792,7 @@ function clampLimit(limit: number | undefined, fallback: number, max: number): n
 
 const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
+const TRACE_LIFECYCLE_MAX_CONCURRENCY = 4;
 
 type VersionSourceCandidate = {
   jarPath: string;
@@ -994,6 +995,37 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+async function mapWithConcurrencyLimit<TInput, TOutput>(
+  items: readonly TInput[],
+  limit: number,
+  mapper: (item: TInput, index: number) => Promise<TOutput>
+): Promise<TOutput[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<TOutput>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(Math.trunc(limit), items.length));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        // Safe in Node's single-threaded event loop because no await occurs between
+        // reading and incrementing nextIndex inside this synchronous dispatch section.
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        if (currentIndex >= items.length) {
+          return;
+        }
+        results[currentIndex] = await mapper(items[currentIndex] as TInput, currentIndex);
+      }
+    })
+  );
+
+  return results;
 }
 
 function normalizeStrictPositiveInt(
@@ -2589,23 +2621,20 @@ export class SourceService {
       );
     }
 
-    const resolvedSymbolsByVersion = new Map<
-      string,
-      { className: string; methodName: string; methodDescriptor?: string }
-    >();
+    const scannedResults = await mapWithConcurrencyLimit(
+      selectedVersions,
+      TRACE_LIFECYCLE_MAX_CONCURRENCY,
+      async (version) => {
+        const versionWarnings: string[] = [];
 
-    const scanned: LifecycleScanEntry[] = [];
-    for (const version of selectedVersions) {
-      try {
-        let resolvedSymbols = resolvedSymbolsByVersion.get(version);
-        if (!resolvedSymbols) {
-          const [obfuscatedClassName, obfuscatedMethod] = await Promise.all([
+        try {
+          const [obfuscatedClassName, obfuscatedMethod, resolvedJar] = await Promise.all([
             this.resolveToObfuscatedClassName(
               userClassName,
               version,
               mapping,
               input.sourcePriority,
-              warnings
+              versionWarnings
             ),
             this.resolveToObfuscatedMemberName(
               userMethodName,
@@ -2615,60 +2644,66 @@ export class SourceService {
               version,
               mapping,
               input.sourcePriority,
-              warnings
-            )
+              versionWarnings
+            ),
+            this.versionService.resolveVersionJar(version)
           ]);
-          resolvedSymbols = {
-            className: obfuscatedClassName,
-            methodName: obfuscatedMethod.name,
-            methodDescriptor: obfuscatedMethod.descriptor
-          };
-          resolvedSymbolsByVersion.set(version, resolvedSymbols);
-        }
 
-        const resolvedJar = await this.versionService.resolveVersionJar(version);
-        const signature = await this.explorerService.getSignature({
-          fqn: resolvedSymbols.className,
-          jarPath: resolvedJar.jarPath,
-          access: "all",
-          includeSynthetic: true
-        });
-        const sameNameMethods = signature.methods.filter((method) => method.name === resolvedSymbols.methodName);
-        const matchesDescriptor = (resolvedSymbols.methodDescriptor ?? descriptor)
-          ? sameNameMethods.some(
-              (method) => method.jvmDescriptor === (resolvedSymbols.methodDescriptor ?? descriptor)
-            )
-          : sameNameMethods.length > 0;
-        const reason =
-          !matchesDescriptor && descriptor && sameNameMethods.length > 0 ? "descriptor-mismatch" : undefined;
-
-        scanned.push({
-          version,
-          exists: matchesDescriptor,
-          reason,
-          determinate: true
-        });
-      } catch (caughtError) {
-        if (isAppError(caughtError) && caughtError.code === ERROR_CODES.CLASS_NOT_FOUND) {
-          scanned.push({
-            version,
-            exists: false,
-            reason: "class-not-found",
-            determinate: true
+          const signature = await this.explorerService.getSignature({
+            fqn: obfuscatedClassName,
+            jarPath: resolvedJar.jarPath,
+            access: "all",
+            includeSynthetic: true
           });
-          continue;
-        }
+          const sameNameMethods = signature.methods.filter((method) => method.name === obfuscatedMethod.name);
+          const effectiveDescriptor = obfuscatedMethod.descriptor ?? descriptor;
+          const matchesDescriptor = effectiveDescriptor
+            ? sameNameMethods.some((method) => method.jvmDescriptor === effectiveDescriptor)
+            : sameNameMethods.length > 0;
+          const reason =
+            !matchesDescriptor && descriptor && sameNameMethods.length > 0 ? "descriptor-mismatch" : undefined;
 
-        scanned.push({
-          version,
-          exists: false,
-          reason: "unresolved",
-          determinate: false
-        });
-        warnings.push(
-          `Failed to evaluate ${version}: ${caughtError instanceof Error ? caughtError.message : String(caughtError)}`
-        );
+          return {
+            entry: {
+              version,
+              exists: matchesDescriptor,
+              reason,
+              determinate: true
+            } satisfies LifecycleScanEntry,
+            warnings: versionWarnings
+          };
+        } catch (caughtError) {
+          if (isAppError(caughtError) && caughtError.code === ERROR_CODES.CLASS_NOT_FOUND) {
+            return {
+              entry: {
+                version,
+                exists: false,
+                reason: "class-not-found",
+                determinate: true
+              } satisfies LifecycleScanEntry,
+              warnings: versionWarnings
+            };
+          }
+
+          versionWarnings.push(
+            `Failed to evaluate ${version}: ${caughtError instanceof Error ? caughtError.message : String(caughtError)}`
+          );
+          return {
+            entry: {
+              version,
+              exists: false,
+              reason: "unresolved",
+              determinate: false
+            } satisfies LifecycleScanEntry,
+            warnings: versionWarnings
+          };
+        }
       }
+    );
+
+    const scanned = scannedResults.map((result) => result.entry);
+    for (const result of scannedResults) {
+      warnings.push(...result.warnings);
     }
 
     const determinate = scanned.filter((entry) => entry.determinate);

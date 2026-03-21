@@ -121,6 +121,7 @@ type AnalyzeSymbolDeps = {
     symbol: string;
     descriptor?: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    toVersion?: string;
   }) => Promise<TraceSymbolLifecycleOutput>;
   resolveWorkspaceSymbol: (input: {
     projectPath: string;
@@ -310,7 +311,8 @@ export class AnalyzeSymbolService {
             ? `${input.subject.owner}.${input.subject.name}`
             : input.subject.name,
           descriptor: input.subject.descriptor,
-          mapping: input.sourceMapping
+          mapping: input.sourceMapping,
+          toVersion: input.version
         });
         return {
           ...buildEntryToolResult({
