@@ -58,6 +58,20 @@ function expandHome(pathValue: string): string {
   return resolve(homedir(), withoutTilde);
 }
 
+function normalizeOptionalPathEnvValue(pathValue: string | undefined): string | undefined {
+  if (!pathValue) {
+    return undefined;
+  }
+
+  const trimmed = pathValue.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  return normalized === "undefined" || normalized === "null" ? undefined : trimmed;
+}
+
 function normalizePath(pathValue: string, field: string): string {
   const expanded = expandHome(pathValue.trim());
   const normalizedForHost = normalizePathForHost(expanded, undefined, field);
@@ -144,16 +158,12 @@ function parseMappingSourcePriority(
 }
 
 function parseOptionalJarPath(envValue: string | undefined, field: string): string | undefined {
-  if (!envValue) {
-    return undefined;
-  }
+  const trimmed = normalizeOptionalPathEnvValue(envValue);
+  return trimmed ? normalizePath(trimmed, field) : undefined;
+}
 
-  const trimmed = envValue.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  return normalizePath(trimmed, field);
+function parseRequiredPath(envValue: string | undefined, fallback: string, field: string): string {
+  return normalizePath(normalizeOptionalPathEnvValue(envValue) ?? fallback, field);
 }
 
 function parseVineflowerPath(envValue: string | undefined): string | undefined {
@@ -166,14 +176,18 @@ function buildArtifactsDirectory(cacheDir: string): string {
 }
 
 export function loadConfig(): Config {
-  const cacheDir = normalizePath(process.env.MCP_CACHE_DIR ?? DEFAULTS.cacheDir, "MCP_CACHE_DIR");
-  const localM2Path = normalizePath(process.env.MCP_LOCAL_M2 ?? DEFAULTS.localM2Path, "MCP_LOCAL_M2");
+  const cacheDir = parseRequiredPath(process.env.MCP_CACHE_DIR, DEFAULTS.cacheDir, "MCP_CACHE_DIR");
+  const localM2Path = parseRequiredPath(process.env.MCP_LOCAL_M2, DEFAULTS.localM2Path, "MCP_LOCAL_M2");
 
   const sourceRepos = parseRepos(process.env.MCP_SOURCE_REPOS);
 
   return {
     cacheDir,
-    sqlitePath: normalizePath(process.env.MCP_SQLITE_PATH ?? buildArtifactsDirectory(cacheDir), "MCP_SQLITE_PATH"),
+    sqlitePath: parseRequiredPath(
+      process.env.MCP_SQLITE_PATH,
+      buildArtifactsDirectory(cacheDir),
+      "MCP_SQLITE_PATH"
+    ),
     sourceRepos,
     localM2Path,
     vineflowerJarPath: parseVineflowerPath(process.env.MCP_VINEFLOWER_JAR_PATH),

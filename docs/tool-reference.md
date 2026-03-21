@@ -143,6 +143,8 @@ Use `resolve-workspace-symbol` when you need compile-visible names from actual G
 
 ## Environment Variables
 
+Path-based overrides treat blank values and the literal strings `undefined` and `null` as unset, so accidental client serialization does not create `./undefined` or `./null` cache roots or broken JAR override paths.
+
 ### Core and Repository Discovery
 
 | Variable | Default | Description |

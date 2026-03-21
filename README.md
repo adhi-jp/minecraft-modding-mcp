@@ -376,6 +376,8 @@ See [docs/tool-reference.md#response-envelope](docs/tool-reference.md#response-e
 
 These are the most commonly changed settings. For the full supported list, see [docs/tool-reference.md#environment-variables](docs/tool-reference.md#environment-variables).
 
+Path-based overrides treat blank values and the literal strings `undefined` and `null` as unset, so accidental client serialization does not create `./undefined` or `./null` cache roots or broken JAR override paths.
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `MCP_CACHE_DIR` | `~/.cache/minecraft-modding-mcp` | Cache root for downloads and SQLite |

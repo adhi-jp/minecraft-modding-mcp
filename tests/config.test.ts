@@ -110,6 +110,28 @@ test("loadConfig normalizes and expands paths", async () => {
   });
 });
 
+test("loadConfig treats blank, undefined, and null path env values as unset", async () => {
+  await withEnv({
+    MCP_CACHE_DIR: "undefined",
+    MCP_LOCAL_M2: "   ",
+    MCP_SQLITE_PATH: "null",
+    MCP_VINEFLOWER_JAR_PATH: " null ",
+    MCP_TINY_REMAPPER_JAR_PATH: "\t"
+  }, () => {
+    const config = loadConfig();
+    const expectedCacheDir = resolve(homedir(), ".cache/minecraft-modding-mcp");
+    const expectedSqlitePath = resolve(expectedCacheDir, "source-cache.db");
+
+    assert.equal(config.cacheDir, expectedCacheDir);
+    assert.equal(config.sqlitePath, expectedSqlitePath);
+    assert.equal(config.localM2Path, resolve(homedir(), ".m2/repository"));
+    assert.equal(config.vineflowerJarPath, undefined);
+    assert.equal(config.tinyRemapperJarPath, undefined);
+    assert.notEqual(config.cacheDir, resolve(process.cwd(), "undefined"));
+    assert.notEqual(config.sqlitePath, resolve(process.cwd(), "null"));
+  });
+});
+
 test("loadConfig falls back for malformed numeric values", async () => {
   await withEnv({
     MCP_MAX_CONTENT_BYTES: "0",
