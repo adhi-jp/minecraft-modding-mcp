@@ -25,7 +25,10 @@ This document complements [README.md](../README.md). Use it when you need the ex
 - `check-symbol-exists` defaults to strict FQCN class lookup. Use `nameMode="auto"` for short class names.
 - `check-symbol-exists` can use `signatureMode="name-only"` for overload discovery, but exact `descriptor` matching is still the most reliable path.
 - `find-mapping` accepts short class ids such as `dhl` only when `sourceMapping="obfuscated"`. Other class lookup paths still validate class names as fully-qualified.
+- `find-mapping` still rejects the public namespace name `official`, but upstream Tiny files that use `official` internally are now bridged to the supported `obfuscated` graph automatically.
 - `get-class-api-matrix` now uses the explicit `classNameMapping` as its base namespace even when an obfuscated identity is also available.
+- `inspect-minecraft task="class-overview" | "search" | "class-source" | "class-members"` needs artifact context for plain `subject.kind="search" | "class" | "file"` inputs. Use `subject.kind="workspace"` when you want the tool to resolve the artifact for you. Invalid combinations return `ERR_INVALID_INPUT` with a retryable `suggestedCall`; when artifact context is the only missing piece, the suggested retry preserves the requested task.
+- Workspace `inspect-minecraft` flows now treat `partial-source-no-net-minecraft` as a recoverable condition: `task="class-overview"` and class-like workspace `task="search"` can confirm vanilla classes through binary-backed symbol lookup, while workspace `task="list-files"` marks the response as partial and includes follow-up guidance.
 - `analyze-mod` and `validate-project` keep their structured `subject` contracts; stale string-subject or domain-include payloads now fail with `ERR_INVALID_INPUT` plus a retryable `suggestedCall` instead of a dead-end schema error.
 - `scope="loader"` currently resolves through the same lookup path as `scope="merged"`.
 - `remap-mod-jar` requires Java and supports Fabric/Quilt inputs. Mojang-mapped inputs can only be copied through `targetMapping="mojang"`.
@@ -38,7 +41,7 @@ This document complements [README.md](../README.md). Use it when you need the ex
 
 - Start with `inspect-minecraft` for version, artifact, class, file, and search workflows before dropping to `list-versions`, `resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, or `list-artifact-files`.
 - Start with `analyze-symbol` for symbol mapping, existence, lifecycle, workspace, and API overview workflows before using `find-mapping`, `resolve-method-mapping-exact`, `check-symbol-exists`, `trace-symbol-lifecycle`, `resolve-workspace-symbol`, or `get-class-api-matrix` directly.
-- `analyze-symbol task="lifecycle"` treats its required `version` as the upper bound for the lifecycle scan. Use `trace-symbol-lifecycle` directly when you need explicit `fromVersion` / `toVersion` control.
+- `analyze-symbol task="lifecycle"` treats its required `version` as the upper bound for the lifecycle scan and intentionally limits the high-level helper to a recent 5-version window. Use `trace-symbol-lifecycle` directly when you need explicit `fromVersion` / `toVersion` control or a wider history.
 - Start with `compare-minecraft` for version-pair, class diff, registry diff, and migration-summary flows before using `compare-versions`, `diff-class-signatures`, or `get-registry-data` directly.
 - Start with `analyze-mod` for metadata-first mod inspection and safe remap preview/apply flows before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
 - Start with `validate-project` for workspace summaries and direct Mixin or Access Widener validation before using `validate-mixin` or `validate-access-widener` directly.
@@ -120,7 +123,11 @@ When `trace-symbol-lifecycle` omits `descriptor`, the server resolves methods by
 
 If callers accidentally append an inline signature suffix to `trace-symbol-lifecycle.symbol`, the server strips that suffix before splitting `Class.method`. Use the separate `descriptor` field when the workflow needs exact overload matching.
 
+`trace-symbol-lifecycle` rejects class-like `symbol` inputs such as `net.minecraft.world.item.Item` with `ERR_INVALID_INPUT`. Pass `Class.method` and keep exact overload matching in the separate `descriptor` field.
+
 `trace-symbol-lifecycle` evaluates per-version bytecode checks with bounded parallelism. If you only need a narrower historical window, still prefer explicit `fromVersion` / `toVersion` bounds to reduce work further.
+
+`trace-symbol-lifecycle`, `check-symbol-exists`, and `find-mapping` skip intermediary/yarn Tiny graph loading when the request only needs Mojang/obfuscated names, so cold `mojang <-> obfuscated` lifecycle and existence lookups no longer pay the full named-namespace graph cost.
 
 For decompile-only `ERR_MAPPING_NOT_APPLIED` failures, error details include `artifactOrigin`, `nextAction`, and `suggestedCall` so clients can recover without guessing.
 

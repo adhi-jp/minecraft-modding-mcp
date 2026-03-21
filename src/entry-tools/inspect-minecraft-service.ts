@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type {
+  CheckSymbolExistsOutput,
   FindClassOutput,
   GetArtifactFileOutput,
   GetClassMembersOutput,
@@ -161,6 +162,40 @@ type WorkspaceSubject = Extract<Subject, { kind: "workspace" }>;
 type WorkspaceClassFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "class" }>;
 type WorkspaceSearchFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "search" }>;
 type WorkspaceFileFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "file" }>;
+type InspectMinecraftTask = typeof TASKS[number];
+type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
+type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
+
+function hasPartialVanillaCoverage(artifact: ResolveArtifactOutput | undefined): boolean {
+  return artifact?.qualityFlags.includes("partial-source-no-net-minecraft") === true
+    || artifact?.artifactContents.sourceCoverage === "partial";
+}
+
+function looksLikeClassQuery(query: string): boolean {
+  const trimmed = query.trim();
+  if (!/^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(trimmed)) {
+    return false;
+  }
+  const simpleName = trimmed.split(".").at(-1) ?? trimmed;
+  return /^[A-Z_$]/.test(simpleName) || /^class_\d+(?:\$class_\d+)*$/.test(simpleName);
+}
+
+function classNameToFilePath(className: string): string {
+  const topLevelClassName = className.split("$")[0] ?? className;
+  return `${topLevelClassName.replace(/\./g, "/")}.java`;
+}
+
+function isVanillaNamespacePath(filePath: string): boolean {
+  return filePath.startsWith("net/minecraft/") || filePath.startsWith("com/mojang/");
+}
+
+function hitTargetsVanillaNamespace(hit: SearchClassSourceOutput["hits"][number]): boolean {
+  if (isVanillaNamespacePath(hit.filePath)) {
+    return true;
+  }
+  const qualifiedName = hit.symbol?.qualifiedName;
+  return qualifiedName?.startsWith("net.minecraft.") === true || qualifiedName?.startsWith("com.mojang.") === true;
+}
 
 type InspectMinecraftDeps = {
   listVersions: (input: { includeSnapshots?: boolean; limit?: number }) => Promise<ListVersionsOutput>;
@@ -173,6 +208,18 @@ type InspectMinecraftDeps = {
     strictVersion?: boolean;
   }) => Promise<ResolveArtifactOutput>;
   findClass: (input: { className: string; artifactId: string; limit?: number }) => Promise<FindClassOutput>;
+  checkSymbolExists?: (input: {
+    version: string;
+    kind: "class" | "field" | "method";
+    name: string;
+    owner?: string;
+    descriptor?: string;
+    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourcePriority?: "loom-first" | "maven-first";
+    nameMode?: "fqcn" | "auto";
+    signatureMode?: "exact" | "name-only";
+    maxCandidates?: number;
+  }) => Promise<CheckSymbolExistsOutput>;
   getClassSource: (input: {
     className: string;
     artifactId?: string;
@@ -310,12 +357,13 @@ export class InspectMinecraftService {
 
   private async resolveClassArtifactReference(
     subject: Extract<Subject, { kind: "class" }> | WorkspaceSubject,
-    classSubject: Extract<Subject, { kind: "class" }>
+    classSubject: Extract<Subject, { kind: "class" }>,
+    task: Extract<ArtifactContextTask, "class-overview" | "class-source" | "class-members">
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
     if (subject.kind === "workspace") {
       return this.resolveWorkspaceArtifactReference(subject, classSubject.artifact);
     }
-    return this.resolveArtifactReference(classSubject);
+    return this.resolveArtifactReference(classSubject, task);
   }
 
   private async resolveWorkspaceArtifactReference(
@@ -398,17 +446,149 @@ export class InspectMinecraftService {
     return subject;
   }
 
+  private async exampleVersionForSubject(
+    subject: Extract<Subject, { kind: "class" | "search" | "file" }>
+  ): Promise<string> {
+    if ("projectPath" in subject && typeof subject.projectPath === "string") {
+      const detectedVersion = await this.deps.detectProjectMinecraftVersion(subject.projectPath);
+      if (detectedVersion) {
+        return detectedVersion;
+      }
+    }
+    return "<version>";
+  }
+
+  private async buildArtifactContextSuggestedCall(
+    task: ArtifactContextTask,
+    subject: Extract<Subject, { kind: "class" | "search" | "file" }>
+  ): Promise<{ tool: string; params: Record<string, unknown> }> {
+    return {
+      tool: "inspect-minecraft",
+      params: {
+        task,
+        subject: {
+          ...subject,
+          artifact: {
+            type: "resolve-target",
+            target: {
+              kind: "version",
+              value: await this.exampleVersionForSubject(subject)
+            }
+          }
+        }
+      }
+    };
+  }
+
+  private taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
+    return this.resolveTask(undefined, subject) as ConcreteInspectMinecraftTask;
+  }
+
+  private invalidTaskSubjectError(task: ConcreteInspectMinecraftTask, subject: Subject): never {
+    if (task === "class-source" && subject.kind === "version") {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "class-source requires a class subject; version subjects resolve artifacts, not class names.",
+        details: {
+          nextAction: "Retry class-source with subject.kind=class and attach artifact context, or use task=artifact to inspect the version first.",
+          suggestedCall: {
+            tool: "inspect-minecraft",
+            params: {
+              task: "class-source",
+              subject: {
+                kind: "class",
+                className: "net.minecraft.world.item.Item",
+                artifact: {
+                  type: "resolve-target",
+                  target: {
+                    kind: "version",
+                    value: subject.version
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    const suggestedTask = this.taskForSubject(subject);
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `${task} is not compatible with subject.kind="${subject.kind}".`,
+      details: {
+        nextAction: suggestedTask === "artifact"
+          ? `Retry with task=artifact for this ${subject.kind} subject, or reshape the subject so it supplies the input that ${task} needs.`
+          : `Retry with task=${suggestedTask} for this subject, or reshape the subject so it supplies the input that ${task} needs.`,
+        suggestedCall: {
+          tool: "inspect-minecraft",
+          params: {
+            task: suggestedTask,
+            subject
+          }
+        }
+      }
+    });
+  }
+
+  private async resolveBinaryBackedClass(
+    className: string,
+    input: {
+      version?: string;
+      mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    }
+  ): Promise<{ className: string; warnings: string[] } | undefined> {
+    if (!this.deps.checkSymbolExists || !input.version) {
+      return undefined;
+    }
+    let lookup: CheckSymbolExistsOutput;
+    try {
+      lookup = await this.deps.checkSymbolExists({
+        version: input.version,
+        kind: "class",
+        name: className,
+        sourceMapping: input.mapping ?? "obfuscated",
+        nameMode: className.includes(".") ? "fqcn" : "auto",
+        maxCandidates: 10
+      });
+    } catch (caughtError) {
+      if (isAppError(caughtError)) {
+        return undefined;
+      }
+      throw caughtError;
+    }
+    const resolvedClassName = lookup.resolvedSymbol?.name;
+    if (!resolvedClassName) {
+      return undefined;
+    }
+    return {
+      className: resolvedClassName,
+      warnings: lookup.warnings
+    };
+  }
+
   private async resolveArtifactReference(
-    subject: Subject
+    subject: Subject,
+    task?: ArtifactContextTask
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
     if (subject.kind === "artifact") {
       return this.resolveArtifactRef(subject.artifact, subject);
     }
     if (subject.kind === "class" || subject.kind === "file" || subject.kind === "search") {
       if (!subject.artifact) {
+        const suggestedTask: ArtifactContextTask = task
+          ?? (subject.kind === "class"
+            ? "class-overview"
+            : subject.kind === "search"
+              ? "search"
+              : "file");
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
-          message: `${subject.kind} subject requires artifact context.`
+          message: `${subject.kind} subject requires artifact context.`,
+          details: {
+            nextAction: "Add subject.artifact or use subject.kind=workspace so inspect-minecraft can resolve the artifact first.",
+            suggestedCall: await this.buildArtifactContextSuggestedCall(suggestedTask, subject)
+          }
         });
       }
       return this.resolveArtifactRef(subject.artifact, subject);
@@ -621,15 +801,12 @@ export class InspectMinecraftService {
     include: string[]
   ) {
     if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "class-overview requires a class or workspace focus subject."
-      });
+      this.invalidTaskSubjectError("class-overview", subject);
     }
 
     const classSubject = this.buildClassSubject(subject);
     const className = classSubject.className;
-    const artifact = await this.resolveClassArtifactReference(subject, classSubject);
+    const artifact = await this.resolveClassArtifactReference(subject, classSubject, "class-overview");
 
     if (!artifact.artifactId) {
       const summary: Summary = {
@@ -665,6 +842,71 @@ export class InspectMinecraftService {
     });
 
     if (matches.total === 0) {
+      const partialSourceFallback =
+        subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact)
+          ? await this.resolveBinaryBackedClass(className, {
+              version: artifact.version,
+              mapping: classSubject.mapping
+            })
+          : undefined;
+      if (partialSourceFallback) {
+        const metadata = await this.deps.getClassSource({
+          className: partialSourceFallback.className,
+          artifactId: artifact.artifactId,
+          mapping: classSubject.mapping,
+          scope: classSubject.scope,
+          projectPath: classSubject.projectPath,
+          preferProjectVersion: classSubject.preferProjectVersion,
+          strictVersion: classSubject.strictVersion,
+          mode: "metadata"
+        });
+        const summary: Summary = {
+          status: "ok",
+          headline: `Resolved class overview for ${partialSourceFallback.className}.`,
+          subject: createSummarySubject({
+            task: "class-overview",
+            requested: subject,
+            className: partialSourceFallback.className,
+            artifactId: metadata.artifactId
+          }),
+          counts: {
+            totalLines: metadata.totalLines
+          },
+          notes: [
+            "Source coverage was partial, so inspect-minecraft confirmed the vanilla class through binary-backed symbol lookup."
+          ]
+        };
+        return {
+          ...buildEntryToolResult({
+            task: "class-overview",
+            summary,
+            detail,
+            include,
+            blocks: {
+              subject: {
+                requested: subject,
+                resolved: {
+                  artifactId: metadata.artifactId,
+                  className: partialSourceFallback.className
+                }
+              },
+              class: {
+                className: partialSourceFallback.className,
+                totalLines: metadata.totalLines,
+                returnedNamespace: metadata.returnedNamespace
+              }
+            },
+            alwaysBlocks: ["subject"]
+          }),
+          warnings: [
+            ...artifact.warnings,
+            ...matches.warnings,
+            ...partialSourceFallback.warnings,
+            ...metadata.warnings
+          ]
+        };
+      }
+
       const summary: Summary = {
         status: "not_found",
         headline: `No class match was found for ${className}.`,
@@ -818,14 +1060,11 @@ export class InspectMinecraftService {
     include: string[]
   ) {
     if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "class-source requires a class or workspace focus subject."
-      });
+      this.invalidTaskSubjectError("class-source", subject);
     }
     const classSubject = this.buildClassSubject(subject);
     const className = classSubject.className;
-    const artifactContext = await this.resolveClassArtifactReference(subject, classSubject);
+    const artifactContext = await this.resolveClassArtifactReference(subject, classSubject, "class-source");
     const source = await this.deps.getClassSource({
       className,
       artifactId: artifactContext.artifactId || undefined,
@@ -884,13 +1123,10 @@ export class InspectMinecraftService {
     limit: number | undefined
   ) {
     if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "class-members requires a class or workspace focus subject."
-      });
+      this.invalidTaskSubjectError("class-members", subject);
     }
     const classSubject = this.buildClassSubject(subject);
-    const artifact = await this.resolveClassArtifactReference(subject, classSubject);
+    const artifact = await this.resolveClassArtifactReference(subject, classSubject, "class-members");
     const members = await this.deps.getClassMembers({
       className: classSubject.className,
       artifactId: artifact.artifactId || undefined,
@@ -966,17 +1202,14 @@ export class InspectMinecraftService {
     cursor: string | undefined
   ) {
     if (subject.kind !== "search" && !(subject.kind === "workspace" && subject.focus?.kind === "search")) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "search requires a search or workspace focus subject."
-      });
+      this.invalidTaskSubjectError("search", subject);
     }
 
     const searchSubject = subject.kind === "search" ? subject : this.requireWorkspaceSearchFocus(subject);
     const requestedSubject = this.summarizeRequestedSubject(subject);
     const queryMode = searchSubject.queryMode ?? "auto";
     const artifact = subject.kind === "search"
-      ? await this.resolveArtifactReference(subject)
+      ? await this.resolveArtifactReference(subject, "search")
       : await this.resolveWorkspaceArtifactReference(subject, searchSubject.artifact);
     const search = await this.deps.searchClassSource({
       artifactId: artifact.artifactId,
@@ -995,9 +1228,42 @@ export class InspectMinecraftService {
         : undefined
     });
 
-    const sampledHits = capArray(search.hits, 5);
+    const needsBinaryBackedClassHit =
+      subject.kind === "workspace" &&
+      hasPartialVanillaCoverage(artifact.artifact) &&
+      looksLikeClassQuery(searchSubject.query) &&
+      !search.hits.some((hit) => hitTargetsVanillaNamespace(hit));
+    const binaryBackedClassHit = needsBinaryBackedClassHit
+      ? await this.resolveBinaryBackedClass(searchSubject.query, {
+          version: artifact.version,
+          mapping: subject.mapping
+        })
+      : undefined;
+    const binaryBackedHitRecord = binaryBackedClassHit == null
+      ? undefined
+      : {
+          filePath: classNameToFilePath(binaryBackedClassHit.className),
+          score: 100,
+          matchedIn: "symbol" as const,
+          reasonCodes: ["binary-class-lookup"],
+          symbol: {
+            symbolKind: "class" as const,
+            symbolName: binaryBackedClassHit.className.split(".").at(-1) ?? binaryBackedClassHit.className,
+            qualifiedName: binaryBackedClassHit.className,
+            line: 1
+          }
+        };
+    const effectiveHits =
+      binaryBackedHitRecord == null
+        ? search.hits
+        : [
+            binaryBackedHitRecord,
+            ...search.hits.filter((hit) => hit.filePath !== binaryBackedHitRecord.filePath)
+          ];
+
+    const sampledHits = capArray(effectiveHits, 5);
     const isAutoSeparatorMiss =
-      search.hits.length === 0 &&
+      effectiveHits.length === 0 &&
       queryMode === "auto" &&
       /[._$]/.test(searchSubject.query);
     const literalRetrySubject = subject.kind === "search"
@@ -1014,9 +1280,9 @@ export class InspectMinecraftService {
           }
         };
     const summary: Summary = {
-      status: search.hits.length > 0 ? "ok" : "not_found",
-      headline: search.hits.length > 0
-        ? `Found ${search.hits.length} source hits for ${searchSubject.query}.`
+      status: effectiveHits.length > 0 ? "ok" : "not_found",
+      headline: effectiveHits.length > 0
+        ? `Found ${effectiveHits.length} source hits for ${searchSubject.query}.`
         : `No source hits were found for ${searchSubject.query}.`,
       subject: createSummarySubject({
         task: "search",
@@ -1025,16 +1291,16 @@ export class InspectMinecraftService {
         artifactId: artifact.artifactId
       }),
       counts: {
-        hits: search.hits.length
+        hits: effectiveHits.length
       },
       nextActions: nextActionsOrUndefined([
-        ...(search.hits.length > 0
+        ...(effectiveHits.length > 0
           ? [
               createNextAction("inspect-minecraft", {
                 task: "file",
                 subject: {
                   kind: "file",
-                  filePath: search.hits[0]!.filePath,
+                  filePath: effectiveHits[0]!.filePath,
                   artifact: {
                     type: "resolved-id",
                     artifactId: artifact.artifactId
@@ -1059,7 +1325,13 @@ export class InspectMinecraftService {
               "Separator query returned no indexed hits. Retry with queryMode=\"literal\" for an explicit full substring scan."
             ]
           }
-        : {})
+        : binaryBackedClassHit
+          ? {
+              notes: [
+                "Source coverage was partial, so inspect-minecraft returned a binary-backed class match for the vanilla symbol."
+              ]
+            }
+          : {})
     };
     return {
       ...buildEntryToolResult({
@@ -1076,13 +1348,13 @@ export class InspectMinecraftService {
           },
           search: {
             query: searchSubject.query,
-            hits: detail === "summary" ? sampledHits.items : search.hits,
+            hits: detail === "summary" ? sampledHits.items : effectiveHits,
             nextCursor: search.nextCursor
           }
         },
         alwaysBlocks: ["subject"]
       }),
-      warnings: [...artifact.warnings]
+      warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])]
     };
   }
 
@@ -1092,14 +1364,11 @@ export class InspectMinecraftService {
     include: string[]
   ) {
     if (subject.kind !== "file" && !(subject.kind === "workspace" && subject.focus?.kind === "file")) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "file task requires a file or workspace focus subject."
-      });
+      this.invalidTaskSubjectError("file", subject);
     }
     const fileSubject = subject.kind === "file" ? subject : this.requireWorkspaceFileFocus(subject);
     const artifact = subject.kind === "file"
-      ? await this.resolveArtifactReference(subject)
+      ? await this.resolveArtifactReference(subject, "file")
       : await this.resolveWorkspaceArtifactReference(subject, fileSubject.artifact);
     const file = await this.deps.getArtifactFile({
       artifactId: artifact.artifactId,
@@ -1152,15 +1421,52 @@ export class InspectMinecraftService {
     limit: number | undefined,
     cursor: string | undefined
   ) {
-    const artifact = await this.resolveArtifactReference(subject);
+    const artifact = await this.resolveArtifactReference(subject, "list-files");
     const files = await this.deps.listArtifactFiles({
       artifactId: artifact.artifactId,
       limit,
       cursor
     });
     const sampled = capArray(files.items, 10);
+    const partialCoverage = subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact);
+    const nextActions = [
+      ...(files.items.length > 0
+        ? [
+            createNextAction("inspect-minecraft", {
+              task: "file",
+              subject: {
+                kind: "file",
+                filePath: files.items[0],
+                artifact: {
+                  type: "resolved-id",
+                  artifactId: artifact.artifactId
+                }
+              }
+            })
+          ]
+        : []),
+      ...(partialCoverage
+        ? [
+            createNextAction("inspect-minecraft", {
+              task: "class-source",
+              subject: {
+                kind: "workspace",
+                projectPath: subject.projectPath,
+                mapping: subject.mapping,
+                scope: subject.scope,
+                preferProjectVersion: subject.preferProjectVersion,
+                strictVersion: subject.strictVersion,
+                focus: {
+                  kind: "class",
+                  className: "net.minecraft.world.item.Item"
+                }
+              }
+            })
+          ]
+        : [])
+    ];
     const summary: Summary = {
-      status: "ok",
+      status: partialCoverage ? "partial" : "ok",
       headline: `Listed ${files.items.length} files for ${artifact.artifactId}.`,
       subject: createSummarySubject({
         task: "list-files",
@@ -1170,23 +1476,14 @@ export class InspectMinecraftService {
       counts: {
         files: files.items.length
       },
-      nextActions: nextActionsOrUndefined(
-        files.items.length > 0
-          ? [
-              createNextAction("inspect-minecraft", {
-                task: "file",
-                subject: {
-                  kind: "file",
-                  filePath: files.items[0],
-                  artifact: {
-                    type: "resolved-id",
-                    artifactId: artifact.artifactId
-                  }
-                }
-              })
+      nextActions: nextActionsOrUndefined(nextActions),
+      ...(partialCoverage
+        ? {
+            notes: [
+              "This listing is partial because the resolved source artifact does not contain net.minecraft entries."
             ]
-          : []
-      )
+          }
+        : {})
     };
     return {
       ...buildEntryToolResult({
@@ -1203,7 +1500,15 @@ export class InspectMinecraftService {
           },
           files: {
             items: detail === "summary" ? sampled.items : files.items,
-            nextCursor: files.nextCursor
+            nextCursor: files.nextCursor,
+            ...(partialCoverage
+              ? {
+                  coverage: {
+                    sourceCoverage: "partial",
+                    missingNamespaces: ["net.minecraft"]
+                  }
+                }
+              : {})
           }
         },
         alwaysBlocks: ["subject"]

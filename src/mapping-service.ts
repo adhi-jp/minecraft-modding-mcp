@@ -64,12 +64,15 @@ type CandidateAccumulator = {
 type LoadedGraph = {
   version: string;
   priority: MappingSourcePriority;
+  mode: GraphLoadMode;
   pairs: Map<PairKey, PairRecord>;
   adjacency: Map<SourceMapping, SourceMapping[]>;
   pathCache: Map<PairKey, SourceMapping[] | undefined>;
   recordsByTarget: Map<SourceMapping, MappingSymbolRecord[]>;
   warnings: string[];
 };
+
+type GraphLoadMode = "full" | "obfuscated-mojang-only";
 
 export type MappingMatchKind = "exact" | "normalized" | "simple-name";
 
@@ -720,7 +723,7 @@ function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
 
 function normalizeTinyNamespace(namespace: string): SourceMapping | undefined {
   const normalized = namespace.trim().toLowerCase();
-  if (normalized === "obfuscated") {
+  if (normalized === "obfuscated" || normalized === "official") {
     return "obfuscated";
   }
   if (normalized === "mojang") {
@@ -934,6 +937,16 @@ function mappingSourceOrder(priority: MappingSourcePriority): Array<"loom-cache"
     return ["maven", "loom-cache"];
   }
   return ["loom-cache", "maven"];
+}
+
+function requiresOnlyObfuscatedMojangGraph(
+  sourceMapping: SourceMapping,
+  targetMapping?: SourceMapping
+): boolean {
+  return sourceMapping !== "intermediary" &&
+    sourceMapping !== "yarn" &&
+    targetMapping !== "intermediary" &&
+    targetMapping !== "yarn";
 }
 
 function namespacePath(
@@ -1384,7 +1397,11 @@ export class MappingService {
       };
     }
 
-    const graph = await this.loadGraph(version, priority);
+    const graph = await this.loadGraph(
+      version,
+      priority,
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+    );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       return {
@@ -1485,7 +1502,11 @@ export class MappingService {
       };
     }
 
-    const graph = await this.loadGraph(version, priority);
+    const graph = await this.loadGraph(
+      version,
+      priority,
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+    );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       throw createError({
@@ -1577,7 +1598,11 @@ export class MappingService {
       };
     }
 
-    const graph = await this.loadGraph(version, priority);
+    const graph = await this.loadGraph(
+      version,
+      priority,
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+    );
     const path = namespacePath(graph, sourceMapping, targetMapping);
 
     if (!path) {
@@ -1689,7 +1714,7 @@ export class MappingService {
     }
 
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
-    const graph = await this.loadGraph(version, priority);
+    const graph = await this.loadGraph(version, priority, "full");
     const warnings = [...graph.warnings];
     const includeKinds = normalizeIncludedKinds(input.includeKinds);
     const pathCache = new Map<PairKey, SourceMapping[] | undefined>();
@@ -1956,7 +1981,11 @@ export class MappingService {
             };
           })();
 
-    const graph = await this.loadGraph(version, priority);
+    const graph = await this.loadGraph(
+      version,
+      priority,
+      sourceMapping === "mojang" ? "obfuscated-mojang-only" : "full"
+    );
     const warnings = [...graph.warnings];
     const records = collectTargetRecords(graph, sourceMapping);
     if (records.length === 0) {
@@ -2235,7 +2264,7 @@ export class MappingService {
 
     let graph: LoadedGraph;
     try {
-      graph = await this.loadGraph(input.version, priority);
+      graph = await this.loadGraph(input.version, priority, "full");
     } catch {
       return {
         mojangMappingsAvailable: false,
@@ -2280,8 +2309,12 @@ export class MappingService {
     };
   }
 
-  private async loadGraph(version: string, priority: MappingSourcePriority): Promise<LoadedGraph> {
-    const cacheKey = `${version}|${priority}`;
+  private async loadGraph(
+    version: string,
+    priority: MappingSourcePriority,
+    mode: GraphLoadMode
+  ): Promise<LoadedGraph> {
+    const cacheKey = `${version}|${priority}|${mode}`;
     const cached = this.graphCache.get(cacheKey);
     if (cached) {
       this.graphCache.delete(cacheKey);
@@ -2294,7 +2327,7 @@ export class MappingService {
       return existingLock;
     }
 
-    const buildPromise = this.buildGraph(version, priority);
+    const buildPromise = this.buildGraph(version, priority, mode);
     this.buildLocks.set(cacheKey, buildPromise);
     try {
       const built = await buildPromise;
@@ -2306,11 +2339,16 @@ export class MappingService {
     }
   }
 
-  private async buildGraph(version: string, priority: MappingSourcePriority): Promise<LoadedGraph> {
+  private async buildGraph(
+    version: string,
+    priority: MappingSourcePriority,
+    mode: GraphLoadMode
+  ): Promise<LoadedGraph> {
     if (isUnobfuscatedVersion(version)) {
       return {
         version,
         priority,
+        mode,
         pairs: new Map(),
         adjacency: new Map(),
         pathCache: new Map(),
@@ -2324,6 +2362,7 @@ export class MappingService {
     const graph: LoadedGraph = {
       version,
       priority,
+      mode,
       pairs: new Map(),
       adjacency: new Map(),
       pathCache: new Map(),
@@ -2335,32 +2374,34 @@ export class MappingService {
     graph.warnings.push(...mojangLoad.warnings);
     this.mergePairs(graph.pairs, mojangLoad.pairs, "mojang-client-mappings", mojangLoad.mappingArtifact);
 
-    let tinyLoaded = false;
-    const deferredTinyWarnings: string[] = [];
-    for (const source of mappingSourceOrder(priority)) {
-      const tinyLoad =
-        source === "loom-cache"
-          ? await this.loadTinyPairsFromLoom(version)
-          : await this.loadTinyPairsFromMaven(version);
-      if (tinyLoad.pairs.size === 0) {
-        deferredTinyWarnings.push(...tinyLoad.warnings);
-        continue;
+    if (mode === "full") {
+      let tinyLoaded = false;
+      const deferredTinyWarnings: string[] = [];
+      for (const source of mappingSourceOrder(priority)) {
+        const tinyLoad =
+          source === "loom-cache"
+            ? await this.loadTinyPairsFromLoom(version)
+            : await this.loadTinyPairsFromMaven(version);
+        if (tinyLoad.pairs.size === 0) {
+          deferredTinyWarnings.push(...tinyLoad.warnings);
+          continue;
+        }
+
+        tinyLoaded = true;
+        this.mergePairs(graph.pairs, tinyLoad.pairs, source, tinyLoad.mappingArtifact);
+        graph.warnings.push(...tinyLoad.warnings);
+        if (deferredTinyWarnings.length > 0) {
+          graph.warnings.push(
+            `Used ${source === "maven" ? "Maven" : "Loom cache"} tiny mappings for "${version}" after an earlier source lookup returned no data.`
+          );
+        }
+        break;
       }
 
-      tinyLoaded = true;
-      this.mergePairs(graph.pairs, tinyLoad.pairs, source, tinyLoad.mappingArtifact);
-      graph.warnings.push(...tinyLoad.warnings);
-      if (deferredTinyWarnings.length > 0) {
-        graph.warnings.push(
-          `Used ${source === "maven" ? "Maven" : "Loom cache"} tiny mappings for "${version}" after an earlier source lookup returned no data.`
-        );
+      if (!tinyLoaded) {
+        graph.warnings.push(...deferredTinyWarnings);
+        graph.warnings.push("No intermediary/yarn tiny mappings were found for this version.");
       }
-      break;
-    }
-
-    if (!tinyLoaded) {
-      graph.warnings.push(...deferredTinyWarnings);
-      graph.warnings.push("No intermediary/yarn tiny mappings were found for this version.");
     }
 
     graph.adjacency = buildAdjacency(graph.pairs);
@@ -2649,6 +2690,16 @@ export class MappingService {
       }
       this.graphCache.delete(oldestKey);
     }
+  }
+
+  releaseGraphCacheEntry(version: string, sourcePriority?: MappingSourcePriority): void {
+    const normalizedVersion = version.trim();
+    if (!normalizedVersion) {
+      return;
+    }
+    const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, sourcePriority);
+    this.graphCache.delete(`${normalizedVersion}|${priority}|full`);
+    this.graphCache.delete(`${normalizedVersion}|${priority}|obfuscated-mojang-only`);
   }
 }
 

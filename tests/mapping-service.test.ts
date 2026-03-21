@@ -59,6 +59,15 @@ const TEST_TINY = [
   "\tm\t(Ljava/lang/String;)V\tf\tinterOverloadString\toverloaded"
 ].join("\n");
 
+const TEST_TINY_OFFICIAL = [
+  "tiny\t2\t0\tofficial\tintermediary\tnamed",
+  "c\ta/b/C\tintermediary/pkg/InterClass\tyarn/pkg/NamedClass",
+  "\tf\tI\td\tinterField\tnamedField",
+  "\tm\t(I)V\te\tinterMethod\tnamedMethod",
+  "\tm\t(I)V\tf\tinterOverloadInt\toverloaded",
+  "\tm\t(Ljava/lang/String;)V\tf\tinterOverloadString\toverloaded"
+].join("\n");
+
 const TEST_AMBIGUOUS_METHOD_TINY = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
@@ -198,6 +207,69 @@ test("MappingService maps obfuscated -> mojang and caches repeated lookups", asy
   assert.equal(fetchCalls.filter((url) => url === "https://example.test/mappings/client.txt").length, 1);
 });
 
+test("MappingService skips tiny namespace loading for mojang <-> obfuscated lookups", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-obf-only-"));
+  const config = buildTestConfig(root);
+
+  const fetchStub = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/mappings/client.txt") {
+      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const service = new MappingService(config, createVersionServiceStub("https://example.test/mappings/client.txt"), fetchStub);
+
+  let loomTinyLoads = 0;
+  let mavenTinyLoads = 0;
+  (service as unknown as {
+    loadTinyPairsFromLoom: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+    loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+  }).loadTinyPairsFromLoom = async () => {
+    loomTinyLoads += 1;
+    return {
+      pairs: new Map(),
+      warnings: [],
+      mappingArtifact: "loom-cache:none"
+    };
+  };
+  (service as unknown as {
+    loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+  }).loadTinyPairsFromMaven = async () => {
+    mavenTinyLoads += 1;
+    return {
+      pairs: new Map(),
+      warnings: [],
+      mappingArtifact: "maven:none"
+    };
+  };
+
+  const classResult = await service.findMapping({
+    version: "1.21.10",
+    kind: "class",
+    name: "com.mojang.NamedClass",
+    sourceMapping: "mojang",
+    targetMapping: "obfuscated"
+  });
+  const methodResult = await service.resolveMethodMappingExact({
+    version: "1.21.10",
+    owner: "com.mojang.NamedClass",
+    name: "namedMethod",
+    descriptor: "(I)V",
+    sourceMapping: "mojang",
+    targetMapping: "obfuscated"
+  });
+
+  assert.equal(classResult.status, "resolved");
+  assert.equal(classResult.resolvedSymbol?.symbol, "a.b.C");
+  assert.equal(methodResult.status, "resolved");
+  assert.equal(methodResult.resolvedSymbol?.symbol, "a.b.C.e(I)V");
+  assert.equal(loomTinyLoads, 0);
+  assert.equal(mavenTinyLoads, 0);
+});
+
 test("MappingService maps obfuscated -> yarn from Loom tiny cache", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-loom-"));
@@ -287,6 +359,115 @@ test("MappingService falls back to Maven tiny when Loom cache is unavailable", a
 
   assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass");
   assert.equal(result.provenance?.source, "maven");
+});
+
+test("MappingService resolves mojang named namespace paths through official tiny headers from Loom cache", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-official-loom-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  await writeLoomTinyCache(root, TEST_TINY_OFFICIAL);
+
+  const fetchStub = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/mappings/client.txt") {
+      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+
+  const mojangToIntermediary = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "com.mojang.NamedClass",
+      sourceMapping: "mojang",
+      targetMapping: "intermediary"
+    })
+  );
+  const mojangToYarn = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "com.mojang.NamedClass",
+      sourceMapping: "mojang",
+      targetMapping: "yarn"
+    })
+  );
+  const intermediaryToMojang = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "intermediary.pkg.InterClass",
+      sourceMapping: "intermediary",
+      targetMapping: "mojang"
+    })
+  );
+
+  assert.equal(mojangToIntermediary.status, "resolved");
+  assert.equal(mojangToIntermediary.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
+  assert.equal(mojangToYarn.status, "resolved");
+  assert.equal(mojangToYarn.resolvedSymbol?.symbol, "yarn.pkg.NamedClass");
+  assert.equal(intermediaryToMojang.status, "resolved");
+  assert.equal(intermediaryToMojang.resolvedSymbol?.symbol, "com.mojang.NamedClass");
+  assert.ok(mojangToIntermediary.warnings.every((warning) => !warning.includes("No mapping path is available")));
+});
+
+test("MappingService resolves mojang named namespace paths through official tiny headers from Maven fallback", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-official-maven-"));
+  const config = buildTestConfig(root, { mappingSourcePriority: "maven-first" });
+
+  const tinyJarPath = join(root, "official-tiny.jar");
+  await createJar(tinyJarPath, {
+    "mappings/mappings.tiny": `${TEST_TINY_OFFICIAL}\n`
+  });
+  const tinyJarBuffer = await readFile(tinyJarPath);
+
+  const fetchStub = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "https://example.test/mappings/client.txt") {
+      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+    }
+    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+      return new Response(
+        [
+          "<metadata>",
+          "<versioning>",
+          "<versions>",
+          "<version>1.21.10+build.1</version>",
+          "</versions>",
+          "</versioning>",
+          "</metadata>"
+        ].join(""),
+        { status: 200 }
+      );
+    }
+    if (url.endsWith(".jar")) {
+      return new Response(tinyJarBuffer, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+
+  const result = await withCwd(root, () =>
+    service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "com.mojang.NamedClass",
+      sourceMapping: "mojang",
+      targetMapping: "intermediary"
+    })
+  );
+
+  assert.equal(result.status, "resolved");
+  assert.equal(result.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
+  assert.equal(result.mappingContext.sourcePriorityApplied, "maven-first");
+  assert.ok(result.warnings.every((warning) => !warning.includes("No mapping path is available")));
 });
 
 test("MappingService fetches Maven tiny jars in parallel during fallback loading", async () => {

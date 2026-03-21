@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +119,80 @@ function requireToolOk<T extends Record<string, unknown>>(
     return envelope.result as T;
   }
   throw new Error(`${toolName} failed: ${envelope.error.code} ${envelope.error.detail}`);
+}
+
+async function measureToolCall<T extends Record<string, unknown>>(
+  toolName: string,
+  call: () => Promise<{ content: Array<{ type: string; text?: string }> }>
+): Promise<{ result: T; durationMs: number }> {
+  const startedAt = performance.now();
+  const response = await call();
+  const durationMs = performance.now() - startedAt;
+  return {
+    result: requireToolOk<T>(toolName, response),
+    durationMs
+  };
+}
+
+type ColdWarmProbe = {
+  coldMs: number;
+  warmMs: number;
+};
+
+function classifyColdStartProbes(probes: {
+  inspectMinecraftVersions: ColdWarmProbe;
+  workspaceArtifactResolve: ColdWarmProbe;
+}): {
+  classification: "steady-state-like" | "cold-start-overhead-observed" | "manual-review-needed";
+  reason: string;
+  ratios: {
+    inspectMinecraftVersions: number | null;
+    workspaceArtifactResolve: number | null;
+    worstObserved: number | null;
+  };
+} {
+  const versionRatio = probes.inspectMinecraftVersions.warmMs > 0
+    ? probes.inspectMinecraftVersions.coldMs / probes.inspectMinecraftVersions.warmMs
+    : null;
+  const workspaceRatio = probes.workspaceArtifactResolve.warmMs > 0
+    ? probes.workspaceArtifactResolve.coldMs / probes.workspaceArtifactResolve.warmMs
+    : null;
+  const finiteRatios = [versionRatio, workspaceRatio].filter((ratio): ratio is number => ratio != null && Number.isFinite(ratio));
+
+  if (finiteRatios.length !== 2) {
+    return {
+      classification: "manual-review-needed",
+      reason: "At least one warm probe duration was zero or invalid, so the cold/warm ratio could not be classified automatically.",
+      ratios: {
+        inspectMinecraftVersions: versionRatio,
+        workspaceArtifactResolve: workspaceRatio,
+        worstObserved: null
+      }
+    };
+  }
+
+  const worstObserved = Math.max(...finiteRatios);
+  if (worstObserved >= 1.25) {
+    return {
+      classification: "cold-start-overhead-observed",
+      reason: `The worst cold/warm ratio was ${worstObserved.toFixed(2)}x, so cold-start overhead was measurable in this environment.`,
+      ratios: {
+        inspectMinecraftVersions: versionRatio,
+        workspaceArtifactResolve: workspaceRatio,
+        worstObserved
+      }
+    };
+  }
+
+  return {
+    classification: "steady-state-like",
+    reason: `The worst cold/warm ratio stayed within 1.25x (${worstObserved.toFixed(2)}x), so the probes behaved close to steady-state in this environment.`,
+    ratios: {
+      inspectMinecraftVersions: versionRatio,
+      workspaceArtifactResolve: workspaceRatio,
+      worstObserved
+    }
+  };
 }
 
 function asString(value: unknown, field: string): string {
@@ -430,6 +504,10 @@ async function main(): Promise<void> {
   const sqlitePath = join(cacheDir, "source-cache.db");
   const binaryJarPath = join(root, "minecraft-client.jar");
   const sourcesJarPath = join(root, "minecraft-client-sources.jar");
+  const workspacePath = join(root, "workspace");
+  const workspaceLoomCacheDir = join(workspacePath, ".gradle", "loom-cache", "1.21.10");
+  const workspaceBinaryJarPath = join(workspaceLoomCacheDir, "minecraft-merged-1.21.10.jar");
+  const workspaceSourcesJarPath = join(workspaceLoomCacheDir, "minecraft-merged-1.21.10-sources.jar");
   const workerPidFile = join(root, "worker.pid");
 
   await mkdir(cacheDir, { recursive: true });
@@ -460,6 +538,23 @@ async function main(): Promise<void> {
       "public class World {",
       "  static void update() {}",
       "}"
+    ].join("\n")
+  });
+
+  await mkdir(workspaceLoomCacheDir, { recursive: true });
+  await writeFile(join(workspacePath, "gradle.properties"), "minecraft_version=1.21.10\n", "utf8");
+  await createJar(workspaceBinaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbf])
+  });
+  await createJar(workspaceSourcesJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {}"
+    ].join("\n"),
+    "net/minecraft/world/item/Item.java": [
+      "package net.minecraft.world.item;",
+      "public class Item {}"
     ].join("\n")
   });
 
@@ -585,6 +680,114 @@ async function main(): Promise<void> {
     );
     assert.ok(Array.isArray(versionsAfterRestart.releases), "Expected releases list after worker restart.");
     assert.equal(typeof versionsAfterRestart.totalAvailable, "number");
+
+    const inspectVersionsCold = await measureToolCall<Record<string, unknown>>(
+      "inspect-minecraft-versions-cold",
+      () =>
+        client.callTool({
+          name: "inspect-minecraft",
+          arguments: {
+            task: "versions",
+            limit: 1
+          }
+        }) as Promise<{ content: Array<{ type: string; text?: string }> }>
+    );
+    const inspectVersionsWarm = await measureToolCall<Record<string, unknown>>(
+      "inspect-minecraft-versions-warm",
+      () =>
+        client.callTool({
+          name: "inspect-minecraft",
+          arguments: {
+            task: "versions",
+            limit: 1
+          }
+        }) as Promise<{ content: Array<{ type: string; text?: string }> }>
+    );
+    const workspaceArtifactCold = await measureToolCall<Record<string, unknown>>(
+      "inspect-minecraft-workspace-artifact-cold",
+      () =>
+        client.callTool({
+          name: "inspect-minecraft",
+          arguments: {
+            task: "artifact",
+            subject: {
+              kind: "workspace",
+              projectPath: workspacePath,
+              mapping: "obfuscated",
+              scope: "merged",
+              preferProjectVersion: true
+            }
+          }
+        }) as Promise<{ content: Array<{ type: string; text?: string }> }>
+    );
+    const workspaceArtifactWarm = await measureToolCall<Record<string, unknown>>(
+      "inspect-minecraft-workspace-artifact-warm",
+      () =>
+        client.callTool({
+          name: "inspect-minecraft",
+          arguments: {
+            task: "artifact",
+            subject: {
+              kind: "workspace",
+              projectPath: workspacePath,
+              mapping: "obfuscated",
+              scope: "merged",
+              preferProjectVersion: true
+            }
+          }
+        }) as Promise<{ content: Array<{ type: string; text?: string }> }>
+    );
+
+    assert.equal(inspectVersionsCold.result.task, "versions");
+    assert.equal(workspaceArtifactCold.result.task, "artifact");
+    const coldStartClassification = classifyColdStartProbes({
+      inspectMinecraftVersions: {
+        coldMs: inspectVersionsCold.durationMs,
+        warmMs: inspectVersionsWarm.durationMs
+      },
+      workspaceArtifactResolve: {
+        coldMs: workspaceArtifactCold.durationMs,
+        warmMs: workspaceArtifactWarm.durationMs
+      }
+    });
+
+    console.log(
+      "Cold-start perf probes:",
+      JSON.stringify(
+        {
+          conditions: {
+            appCache: "empty at process start",
+            gradleCache: "workspace loom cache pre-populated"
+          },
+          probes: {
+            inspectMinecraftVersions: {
+              coldMs: Number(inspectVersionsCold.durationMs.toFixed(3)),
+              warmMs: Number(inspectVersionsWarm.durationMs.toFixed(3))
+            },
+            workspaceArtifactResolve: {
+              coldMs: Number(workspaceArtifactCold.durationMs.toFixed(3)),
+              warmMs: Number(workspaceArtifactWarm.durationMs.toFixed(3))
+            }
+          },
+          classification: coldStartClassification.classification,
+          classificationReason: coldStartClassification.reason,
+          ratios: {
+            inspectMinecraftVersions: coldStartClassification.ratios.inspectMinecraftVersions == null
+              ? null
+              : Number(coldStartClassification.ratios.inspectMinecraftVersions.toFixed(3)),
+            workspaceArtifactResolve: coldStartClassification.ratios.workspaceArtifactResolve == null
+              ? null
+              : Number(coldStartClassification.ratios.workspaceArtifactResolve.toFixed(3)),
+            worstObserved: coldStartClassification.ratios.worstObserved == null
+              ? null
+              : Number(coldStartClassification.ratios.worstObserved.toFixed(3))
+          },
+          nextMeasurement: "pnpm test:manual:stdio-smoke"
+        },
+        null,
+        2
+      )
+    );
 
     console.log("Manual stdio client smoke passed: source tools and worker auto-restart validated.");
   } finally {

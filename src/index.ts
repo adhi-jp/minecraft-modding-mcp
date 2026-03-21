@@ -846,6 +846,7 @@ const inspectMinecraftService = new InspectMinecraftService({
   listVersions: (input) => sourceService.listVersions(input),
   resolveArtifact: (input) => sourceService.resolveArtifact(input),
   findClass: (input) => Promise.resolve(sourceService.findClass(input)),
+  checkSymbolExists: (input) => sourceService.checkSymbolExists(input),
   getClassSource: (input) => sourceService.getClassSource(input),
   getClassMembers: (input) => sourceService.getClassMembers(input),
   searchClassSource: (input) => sourceService.searchClassSource(input),

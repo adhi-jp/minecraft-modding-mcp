@@ -792,7 +792,7 @@ function clampLimit(limit: number | undefined, fallback: number, max: number): n
 
 const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
-const TRACE_LIFECYCLE_MAX_CONCURRENCY = 4;
+const TRACE_LIFECYCLE_MAX_CONCURRENCY = 3;
 
 type VersionSourceCandidate = {
   jarPath: string;
@@ -880,6 +880,20 @@ function normalizeOptionalProjectPath(projectPath: string | undefined): string |
   return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
 }
 
+function looksLikeClassSegment(name: string): boolean {
+  const trimmed = name.trim();
+  return /^[A-Z_$]/.test(trimmed);
+}
+
+function looksLikeJvmMethodDescriptor(descriptor: string | undefined): boolean {
+  const trimmed = descriptor?.trim();
+  if (!trimmed || !trimmed.startsWith("(")) {
+    return false;
+  }
+  const closing = trimmed.indexOf(")");
+  return closing > 0 && closing < trimmed.length - 1;
+}
+
 function resolveGradleUserHomePath(): string {
   const configured = process.env.GRADLE_USER_HOME?.trim();
   if (!configured) {
@@ -957,10 +971,15 @@ function scopeToJarType(scope: ArtifactScope): "vanilla-client" | "merged" | "lo
   return scope;
 }
 
-function parseQualifiedMethodSymbol(symbol: string): { className: string; methodName: string } {
+function parseQualifiedMethodSymbol(symbol: string): {
+  className: string;
+  methodName: string;
+  inlineDescriptor?: string;
+} {
   const trimmed = symbol.trim();
   const descriptorStart = trimmed.indexOf("(");
   const qualifiedSymbol = descriptorStart >= 0 ? trimmed.slice(0, descriptorStart) : trimmed;
+  const inlineDescriptor = descriptorStart >= 0 ? trimmed.slice(descriptorStart).trim() : undefined;
   const separator = qualifiedSymbol.lastIndexOf(".");
   if (separator <= 0 || separator >= qualifiedSymbol.length - 1) {
     throw createError({
@@ -986,7 +1005,11 @@ function parseQualifiedMethodSymbol(symbol: string): { className: string; method
     });
   }
 
-  return { className, methodName };
+  return {
+    className,
+    methodName,
+    ...(inlineDescriptor ? { inlineDescriptor } : {})
+  };
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -2557,8 +2580,13 @@ export class SourceService {
   async traceSymbolLifecycle(input: TraceSymbolLifecycleInput): Promise<TraceSymbolLifecycleOutput> {
     const mapping = normalizeMapping(input.mapping);
 
-    const { className: userClassName, methodName: userMethodName } = parseQualifiedMethodSymbol(input.symbol);
-    const descriptor = normalizeOptionalString(input.descriptor);
+    const {
+      className: userClassName,
+      methodName: userMethodName,
+      inlineDescriptor
+    } = parseQualifiedMethodSymbol(input.symbol);
+    const descriptor = normalizeOptionalString(input.descriptor)
+      ?? (looksLikeJvmMethodDescriptor(inlineDescriptor) ? normalizeOptionalString(inlineDescriptor) : undefined);
     const includeTimeline = input.includeTimeline ?? false;
     const includeSnapshots = input.includeSnapshots ?? false;
     const maxVersions = clampLimit(input.maxVersions, 120, 400);
@@ -2620,6 +2648,16 @@ export class SourceService {
         `Version scan truncated to ${maxVersions} entries. Effective fromVersion is now "${selectedVersions[0]}".`
       );
     }
+
+    const referenceVersion = selectedVersions[selectedVersions.length - 1];
+    await this.rejectLifecycleClassLikeInput({
+      symbol: input.symbol,
+      className: userClassName,
+      methodName: userMethodName,
+      mapping,
+      version: referenceVersion,
+      sourcePriority: input.sourcePriority
+    });
 
     const scannedResults = await mapWithConcurrencyLimit(
       selectedVersions,
@@ -2697,6 +2735,8 @@ export class SourceService {
             } satisfies LifecycleScanEntry,
             warnings: versionWarnings
           };
+        } finally {
+          this.releaseLifecycleMappingGraph(version, input.sourcePriority);
         }
       }
     );
@@ -5458,6 +5498,50 @@ export class SourceService {
       message: `Source for class "${input.className}" was not found.`,
       details
     });
+  }
+
+  private rejectLifecycleClassLikeInput(input: {
+    symbol: string;
+    className: string;
+    methodName: string;
+    mapping: SourceMapping;
+    version?: string;
+    sourcePriority?: MappingSourcePriority;
+  }): void {
+    if (!looksLikeClassSegment(input.methodName)) {
+      return;
+    }
+
+    const classLikeSymbol = `${input.className}.${input.methodName}`;
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `symbol must be in the form "fully.qualified.Class.method".`,
+      details: {
+        symbol: input.symbol,
+        classLikeSymbol,
+        nextAction: "Pass lifecycle input as Class.method and use the separate descriptor field for exact overload matching.",
+        suggestedCall: input.version
+          ? {
+          tool: "check-symbol-exists",
+          params: {
+            version: input.version,
+            kind: "class",
+            name: classLikeSymbol,
+            sourceMapping: input.mapping
+          }
+          }
+          : undefined
+      }
+    });
+  }
+
+  private releaseLifecycleMappingGraph(version: string, sourcePriority: MappingSourcePriority | undefined): void {
+    if (
+      "releaseGraphCacheEntry" in this.mappingService &&
+      typeof this.mappingService.releaseGraphCacheEntry === "function"
+    ) {
+      this.mappingService.releaseGraphCacheEntry(version, sourcePriority);
+    }
   }
 
   private async resolveToObfuscatedClassName(

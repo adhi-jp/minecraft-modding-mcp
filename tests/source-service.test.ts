@@ -4426,6 +4426,257 @@ test("SourceService traceSymbolLifecycle surfaces invalid method mapping input d
   );
 });
 
+test("SourceService traceSymbolLifecycle rejects obvious class-like symbols before consulting mapping state or scanning jars", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-classlike-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  let resolveVersionJarCalls = 0;
+  let getSignatureCalls = 0;
+  let checkSymbolExistsCalls = 0;
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return ["1.21.1", "1.21"];
+    },
+    async resolveVersionJar(version: string) {
+      resolveVersionJarCalls += 1;
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      getSignatureCalls += 1;
+      return {
+        constructors: [],
+        fields: [],
+        methods: [],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async checkSymbolExists(input: {
+      kind: string;
+      name: string;
+      sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+      version: string;
+    }) {
+      checkSymbolExistsCalls += 1;
+      assert.equal(input.kind, "class");
+      assert.equal(input.name, "net.minecraft.world.item.Item");
+      assert.equal(input.sourceMapping, "mojang");
+      assert.equal(input.version, "1.21.1");
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: {
+          kind: "class",
+          name: "net.minecraft.world.item.Item",
+          symbol: "net.minecraft.world.item.Item"
+        },
+        candidates: [],
+        candidateCount: 1,
+        warnings: []
+      };
+    },
+    async findMapping() {
+      throw new Error("findMapping should not be reached for class-like input");
+    }
+  };
+
+  await assert.rejects(
+    () =>
+      (service as unknown as {
+        traceSymbolLifecycle: (input: {
+          symbol: string;
+          mapping: "mojang";
+          maxVersions: number;
+        }) => Promise<unknown>;
+      }).traceSymbolLifecycle({
+        symbol: "net.minecraft.world.item.Item",
+        mapping: "mojang",
+        maxVersions: 5
+      }),
+    (error: unknown) => {
+      assert.equal(typeof error, "object");
+      assert.equal(error !== null && "code" in error ? (error as { code?: string }).code : undefined, ERROR_CODES.INVALID_INPUT);
+      assert.match(
+        error instanceof Error ? error.message : String(error),
+        /Class\.method/
+      );
+      return true;
+    }
+  );
+
+  assert.equal(checkSymbolExistsCalls, 0);
+  assert.equal(resolveVersionJarCalls, 0);
+  assert.equal(getSignatureCalls, 0);
+});
+
+test("SourceService traceSymbolLifecycle keeps mapping pressure bounded across versions when cache release is available", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-lifecycle-pressure-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const versions = ["1.0.2", "1.0.1", "1.0.0"];
+  const activeGraphVersions = new Set<string>();
+  const releasedVersions: string[] = [];
+
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return versions;
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return {
+        constructors: [],
+        fields: [],
+        methods: [
+          {
+            ownerFqn: "net.minecraft.server.Main",
+            name: "tickServer",
+            javaSignature: "public void tickServer()",
+            jvmDescriptor: "()V",
+            accessFlags: 0x0001,
+            isSynthetic: false
+          }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const acquireGraph = (version: string) => {
+    activeGraphVersions.add(version);
+    if (activeGraphVersions.size > 3) {
+      throw new Error(`simulated mapping graph pressure on ${version}`);
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: {
+      version: string;
+      kind: "class" | "method";
+      name: string;
+      owner?: string;
+      descriptor?: string;
+    }) {
+      acquireGraph(input.version);
+      if (input.kind === "class") {
+        return {
+          resolved: true,
+          status: "resolved",
+          resolvedSymbol: {
+            kind: "class",
+            name: input.name,
+            symbol: input.name
+          },
+          candidates: [],
+          candidateCount: 1,
+          warnings: []
+        };
+      }
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: {
+          kind: "method",
+          owner: input.owner,
+          name: input.name,
+          descriptor: input.descriptor,
+          symbol: `${input.owner}.${input.name}${input.descriptor ?? ""}`
+        },
+        candidates: [],
+        candidateCount: 1,
+        warnings: []
+      };
+    },
+    async resolveMethodMappingExact(input: {
+      version: string;
+      owner: string;
+      name: string;
+      descriptor: string;
+    }) {
+      acquireGraph(input.version);
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: {
+          kind: "method",
+          owner: input.owner,
+          name: input.name,
+          descriptor: input.descriptor,
+          symbol: `${input.owner}.${input.name}${input.descriptor}`
+        },
+        candidates: [],
+        candidateCount: 1,
+        warnings: []
+      };
+    },
+    releaseGraphCacheEntry(version: string) {
+      activeGraphVersions.delete(version);
+      releasedVersions.push(version);
+    }
+  };
+
+  const result = await (service as unknown as {
+    traceSymbolLifecycle: (input: {
+      symbol: string;
+      mapping: "mojang";
+      descriptor: string;
+      fromVersion: string;
+      toVersion: string;
+      includeTimeline: boolean;
+    }) => Promise<{
+      timeline?: Array<{ version: string; exists: boolean; reason?: string }>;
+      warnings: string[];
+    }>;
+  }).traceSymbolLifecycle({
+    symbol: "net.minecraft.server.Main.tickServer",
+    mapping: "mojang",
+    descriptor: "()V",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.2",
+    includeTimeline: true
+  });
+
+  assert.deepEqual(
+    result.timeline?.map((entry) => ({ version: entry.version, exists: entry.exists, reason: entry.reason })),
+    [
+      { version: "1.0.0", exists: true, reason: undefined },
+      { version: "1.0.1", exists: true, reason: undefined },
+      { version: "1.0.2", exists: true, reason: undefined }
+    ]
+  );
+  assert.deepEqual(releasedVersions.sort(), ["1.0.0", "1.0.1", "1.0.2"]);
+  assert.deepEqual(activeGraphVersions.size, 0);
+  assert.ok(
+    result.warnings.every((warning) => !warning.includes("simulated mapping graph pressure")),
+    "expected mapping graph pressure to stay bounded"
+  );
+});
+
 test("SourceService traceSymbolLifecycle evaluates versions with bounded parallelism while preserving timeline order", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-parallel-"));

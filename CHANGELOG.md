@@ -11,14 +11,21 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `analyze-symbol task="api-overview"` now inherits `sourceMapping` as the default `classNameMapping`, avoiding unintended fallback to `obfuscated` when callers omit `classNameMapping`.
 - `get-class-api-matrix` now builds rows from the explicitly requested `classNameMapping` instead of silently pivoting to `obfuscated` when both identities are available.
 - `find-mapping` now accepts short obfuscated class ids such as `dhl` when `sourceMapping="obfuscated"` instead of rejecting them at input validation.
+- `find-mapping` now resolves `mojang -> intermediary`, `mojang -> yarn`, and `intermediary -> mojang` paths even when upstream Tiny metadata still labels the runtime namespace as `official`.
 - `trace-symbol-lifecycle` now strips an accidental inline signature suffix from `symbol` before splitting `Class.method`, preventing misparsed lifecycle lookups while keeping the separate `descriptor` field as the exact-match path.
-- `analyze-symbol task="lifecycle"` now applies its required `version` as the lifecycle scan upper bound instead of ignoring that input and always scanning the default full range.
+- `trace-symbol-lifecycle` now rejects class-like `symbol` inputs such as `net.minecraft.world.item.Item` with `ERR_INVALID_INPUT` instead of scanning versions until lookup work fails elsewhere.
+- `analyze-symbol task="lifecycle"` now applies its required `version` as the lifecycle scan upper bound instead of ignoring that input and always scanning the default full range, and the high-level helper now keeps that scan to a recent 5-version window for predictable runtime.
 - `trace-symbol-lifecycle` now evaluates per-version bytecode checks with bounded parallelism, reducing long stalls on broad lifecycle scans without changing the response envelope.
 - `analyze-mod` and `validate-project` now return retryable `suggestedCall` guidance when stale string-subject or domain-include payloads hit `ERR_INVALID_INPUT`, without widening the structured public contract.
 - `validate-mixin` and `validate-project task="project-summary"` now treat empty mixin configs as warning-only discovery results with zero validated classes instead of `ERR_INVALID_INPUT`.
+- `inspect-minecraft` now recovers workspace `class-overview` and class-like `search` flows from partial source coverage by confirming vanilla classes through binary-backed symbol lookup, and `task="list-files"` now marks those workspace listings as partial with follow-up guidance.
+- `inspect-minecraft` invalid task/subject combinations now return retryable `suggestedCall` guidance instead of dead-end `ERR_INVALID_INPUT` messages, preserving the requested task when artifact context is the only missing input and otherwise pointing to the subject-compatible retry path.
 
 ### Documentation
-- Documented the stale entry-tool payload recovery guidance, `api-overview` mapping inheritance, explicit API-matrix base namespace behavior, short obfuscated `find-mapping` inputs, empty mixin-config warning semantics, and the lifecycle behavior updates in the English and Japanese READMEs plus the tool reference.
+- Documented the stale entry-tool payload recovery guidance, partial-source workspace fallback behavior, explicit inspect-minecraft artifact-context requirements, `api-overview` mapping inheritance, official-header Tiny mapping recovery, short obfuscated `find-mapping` inputs, empty mixin-config warning semantics, and the lifecycle behavior updates in the English and Japanese READMEs plus the tool reference.
+
+### Performance
+- `trace-symbol-lifecycle`, `check-symbol-exists`, and `find-mapping` now skip intermediary/yarn Tiny graph loading when a request only needs Mojang and obfuscated names, cutting cold lifecycle and existence latency on the `mojang <-> obfuscated` path without changing the response contract.
 
 ## [3.1.0] - 2026-03-15
 

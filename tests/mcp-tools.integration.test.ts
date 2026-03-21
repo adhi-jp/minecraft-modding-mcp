@@ -105,6 +105,19 @@ test("manual stdio smoke validates restarted list-versions against the current r
   assert.doesNotMatch(source, /versionsAfterRestart\.items/);
 });
 
+test("manual stdio smoke records cold and warm inspect-minecraft probes for versions and workspace artifact resolution", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  assert.match(source, /inspect-minecraft-versions-cold/);
+  assert.match(source, /inspect-minecraft-versions-warm/);
+  assert.match(source, /inspect-minecraft-workspace-artifact-cold/);
+  assert.match(source, /inspect-minecraft-workspace-artifact-warm/);
+  assert.match(source, /Cold-start perf probes:/);
+  assert.match(source, /function classifyColdStartProbes\(/);
+  assert.match(source, /const coldStartClassification = classifyColdStartProbes\(/);
+  assert.match(source, /classification:\s*coldStartClassification\.classification/);
+});
+
 test("manual stdio smoke bounds transport shutdown and force-kills a stuck supervisor", async () => {
   const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
 
@@ -521,6 +534,193 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
   assert.deepEqual(collectQueryModeDefaults(inspectMinecraftSchema), ["auto", "auto"]);
 });
 
+test("inspect-minecraft search without artifact context returns retryable suggestedCall", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "search",
+    subject: {
+      kind: "search",
+      query: "CreativeModeTab"
+    }
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: {
+              kind?: string;
+              artifact?: {
+                type?: string;
+                target?: { kind?: string };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "search");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "search");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+});
+
+test("inspect-minecraft class-source without artifact context returns retryable suggestedCall", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item"
+    }
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: {
+              kind?: string;
+              artifact?: {
+                type?: string;
+                target?: { kind?: string };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "class-source");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "class");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+});
+
+test("inspect-minecraft class-members without artifact context preserves the requested task in suggestedCall", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-members",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item"
+    }
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: {
+              kind?: string;
+              artifact?: {
+                type?: string;
+                target?: { kind?: string };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "class-members");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "class");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+});
+
+test("inspect-minecraft class-source with version subject returns concrete retry guidance", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "version",
+      version: "1.21.10"
+    }
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: {
+              kind?: string;
+              artifact?: {
+                type?: string;
+                target?: { kind?: string; value?: string };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "class-source");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "class");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.value, "1.21.10");
+});
+
+test("inspect-minecraft class-members with version subject returns retry guidance instead of a dead-end error", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-members",
+    subject: {
+      kind: "version",
+      version: "1.21.10"
+    }
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        suggestedCall?: {
+          tool?: string;
+          params?: {
+            task?: string;
+            subject?: {
+              kind?: string;
+              version?: string;
+            };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "artifact");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "version");
+  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.version, "1.21.10");
+});
+
 test("resolve-artifact invalid string target returns retryable object target suggestedCall", async () => {
   const result = await callTool("resolve-artifact", {
     target: "1.21.10",
@@ -784,4 +984,11 @@ test("index.ts serializes heavy analysis tools to protect MCP transport stabilit
   assert.match(source, /const heavyToolExecutionGate = new ToolExecutionGate\(/);
   assert.match(source, /HEAVY_TOOL_NAMES\.has\(tool\)/);
   assert.match(source, /heavyToolExecutionGate\.run\(tool,\s*\(\)\s*=>\s*action\(parsedInput\)\)/s);
+});
+
+test("index.ts wires check-symbol-exists into inspect-minecraft partial-source fallbacks", async () => {
+  const source = await readFile("src/index.ts", "utf8");
+
+  assert.match(source, /const inspectMinecraftService = new InspectMinecraftService\(\{/);
+  assert.match(source, /checkSymbolExists:\s*\(input\)\s*=>\s*sourceService\.checkSymbolExists\(input\)/);
 });
