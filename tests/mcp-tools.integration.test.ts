@@ -105,13 +105,13 @@ test("manual stdio smoke validates restarted list-versions against the current r
   assert.doesNotMatch(source, /versionsAfterRestart\.items/);
 });
 
-test("manual stdio smoke records cold and warm inspect-minecraft probes for versions and workspace artifact resolution", async () => {
+test("manual stdio smoke records cold and warm local resolve/search probes for a fresh artifact", async () => {
   const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
 
-  assert.match(source, /inspect-minecraft-versions-cold/);
-  assert.match(source, /inspect-minecraft-versions-warm/);
-  assert.match(source, /inspect-minecraft-workspace-artifact-cold/);
-  assert.match(source, /inspect-minecraft-workspace-artifact-warm/);
+  assert.match(source, /resolve-artifact-probe-cold/);
+  assert.match(source, /resolve-artifact-probe-warm/);
+  assert.match(source, /search-class-source-probe-cold/);
+  assert.match(source, /search-class-source-probe-warm/);
   assert.match(source, /Cold-start perf probes:/);
   assert.match(source, /function classifyColdStartProbes\(/);
   assert.match(source, /const coldStartClassification = classifyColdStartProbes\(/);
@@ -121,12 +121,22 @@ test("manual stdio smoke records cold and warm inspect-minecraft probes for vers
 test("manual stdio smoke bounds transport shutdown and force-kills a stuck supervisor", async () => {
   const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
 
-  assert.match(source, /async function closeTransportWithTimeout\(transport: StdioClientTransport/);
-  assert.match(source, /const pid = transport\.pid;/);
+  assert.match(source, /type ManagedTransport = Transport &/);
+  assert.match(source, /async function closeTransportWithTimeout\(transport: ManagedTransport/);
+  assert.match(source, /const pid = transport\.pid \?\? null;/);
   assert.match(source, /const closePromise = transport\.close\(\)\.catch\(\(\) => undefined\);/);
   assert.match(source, /await Promise\.race\(\[\s*closePromise\.then\(\(\) => false\),\s*wait\(timeoutMs\)\.then\(\(\) => true\)\s*\]\)/s);
   assert.match(source, /process\.kill\(pid,\s*"SIGTERM"\)/);
   assert.match(source, /process\.kill\(pid,\s*"SIGKILL"\)/);
+});
+
+test("manual stdio smoke falls back to the bash bridge when native child stdio pipes are unavailable", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  assert.match(source, /selectManualStdioMode\(await canUseStdioPipeReliably\(\)\)/);
+  assert.match(source, /createDirectWorkerBridgeTransport\(/);
+  assert.match(source, /Manual stdio smoke fallback active:/);
+  assert.match(source, /worker restart validation is disabled in this mode/);
 });
 
 test("manual stdio smoke fully terminates the content-length probe child process", async () => {

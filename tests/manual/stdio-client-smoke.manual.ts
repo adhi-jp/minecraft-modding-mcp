@@ -6,8 +6,13 @@ import { join } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import { createJar } from "../helpers/zip.ts";
+import {
+  createDirectWorkerBridgeTransport,
+  selectManualStdioMode
+} from "../helpers/manual-stdio-bridge.ts";
 import type { ListVersionsOutput } from "../../src/version-service.ts";
 
 const EXPECTED_TOOLS = [
@@ -140,32 +145,32 @@ type ColdWarmProbe = {
 };
 
 function classifyColdStartProbes(probes: {
-  inspectMinecraftVersions: ColdWarmProbe;
-  workspaceArtifactResolve: ColdWarmProbe;
+  artifactResolve: ColdWarmProbe;
+  searchClassSource: ColdWarmProbe;
 }): {
   classification: "steady-state-like" | "cold-start-overhead-observed" | "manual-review-needed";
   reason: string;
   ratios: {
-    inspectMinecraftVersions: number | null;
-    workspaceArtifactResolve: number | null;
+    artifactResolve: number | null;
+    searchClassSource: number | null;
     worstObserved: number | null;
   };
 } {
-  const versionRatio = probes.inspectMinecraftVersions.warmMs > 0
-    ? probes.inspectMinecraftVersions.coldMs / probes.inspectMinecraftVersions.warmMs
+  const artifactResolveRatio = probes.artifactResolve.warmMs > 0
+    ? probes.artifactResolve.coldMs / probes.artifactResolve.warmMs
     : null;
-  const workspaceRatio = probes.workspaceArtifactResolve.warmMs > 0
-    ? probes.workspaceArtifactResolve.coldMs / probes.workspaceArtifactResolve.warmMs
+  const searchClassSourceRatio = probes.searchClassSource.warmMs > 0
+    ? probes.searchClassSource.coldMs / probes.searchClassSource.warmMs
     : null;
-  const finiteRatios = [versionRatio, workspaceRatio].filter((ratio): ratio is number => ratio != null && Number.isFinite(ratio));
+  const finiteRatios = [artifactResolveRatio, searchClassSourceRatio].filter((ratio): ratio is number => ratio != null && Number.isFinite(ratio));
 
   if (finiteRatios.length !== 2) {
     return {
       classification: "manual-review-needed",
       reason: "At least one warm probe duration was zero or invalid, so the cold/warm ratio could not be classified automatically.",
       ratios: {
-        inspectMinecraftVersions: versionRatio,
-        workspaceArtifactResolve: workspaceRatio,
+        artifactResolve: artifactResolveRatio,
+        searchClassSource: searchClassSourceRatio,
         worstObserved: null
       }
     };
@@ -177,8 +182,8 @@ function classifyColdStartProbes(probes: {
       classification: "cold-start-overhead-observed",
       reason: `The worst cold/warm ratio was ${worstObserved.toFixed(2)}x, so cold-start overhead was measurable in this environment.`,
       ratios: {
-        inspectMinecraftVersions: versionRatio,
-        workspaceArtifactResolve: workspaceRatio,
+        artifactResolve: artifactResolveRatio,
+        searchClassSource: searchClassSourceRatio,
         worstObserved
       }
     };
@@ -188,8 +193,8 @@ function classifyColdStartProbes(probes: {
     classification: "steady-state-like",
     reason: `The worst cold/warm ratio stayed within 1.25x (${worstObserved.toFixed(2)}x), so the probes behaved close to steady-state in this environment.`,
     ratios: {
-      inspectMinecraftVersions: versionRatio,
-      workspaceArtifactResolve: workspaceRatio,
+      artifactResolve: artifactResolveRatio,
+      searchClassSource: searchClassSourceRatio,
       worstObserved
     }
   };
@@ -285,8 +290,12 @@ async function terminateChildProcess(child: ChildProcess, timeoutMs = 2_000): Pr
   child.unref();
 }
 
-async function closeTransportWithTimeout(transport: StdioClientTransport, timeoutMs = 5_000): Promise<void> {
-  const pid = transport.pid;
+type ManagedTransport = Transport & {
+  pid?: number | null;
+};
+
+async function closeTransportWithTimeout(transport: ManagedTransport, timeoutMs = 5_000): Promise<void> {
+  const pid = transport.pid ?? null;
   const closePromise = transport.close().catch(() => undefined);
   const timedOut = await Promise.race([
     closePromise.then(() => false),
@@ -493,30 +502,36 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
 async function main(): Promise<void> {
   await ensureSqliteAvailable();
 
-  const stdioReady = await canUseStdioPipeReliably();
-  if (!stdioReady) {
-    console.log("Manual stdio smoke skipped: stdin pipe closes immediately in this runtime.");
-    return;
-  }
+  const stdioMode = selectManualStdioMode(await canUseStdioPipeReliably());
 
   const root = await mkdtemp(join(tmpdir(), "stdio-smoke-v03-"));
   const cacheDir = join(root, "cache");
   const sqlitePath = join(cacheDir, "source-cache.db");
   const binaryJarPath = join(root, "minecraft-client.jar");
   const sourcesJarPath = join(root, "minecraft-client-sources.jar");
+  const probeBinaryJarPath = join(root, "probe-client.jar");
+  const probeSourcesJarPath = join(root, "probe-client-sources.jar");
   const workspacePath = join(root, "workspace");
   const workspaceLoomCacheDir = join(workspacePath, ".gradle", "loom-cache", "1.21.10");
   const workspaceBinaryJarPath = join(workspaceLoomCacheDir, "minecraft-merged-1.21.10.jar");
   const workspaceSourcesJarPath = join(workspaceLoomCacheDir, "minecraft-merged-1.21.10-sources.jar");
   const workerPidFile = join(root, "worker.pid");
-
-  await mkdir(cacheDir, { recursive: true });
-  await assertContentLengthInitializeHandshake({
+  const transportEnv = {
     ...process.env,
     NODE_ENV: "production",
     MCP_CACHE_DIR: cacheDir,
-    MCP_SQLITE_PATH: sqlitePath
-  });
+    MCP_SQLITE_PATH: sqlitePath,
+    MCP_SUPERVISOR_CHILD_PID_FILE: workerPidFile
+  };
+
+  await mkdir(cacheDir, { recursive: true });
+  if (stdioMode.kind === "native") {
+    await assertContentLengthInitializeHandshake(transportEnv);
+  } else {
+    console.log(
+      `Manual stdio smoke fallback active: ${stdioMode.detail} Running the direct worker through a bash bridge; worker restart validation is disabled in this mode.`
+    );
+  }
 
   await createJar(binaryJarPath, {
     "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
@@ -541,6 +556,29 @@ async function main(): Promise<void> {
     ].join("\n")
   });
 
+  await createJar(probeBinaryJarPath, {
+    "net/minecraft/server/ProbeMain.class": Buffer.from([0xca, 0xfe, 0xba, 0xaa]),
+    "net/minecraft/world/ProbeWorld.class": Buffer.from([0xca, 0xfe, 0xba, 0xab])
+  });
+
+  await createJar(probeSourcesJarPath, {
+    "net/minecraft/server/ProbeMain.java": [
+      "package net.minecraft.server;",
+      "import net.minecraft.world.ProbeWorld;",
+      "public class ProbeMain {",
+      "  void probeTick() {",
+      "    ProbeWorld.update();",
+      "  }",
+      "}"
+    ].join("\n"),
+    "net/minecraft/world/ProbeWorld.java": [
+      "package net.minecraft.world;",
+      "public class ProbeWorld {",
+      "  static void update() {}",
+      "}"
+    ].join("\n")
+  });
+
   await mkdir(workspaceLoomCacheDir, { recursive: true });
   await writeFile(join(workspacePath, "gradle.properties"), "minecraft_version=1.21.10\n", "utf8");
   await createJar(workspaceBinaryJarPath, {
@@ -558,23 +596,24 @@ async function main(): Promise<void> {
     ].join("\n")
   });
 
-  const transport = new StdioClientTransport({
-    command: "node",
-    args: ["--import", "tsx", "src/cli.ts"],
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      MCP_CACHE_DIR: cacheDir,
-      MCP_SQLITE_PATH: sqlitePath,
-      MCP_SUPERVISOR_CHILD_PID_FILE: workerPidFile
-    }
-  });
+  const transport: ManagedTransport = stdioMode.kind === "native"
+    ? new StdioClientTransport({
+        command: "node",
+        args: ["--import", "tsx", "src/cli.ts"],
+        env: transportEnv
+      })
+    : createDirectWorkerBridgeTransport({
+        cwd: process.cwd(),
+        env: transportEnv
+      });
 
   const client = new Client({ name: "stdio-smoke-test", version: "1.0.0" });
 
   try {
     await client.connect(transport);
-    const initialWorkerPid = await waitForChildPid(workerPidFile);
+    const initialWorkerPid = stdioMode.supportsWorkerRestartValidation
+      ? await waitForChildPid(workerPidFile)
+      : undefined;
 
     const { tools } = await client.listTools();
     const toolNames = tools.map((tool) => tool.name);
@@ -664,90 +703,95 @@ async function main(): Promise<void> {
     const reindexed = requireToolOk<Record<string, unknown>>("index-artifact", indexResult as never);
     assert.equal(typeof reindexed.reindexed, "boolean");
 
-    process.kill(initialWorkerPid, "SIGKILL");
-    const restartedWorkerPid = await waitForChildPid(workerPidFile, initialWorkerPid);
-    assert.notEqual(restartedWorkerPid, initialWorkerPid);
+    if (initialWorkerPid !== undefined) {
+      process.kill(initialWorkerPid, "SIGKILL");
+      const restartedWorkerPid = await waitForChildPid(workerPidFile, initialWorkerPid);
+      assert.notEqual(restartedWorkerPid, initialWorkerPid);
 
-    const versionsAfterRestartResult = await client.callTool({
-      name: "list-versions",
-      arguments: {
-        limit: 1
-      }
-    });
-    const versionsAfterRestart = requireToolOk<ListVersionsOutput>(
-      "list-versions-after-restart",
-      versionsAfterRestartResult as never
-    );
-    assert.ok(Array.isArray(versionsAfterRestart.releases), "Expected releases list after worker restart.");
-    assert.equal(typeof versionsAfterRestart.totalAvailable, "number");
+      const versionsAfterRestartResult = await client.callTool({
+        name: "list-versions",
+        arguments: {
+          limit: 1
+        }
+      });
+      const versionsAfterRestart = requireToolOk<ListVersionsOutput>(
+        "list-versions-after-restart",
+        versionsAfterRestartResult as never
+      );
+      assert.ok(Array.isArray(versionsAfterRestart.releases), "Expected releases list after worker restart.");
+      assert.equal(typeof versionsAfterRestart.totalAvailable, "number");
+    }
 
-    const inspectVersionsCold = await measureToolCall<Record<string, unknown>>(
-      "inspect-minecraft-versions-cold",
+    const probeResolveArtifactCold = await measureToolCall<Record<string, unknown>>(
+      "resolve-artifact-probe-cold",
       () =>
         client.callTool({
-          name: "inspect-minecraft",
+          name: "resolve-artifact",
           arguments: {
-            task: "versions",
-            limit: 1
+            target: {
+              kind: "jar",
+              value: probeBinaryJarPath
+            },
+            mapping: "obfuscated",
+            allowDecompile: false
           }
         }) as Promise<{ content: Array<{ type: string; text?: string }> }>
     );
-    const inspectVersionsWarm = await measureToolCall<Record<string, unknown>>(
-      "inspect-minecraft-versions-warm",
+    const probeResolveArtifactWarm = await measureToolCall<Record<string, unknown>>(
+      "resolve-artifact-probe-warm",
       () =>
         client.callTool({
-          name: "inspect-minecraft",
+          name: "resolve-artifact",
           arguments: {
-            task: "versions",
-            limit: 1
+            target: {
+              kind: "jar",
+              value: probeBinaryJarPath
+            },
+            mapping: "obfuscated",
+            allowDecompile: false
           }
         }) as Promise<{ content: Array<{ type: string; text?: string }> }>
     );
-    const workspaceArtifactCold = await measureToolCall<Record<string, unknown>>(
-      "inspect-minecraft-workspace-artifact-cold",
+    const probeArtifactId = asString(probeResolveArtifactCold.result.artifactId, "probeArtifactId");
+    const probeSearchClassSourceCold = await measureToolCall<Record<string, unknown>>(
+      "search-class-source-probe-cold",
       () =>
         client.callTool({
-          name: "inspect-minecraft",
+          name: "search-class-source",
           arguments: {
-            task: "artifact",
-            subject: {
-              kind: "workspace",
-              projectPath: workspacePath,
-              mapping: "obfuscated",
-              scope: "merged",
-              preferProjectVersion: true
-            }
+            artifactId: probeArtifactId,
+            query: "probeTick",
+            intent: "symbol",
+            match: "exact",
+            limit: 5
           }
         }) as Promise<{ content: Array<{ type: string; text?: string }> }>
     );
-    const workspaceArtifactWarm = await measureToolCall<Record<string, unknown>>(
-      "inspect-minecraft-workspace-artifact-warm",
+    const probeSearchClassSourceWarm = await measureToolCall<Record<string, unknown>>(
+      "search-class-source-probe-warm",
       () =>
         client.callTool({
-          name: "inspect-minecraft",
+          name: "search-class-source",
           arguments: {
-            task: "artifact",
-            subject: {
-              kind: "workspace",
-              projectPath: workspacePath,
-              mapping: "obfuscated",
-              scope: "merged",
-              preferProjectVersion: true
-            }
+            artifactId: probeArtifactId,
+            query: "probeTick",
+            intent: "symbol",
+            match: "exact",
+            limit: 5
           }
         }) as Promise<{ content: Array<{ type: string; text?: string }> }>
     );
 
-    assert.equal(inspectVersionsCold.result.task, "versions");
-    assert.equal(workspaceArtifactCold.result.task, "artifact");
+    assert.equal(asString(probeResolveArtifactCold.result.mappingApplied, "probeMappingApplied"), "obfuscated");
+    assert.ok(Array.isArray(probeSearchClassSourceCold.result.hits), "Expected probe search hits array.");
     const coldStartClassification = classifyColdStartProbes({
-      inspectMinecraftVersions: {
-        coldMs: inspectVersionsCold.durationMs,
-        warmMs: inspectVersionsWarm.durationMs
+      artifactResolve: {
+        coldMs: probeResolveArtifactCold.durationMs,
+        warmMs: probeResolveArtifactWarm.durationMs
       },
-      workspaceArtifactResolve: {
-        coldMs: workspaceArtifactCold.durationMs,
-        warmMs: workspaceArtifactWarm.durationMs
+      searchClassSource: {
+        coldMs: probeSearchClassSourceCold.durationMs,
+        warmMs: probeSearchClassSourceWarm.durationMs
       }
     });
 
@@ -755,29 +799,32 @@ async function main(): Promise<void> {
       "Cold-start perf probes:",
       JSON.stringify(
         {
+          transportMode: stdioMode.kind,
+          workerRestartValidation: stdioMode.supportsWorkerRestartValidation,
           conditions: {
             appCache: "empty at process start",
-            gradleCache: "workspace loom cache pre-populated"
+            gradleCache: "workspace loom cache pre-populated",
+            contentLengthHandshake: stdioMode.kind === "native" ? "validated" : "skipped in bash-bridge fallback"
           },
           probes: {
-            inspectMinecraftVersions: {
-              coldMs: Number(inspectVersionsCold.durationMs.toFixed(3)),
-              warmMs: Number(inspectVersionsWarm.durationMs.toFixed(3))
+            artifactResolve: {
+              coldMs: Number(probeResolveArtifactCold.durationMs.toFixed(3)),
+              warmMs: Number(probeResolveArtifactWarm.durationMs.toFixed(3))
             },
-            workspaceArtifactResolve: {
-              coldMs: Number(workspaceArtifactCold.durationMs.toFixed(3)),
-              warmMs: Number(workspaceArtifactWarm.durationMs.toFixed(3))
+            searchClassSource: {
+              coldMs: Number(probeSearchClassSourceCold.durationMs.toFixed(3)),
+              warmMs: Number(probeSearchClassSourceWarm.durationMs.toFixed(3))
             }
           },
           classification: coldStartClassification.classification,
           classificationReason: coldStartClassification.reason,
           ratios: {
-            inspectMinecraftVersions: coldStartClassification.ratios.inspectMinecraftVersions == null
+            artifactResolve: coldStartClassification.ratios.artifactResolve == null
               ? null
-              : Number(coldStartClassification.ratios.inspectMinecraftVersions.toFixed(3)),
-            workspaceArtifactResolve: coldStartClassification.ratios.workspaceArtifactResolve == null
+              : Number(coldStartClassification.ratios.artifactResolve.toFixed(3)),
+            searchClassSource: coldStartClassification.ratios.searchClassSource == null
               ? null
-              : Number(coldStartClassification.ratios.workspaceArtifactResolve.toFixed(3)),
+              : Number(coldStartClassification.ratios.searchClassSource.toFixed(3)),
             worstObserved: coldStartClassification.ratios.worstObserved == null
               ? null
               : Number(coldStartClassification.ratios.worstObserved.toFixed(3))
@@ -789,7 +836,11 @@ async function main(): Promise<void> {
       )
     );
 
-    console.log("Manual stdio client smoke passed: source tools and worker auto-restart validated.");
+    if (stdioMode.supportsWorkerRestartValidation) {
+      console.log("Manual stdio client smoke passed: source tools and worker auto-restart validated.");
+    } else {
+      console.log("Manual stdio client smoke passed via bash bridge fallback: source tools validated in a runtime where Node child-process stdio pipes close stdin immediately.");
+    }
   } finally {
     await closeTransportWithTimeout(transport);
     await rm(root, { recursive: true, force: true });

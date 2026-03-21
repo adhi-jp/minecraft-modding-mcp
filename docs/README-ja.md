@@ -418,7 +418,7 @@ pnpm test
 
 必要に応じて実行:
 
-- `pnpm test:manual:stdio-smoke`: MCP トランスポート、登録、手動ワークフローの変更時
+- `pnpm test:manual:stdio-smoke`: MCP トランスポート、登録、手動ワークフローの変更時。Codex のように Node の child-process stdio pipe で stdin が即座に閉じる実行環境では、bash ブリッジへ自動フォールバックし、worker 自動再起動の検証だけを省略します。
 - `pnpm test:manual:package-smoke`: パッケージインストールや配布形態の検証時
 - `pnpm test:perf`: 検索、インデックス、性能に影響する変更時
 - `pnpm test:coverage` または `pnpm test:coverage:lcov`: カバレッジ確認時（`lines=80`, `branches=70`, `functions=80`）

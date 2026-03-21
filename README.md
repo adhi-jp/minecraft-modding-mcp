@@ -418,7 +418,7 @@ pnpm test
 
 Run these when relevant:
 
-- `pnpm test:manual:stdio-smoke` for MCP transport, registration, or manual workflow changes
+- `pnpm test:manual:stdio-smoke` for MCP transport, registration, or manual workflow changes. On Codex-like runtimes where Node child-process stdio pipes close stdin immediately, it falls back to a bash bridge and skips only worker auto-restart validation.
 - `pnpm test:manual:package-smoke` when checking packaged install and distribution behavior
 - `pnpm test:perf` for search, index, or performance-sensitive changes
 - `pnpm test:coverage` or `pnpm test:coverage:lcov` for coverage checks (`lines=80`, `branches=70`, `functions=80`)
