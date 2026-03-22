@@ -35,6 +35,7 @@
 - Treat `origin` release tags (`vX.Y.Z`) as the source of truth for published versions.
 - Do not record new changes under any CHANGELOG version heading whose tag already exists on `origin`.
 - For all commits after the latest `origin` release tag, record changes only under `## [Unreleased]` until the next release is cut.
+- Once the next release section is cut, remove any empty `## [Unreleased]` heading instead of leaving a blank placeholder at the top of the file.
 - Before editing CHANGELOG release sections, verify commit/tag boundaries (`git log --oneline --decorate` and `git tag` with remote-tracking tags) so entries map to the correct release window.
 - Editing an already-tagged release section is allowed only with explicit user instruction and a documented history-rewrite/release-correction plan.
 
