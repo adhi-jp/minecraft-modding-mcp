@@ -1,6 +1,8 @@
 # Tool and Configuration Reference
 
-This document complements [README.md](../README.md). Use it when you need the exact input conventions, resource URIs, mapping rules, or the full environment-variable matrix.
+Use [README.md](../README.md) for quick start and client setup. Use [docs/examples.md](examples.md) for concrete request payloads.
+
+Use this document when you need the exact input conventions, outputs, resource URIs, mapping rules, migration notes, operational pitfalls, or the full environment-variable matrix.
 
 ## Essential Conventions
 
@@ -10,6 +12,7 @@ This document complements [README.md](../README.md). Use it when you need the ex
 - `validate-mixin` and `validate-project task="mixin"` use `input.mode="inline" | "path" | "paths" | "config" | "project"`.
 - Positive integer tool arguments accept numeric strings such as `"10"` for documented top-level parameters.
 - When a parameter has a fixed safe default, `tools/list` exposes it through the JSON Schema `default` field so clients can rely on schema metadata instead of prose notes.
+- Retryable `suggestedCall` payloads omit parameters when the supplied value already matches the tool default, keeping recovery calls smaller without changing behavior.
 - Source-oriented tools expose `artifactContents` so callers can tell whether the backing artifact is a `source-jar` or a `decompiled-binary`. `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` also expose `returnedNamespace`.
 - Windows and WSL path forms are normalized for `jarPath`, `projectPath`, and environment-variable path overrides.
 - Heavy analysis tools are serialized in-process to protect stdio stability. Queue overflow returns `ERR_LIMIT_EXCEEDED`.
@@ -24,6 +27,7 @@ This document complements [README.md](../README.md). Use it when you need the ex
 - `find-class` and `get-class-source` on `mapping="obfuscated"` expect Mojang obfuscated names. Deobfuscated queries warn and usually need `mapping="mojang"` or a `find-mapping` step first.
 - `check-symbol-exists` defaults to strict FQCN class lookup. Use `nameMode="auto"` for short class names.
 - `check-symbol-exists` can use `signatureMode="name-only"` for overload discovery, but exact `descriptor` matching is still the most reliable path.
+- `analyze-symbol task="api-overview"` inherits `sourceMapping` as the default `classNameMapping`; it falls back to `obfuscated` only when neither value is provided.
 - `find-mapping` accepts short class ids such as `dhl` only when `sourceMapping="obfuscated"`. Other class lookup paths still validate class names as fully-qualified.
 - `find-mapping` still rejects the public namespace name `official`, but upstream Tiny files that use `official` internally are now bridged to the supported `obfuscated` graph automatically.
 - `get-class-api-matrix` now uses the explicit `classNameMapping` as its base namespace even when an obfuscated identity is also available.

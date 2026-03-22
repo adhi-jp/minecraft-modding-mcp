@@ -25,6 +25,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Documentation
 - Documented the stale entry-tool payload recovery guidance, partial-source workspace fallback behavior, explicit inspect-minecraft artifact-context requirements, `api-overview` mapping inheritance, official-header Tiny mapping recovery, short obfuscated `find-mapping` inputs, empty mixin-config warning semantics, and the lifecycle behavior updates in the English and Japanese READMEs plus the tool reference.
+- Shortened the English and Japanese READMEs so onboarding guidance, workflow notes, and detailed reference material no longer repeat the same content across multiple sections.
+- Simplified the generated tool-surface tables in both READMEs to compact purpose-only summaries and pointed exact input/output details to `docs/tool-reference.md`.
+- Rewrote the Japanese workflow guidance in more natural Japanese and clarified that the detailed examples and full reference remain English-first for now.
 
 ### Performance
 - `trace-symbol-lifecycle`, `check-symbol-exists`, and `find-mapping` now skip intermediary/yarn Tiny graph loading when a request only needs Mojang and obfuscated names, cutting cold lifecycle and existence latency on the `mojang <-> obfuscated` path without changing the response contract.

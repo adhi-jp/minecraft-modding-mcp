@@ -2,78 +2,91 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-function assertMatchesAll(content: string, patterns: RegExp[]): void {
-  for (const pattern of patterns) {
-    assert.match(content, pattern);
-  }
-}
+test("README keeps entry guidance concise and delegates exact contract details", async () => {
+  const readme = await readFile("README.md", "utf8");
+  const startHereSummaryIndex = readme.indexOf("All six return `result.summary` first");
+  const startHereTableIndex = readme.indexOf("| Tool | Start here for |");
 
-const ENGLISH_NARRATIVE_PATTERNS = [
-  /These six top-level workflow tools cover the common workflows/,
-  /Start with `inspect-minecraft`/,
-  /Start with `manage-cache`/,
-  /`resolve-artifact` uses `target: \{ kind, value \}`/,
-  /`get-class-source` and `get-class-members` use `target: \{ type: "artifact", artifactId \}`/,
-  /`validate-mixin` and `validate-project task="mixin"` use `input\.mode="inline" \| "path" \| "paths" \| "config" \| "project"`/,
-  /`mapping="mojang"` requires source-backed artifacts/,
-  /`search-class-source` defaults to `queryMode="auto"`/,
-  /include `summary\.nextActions` when there is a clear follow-up step/,
-  /keeps separator queries such as `foo\.bar`, `foo_bar`, and `foo\$bar` on the indexed path/,
-  /stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`/,
-  /`tools\/list` exposes it through the JSON Schema `default` field/,
-  /`suggestedCall` payloads omit parameters when the supplied value already matches the tool default/,
-  /`search-class-source` returns compact hits only/,
-  /`scope="loader"` currently resolves through the same lookup path as `scope="merged"`/,
-  /`remap-mod-jar` requires Java and supports Fabric\/Quilt inputs/,
-  /`artifactContents`/,
-  /`returnedNamespace`/,
-  /`mc:\/\/versions\/list`/,
-  /`mc:\/\/artifact\/\{artifactId\}\/members\/\{className\}`/,
-  /Tools and JSON resources return the standard `\{ result\?, error\?, meta \}` envelope/,
-  /`MCP_VINEFLOWER_JAR_PATH`/,
-  /`MCP_TINY_REMAPPER_JAR_PATH`/,
-  /"tool": "inspect-minecraft"/,
-  /"tool": "validate-project"/
-] as const;
-
-const JAPANESE_NARRATIVE_PATTERNS = [
-  /Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI/,
-  /以下の 6 つのトップレベルワークフローツールは、一般的な作業をカバー/,
-  /明確に狙っている専用操作がない限り、まずは以下のトップレベルワークフローツールから始めてください/,
-  /次の一手が明確な場合は `summary\.nextActions` も含めます/,
-  /`search-class-source` は既定で `queryMode="auto"`/,
-  /`foo\.bar`、`foo_bar`、`foo\$bar` のような区切り文字付きクエリ/,
-  /古い string-subject \/ domain-include payload には `ERR_INVALID_INPUT` と再試行しやすい `suggestedCall` を返します/,
-  /`tools\/list` は JSON Schema の `default` フィールドにその値を出します/,
-  /`suggestedCall` は、指定値がすでにツール既定動作と同じパラメータを省略/,
-  /`artifactContents`/,
-  /`returnedNamespace`/,
-  /`mc:\/\/versions\/list`/,
-  /`mc:\/\/artifact\/\{artifactId\}\/members\/\{className\}`/,
-  /標準の `\{ result\?, error\?, meta \}` エンベロープ/,
-  /`MCP_VINEFLOWER_JAR_PATH`/,
-  /`MCP_TINY_REMAPPER_JAR_PATH`/,
-  /詳細なリクエスト例（英語）/,
-  /ツール \/ 設定リファレンス（英語）/,
-  /"tool": "inspect-minecraft"/,
-  /"tool": "validate-project"/
-] as const;
-
-test("README documents narrative contract outside generated tables", async () => {
-  const [readme, toolReference, examples] = await Promise.all([
-    readFile("README.md", "utf8"),
-    readFile("docs/tool-reference.md", "utf8"),
-    readFile("docs/examples.md", "utf8")
-  ]);
-  const englishDocs = [readme, toolReference, examples].join("\n");
-
-  assertMatchesAll(englishDocs, ENGLISH_NARRATIVE_PATTERNS);
+  assert.match(readme, /## Start Here/);
+  assert.match(readme, /These six top-level workflow tools cover the common workflows/);
+  assert.match(readme, /All six return `result\.summary` first/);
+  assert.match(readme, /`summary\.nextActions`/);
+  assert.ok(startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex);
+  assert.doesNotMatch(readme, /Choosing a Starting Tool/);
+  assert.doesNotMatch(readme, /- Start with `inspect-minecraft`/);
+  assert.match(readme, /`search-class-source` defaults to `queryMode="auto"`/);
+  assert.match(readme, /prefer `subject\.kind="workspace"` for `inspect-minecraft`/);
+  assert.match(
+    readme,
+    /\[Detailed example requests\]\(docs\/examples\.md\).*copyable payloads and common workflows/
+  );
+  assert.match(
+    readme,
+    /\[Tool and configuration reference\]\(docs\/tool-reference\.md\).*exact inputs, outputs, resource behavior, environment variables, and migration notes/
+  );
+  assert.match(readme, /"tool": "inspect-minecraft"/);
+  assert.match(readme, /"tool": "validate-project"/);
 });
 
-test("Japanese README documents narrative contract outside generated tables", async () => {
-  const readme = await readFile("docs/README-ja.md", "utf8");
+test("Tool reference owns exact contract, migration, and environment details", async () => {
+  const toolReference = await readFile("docs/tool-reference.md", "utf8");
 
-  assertMatchesAll(readme, JAPANESE_NARRATIVE_PATTERNS);
+  assert.match(toolReference, /Use \[README\.md\]\(\.\.\/README\.md\) for quick start/);
+  assert.match(toolReference, /Use \[docs\/examples\.md\]\(examples\.md\) for concrete request payloads/);
+  assert.match(toolReference, /`resolve-artifact` uses `target: \{ kind, value \}`/);
+  assert.match(
+    toolReference,
+    /`get-class-source` and `get-class-members` use `target: \{ type: "artifact", artifactId \}`/
+  );
+  assert.match(
+    toolReference,
+    /`validate-mixin` and `validate-project task="mixin"` use `input\.mode="inline" \| "path" \| "paths" \| "config" \| "project"`/
+  );
+  assert.match(toolReference, /`mapping="mojang"` requires source-backed artifacts/);
+  assert.match(toolReference, /`search-class-source` defaults to `queryMode="auto"`/);
+  assert.match(toolReference, /`search-class-source` returns compact hits only/);
+  assert.match(toolReference, /`scope="loader"` currently resolves through the same lookup path as `scope="merged"`/);
+  assert.match(toolReference, /`remap-mod-jar` requires Java and supports Fabric\/Quilt inputs/);
+  assert.match(
+    toolReference,
+    /`suggestedCall` payloads omit parameters when the supplied value already matches the tool default/
+  );
+  assert.match(toolReference, /`artifactContents`/);
+  assert.match(toolReference, /`returnedNamespace`/);
+  assert.match(toolReference, /`mc:\/\/versions\/list`/);
+  assert.match(toolReference, /`mc:\/\/artifact\/\{artifactId\}\/members\/\{className\}`/);
+  assert.match(toolReference, /standard `\{ result\?, error\?, meta \}` envelope/);
+  assert.match(toolReference, /`MCP_VINEFLOWER_JAR_PATH`/);
+  assert.match(toolReference, /`MCP_TINY_REMAPPER_JAR_PATH`/);
+});
+
+test("Japanese README stays overview-first and uses natural Japanese for guidance", async () => {
+  const readme = await readFile("docs/README-ja.md", "utf8");
+  const startHereSummaryIndex = readme.indexOf("すべて `result.summary` を先に返し");
+  const startHereTableIndex = readme.indexOf("| ツール | 主な用途 |");
+
+  assert.match(readme, /## まずここから/);
+  assert.match(readme, /以下の 6 つのトップレベルワークフローツールは、一般的な作業をカバー/);
+  assert.match(readme, /すべて `result\.summary` を先に返し、次の一手が明確な場合は `summary\.nextActions` も含めます/);
+  assert.ok(startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex);
+  assert.doesNotMatch(readme, /開始ツールの選び方/);
+  assert.doesNotMatch(readme, /plain な/);
+  assert.doesNotMatch(readme, /retry 用/);
+  assert.doesNotMatch(readme, /partial 結果/);
+  assert.doesNotMatch(readme, /structured な/);
+  assert.doesNotMatch(readme, /canonical な/);
+  assert.match(readme, /`search-class-source` は既定で `queryMode="auto"`/);
+  assert.match(readme, /アーティファクトが不明な場合は、`inspect-minecraft` で `subject\.kind="workspace"` を使う方が安全です/);
+  assert.match(readme, /ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます/);
+  assert.match(readme, /構造化された `subject` と正規の `include`/);
+  assert.match(
+    readme,
+    /この日本語版はオンボーディング向けの概要です。詳細な例と完全なリファレンスは現時点では英語ドキュメントを参照してください/
+  );
+  assert.match(readme, /\[詳細なリクエスト例（英語）\]\(examples\.md\)/);
+  assert.match(readme, /\[ツール \/ 設定リファレンス（英語）\]\(tool-reference\.md\)/);
+  assert.match(readme, /"tool": "inspect-minecraft"/);
+  assert.match(readme, /"tool": "validate-project"/);
 });
 
 test("README documents MCP client quick start commands", async () => {

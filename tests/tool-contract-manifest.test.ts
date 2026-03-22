@@ -36,17 +36,39 @@ test("Japanese README tool surface tables are generated from the contract manife
   }
 });
 
-test("tool contract manifest fixes compare-minecraft nested sourcePriority drift", () => {
+test("tool contract manifest renders compact two-column tables", () => {
   const entryTable = renderToolSurfaceSection("en", "v3-entry-tools");
+  const japaneseEntryTable = renderToolSurfaceSection("ja", "v3-entry-tools");
 
-  assert.match(entryTable, /\| `compare-minecraft` \|.*`subject\.kind="class"\.sourcePriority\?`/);
-  assert.doesNotMatch(entryTable, /\| `compare-minecraft` \|.*`include\?`, `sourcePriority\?`, `maxClassResults\?`/);
+  assert.match(entryTable, /^\| Tool \| Purpose \|\n\| --- \| --- \|/);
+  assert.match(japaneseEntryTable, /^\| ツール \| 役割 \|\n\| --- \| --- \|/);
+  assert.doesNotMatch(entryTable, /Key Inputs|Key Outputs/);
+  assert.doesNotMatch(japaneseEntryTable, /主な入力|主な出力/);
 });
 
-test("tool contract manifest reflects current inspect-minecraft and validate-project table contracts", () => {
+test("tool contract manifest reflects current entry-tool purpose summaries", () => {
   const entryTable = renderToolSurfaceSection("en", "v3-entry-tools");
 
-  assert.match(entryTable, /\| `inspect-minecraft` \|.*`result\.summary`, `versions\?`, `subject`, `artifact\?`, `class\?`, `source\?`, `members\?`, `search\?`, `file\?`, `files\?` \|/);
-  assert.match(entryTable, /\| `validate-project` \|.*`result\.summary`, `project`, `workspace\?`, `issues\?` \|/);
-  assert.doesNotMatch(entryTable, /\| `validate-project` \|.*`recovery\?`/);
+  assert.match(
+    entryTable,
+    /\| `inspect-minecraft` \| Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows \|/
+  );
+  assert.match(
+    entryTable,
+    /\| `compare-minecraft` \| Compare version pairs, class diffs, registry diffs, and migration-oriented summaries \|/
+  );
+  assert.match(
+    entryTable,
+    /\| `validate-project` \| Summarize workspaces and run direct Mixin or Access Widener validation \|/
+  );
+});
+
+test("tool contract manifest keeps Japanese purpose rows localized", () => {
+  const diagnosticsTable = renderToolSurfaceSection("ja", "registry-diagnostics");
+
+  assert.match(
+    diagnosticsTable,
+    /\| `get-runtime-metrics` \| ランタイムメトリクスとレイテンシスナップショットを確認する \|/
+  );
+  assert.doesNotMatch(diagnosticsTable, /runtime metrics|meta envelope/);
 });
