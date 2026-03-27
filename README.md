@@ -265,6 +265,8 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 | `index-artifact` | Rebuild indexed metadata for an existing artifact |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
+For unobfuscated releases such as `26.1+`, `mapping="mojang"` now uses the runtime/decompile path directly for version and versioned-coordinate targets and skips Loom source-jar discovery entirely, while `intermediary` and `yarn` still fall back to `obfuscated` with a warning.
+
 ### Version Comparison & Symbol Tracking
 
 Tools for comparing class and registry changes across Minecraft versions and tracing symbol existence over time.

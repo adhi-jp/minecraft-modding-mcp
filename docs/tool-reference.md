@@ -20,7 +20,7 @@ Use this document when you need the exact input conventions, outputs, resource U
 
 ## Common Pitfalls
 
-- `mapping="mojang"` requires source-backed artifacts. Decompile-only paths return `ERR_MAPPING_NOT_APPLIED`.
+- `mapping="mojang"` requires source-backed artifacts on legacy obfuscated versions. For unobfuscated releases such as `26.1+`, the runtime/decompile path is accepted directly for version and versioned-coordinate targets.
 - `list-artifact-files` indexes Java source paths only. Probing `assets/` or `data/` prefixes will not return non-Java resources.
 - `search-class-source` defaults to `queryMode="auto"`. Use `queryMode="literal"` for explicit substring scans. `match="regex"` enforces `query.length <= 200` and caps results at `100`.
 - `search-class-source` returns compact hits only. Use `get-artifact-file` or `get-class-source` to inspect returned files.
@@ -115,13 +115,14 @@ Symbol query inputs use `kind` plus `name` plus optional `owner` and `descriptor
 - field: `kind="field"`, `owner="a.b.C"`, `name="fieldName"`
 - method: `kind="method"`, `owner="a.b.C"`, `name="methodName"`, `descriptor="(I)V"`
 
-`mapping="mojang"` requires a source-backed artifact. If only a decompile path is available, the server returns `ERR_MAPPING_NOT_APPLIED`.
+`mapping="mojang"` requires a source-backed artifact on legacy obfuscated versions. On unobfuscated releases such as `26.1+`, decompile-only/runtime paths are accepted directly for version and versioned-coordinate targets.
 
 `resolve-artifact`, `get-class-members`, `trace-symbol-lifecycle`, and `diff-class-signatures` accept `obfuscated | mojang | intermediary | yarn` with these constraints:
 
 - `intermediary` and `yarn` require a resolvable Minecraft version context such as `target.kind="version"` or a versioned Maven coordinate.
 - For unobfuscated versions such as `26.1+`, requesting `intermediary` or `yarn` falls back to `obfuscated` with a warning.
-- `mojang` requires source-backed artifacts. Decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
+- On legacy obfuscated versions, `mojang` requires source-backed artifacts and decompile-only paths are rejected with `ERR_MAPPING_NOT_APPLIED`.
+- On unobfuscated versions such as `26.1+`, `mojang` uses the runtime/decompile path directly for version and versioned-coordinate targets and skips Loom source-jar approximation.
 
 When `trace-symbol-lifecycle` omits `descriptor`, the server resolves methods by owner and name and warns if overload ambiguity prevents a unique answer.
 

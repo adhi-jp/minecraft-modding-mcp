@@ -3252,6 +3252,61 @@ test("SourceService resolves intermediary mapping for source-backed coordinate a
   assert.deepEqual(mappingCalls, [{ version: "1.0.0", mapping: "intermediary" }]);
 });
 
+test("SourceService accepts unobfuscated mojang mapping for decompiled coordinate artifacts", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-coordinate-unobfuscated-mojang-"));
+  const coordinate = "net.minecraft:client:26.1";
+  const remoteJarPath = join(root, "client-26.1.jar");
+  await createJar(remoteJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteJarBytes = await readFile(remoteJarPath);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/net/minecraft/client/26.1/client-26.1-sources.jar")) {
+      return new Response("not found", { status: 404 });
+    }
+    if (url.endsWith("/net/minecraft/client/26.1/client-26.1.jar")) {
+      return new Response(remoteJarBytes, {
+        status: 200,
+        headers: {
+          "content-length": String(remoteJarBytes.byteLength),
+          etag: "coordinate-26.1"
+        }
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const service = new SourceService(
+      buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+    );
+    (service as unknown as {
+      ingestIfNeeded: (resolved: unknown) => Promise<void>;
+    }).ingestIfNeeded = async () => {};
+
+    const resolved = await service.resolveArtifact({
+      target: {
+        kind: "coordinate",
+        value: coordinate
+      },
+      mapping: "mojang"
+    });
+
+    assert.equal(resolved.version, "26.1");
+    assert.equal(resolved.requestedMapping, "mojang");
+    assert.equal(resolved.mappingApplied, "mojang");
+    assert.equal(resolved.origin, "decompiled");
+    assert.equal(resolved.resolvedSourceJarPath, undefined);
+    assert.equal(resolved.coordinate, coordinate);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("SourceService rejects intermediary and yarn mappings when artifact version is unknown", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-unsupported-map-"));
@@ -3831,6 +3886,140 @@ test("SourceService resolveArtifact handles unobfuscated version fallback warnin
       testCase.verify(result);
     });
   }
+});
+
+test("SourceService supports mojang mapping on unobfuscated version targets without source jars", async (t) => {
+  const { SourceService } = await import("../src/source-service.ts");
+
+  async function createFixture(rootPrefix: string): Promise<{
+    binaryJarPath: string;
+    gradleUserHome: string;
+    root: string;
+    service: SourceServiceFixture;
+  }> {
+    const root = await mkdtemp(join(tmpdir(), rootPrefix));
+    const binaryJarPath = join(root, "client-26.1.jar");
+    const gradleUserHome = join(root, "gradle-home");
+
+    await createJar(binaryJarPath, {
+      "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    });
+
+    const service = new SourceService(buildTestConfig(root));
+    (service as unknown as { versionService: unknown }).versionService = {
+      async resolveVersionJar(version: string) {
+        return {
+          version,
+          jarPath: binaryJarPath,
+          source: "downloaded" as const,
+          clientJarUrl: `https://example.test/${version}.jar`
+        };
+      }
+    };
+    (service as unknown as {
+      ingestIfNeeded: (resolved: unknown) => Promise<void>;
+    }).ingestIfNeeded = async () => {};
+
+    return { binaryJarPath, gradleUserHome, root, service };
+  }
+
+  await t.test("resolveArtifact ignores mismatched Loom sources for unobfuscated versions", async () => {
+    const { gradleUserHome, service } = await createFixture("service-unobfuscated-mojang-resolve-");
+    const foreignSourceJar = join(
+      gradleUserHome,
+      "caches",
+      "fabric-loom",
+      "minecraftMaven",
+      "net",
+      "minecraft",
+      "minecraft-merged",
+      "1.21.10",
+      "minecraft-merged-1.21.10-sources.jar"
+    );
+
+    await createJar(foreignSourceJar, {
+      "net/minecraft/world/item/Item.java": [
+        "package net.minecraft.world.item;",
+        "public class Item {}"
+      ].join("\n")
+    });
+
+    await withGradleUserHome(gradleUserHome, async () => {
+      const result = await service.resolveArtifact({
+        target: { kind: "version", value: "26.1" },
+        mapping: "mojang"
+      });
+
+      assert.equal(result.requestedMapping, "mojang");
+      assert.equal(result.mappingApplied, "mojang");
+      assert.equal(result.origin, "decompiled");
+      assert.equal(result.resolvedSourceJarPath, undefined);
+      assert.ok(
+        !result.warnings.some((warning) => warning.includes("Resolved source-backed artifact from Loom cache candidate")),
+        "Expected unobfuscated 26.1 resolution to skip mismatched Loom source jars."
+      );
+    });
+  });
+
+  await t.test("getClassMembers reads unobfuscated runtime names without remap fallback", async () => {
+    const { binaryJarPath, gradleUserHome, service } = await createFixture("service-unobfuscated-mojang-members-");
+
+    (service as unknown as { explorerService: unknown }).explorerService = {
+      async getSignature(input: { fqn: string; jarPath: string }) {
+        assert.equal(input.fqn, "net.minecraft.world.item.Item");
+        assert.equal(input.jarPath, binaryJarPath);
+        return {
+          constructors: [],
+          fields: [
+            {
+              ownerFqn: "net.minecraft.world.item.Item",
+              name: "MAX_STACK_SIZE",
+              javaSignature: "public static final int MAX_STACK_SIZE",
+              jvmDescriptor: "I",
+              accessFlags: 0x0019,
+              isSynthetic: false
+            }
+          ],
+          methods: [
+            {
+              ownerFqn: "net.minecraft.world.item.Item",
+              name: "use",
+              javaSignature:
+                "public net.minecraft.world.InteractionResult use(net.minecraft.world.item.ItemStack)",
+              jvmDescriptor: "(Lnet/minecraft/world/item/ItemStack;)Lnet/minecraft/world/InteractionResult;",
+              accessFlags: 0x0001,
+              isSynthetic: false
+            }
+          ],
+          warnings: [],
+          context: {
+            minecraftVersion: "26.1",
+            mappingType: "mojang",
+            mappingNamespace: "mojang",
+            jarHash: "hash",
+            generatedAt: new Date().toISOString()
+          }
+        };
+      }
+    };
+
+    await withGradleUserHome(gradleUserHome, async () => {
+      const result = await service.getClassMembers({
+        className: "net.minecraft.world.item.Item",
+        target: { kind: "version", value: "26.1" },
+        mapping: "mojang"
+      });
+
+      assert.equal(result.mappingApplied, "mojang");
+      assert.equal(result.className, "net.minecraft.world.item.Item");
+      assert.equal(result.members.fields[0]?.name, "MAX_STACK_SIZE");
+      assert.equal(result.members.methods[0]?.name, "use");
+      assert.ok(
+        !result.warnings.some((warning) => warning.includes("Could not map class")),
+        "Expected unobfuscated 26.1 lookups to avoid remap fallback warnings."
+      );
+    });
+  });
 });
 
 test("SourceService traces symbol lifecycle across versions and reports gaps", async () => {

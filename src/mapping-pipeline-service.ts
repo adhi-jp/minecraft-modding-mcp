@@ -5,6 +5,7 @@ export interface MappingPipelineInput {
   requestedMapping: SourceMapping;
   target: SourceTargetInput;
   resolved: ResolvedSourceArtifact;
+  runtimeNamesUnobfuscated?: boolean;
 }
 
 export interface MappingPipelineResult {
@@ -17,7 +18,8 @@ export interface MappingPipelineResult {
  * Mapping pipeline for v0.3.
  * Current implementation enforces explicit guarantees:
  * - obfuscated: always pass-through
- * - mojang: requires source-backed artifact; decompile-only artifacts are rejected
+ * - mojang: requires source-backed artifacts on legacy obfuscated versions,
+ *   but unobfuscated runtime jars can pass through directly
  */
 export function applyMappingPipeline(input: MappingPipelineInput): MappingPipelineResult {
   const transformChain: string[] = [];
@@ -32,6 +34,20 @@ export function applyMappingPipeline(input: MappingPipelineInput): MappingPipeli
     }
     return {
       mappingApplied: "obfuscated",
+      qualityFlags,
+      transformChain
+    };
+  }
+
+  if (input.requestedMapping === "mojang" && input.runtimeNamesUnobfuscated) {
+    transformChain.push("mapping:mojang-runtime-unobfuscated");
+    if (input.resolved.isDecompiled) {
+      qualityFlags.push("decompiled");
+    } else {
+      qualityFlags.push("source-backed");
+    }
+    return {
+      mappingApplied: "mojang",
       qualityFlags,
       transformChain
     };

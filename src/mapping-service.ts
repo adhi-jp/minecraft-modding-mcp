@@ -2262,6 +2262,22 @@ export class MappingService {
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
     const degradations: string[] = [];
 
+    if (isUnobfuscatedVersion(input.version)) {
+      const requestFulfillable =
+        input.requestedMapping === "obfuscated" || input.requestedMapping === "mojang";
+      if (!requestFulfillable) {
+        degradations.push(
+          `Version ${input.version} is unobfuscated; ${input.requestedMapping} mappings are not applicable.`
+        );
+      }
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: false,
+        memberRemapAvailable: requestFulfillable,
+        degradations
+      };
+    }
+
     let graph: LoadedGraph;
     try {
       graph = await this.loadGraph(input.version, priority, "full");

@@ -1808,9 +1808,11 @@ export class SourceService {
       let resolvedTarget: SourceTargetInput = { kind, value };
       let resolvedVersion: string | undefined;
       let versionSourceDiscovery: VersionSourceDiscovery | undefined;
+      let runtimeNamesUnobfuscated = false;
       if (kind === "version") {
         const versionJar = await this.versionService.resolveVersionJar(value);
         resolvedVersion = versionJar.version;
+        runtimeNamesUnobfuscated = isUnobfuscatedVersion(resolvedVersion);
         resolvedTarget = {
           kind: "jar",
           value: versionJar.jarPath
@@ -1823,6 +1825,9 @@ export class SourceService {
         } catch {
           // coordinate validity is validated by resolver, keep version undefined on parse failure.
         }
+      }
+      if (!runtimeNamesUnobfuscated && resolvedVersion && isUnobfuscatedVersion(resolvedVersion)) {
+        runtimeNamesUnobfuscated = true;
       }
 
       // Unobfuscated versions (MC 26.1+) ship with deobfuscated runtime names; intermediary/yarn are not applicable.
@@ -1838,7 +1843,13 @@ export class SourceService {
         effectiveMapping = "obfuscated";
       }
 
-      if (kind === "version" && resolvedVersion && effectiveMapping === "mojang" && scope !== "vanilla") {
+      if (
+        kind === "version" &&
+        resolvedVersion &&
+        effectiveMapping === "mojang" &&
+        !runtimeNamesUnobfuscated &&
+        scope !== "vanilla"
+      ) {
         versionSourceDiscovery = await this.discoverVersionSourceJar({
           version: resolvedVersion,
           projectPath: input.projectPath
@@ -1881,7 +1892,8 @@ export class SourceService {
         mappingDecision = applyMappingPipeline({
           requestedMapping: effectiveMapping,
           target: { kind, value },
-          resolved
+          resolved,
+          runtimeNamesUnobfuscated
         });
       } catch (caughtError) {
         if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {

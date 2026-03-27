@@ -1735,6 +1735,47 @@ test("MappingService returns empty graph for unobfuscated version (26.1)", async
   assert.equal(fetchCalls.length, 0, "No network requests should be made for unobfuscated versions");
 });
 
+test("MappingService checkMappingHealth treats unobfuscated mojang runtime names as healthy", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-unobfuscated-health-"));
+  const config = buildTestConfig(root, { sourceRepos: [] });
+
+  const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+  const versionServiceStub = {
+    async resolveVersionMappings(version: string) {
+      return {
+        version,
+        versionManifestUrl: "https://example.test/version_manifest_v2.json",
+        versionDetailUrl: `https://example.test/versions/${version}.json`,
+        mappingsUrl: undefined
+      };
+    }
+  };
+
+  const service = new MappingService(config, versionServiceStub, fetchStub);
+  const mojangHealth = await service.checkMappingHealth({
+    version: "26.1",
+    requestedMapping: "mojang"
+  });
+  const yarnHealth = await service.checkMappingHealth({
+    version: "26.1",
+    requestedMapping: "yarn"
+  });
+
+  assert.deepEqual(mojangHealth, {
+    mojangMappingsAvailable: true,
+    tinyMappingsAvailable: false,
+    memberRemapAvailable: true,
+    degradations: []
+  });
+  assert.deepEqual(yarnHealth, {
+    mojangMappingsAvailable: true,
+    tinyMappingsAvailable: false,
+    memberRemapAvailable: false,
+    degradations: ["Version 26.1 is unobfuscated; yarn mappings are not applicable."]
+  });
+});
+
 const TEST_TINY_V1 = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tintermediary/pkg/InterClass\tv1/pkg/VersionOneClass",
