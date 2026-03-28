@@ -119,11 +119,11 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
   "validation": {
     en: [
       "| `validate-mixin` | Validate Mixin source against a target Minecraft version |",
-      "| `validate-access-widener` | Validate Access Widener content against a target Minecraft version |"
+      "| `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |"
     ],
     ja: [
       "| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する |",
-      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証する |"
+      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |"
     ]
   },
   "registry-diagnostics": {

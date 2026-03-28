@@ -721,7 +721,11 @@ const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),
   version: nonEmptyString.describe("Minecraft version"),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted runtime validation"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
+  preferProjectVersion: z.boolean().default(false)
+    .describe("When true, detect MC version from gradle.properties and override version")
 };
 const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
 
@@ -2357,7 +2361,10 @@ server.tool("validate-access-widener",
       content: input.content,
       version: input.version,
       mapping: input.mapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath,
+      scope: input.scope as ArtifactScope | undefined,
+      preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>
   )
 );

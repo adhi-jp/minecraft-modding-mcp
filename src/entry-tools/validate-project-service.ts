@@ -103,6 +103,9 @@ type ValidateProjectDeps = {
     version: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
+    projectPath?: string;
+    scope?: "vanilla" | "merged" | "loader";
+    preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   discoverMixins: (projectPath: string, configPaths?: string[]) => Promise<string[]>;
   discoverAccessWideners: (projectPath: string) => Promise<string[]>;
@@ -234,7 +237,9 @@ export class ValidateProjectService {
           content,
           version: input.version!,
           mapping: input.mapping,
-          sourcePriority: input.sourcePriority
+          sourcePriority: input.sourcePriority,
+          scope: input.scope,
+          preferProjectVersion: input.preferProjectVersion
         });
         return {
           ...buildEntryToolResult({
@@ -466,7 +471,10 @@ export class ValidateProjectService {
               content: await readFile(awPath, "utf8"),
               version: validationVersion,
               mapping: input.mapping,
-              sourcePriority: input.sourcePriority
+              sourcePriority: input.sourcePriority,
+              projectPath,
+              scope: input.scope,
+              preferProjectVersion: input.preferProjectVersion
             });
             if (output.valid) {
               validAw += 1;

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import type { Config } from "../src/types.ts";
+import { buildClassFile } from "./helpers/classfile.ts";
 import { createJar } from "./helpers/zip.ts";
 
 function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config {
@@ -5719,6 +5720,159 @@ test("SourceService validateAccessWidener chooses the expected mapping namespace
       await testCase.run(await createValidateAccessWidenerFixture(testCase.rootPrefix));
     });
   }
+});
+
+test("SourceService runtime-aware access widener candidate scan avoids loader-constant scoring and broad jar globs", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+
+  assert.doesNotMatch(source, /\(input\.requestedScope === "loader" \? 1_000 : 0\)/);
+  assert.doesNotMatch(source, /fastGlob\.sync\("\*\*\/\*\.jar"/);
+});
+
+test("SourceService validateAccessWidener resolves merged runtime artifacts and surfaces runtime access evidence", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-aw-runtime-aware-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const loomCacheDir = join(gradleUserHome, "loom-cache", "runtime");
+  const binaryJarPath = join(loomCacheDir, "minecraft-merged-1.21.10.jar");
+  const sourceJarPath = join(loomCacheDir, "minecraft-merged-1.21.10-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": buildClassFile({
+      internalName: "net/minecraft/server/Main",
+      accessFlags: 0x0001,
+      fields: [
+        { name: "field_1234", descriptor: "I", accessFlags: 0x0002 }
+      ],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "method_1234", descriptor: "()V", accessFlags: 0x0001 }
+      ]
+    })
+  });
+  await createJar(sourceJarPath, {
+    "net/minecraft/server/Main.java": "package net.minecraft.server; public class Main {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: {
+      kind: string;
+      name: string;
+      owner?: string;
+      sourceMapping: string;
+      targetMapping: string;
+    }) {
+      if (
+        input.kind === "class" &&
+        input.name === "net.minecraft.server.MinecraftServer" &&
+        input.sourceMapping === "yarn" &&
+        input.targetMapping === "intermediary"
+      ) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "net.minecraft.server.Main" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (
+        input.kind === "class" &&
+        input.name === "net.minecraft.server.Main" &&
+        input.sourceMapping === "intermediary" &&
+        input.targetMapping === "yarn"
+      ) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "net.minecraft.server.MinecraftServer" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (
+        input.kind === "method" &&
+        input.name === "method_1234" &&
+        input.owner === "net.minecraft.server.Main" &&
+        input.sourceMapping === "intermediary" &&
+        input.targetMapping === "yarn"
+      ) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "tickServer", owner: "net.minecraft.server.MinecraftServer", descriptor: "()V" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (
+        input.kind === "field" &&
+        input.name === "field_1234" &&
+        input.owner === "net.minecraft.server.Main" &&
+        input.sourceMapping === "intermediary" &&
+        input.targetMapping === "yarn"
+      ) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "serverPort", owner: "net.minecraft.server.MinecraftServer", descriptor: "I" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      return { resolved: false, status: "not_found", candidates: [], candidateCount: 0, warnings: [] };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      assert.fail("runtime-aware access widener validation should use the merged runtime artifact");
+    }
+  };
+
+  await withGradleUserHome(gradleUserHome, async () => {
+    const result = await (
+      service as unknown as {
+        validateAccessWidener: (input: Record<string, unknown>) => Promise<Record<string, any>>;
+      }
+    ).validateAccessWidener({
+      content: [
+        "accessWidener v2 named",
+        "accessible class net/minecraft/server/MinecraftServer",
+        "accessible method net/minecraft/server/MinecraftServer tickServer ()V",
+        "mutable field net/minecraft/server/MinecraftServer serverPort I"
+      ].join("\n"),
+      version: "1.21.10",
+      projectPath: root,
+      scope: "merged"
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.provenance?.version, "1.21.10");
+    assert.equal(result.provenance?.jarPath, binaryJarPath);
+    assert.equal(result.provenance?.origin, "loom-cache");
+    assert.equal(result.provenance?.requestedScope, "merged");
+    assert.equal(result.provenance?.appliedScope, "merged");
+    assert.equal(result.provenance?.requestedMapping, "yarn");
+    assert.equal(result.provenance?.mappingApplied, "intermediary");
+
+    const classEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "class");
+    const methodEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "method");
+    const fieldEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "field");
+    assert.equal(classEntry?.resolvedInRuntime, true);
+    assert.equal(classEntry?.resolvedRuntimeAccess, "public");
+    assert.equal(methodEntry?.resolvedInRuntime, true);
+    assert.equal(methodEntry?.resolvedRuntimeAccess, "public");
+    assert.equal(methodEntry?.resolvedRuntimeJvmDescriptor, "()V");
+    assert.match(methodEntry?.resolvedRuntimeJavaSignature ?? "", /method_1234/);
+    assert.equal(fieldEntry?.resolvedInRuntime, true);
+    assert.equal(fieldEntry?.resolvedRuntimeAccess, "private");
+    assert.equal(fieldEntry?.resolvedRuntimeJvmDescriptor, "I");
+    assert.match(fieldEntry?.resolvedRuntimeJavaSignature ?? "", /field_1234/);
+  });
+});
+
+test("SourceService validateAccessWidener runtime-aware mode fails when no runtime jar can be resolved", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-aw-runtime-missing-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const service = new SourceService(buildTestConfig(root));
+
+  await withGradleUserHome(gradleUserHome, async () => {
+    await assert.rejects(
+      async () => (
+        service as unknown as {
+          validateAccessWidener: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        }
+      ).validateAccessWidener({
+        content: "accessWidener v2 named\naccessible class net/minecraft/server/MinecraftServer",
+        version: "1.21.10",
+        projectPath: root,
+        scope: "merged"
+      }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
+    );
+  });
 });
 
 test("SourceService getClassMembers with mojang mapping remaps className and member names", async () => {

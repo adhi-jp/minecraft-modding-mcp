@@ -49,6 +49,7 @@ Use this document when you need the exact input conventions, outputs, resource U
 - Start with `compare-minecraft` for version-pair, class diff, registry diff, and migration-summary flows before using `compare-versions`, `diff-class-signatures`, or `get-registry-data` directly.
 - Start with `analyze-mod` for metadata-first mod inspection and safe remap preview/apply flows before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
 - Start with `validate-project` for workspace summaries and direct Mixin or Access Widener validation before using `validate-mixin` or `validate-access-widener` directly.
+- `validate-access-widener` keeps vanilla validation when `projectPath`, `scope`, and `preferProjectVersion` are omitted. Supplying Loom workspace context switches it into runtime-aware mode, which returns `provenance` and per-entry runtime access evidence without changing the existing summary shape.
 - Start with `manage-cache` for cache inventory and safe cleanup. Use `executionMode="preview"` before `executionMode="apply"`.
 - Replace `resolve-artifact` `targetKind` and `targetValue` with `target: { kind, value }`.
 - Replace `get-class-source` and `get-class-members` top-level `artifactId`, `targetKind`, and `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.

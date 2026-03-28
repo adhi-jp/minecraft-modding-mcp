@@ -24,6 +24,7 @@ interface ParsedClassMember {
 }
 
 interface ParsedClassFile {
+  accessFlags: number;
   internalName: string;
   superInternalName: string | undefined;
   interfaceInternalNames: string[];
@@ -50,6 +51,7 @@ export interface GetSignatureInput {
 }
 
 export interface GetSignatureOutput {
+  classAccessFlags?: number;
   constructors: SignatureMember[];
   methods: SignatureMember[];
   fields: SignatureMember[];
@@ -484,7 +486,7 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
     }
   }
 
-  reader.readU2();
+  const accessFlags = reader.readU2();
   const thisClassIndex = reader.readU2();
   const superClassIndex = reader.readU2();
 
@@ -522,6 +524,7 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
   readAttributes(reader, cp, attributesCount);
 
   return {
+    accessFlags,
     internalName: readClassName(cp, thisClassIndex),
     superInternalName: readOptionalClassName(cp, superClassIndex),
     interfaceInternalNames,
@@ -564,6 +567,7 @@ export class MinecraftExplorerService {
     const cached = this.signatureCache.get(cacheKey);
     if (cached) {
       return {
+        classAccessFlags: cached.classAccessFlags,
         constructors: cached.constructors,
         methods: cached.methods,
         fields: cached.fields,
@@ -788,6 +792,7 @@ export class MinecraftExplorerService {
     );
 
     const output: CachedSignatureOutput = {
+      classAccessFlags: parsed.accessFlags,
       constructors,
       methods,
       fields,
@@ -795,6 +800,7 @@ export class MinecraftExplorerService {
     };
     this.signatureCache.set(cacheKey, output);
     return {
+      classAccessFlags: output.classAccessFlags,
       constructors: output.constructors,
       methods: output.methods,
       fields: output.fields,

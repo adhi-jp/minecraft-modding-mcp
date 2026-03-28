@@ -322,12 +322,13 @@ Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mo
 ### バリデーション
 
 Mixin ソースや Access Widener ファイルを、対象 Minecraft バージョンに対して検証するツール群です。
+`validate-access-widener` は既定では従来どおり vanilla bytecode を検証し、`projectPath` / `scope` / `preferProjectVersion` を指定した場合は runtime-aware 検証に切り替わって `provenance` と各 entry の `resolvedRuntimeAccess` を返します。
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | ツール | 役割 |
 | --- | --- |
 | `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する |
-| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証する |
+| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### レジストリと診断

@@ -6,7 +6,7 @@
 import type { SignatureMember } from "./minecraft-explorer-service.js";
 import type { ParsedMixin, ParsedInjection, ParsedShadow, ParsedAccessor } from "./mixin-parser.js";
 import type { ParsedAccessWidener, AccessWidenerEntry } from "./access-widener-parser.js";
-import type { SourceMapping } from "./types.js";
+import type { RuntimeValidationProvenance, SourceMapping } from "./types.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -155,6 +155,7 @@ export type MixinValidationResult = {
 
 export type ResolvedTargetMembers = {
   className: string;
+  classAccessFlags?: number;
   constructors: SignatureMember[];
   methods: SignatureMember[];
   fields: SignatureMember[];
@@ -169,9 +170,14 @@ export type AccessWidenerValidationResult = {
       valid: boolean;
       issue?: string;
       suggestions?: string[];
+      resolvedInRuntime?: boolean;
+      resolvedRuntimeAccess?: "public" | "protected" | "private" | "package-private";
+      resolvedRuntimeJvmDescriptor?: string;
+      resolvedRuntimeJavaSignature?: string;
     }
   >;
   summary: { total: number; valid: number; invalid: number };
+  provenance?: RuntimeValidationProvenance;
   warnings: string[];
 };
 
@@ -311,6 +317,24 @@ function allMethodNames(members: ResolvedTargetMembers): string[] {
 
 function allFieldNames(members: ResolvedTargetMembers): string[] {
   return members.fields.map((m) => m.name);
+}
+
+function accessLevelFromFlags(
+  accessFlags: number | undefined
+): "public" | "protected" | "private" | "package-private" | undefined {
+  if (accessFlags == null) {
+    return undefined;
+  }
+  if ((accessFlags & 0x0001) !== 0) {
+    return "public";
+  }
+  if ((accessFlags & 0x0004) !== 0) {
+    return "protected";
+  }
+  if ((accessFlags & 0x0002) !== 0) {
+    return "private";
+  }
+  return "package-private";
 }
 
 function computeFalsePositiveRisk(
@@ -1003,7 +1027,8 @@ export function validateParsedMixin(
 export function validateParsedAccessWidener(
   parsed: ParsedAccessWidener,
   membersByClass: Map<string, ResolvedTargetMembers>,
-  warnings: string[]
+  warnings: string[],
+  options?: { includeRuntimeEvidence?: boolean }
 ): AccessWidenerValidationResult {
   warnings.push(...parsed.parseWarnings);
 
@@ -1015,14 +1040,28 @@ export function validateParsedAccessWidener(
     const ownerFqn = entry.target.replace(/\//g, ".");
 
     if (entry.targetKind === "class") {
-      if (membersByClass.has(ownerFqn)) {
-        validatedEntries.push({ ...entry, valid: true });
+      const members = membersByClass.get(ownerFqn);
+      if (members) {
+        const runtimeAccess = accessLevelFromFlags(members.classAccessFlags);
+        validatedEntries.push({
+          ...entry,
+          valid: true,
+          ...(options?.includeRuntimeEvidence
+            ? {
+                resolvedInRuntime: true,
+                ...(runtimeAccess
+                  ? { resolvedRuntimeAccess: runtimeAccess }
+                  : {})
+              }
+            : {})
+        });
         validCount++;
       } else {
         validatedEntries.push({
           ...entry,
           valid: false,
-          issue: `Class "${ownerFqn}" not found in game jar.`
+          issue: `Class "${ownerFqn}" not found in game jar.`,
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
         });
         invalidCount++;
       }
@@ -1035,7 +1074,8 @@ export function validateParsedAccessWidener(
       validatedEntries.push({
         ...entry,
         valid: false,
-        issue: `Owner class "${ownerFqn}" not found in game jar.`
+        issue: `Owner class "${ownerFqn}" not found in game jar.`,
+        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
       });
       invalidCount++;
       continue;
@@ -1043,14 +1083,34 @@ export function validateParsedAccessWidener(
 
     if (entry.targetKind === "method") {
       const methodNames = allMethodNames(members);
-      const found = members.methods.some(
+      const matchedMember = members.methods.find(
         (m) => m.name === entry.name && (!entry.descriptor || m.jvmDescriptor === entry.descriptor)
-      ) || members.constructors.some(
+      ) ?? members.constructors.find(
         (m) => m.name === entry.name && (!entry.descriptor || m.jvmDescriptor === entry.descriptor)
       );
+      const found = matchedMember != null;
 
       if (found) {
-        validatedEntries.push({ ...entry, valid: true });
+        const runtimeMember = matchedMember;
+        const runtimeAccess = accessLevelFromFlags(runtimeMember.accessFlags);
+        validatedEntries.push({
+          ...entry,
+          valid: true,
+          ...(options?.includeRuntimeEvidence
+            ? {
+                resolvedInRuntime: true,
+                ...(runtimeAccess
+                  ? { resolvedRuntimeAccess: runtimeAccess }
+                  : {}),
+                ...(runtimeMember.jvmDescriptor
+                  ? { resolvedRuntimeJvmDescriptor: runtimeMember.jvmDescriptor }
+                  : {}),
+                ...(runtimeMember.javaSignature
+                  ? { resolvedRuntimeJavaSignature: runtimeMember.javaSignature }
+                  : {})
+              }
+            : {})
+        });
         validCount++;
       } else {
         const suggestions = entry.name ? suggestSimilar(entry.name, methodNames) : [];
@@ -1058,19 +1118,40 @@ export function validateParsedAccessWidener(
           ...entry,
           valid: false,
           issue: `Method "${entry.name}" not found in class "${ownerFqn}".`,
-          suggestions: suggestions.length > 0 ? suggestions : undefined
+          suggestions: suggestions.length > 0 ? suggestions : undefined,
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
         });
         invalidCount++;
       }
     } else {
       // field
       const fieldNames = allFieldNames(members);
-      const found = members.fields.some(
+      const matchedMember = members.fields.find(
         (m) => m.name === entry.name && (!entry.descriptor || m.jvmDescriptor === entry.descriptor)
       );
+      const found = matchedMember != null;
 
       if (found) {
-        validatedEntries.push({ ...entry, valid: true });
+        const runtimeMember = matchedMember;
+        const runtimeAccess = accessLevelFromFlags(runtimeMember.accessFlags);
+        validatedEntries.push({
+          ...entry,
+          valid: true,
+          ...(options?.includeRuntimeEvidence
+            ? {
+                resolvedInRuntime: true,
+                ...(runtimeAccess
+                  ? { resolvedRuntimeAccess: runtimeAccess }
+                  : {}),
+                ...(runtimeMember.jvmDescriptor
+                  ? { resolvedRuntimeJvmDescriptor: runtimeMember.jvmDescriptor }
+                  : {}),
+                ...(runtimeMember.javaSignature
+                  ? { resolvedRuntimeJavaSignature: runtimeMember.javaSignature }
+                  : {})
+              }
+            : {})
+        });
         validCount++;
       } else {
         const suggestions = entry.name ? suggestSimilar(entry.name, fieldNames) : [];
@@ -1078,7 +1159,8 @@ export function validateParsedAccessWidener(
           ...entry,
           valid: false,
           issue: `Field "${entry.name}" not found in class "${ownerFqn}".`,
-          suggestions: suggestions.length > 0 ? suggestions : undefined
+          suggestions: suggestions.length > 0 ? suggestions : undefined,
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
         });
         invalidCount++;
       }

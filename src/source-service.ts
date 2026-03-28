@@ -70,6 +70,7 @@ import type {
   FileRow,
   MappingSourcePriority,
   ResolvedSourceArtifact,
+  RuntimeValidationProvenance,
   SourceMapping,
   SourceTargetInput,
   SymbolRow
@@ -730,6 +731,9 @@ export type ValidateAccessWidenerInput = {
   version: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
 };
 
 export type ValidateAccessWidenerOutput = AccessWidenerValidationResult;
@@ -807,6 +811,13 @@ type VersionSourceDiscovery = {
   candidateArtifacts: string[];
   selectedSourceJarPath?: string;
   selectedHasMinecraftNamespace?: boolean;
+};
+
+type RuntimeJarCandidate = {
+  jarPath: string;
+  score: number;
+  appliedScope: ArtifactScope;
+  origin: RuntimeValidationProvenance["origin"];
 };
 
 function normalizePathStyle(path: string): string {
@@ -1675,6 +1686,162 @@ export class SourceService {
       candidateArtifacts,
       selectedSourceJarPath: selected?.jarPath,
       selectedHasMinecraftNamespace: selected?.hasMinecraftNamespace
+    };
+  }
+
+  private discoverAccessWidenerRuntimeCandidates(input: {
+    version: string;
+    projectPath?: string;
+    requestedScope: ArtifactScope;
+  }): { searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate } {
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
+    const searchedPaths: string[] = [];
+    const candidates: RuntimeJarCandidate[] = [];
+    const seen = new Set<string>();
+
+    for (const root of searchRoots) {
+      searchedPaths.push(root);
+      let discovered: string[] = [];
+      try {
+        discovered = fastGlob.sync(["**/*minecraft*.jar", "**/*merged*.jar"], {
+          cwd: root,
+          absolute: true,
+          onlyFiles: true,
+          ignore: ["**/*sources.jar", "**/node_modules/**", "**/.git/**", "**/build/**", "**/out/**"]
+        });
+      } catch {
+        continue;
+      }
+
+      for (const candidatePath of discovered) {
+        const normalizedPath = normalizePathStyle(candidatePath);
+        if (seen.has(normalizedPath)) {
+          continue;
+        }
+        seen.add(normalizedPath);
+
+        const lower = normalizedPath.toLowerCase();
+        if (!lower.includes("minecraft")) {
+          continue;
+        }
+
+        const exactVersionMatch = hasExactVersionToken(normalizedPath, input.version);
+        const looksMerged = lower.includes("minecraft-merged") || lower.includes("/merged/") || lower.includes("-merged");
+        const appliedScope: ArtifactScope =
+          looksMerged
+            ? "merged"
+            : input.requestedScope === "loader"
+              ? "merged"
+              : input.requestedScope;
+
+        const score =
+          (exactVersionMatch ? 5_000 : 0) +
+          (looksMerged ? 4_000 : 0) +
+          (lower.includes("loom-cache") ? 500 : 0) +
+          (lower.includes("minecraft-client") || lower.includes("client") ? 100 : 0);
+
+        candidates.push({
+          jarPath: normalizedPath,
+          score,
+          appliedScope,
+          origin: lower.includes("loom-cache") ? "loom-cache" : "local-jar"
+        });
+      }
+    }
+
+    candidates.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.jarPath.localeCompare(right.jarPath);
+    });
+
+    return {
+      searchedPaths,
+      candidateArtifacts: candidates.slice(0, 20).map((candidate) => candidate.jarPath),
+      selected: candidates[0]
+    };
+  }
+
+  private async resolveAccessWidenerRuntimeArtifact(input: {
+    version: string;
+    awNamespace: SourceMapping;
+    projectPath?: string;
+    scope?: ArtifactScope;
+    preferProjectVersion?: boolean;
+  }): Promise<RuntimeValidationProvenance> {
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    let version = input.version;
+    if (input.preferProjectVersion && normalizedProjectPath) {
+      const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
+      version = detected ?? version;
+    }
+
+    const requestedScope: ArtifactScope = input.scope ?? (normalizedProjectPath ? "loader" : "vanilla");
+    if (requestedScope === "vanilla") {
+      const versionJar = await this.versionService.resolveVersionJar(version);
+      return {
+        version: versionJar.version,
+        jarPath: versionJar.jarPath,
+        requestedScope,
+        appliedScope: "vanilla",
+        requestedMapping: input.awNamespace,
+        mappingApplied: "obfuscated",
+        origin: "version-jar"
+      };
+    }
+
+    const discovery = this.discoverAccessWidenerRuntimeCandidates({
+      version,
+      projectPath: normalizedProjectPath,
+      requestedScope
+    });
+    if (!discovery.selected) {
+      throw createError({
+        code: ERROR_CODES.CONTEXT_UNRESOLVED,
+        message: "Could not resolve a runtime jar for Access Widener validation.",
+        details: {
+          version,
+          requestedScope,
+          projectPath: normalizedProjectPath,
+          searchedPaths: discovery.searchedPaths,
+          candidateArtifacts: discovery.candidateArtifacts,
+          nextAction: "Provide projectPath for a Loom workspace with generated runtime jars, or run Gradle tasks that populate the Loom cache before retrying.",
+          suggestedCall: {
+            tool: "validate-access-widener",
+            params: {
+              version,
+              scope: requestedScope,
+              ...(normalizedProjectPath ? { projectPath: normalizedProjectPath } : {})
+            }
+          }
+        }
+      });
+    }
+
+    const appliedScope = discovery.selected.appliedScope;
+    const scopeFallback =
+      requestedScope !== appliedScope
+        ? {
+            requested: requestedScope,
+            applied: appliedScope,
+            reason: requestedScope === "loader"
+              ? "Fabric loader runtime validation currently reuses the merged runtime jar."
+              : "Selected runtime jar matched a nearby merged artifact."
+          }
+        : undefined;
+
+    return {
+      version,
+      jarPath: discovery.selected.jarPath,
+      requestedScope,
+      appliedScope,
+      requestedMapping: input.awNamespace,
+      mappingApplied: isUnobfuscatedVersion(version) ? "obfuscated" : "intermediary",
+      origin: discovery.selected.origin,
+      resolutionNotes: scopeFallback ? [scopeFallback.reason] : undefined,
+      scopeFallback
     };
   }
 
@@ -4939,7 +5106,6 @@ export class SourceService {
     }
 
     const warnings: string[] = [];
-    const { jarPath } = await this.versionService.resolveVersionJar(version);
     const parsed = parseAccessWidener(content);
 
     const headerNamespaceRaw = normalizeOptionalString(parsed.namespace);
@@ -4955,7 +5121,27 @@ export class SourceService {
         `Using mapping override "${overrideMapping}" instead of header namespace "${headerNamespaceRaw}".`
       );
     }
-    const needsMapping = awNamespace !== "obfuscated";
+    const runtimeAware = input.projectPath != null || input.scope != null || input.preferProjectVersion === true;
+    let resolvedVersion = version;
+    let jarPath: string;
+    let lookupMapping: SourceMapping = "obfuscated";
+    let provenance: RuntimeValidationProvenance | undefined;
+
+    if (runtimeAware) {
+      provenance = await this.resolveAccessWidenerRuntimeArtifact({
+        version,
+        awNamespace,
+        projectPath: input.projectPath,
+        scope: input.scope,
+        preferProjectVersion: input.preferProjectVersion
+      });
+      resolvedVersion = provenance.version;
+      jarPath = provenance.jarPath;
+      lookupMapping = provenance.mappingApplied;
+    } else {
+      ({ jarPath } = await this.versionService.resolveVersionJar(version));
+    }
+    const needsLookupMapping = awNamespace !== lookupMapping;
 
     // Collect unique class FQNs from entries
     const classFqns = new Set<string>();
@@ -4966,22 +5152,22 @@ export class SourceService {
 
     const membersByClass = new Map<string, ResolvedTargetMembers>();
     for (const fqn of classFqns) {
-      let obfuscatedFqn = fqn;
+      let lookupFqn = fqn;
 
-      if (needsMapping) {
+      if (needsLookupMapping) {
         try {
           const mapped = await this.mappingService.findMapping({
-            version,
+            version: resolvedVersion,
             kind: "class",
             name: fqn,
             sourceMapping: awNamespace,
-            targetMapping: "obfuscated",
+            targetMapping: lookupMapping,
             sourcePriority: input.sourcePriority
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
-            obfuscatedFqn = mapped.resolvedSymbol.name;
+            lookupFqn = mapped.resolvedSymbol.name;
           } else {
-            warnings.push(`Could not map class "${fqn}" from ${awNamespace} to obfuscated.`);
+            warnings.push(`Could not map class "${fqn}" from ${awNamespace} to ${lookupMapping}.`);
           }
         } catch {
           warnings.push(`Mapping lookup failed for class "${fqn}".`);
@@ -4990,23 +5176,67 @@ export class SourceService {
 
       try {
         const sig = await this.explorerService.getSignature({
-          fqn: obfuscatedFqn,
+          fqn: lookupFqn,
           jarPath,
           access: "all"
         });
         warnings.push(...sig.warnings);
+        let constructors = sig.constructors;
+        let methods = sig.methods;
+        let fields = sig.fields;
+        if (needsLookupMapping) {
+          const [ctorResult, methodResult, fieldResult] = await Promise.all([
+            this.remapSignatureMembers(
+              sig.constructors,
+              "method",
+              resolvedVersion,
+              lookupMapping,
+              awNamespace,
+              input.sourcePriority,
+              warnings
+            ),
+            this.remapSignatureMembers(
+              sig.methods,
+              "method",
+              resolvedVersion,
+              lookupMapping,
+              awNamespace,
+              input.sourcePriority,
+              warnings
+            ),
+            this.remapSignatureMembers(
+              sig.fields,
+              "field",
+              resolvedVersion,
+              lookupMapping,
+              awNamespace,
+              input.sourcePriority,
+              warnings
+            )
+          ]);
+          constructors = ctorResult.members;
+          methods = methodResult.members;
+          fields = fieldResult.members;
+        }
         membersByClass.set(fqn, {
           className: fqn,
-          constructors: sig.constructors,
-          methods: sig.methods,
-          fields: sig.fields
+          classAccessFlags: sig.classAccessFlags,
+          constructors,
+          methods,
+          fields
         });
       } catch {
-        warnings.push(`Could not load signature for class "${obfuscatedFqn}".`);
+        warnings.push(`Could not load signature for class "${lookupFqn}".`);
       }
     }
 
-    return validateParsedAccessWidener(parsed, membersByClass, warnings);
+    const result = validateParsedAccessWidener(parsed, membersByClass, warnings, {
+      includeRuntimeEvidence: runtimeAware
+    });
+    if (provenance) {
+      result.provenance = provenance;
+    }
+    return result;
   }
 
   getRuntimeMetrics(): RuntimeMetricSnapshot {

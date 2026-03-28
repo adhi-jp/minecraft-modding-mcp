@@ -2188,6 +2188,63 @@ test("ValidateProjectService project-summary applies preferProjectVersion to dis
   assert.equal(result.project?.summary?.invalid, 0);
 });
 
+test("ValidateProjectService project-summary forwards runtime-aware access widener inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-project-aw-runtime-aware-"));
+  const awPath = join(root, "src", "main", "resources", "example.accesswidener");
+  await mkdir(join(root, "src", "main", "resources"), { recursive: true });
+  await writeFile(
+    awPath,
+    "accessWidener v2 named\naccessible class net/minecraft/client/Minecraft\n",
+    "utf8"
+  );
+
+  let seenProjectPath: string | undefined;
+  let seenScope: string | undefined;
+  let seenPreferProjectVersion: boolean | undefined;
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({
+      summary: {
+        valid: 0,
+        partial: 0,
+        invalid: 0
+      },
+      warnings: []
+    }),
+    validateAccessWidener: async (input) => {
+      seenProjectPath = (input as { projectPath?: string }).projectPath;
+      seenScope = (input as { scope?: string }).scope;
+      seenPreferProjectVersion = (input as { preferProjectVersion?: boolean }).preferProjectVersion;
+      return {
+        valid: true,
+        header: "accessWidener v2 named",
+        namespace: "named",
+        issues: [],
+        warnings: []
+      };
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [awPath],
+    detectProjectMinecraftVersion: async () => "26.1"
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    scope: "loader",
+    preferProjectVersion: true,
+    subject: {
+      kind: "workspace",
+      projectPath: root
+    }
+  });
+
+  assert.equal(seenProjectPath, root);
+  assert.equal(seenScope, "loader");
+  assert.equal(seenPreferProjectVersion, true);
+  assert.equal(result.summary.status, "ok");
+  assert.equal(result.project?.summary?.valid, 1);
+});
+
 test("ValidateProjectService project-summary uses detected project version consistently across mixins and access wideners", async () => {
   const root = await mkdtemp(join(tmpdir(), "validate-project-consistent-version-"));
   const awPath = join(root, "src", "main", "resources", "example.accesswidener");

@@ -42,6 +42,18 @@ export interface ArtifactProvenance {
   transformChain: string[];
 }
 
+export interface RuntimeValidationProvenance {
+  version: string;
+  jarPath: string;
+  requestedScope?: ArtifactScope;
+  appliedScope?: ArtifactScope;
+  requestedMapping: SourceMapping;
+  mappingApplied: SourceMapping;
+  origin: SourceOrigin | "loom-cache" | "version-jar";
+  resolutionNotes?: string[];
+  scopeFallback?: { requested: string; applied: string; reason: string };
+}
+
 export interface ErrorEnvelope {
   code: string;
   message: string;

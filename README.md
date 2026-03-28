@@ -324,12 +324,13 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 ### Validation
 
 Tools for validating Mixin source and Access Widener files against a target Minecraft version.
+`validate-access-widener` keeps vanilla bytecode validation by default, and now also supports runtime-aware validation through `projectPath`, `scope`, and `preferProjectVersion`, returning runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence when that mode is used.
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose |
 | --- | --- |
 | `validate-mixin` | Validate Mixin source against a target Minecraft version |
-| `validate-access-widener` | Validate Access Widener content against a target Minecraft version |
+| `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### Registry & Diagnostics

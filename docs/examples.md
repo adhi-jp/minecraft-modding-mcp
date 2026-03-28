@@ -429,6 +429,21 @@ If the input JAR was already built with Mojang mappings, use `targetMapping: "mo
 }
 ```
 
+### Validate Access Widener content against a Loom runtime jar
+
+```json
+{
+  "tool": "validate-access-widener",
+  "arguments": {
+    "content": "accessWidener v2 named\naccessible class net/minecraft/server/Main\naccessible method net/minecraft/server/Main tick ()V",
+    "version": "1.21.10",
+    "projectPath": "/workspace/example-mod",
+    "scope": "loader",
+    "preferProjectVersion": true
+  }
+}
+```
+
 ## Registry and Diagnostics
 
 ### Get all registries for a version
