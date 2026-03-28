@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -60,6 +60,59 @@ test("searchModSource sets truncated at limit and preserves first decompile warn
   assert.equal(result.truncated, true);
   assert.deepEqual(result.warnings, ["metadata unavailable"]);
   assert.equal(decompileCalls, 1);
+});
+
+test("searchModSource stops scheduling later decompiled files once an earlier batch satisfies the limit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-early-stop-"));
+  const jarPath = join(root, "demo-mod.jar");
+  await createJar(jarPath, {
+    "com/example/Foo.class": Buffer.alloc(4)
+  });
+
+  const classNames = Array.from({ length: 20 }, (_, index) => `com.example.F${index}`);
+  const decompileStub = {
+    async decompileModJar(): Promise<DecompileModJarOutput> {
+      return {
+        modId: "demo",
+        loader: "fabric",
+        outputDir: root,
+        fileCount: classNames.length,
+        files: classNames,
+        warnings: []
+      };
+    }
+  };
+
+  const service = new ModSearchService(decompileStub as any);
+  const processedClassNames: string[] = [];
+  (service as unknown as {
+    searchDecompiledClassFile: (input: { className: string }) => Promise<{ hits: Array<{ type: "content"; name: string; file: string }> }>;
+  }).searchDecompiledClassFile = async ({ className }) => {
+    processedClassNames.push(className);
+    return className === classNames[0]
+      ? {
+          hits: [
+            {
+              type: "content",
+              name: className,
+              file: `${className.replaceAll(".", "/")}.java`
+            }
+          ]
+        }
+      : { hits: [] };
+  };
+
+  const result = await service.searchModSource({
+    jarPath,
+    query: "needle",
+    searchType: "content",
+    limit: 1
+  });
+
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.truncated, true);
+  assert.ok(processedClassNames.length < classNames.length, "expected early termination before scanning every file");
+  assert.ok(!processedClassNames.includes(classNames.at(-1) ?? ""), "expected later files to remain unread");
 });
 
 test("searchModSource normalizes jarPath before decompile delegation", async () => {
@@ -210,4 +263,11 @@ test("searchModSource searches source jars directly without decompile", async ()
   assert.equal(result.totalHits, 1);
   assert.equal(result.hits[0]?.file, "com/example/Foo.java");
   assert.ok(result.warnings.some((warning) => warning.includes("source jar")));
+});
+
+test("searchModSource uses promise-based file reads for decompiled output scanning", async () => {
+  const source = await readFile("src/mod-search-service.ts", "utf8");
+
+  assert.doesNotMatch(source, /readFileSync\(/);
+  assert.match(source, /mapWithConcurrencyLimit/);
 });

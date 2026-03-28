@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-03-28T18:04:08.680Z",
+  "runtime": {
+    "node": "v24.13.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "samples": 15,
+  "fixtures": {
+    "workspaceModules": 24,
+    "sourceJarResourcesBeforeJava": 300,
+    "sourceJarJavaFiles": 900,
+    "decompiledJavaFiles": 320
+  },
+  "kpis": {
+    "workspaceDiscovery": {
+      "p50Ms": 44.399,
+      "p95Ms": 49.973
+    },
+    "sourceJarDetection": {
+      "p50Ms": 38.184,
+      "p95Ms": 41.364
+    },
+    "searchModSourceDecompiled": {
+      "p50Ms": 43.28,
+      "p95Ms": 62.015
+    }
+  }
+}

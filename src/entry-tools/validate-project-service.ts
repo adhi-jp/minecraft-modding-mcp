@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import fastGlob from "fast-glob";
 import { z } from "zod";
 
+import { mapWithConcurrencyLimit } from "../concurrency.js";
 import { createError, ERROR_CODES } from "../errors.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
@@ -11,6 +12,7 @@ import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
+const WORKSPACE_TEXT_FILE_READ_CONCURRENCY = 4;
 
 const mixinInputSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("inline"), source: nonEmptyString }),
@@ -143,34 +145,41 @@ export async function discoverWorkspaceMixins(projectPath: string, configPaths?:
   if (configPaths?.length) {
     return [...configPaths];
   }
-  return fastGlob.sync(["**/*.mixins.json"], {
+  return (await fastGlob.glob(["**/*.mixins.json"], {
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,
     ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-  });
+  })).sort((left, right) => left.localeCompare(right));
 }
 
 export async function discoverWorkspaceAccessWideners(projectPath: string): Promise<string[]> {
-  const descriptorFiles = fastGlob.sync(["fabric.mod.json", "quilt.mod.json", "**/fabric.mod.json", "**/quilt.mod.json"], {
+  const descriptorFiles = (await fastGlob.glob(["fabric.mod.json", "quilt.mod.json", "**/fabric.mod.json", "**/quilt.mod.json"], {
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,
     ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-  });
+  })).sort((left, right) => left.localeCompare(right));
   const discovered = new Set<string>();
-  for (const descriptorPath of descriptorFiles) {
-    try {
-      const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
-        accessWidener?: string;
-        access_widener?: string;
-      };
-      const relative = parsed.accessWidener ?? parsed.access_widener;
-      if (relative) {
-        discovered.add(resolve(descriptorPath, "..", relative));
+  const matches = await mapWithConcurrencyLimit(
+    descriptorFiles,
+    WORKSPACE_TEXT_FILE_READ_CONCURRENCY,
+    async (descriptorPath): Promise<string[]> => {
+      try {
+        const parsed = JSON.parse(await readFile(descriptorPath, "utf8")) as {
+          accessWidener?: string;
+          access_widener?: string;
+        };
+        const relative = parsed.accessWidener ?? parsed.access_widener;
+        return relative ? [resolve(descriptorPath, "..", relative)] : [];
+      } catch {
+        return [];
       }
-    } catch {
-      // ignore malformed descriptors in discovery mode
+    }
+  );
+  for (const matchList of matches) {
+    for (const match of matchList) {
+      discovered.add(match);
     }
   }
   return [...discovered].sort((left, right) => left.localeCompare(right));
@@ -256,7 +265,7 @@ function collectTomlAccessTransformerEntries(content: string, filePath: string, 
 
 export async function discoverWorkspaceAccessTransformers(projectPath: string): Promise<string[]> {
   const discovered = new Set<string>();
-  const textFiles = fastGlob.sync([
+  const textFiles = (await fastGlob.glob([
     "build.gradle",
     "build.gradle.kts",
     "META-INF/mods.toml",
@@ -270,35 +279,46 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
     absolute: true,
     onlyFiles: true,
     ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-  });
+  })).sort((left, right) => left.localeCompare(right));
 
-  for (const filePath of textFiles) {
-    let content: string;
-    try {
-      content = await readFile(filePath, "utf8");
-    } catch {
-      continue;
-    }
+  const discoveredByFile = await mapWithConcurrencyLimit(
+    textFiles,
+    WORKSPACE_TEXT_FILE_READ_CONCURRENCY,
+    async (filePath): Promise<string[]> => {
+      let content: string;
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch {
+        return [];
+      }
 
-    collectFileArgumentMatches(
-      content,
-      filePath,
-      discovered,
-      /accessTransformer\s*=\s*file\(\s*(["'])(.+?)\1\s*\)/g
-    );
-    collectFileArgumentMatches(
-      content,
-      filePath,
-      discovered,
-      /accessTransformers\.from\s*\(\s*file\(\s*(["'])(.+?)\1\s*\)\s*\)/g
-    );
-    for (const block of extractNamedDslBlocks(content, "accessTransformers")) {
-      collectFileArgumentMatches(block, filePath, discovered, /file\(\s*(["'])(.+?)\1\s*\)/g);
+      const perFileDiscovered = new Set<string>();
+      collectFileArgumentMatches(
+        content,
+        filePath,
+        perFileDiscovered,
+        /accessTransformer\s*=\s*file\(\s*(["'])(.+?)\1\s*\)/g
+      );
+      collectFileArgumentMatches(
+        content,
+        filePath,
+        perFileDiscovered,
+        /accessTransformers\.from\s*\(\s*file\(\s*(["'])(.+?)\1\s*\)\s*\)/g
+      );
+      for (const block of extractNamedDslBlocks(content, "accessTransformers")) {
+        collectFileArgumentMatches(block, filePath, perFileDiscovered, /file\(\s*(["'])(.+?)\1\s*\)/g);
+      }
+      collectTomlAccessTransformerEntries(content, filePath, perFileDiscovered);
+      return [...perFileDiscovered];
     }
-    collectTomlAccessTransformerEntries(content, filePath, discovered);
+  );
+  for (const matchList of discoveredByFile) {
+    for (const match of matchList) {
+      discovered.add(match);
+    }
   }
 
-  for (const fallbackPath of fastGlob.sync([
+  for (const fallbackPath of (await fastGlob.glob([
     "**/META-INF/accesstransformer.cfg",
     "**/*_at.cfg",
     "**/accesstransformer*.cfg"
@@ -307,7 +327,7 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
     absolute: true,
     onlyFiles: true,
     ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-  })) {
+  })).sort((left, right) => left.localeCompare(right))) {
     discovered.add(fallbackPath);
   }
 

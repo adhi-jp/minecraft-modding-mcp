@@ -5729,6 +5729,39 @@ test("SourceService runtime-aware access widener candidate scan avoids loader-co
   assert.doesNotMatch(source, /fastGlob\.sync\("\*\*\/\*\.jar"/);
 });
 
+test("SourceService version/runtime discovery blocks avoid sync glob scans on hot paths", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+  const versionSourceBlock =
+    source.match(/private async discoverVersionSourceJar\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+  const accessWidenerBlock =
+    source.match(/private (?:async )?discoverAccessWidenerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+  const accessTransformerBlock =
+    source.match(/private (?:async )?discoverAccessTransformerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+
+  assert.doesNotMatch(versionSourceBlock, /fastGlob\.sync\(/);
+  assert.doesNotMatch(accessWidenerBlock, /fastGlob\.sync\(/);
+  assert.doesNotMatch(accessTransformerBlock, /fastGlob\.sync\(/);
+  assert.doesNotMatch(accessTransformerBlock, /existsSync\(root\)/);
+});
+
+test("SourceService validateMixin project/config discovery avoids sync glob and existence probes in discovery blocks", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+  const projectBlock =
+    source.match(/private (?:async )?createProjectValidateMixinConfigInput\([\s\S]*?return \{\s*\.\.\.input,/m)?.[0] ?? "";
+  const configBlock =
+    source.match(/private async resolveMixinConfigSources\([\s\S]*?return \{\s*sources: results,/m)?.[0] ?? "";
+
+  assert.doesNotMatch(projectBlock, /fastGlob\.sync\(/);
+  assert.doesNotMatch(configBlock, /existsSync\(/);
+});
+
+test("SourceService reuses the shared concurrency helper instead of defining a local variant", async () => {
+  const source = await readFile("src/source-service.ts", "utf8");
+
+  assert.match(source, /import\s+\{\s*mapWithConcurrencyLimit\s*\}\s+from "\.\/concurrency\.js"/);
+  assert.doesNotMatch(source, /async function mapWithConcurrencyLimit</);
+});
+
 test("SourceService validateAccessWidener resolves merged runtime artifacts and surfaces runtime access evidence", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-aw-runtime-aware-"));

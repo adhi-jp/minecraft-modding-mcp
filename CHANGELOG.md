@@ -20,6 +20,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and workspace Mixin checks, and returns a blocked summary with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
 - `check-symbol-exists` and `analyze-symbol task="exists"` now fall back to unobfuscated runtime bytecode for `mojang`/runtime-name existence checks on `26.1+`, preserve the original `mapping_unavailable` result when the runtime JAR cannot be resolved, and return a targeted warning when callers provide only a short class name.
 
+### Performance
+- `resolve-artifact` source-jar detection and mapping tiny-jar loading now reuse a single ZIP walk per jar probe instead of reopening and fully enumerating matching archives on each helper call.
+- `search-mod-source`, `decompile-mod-jar`, `get-mod-class-source`, `validate-project` workspace discovery, and workspace mapping detection now avoid synchronous hot-path file/glob reads and use bounded concurrent text reads where safe, reducing event-loop stalls on larger decompiled outputs and multi-module workspaces.
+
 ## [3.1.1] - 2026-03-21
 
 ### Fixed

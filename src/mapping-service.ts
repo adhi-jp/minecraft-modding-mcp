@@ -6,7 +6,7 @@ import fastGlob from "fast-glob";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
-import { listJarEntries, readJarEntryAsUtf8 } from "./source-jar-reader.js";
+import { collectMatchedJarEntriesAsUtf8, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
 import { VersionService, isUnobfuscatedVersion, type ResolvedVersionMappings } from "./version-service.js";
 
@@ -2527,7 +2527,7 @@ export class MappingService {
     mappingArtifact: string;
   }> {
     const patterns = [".gradle/loom-cache/**/*.tiny", ".gradle/loom-cache/**/*.tinyv2"];
-    const candidates = fastGlob.sync(patterns, {
+    const candidates = await fastGlob.glob(patterns, {
       cwd: process.cwd(),
       absolute: true,
       onlyFiles: true
@@ -2644,16 +2644,16 @@ export class MappingService {
   }
 
   private async parseTinyFromJar(jarPath: string): Promise<Map<PairKey, DirectionIndex>> {
-    const entries = await listJarEntries(jarPath);
-    const tinyEntries = entries
-      .filter((entry) => entry.toLowerCase().endsWith(".tiny") || entry.toLowerCase().endsWith(".tinyv2"))
-      .sort((left, right) => left.localeCompare(right));
+    const tinyEntries = (await collectMatchedJarEntriesAsUtf8(
+      jarPath,
+      (entry) => entry.toLowerCase().endsWith(".tiny") || entry.toLowerCase().endsWith(".tinyv2"),
+      { continueOnError: true }
+    )).sort((left, right) => left.filePath.localeCompare(right.filePath));
 
     const merged = new Map<PairKey, DirectionIndex>();
     for (const entry of tinyEntries) {
       try {
-        const text = await readJarEntryAsUtf8(jarPath, entry);
-        const parsed = parseTinyMappings(text);
+        const parsed = parseTinyMappings(entry.content);
         for (const [key, index] of parsed.entries()) {
           const existing = merged.get(key);
           if (!existing) {
@@ -2756,17 +2756,18 @@ async function extractTinyFromJar(
   jarPath: string,
   outputPath: string
 ): Promise<boolean> {
-  const entries = await listJarEntries(jarPath);
-  const tinyEntry = entries.find(
-    (entry) => entry === "mappings/mappings.tiny" || entry.toLowerCase().endsWith(".tiny")
+  const matchedEntries = await collectMatchedJarEntriesAsUtf8(
+    jarPath,
+    (entry) => entry === "mappings/mappings.tiny" || entry.toLowerCase().endsWith(".tiny"),
+    { maxEntries: 1 }
   );
+  const tinyEntry = matchedEntries[0];
   if (!tinyEntry) {
     return false;
   }
 
-  const content = await readJarEntryAsUtf8(jarPath, tinyEntry);
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, content, "utf8");
+  await writeFile(outputPath, tinyEntry.content, "utf8");
   return true;
 }
 

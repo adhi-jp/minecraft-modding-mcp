@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
 
+import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { decompileBinaryJar } from "./decompiler/vineflower.js";
@@ -1068,37 +1069,6 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return trimmed ? trimmed : undefined;
 }
 
-async function mapWithConcurrencyLimit<TInput, TOutput>(
-  items: readonly TInput[],
-  limit: number,
-  mapper: (item: TInput, index: number) => Promise<TOutput>
-): Promise<TOutput[]> {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const results = new Array<TOutput>(items.length);
-  let nextIndex = 0;
-  const workerCount = Math.max(1, Math.min(Math.trunc(limit), items.length));
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (true) {
-        // Safe in Node's single-threaded event loop because no await occurs between
-        // reading and incrementing nextIndex inside this synchronous dispatch section.
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        if (currentIndex >= items.length) {
-          return;
-        }
-        results[currentIndex] = await mapper(items[currentIndex] as TInput, currentIndex);
-      }
-    })
-  );
-
-  return results;
-}
-
 function normalizeStrictPositiveInt(
   value: number | undefined,
   field: string
@@ -1141,6 +1111,15 @@ const MIXIN_PROJECT_DISCOVERY_IGNORES = [
   "**/out/**",
   "**/node_modules/**"
 ] as const;
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   if (mapping == null) {
@@ -1669,7 +1648,7 @@ export class SourceService {
       searchedPaths.push(root);
       let discovered: string[] = [];
       try {
-        discovered = fastGlob.sync("**/*sources.jar", {
+        discovered = await fastGlob.glob("**/*sources.jar", {
           cwd: root,
           absolute: true,
           onlyFiles: true
@@ -1745,11 +1724,11 @@ export class SourceService {
     };
   }
 
-  private discoverAccessWidenerRuntimeCandidates(input: {
+  private async discoverAccessWidenerRuntimeCandidates(input: {
     version: string;
     projectPath?: string;
     requestedScope: ArtifactScope;
-  }): { searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate } {
+  }): Promise<{ searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate }> {
     const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
     const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
     const searchedPaths: string[] = [];
@@ -1760,7 +1739,7 @@ export class SourceService {
       searchedPaths.push(root);
       let discovered: string[] = [];
       try {
-        discovered = fastGlob.sync(["**/*minecraft*.jar", "**/*merged*.jar"], {
+        discovered = await fastGlob.glob(["**/*minecraft*.jar", "**/*merged*.jar"], {
           cwd: root,
           absolute: true,
           onlyFiles: true,
@@ -1820,13 +1799,13 @@ export class SourceService {
     };
   }
 
-  private discoverAccessTransformerRuntimeCandidates(input: {
+  private async discoverAccessTransformerRuntimeCandidates(input: {
     version: string;
     projectPath?: string;
     requestedScope: ArtifactScope;
     atNamespace: AccessTransformerNamespace;
     loader: WorkspaceProjectLoader | "unknown";
-  }): { searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate } {
+  }): Promise<{ searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate }> {
     const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
     const normalizedProjectPathLower = normalizedProjectPath
       ? normalizePathStyle(normalizedProjectPath).toLowerCase()
@@ -1850,12 +1829,12 @@ export class SourceService {
 
     for (const root of searchRoots) {
       searchedPaths.push(root);
-      if (!existsSync(root)) {
+      if (!(await pathExists(root))) {
         continue;
       }
       let discovered: string[] = [];
       try {
-        discovered = fastGlob.sync(globs, {
+        discovered = await fastGlob.glob(globs, {
           cwd: root,
           absolute: true,
           onlyFiles: true,
@@ -1958,7 +1937,7 @@ export class SourceService {
       };
     }
 
-    const discovery = this.discoverAccessWidenerRuntimeCandidates({
+    const discovery = await this.discoverAccessWidenerRuntimeCandidates({
       version,
       projectPath: normalizedProjectPath,
       requestedScope
@@ -2089,7 +2068,7 @@ export class SourceService {
       ? await this.workspaceMappingService.detectProjectLoader(normalizedProjectPath)
       : { resolved: false, loader: undefined, evidence: [], warnings: [] };
     const loader = loaderDetection.resolved ? loaderDetection.loader ?? "unknown" : "unknown";
-    const discovery = this.discoverAccessTransformerRuntimeCandidates({
+    const discovery = await this.discoverAccessTransformerRuntimeCandidates({
       version,
       projectPath: normalizedProjectPath,
       requestedScope,
@@ -4493,7 +4472,7 @@ export class SourceService {
     }
 
     const resolvedInput = mode === "project"
-      ? this.createProjectValidateMixinConfigInput(input)
+      ? await this.createProjectValidateMixinConfigInput(input)
       : input;
     const { sources: configSources, warnings: configWarnings } = await this.resolveMixinConfigSources(resolvedInput);
     if (configSources.length === 0) {
@@ -4520,18 +4499,18 @@ export class SourceService {
     );
   }
 
-  private createProjectValidateMixinConfigInput(input: ValidateMixinInput): ValidateMixinInput {
+  private async createProjectValidateMixinConfigInput(input: ValidateMixinInput): Promise<ValidateMixinInput> {
     if (input.input.mode !== "project") {
       return input;
     }
 
     const resolvedProjectPath = this.resolveMixinInputPath(input.input.path, "path");
-    const configPaths = fastGlob.sync(["**/*.mixins.json"], {
+    const configPaths = (await fastGlob.glob(["**/*.mixins.json"], {
       cwd: resolvedProjectPath,
       absolute: true,
       onlyFiles: true,
       ignore: [...MIXIN_PROJECT_DISCOVERY_IGNORES]
-    }).sort((left, right) => left.localeCompare(right));
+    })).sort((left, right) => left.localeCompare(right));
 
     if (configPaths.length === 0) {
       throw createError({
@@ -5173,11 +5152,21 @@ export class SourceService {
       if (input.sourceRoots && input.sourceRoots.length > 0) {
         sourceRootCandidates = input.sourceRoots;
       } else {
-        const detected = COMMON_SOURCE_ROOTS.filter((candidateRoot) => classNames.some((className) => {
-          const fqcn = pkg ? `${pkg}.${className}` : className;
-          const relative = fqcn.replace(/\./g, "/") + ".java";
-          return existsSync(resolvePath(projectBase, candidateRoot, relative));
-        }));
+        const detected: string[] = [];
+        for (const candidateRoot of COMMON_SOURCE_ROOTS) {
+          let foundInRoot = false;
+          for (const className of classNames) {
+            const fqcn = pkg ? `${pkg}.${className}` : className;
+            const relative = fqcn.replace(/\./g, "/") + ".java";
+            if (await pathExists(resolvePath(projectBase, candidateRoot, relative))) {
+              foundInRoot = true;
+              break;
+            }
+          }
+          if (foundInRoot) {
+            detected.push(candidateRoot);
+          }
+        }
         sourceRootCandidates = detected.length > 0 ? detected : ["src/main/java"];
       }
 
@@ -5187,7 +5176,7 @@ export class SourceService {
         let sourcePath = resolvePath(projectBase, sourceRootCandidates[0], relativePath);
         for (const root of sourceRootCandidates) {
           const candidate = resolvePath(projectBase, root, relativePath);
-          if (existsSync(candidate)) {
+          if (await pathExists(candidate)) {
             sourcePath = candidate;
             break;
           }

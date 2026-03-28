@@ -31,6 +31,17 @@ export interface JavaEntryText {
   content: string;
 }
 
+export interface JarEntryText {
+  filePath: string;
+  content: string;
+}
+
+export interface CollectMatchedJarEntriesOptions {
+  maxBytes?: number;
+  maxEntries?: number;
+  continueOnError?: boolean;
+}
+
 function toErrorMessage(value: unknown): string {
   if (value instanceof Error) {
     return value.message;
@@ -38,7 +49,7 @@ function toErrorMessage(value: unknown): string {
   return String(value);
 }
 
-function hasJavaSourceExtension(entryPath: string): boolean {
+export function hasJavaSourceExtension(entryPath: string): boolean {
   const suffix = ".java";
   if (entryPath.length < suffix.length) {
     return false;
@@ -195,6 +206,26 @@ export async function listJavaEntries(jarPath: string): Promise<string[]> {
   return entries.filter((entry) => hasJavaSourceExtension(entry) && isSecureJarEntryPath(entry));
 }
 
+export async function hasAnyJarEntry(
+  jarPath: string,
+  predicate: (entryPath: string) => boolean
+): Promise<boolean> {
+  return withZipFile(jarPath, async (zipFile) => {
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        return false;
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (predicate(entry.fileName)) {
+        return true;
+      }
+    }
+  });
+}
+
 export async function readJarEntryAsUtf8(jarPath: string, entryPath: string): Promise<string> {
   const contentBuffer = await readJarEntryAsBuffer(jarPath, entryPath);
   return decodeUtf8OrThrow(contentBuffer, jarPath, entryPath);
@@ -227,6 +258,45 @@ export async function readJarEntryAsBuffer(jarPath: string, entryPath: string): 
         continue;
       }
       return readEntryStream(zipFile, entry, jarPath);
+    }
+  });
+}
+
+export async function collectMatchedJarEntriesAsUtf8(
+  jarPath: string,
+  predicate: (entryPath: string) => boolean,
+  options: CollectMatchedJarEntriesOptions = {}
+): Promise<JarEntryText[]> {
+  return withZipFile(jarPath, async (zipFile) => {
+    const entries: JarEntryText[] = [];
+    const maxEntries =
+      options.maxEntries == null ? undefined : Math.max(1, Math.trunc(options.maxEntries));
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        return entries;
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (!predicate(entry.fileName)) {
+        continue;
+      }
+
+      try {
+        const contentBuffer = await readEntryStream(zipFile, entry, jarPath, options.maxBytes);
+        entries.push({
+          filePath: entry.fileName,
+          content: decodeUtf8OrThrow(contentBuffer, jarPath, entry.fileName)
+        });
+        if (maxEntries != null && entries.length >= maxEntries) {
+          return entries;
+        }
+      } catch (error) {
+        if (!options.continueOnError) {
+          throw error;
+        }
+      }
     }
   });
 }

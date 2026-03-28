@@ -3,8 +3,11 @@ import { resolve } from "node:path";
 
 import fastGlob from "fast-glob";
 
+import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import type { SourceMapping } from "./types.js";
+
+const WORKSPACE_FILE_READ_CONCURRENCY = 4;
 
 export type WorkspaceCompileMappingInput = {
   projectPath: string;
@@ -140,30 +143,30 @@ export class WorkspaceMappingService {
     }
 
     const root = resolve(projectPath);
-    const files = fastGlob.sync(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
+    const files = (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
       cwd: root,
       absolute: true,
       onlyFiles: true,
       ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-    });
+    })).sort((left, right) => left.localeCompare(right));
 
-    const evidence: WorkspaceMappingEvidence[] = [];
-    for (const filePath of files.sort((left, right) => left.localeCompare(right))) {
-      let content: string;
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch {
-        continue;
-      }
-      const detections = detectMappingsFromContent(content);
-      for (const detection of detections) {
-        evidence.push({
+    const evidence = (await mapWithConcurrencyLimit(
+      files,
+      WORKSPACE_FILE_READ_CONCURRENCY,
+      async (filePath): Promise<WorkspaceMappingEvidence[]> => {
+        let content: string;
+        try {
+          content = await readFile(filePath, "utf8");
+        } catch {
+          return [];
+        }
+        return detectMappingsFromContent(content).map((detection) => ({
           filePath,
           mapping: detection.mapping,
           reason: detection.reason
-        });
+        }));
       }
-    }
+    )).flat();
 
     if (evidence.length === 0) {
       return {
@@ -219,13 +222,13 @@ export class WorkspaceMappingService {
 
   async detectProjectLoader(projectPath: string): Promise<WorkspaceProjectLoaderOutput> {
     const root = resolve(projectPath);
-    const buildFiles = fastGlob.sync(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
+    const buildFiles = (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
       cwd: root,
       absolute: true,
       onlyFiles: true,
       ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-    });
-    const descriptorFiles = fastGlob.sync([
+    })).sort((left, right) => left.localeCompare(right));
+    const descriptorFiles = (await fastGlob.glob([
       "fabric.mod.json",
       "quilt.mod.json",
       "META-INF/mods.toml",
@@ -239,26 +242,27 @@ export class WorkspaceMappingService {
       absolute: true,
       onlyFiles: true,
       ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-    });
+    })).sort((left, right) => left.localeCompare(right));
 
-    const evidence: WorkspaceLoaderEvidence[] = [];
-    for (const filePath of buildFiles.sort((left, right) => left.localeCompare(right))) {
-      let content: string;
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch {
-        continue;
-      }
-      for (const detection of detectLoadersFromContent(content)) {
-        evidence.push({
+    const evidence = (await mapWithConcurrencyLimit(
+      buildFiles,
+      WORKSPACE_FILE_READ_CONCURRENCY,
+      async (filePath): Promise<WorkspaceLoaderEvidence[]> => {
+        let content: string;
+        try {
+          content = await readFile(filePath, "utf8");
+        } catch {
+          return [];
+        }
+        return detectLoadersFromContent(content).map((detection) => ({
           filePath,
           loader: detection.loader,
           reason: detection.reason
-        });
+        }));
       }
-    }
+    )).flat();
 
-    for (const descriptorPath of descriptorFiles.sort((left, right) => left.localeCompare(right))) {
+    for (const descriptorPath of descriptorFiles) {
       const normalized = descriptorPath.replaceAll("\\", "/");
       if (normalized.endsWith("fabric.mod.json")) {
         evidence.push({

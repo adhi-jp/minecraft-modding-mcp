@@ -239,3 +239,10 @@ test("resolveLocalCoordinateCandidates avoids nested readdirSync scans of Gradle
 
   assert.doesNotMatch(block, /for \(const entry of readdirSync\(fullDir\)\)/);
 });
+
+test("source-resolver uses async discovery for sibling jars and Gradle cache candidates", async () => {
+  const source = await readFile("src/source-resolver.ts", "utf8");
+
+  assert.doesNotMatch(source, /readdirSync\(/);
+  assert.doesNotMatch(source, /fastGlob\.sync\(/);
+});

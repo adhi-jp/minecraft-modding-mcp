@@ -8,6 +8,7 @@ declare module "fast-glob" {
   }
 
   export interface FastGlob {
+    glob(pattern: string | string[], options?: FastGlobOptions): Promise<string[]>;
     sync(pattern: string | string[], options?: FastGlobOptions): string[];
   }
 

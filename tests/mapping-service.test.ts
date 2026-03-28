@@ -659,6 +659,15 @@ test("MappingService suppresses raw Loom miss warnings when Maven fallback resol
   assert.ok(result.warnings.every((warning) => !warning.includes("No Loom tiny mapping files matched version")));
 });
 
+test("MappingService extractTinyFromJar limits single-open tiny extraction to the first matching entry", async () => {
+  const source = await readFile("src/mapping-service.ts", "utf8");
+  const extractTinyBlock =
+    source.match(/async function extractTinyFromJar\([\s\S]*?return true;\n\}/m)?.[0] ?? "";
+
+  assert.match(extractTinyBlock, /collectMatchedJarEntriesAsUtf8\(/);
+  assert.match(extractTinyBlock, /maxEntries:\s*1/);
+});
+
 test("MappingService limits returned candidates while preserving ambiguity metadata", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-max-candidates-"));
@@ -1826,8 +1835,8 @@ test("MappingService Loom cache version filter handles representative candidate 
     await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
     await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
 
-    const originalSync = fastGlob.sync;
-    fastGlob.sync = () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
+    const originalGlob = fastGlob.glob;
+    fastGlob.glob = async () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
     try {
       const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
       const result = await service.findMapping({
@@ -1839,7 +1848,7 @@ test("MappingService Loom cache version filter handles representative candidate 
 
       assertVersionFilteredResult(result);
     } finally {
-      fastGlob.sync = originalSync;
+      fastGlob.glob = originalGlob;
     }
   });
 });
@@ -1876,6 +1885,12 @@ test("MappingService rejects class queries that include owner", async () => {
       "code" in error &&
       (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
   );
+});
+
+test("MappingService uses async Loom cache candidate discovery", async () => {
+  const source = await readFile("src/mapping-service.ts", "utf8");
+
+  assert.doesNotMatch(source, /fastGlob\.sync\(/);
 });
 
 test("MappingService getClassApiMatrix includes competing candidates in ambiguity warnings", async () => {

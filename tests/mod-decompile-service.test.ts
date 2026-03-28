@@ -402,3 +402,10 @@ test("ModDecompileService refreshes cache hits before eviction so hot jars stay 
   assert.match(source, /this\.decompileCache\.delete\(cacheKey\);\s*this\.decompileCache\.set\(cacheKey, cached\);/);
   assert.match(source, /while \(this\.decompileCache\.size > 8\)/);
 });
+
+test("ModDecompileService uses promise-based file I/O on decompiled source paths", async () => {
+  const source = await readFile("src/mod-decompile-service.ts", "utf8");
+
+  assert.doesNotMatch(source, /readFileSync\(/);
+  assert.doesNotMatch(source, /writeFileSync\(/);
+});

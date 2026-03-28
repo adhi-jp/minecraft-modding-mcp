@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
 import { ModDecompileService } from "./mod-decompile-service.js";
@@ -38,6 +39,7 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const MAX_QUERY_LENGTH = 200;
 const CONTEXT_LINES = 1;
+const DECOMPILED_JAVA_READ_CONCURRENCY = 8;
 
 const METHOD_PATTERN = /^\s*(public|private|protected)\s+.*\(/;
 const FIELD_PATTERN = /^\s*(public|private|protected)\s+(?:static\s+)?(?:final\s+)?[\w<>,\[\]?]+\s+\w+\s*[;=]/;
@@ -71,6 +73,14 @@ function extractContext(lines: string[], lineIndex: number): string {
 function filePathToClassName(filePath: string): string {
   return filePath.replace(/\.java$/, "").replaceAll("/", ".");
 }
+
+function cloneRegex(regex: RegExp): RegExp {
+  return new RegExp(regex.source, regex.flags);
+}
+
+type DecompiledFileSearchResult = {
+  hits: SearchModSourceHit[];
+};
 
 export class ModSearchService {
   private readonly modDecompileService: ModDecompileService;
@@ -152,68 +162,56 @@ export class ModSearchService {
     let totalHits = 0;
     let reachedLimit = false;
 
-    for (const className of classNames) {
+    for (
+      let batchStartIndex = 0;
+      batchStartIndex < classNames.length;
+      batchStartIndex += DECOMPILED_JAVA_READ_CONCURRENCY
+    ) {
       if (hits.length >= limit) {
         reachedLimit = true;
         break;
       }
 
-      const filePath = className.replaceAll(".", "/") + ".java";
+      const batchClassNames = classNames.slice(
+        batchStartIndex,
+        batchStartIndex + DECOMPILED_JAVA_READ_CONCURRENCY
+      );
+      const batchHitLimit = Math.max(1, limit - hits.length);
+      const fileResults = await mapWithConcurrencyLimit(
+        batchClassNames,
+        DECOMPILED_JAVA_READ_CONCURRENCY,
+        async (className) =>
+          this.searchDecompiledClassFile({
+            className,
+            outputDir,
+            searchType,
+            regex: cloneRegex(regex),
+            maxHits: batchHitLimit
+          })
+      );
 
-      // Class name search: check if the simple class name matches
-      if (searchType === "class" || searchType === "all") {
-        const simpleClassName = className.split(".").pop() ?? className;
-        regex.lastIndex = 0;
-        if (regex.test(simpleClassName)) {
-          totalHits++;
-          if (hits.length < limit) {
-            hits.push({
-              type: "class",
-              name: className,
-              file: filePath
-            });
-          }
-          // If searching only classes, skip content search for this file
-          if (searchType === "class") continue;
+      for (const fileResult of fileResults) {
+        if (hits.length >= limit) {
+          reachedLimit = true;
+          break;
         }
-      }
-
-      // Content/method/field search: read and scan the file
-      if (searchType === "method" || searchType === "field" || searchType === "content" || searchType === "all") {
-        let content: string;
-        try {
-          content = readFileSync(join(outputDir, filePath), "utf8");
-        } catch {
-          // File might not exist at the expected path, skip
+        if (fileResult.hits.length === 0) {
           continue;
         }
 
-        const lines = content.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          if (hits.length >= limit) {
-            reachedLimit = true;
-            break;
-          }
+        const remaining = limit - hits.length;
+        const acceptedHits = fileResult.hits.slice(0, remaining);
+        hits.push(...acceptedHits);
+        totalHits += acceptedHits.length;
 
-          regex.lastIndex = 0;
-          if (!regex.test(lines[i])) continue;
-
-          const lineType = classifyLine(lines[i]);
-
-          // Filter by search type
-          if (searchType !== "all" && searchType !== lineType) continue;
-
-          totalHits++;
-          if (hits.length < limit) {
-            hits.push({
-              type: lineType,
-              name: lineType === "content" ? className : extractSymbolName(lines[i], lineType),
-              file: filePath,
-              line: i + 1,
-              context: extractContext(lines, i)
-            });
-          }
+        if (hits.length >= limit || fileResult.hits.length > remaining) {
+          reachedLimit = true;
+          break;
         }
+      }
+
+      if (reachedLimit) {
+        break;
       }
     }
 
@@ -316,6 +314,74 @@ export class ModSearchService {
       truncated: reachedLimit,
       warnings
     };
+  }
+
+  private async searchDecompiledClassFile(input: {
+    className: string;
+    outputDir: string;
+    searchType: SearchModSourceSearchType;
+    regex: RegExp;
+    maxHits: number;
+  }): Promise<DecompiledFileSearchResult> {
+    const hits: SearchModSourceHit[] = [];
+    const filePath = input.className.replaceAll(".", "/") + ".java";
+
+    if (input.searchType === "class" || input.searchType === "all") {
+      const simpleClassName = input.className.split(".").pop() ?? input.className;
+      input.regex.lastIndex = 0;
+      if (input.regex.test(simpleClassName)) {
+        hits.push({
+          type: "class",
+          name: input.className,
+          file: filePath
+        });
+        if (input.searchType === "class" || hits.length >= input.maxHits) {
+          return { hits };
+        }
+      }
+    }
+
+    if (
+      input.searchType !== "method" &&
+      input.searchType !== "field" &&
+      input.searchType !== "content" &&
+      input.searchType !== "all"
+    ) {
+      return { hits };
+    }
+
+    let content: string;
+    try {
+      content = await readFile(join(input.outputDir, filePath), "utf8");
+    } catch {
+      return { hits };
+    }
+
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (hits.length >= input.maxHits) {
+        break;
+      }
+      input.regex.lastIndex = 0;
+      if (!input.regex.test(lines[i])) {
+        continue;
+      }
+
+      const lineType = classifyLine(lines[i]);
+      if (input.searchType !== "all" && input.searchType !== lineType) {
+        continue;
+      }
+
+      hits.push({
+        type: lineType,
+        name: lineType === "content" ? input.className : extractSymbolName(lines[i], lineType),
+        file: filePath,
+        line: i + 1,
+        context: extractContext(lines, i)
+      });
+    }
+
+    return { hits };
   }
 }
 

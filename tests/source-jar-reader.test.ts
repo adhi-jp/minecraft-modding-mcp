@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  collectMatchedJarEntriesAsUtf8,
+  hasAnyJarEntry,
   iterateJavaEntriesAsUtf8,
   listJarEntries,
   listJavaEntries,
@@ -150,4 +152,65 @@ test("sourceJarReader checks .java suffix without lowercasing every entry name",
 
   assert.match(source, /function hasJavaSourceExtension\(/);
   assert.doesNotMatch(source, /toLowerCase\(\)\.endsWith\("\.java"\)/);
+});
+
+test("sourceJarReader can detect matching entries without materializing every match", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-any-entry-"));
+  const jarPath = join(root, "sample.jar");
+  await createJar(jarPath, {
+    "assets/example/lang/en_us.json": "{\"hello\": \"world\"}",
+    "com/example/Main.java": "package com.example;\npublic class Main {}"
+  });
+
+  const hasJava = await hasAnyJarEntry(jarPath, (entryPath) => entryPath.endsWith(".java"));
+  const hasTiny = await hasAnyJarEntry(jarPath, (entryPath) => entryPath.endsWith(".tiny"));
+
+  assert.equal(hasJava, true);
+  assert.equal(hasTiny, false);
+});
+
+test("sourceJarReader can continue collecting matched utf-8 entries after unreadable matches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-collect-matches-"));
+  const jarPath = join(root, "sample.jar");
+  await createJar(jarPath, {
+    "mappings/bad.tiny": Buffer.from([0xff, 0xfe, 0xfd]),
+    "mappings/good.tiny": "tiny\t2\t0\tobfuscated\tintermediary\nc\ta/b/C\tintermediary/pkg/InterClass",
+    "README.txt": "ignore me"
+  });
+
+  const matches = await collectMatchedJarEntriesAsUtf8(
+    jarPath,
+    (entryPath) => entryPath.endsWith(".tiny"),
+    { continueOnError: true }
+  );
+
+  assert.deepEqual(matches, [
+    {
+      filePath: "mappings/good.tiny",
+      content: "tiny\t2\t0\tobfuscated\tintermediary\nc\ta/b/C\tintermediary/pkg/InterClass"
+    }
+  ]);
+});
+
+test("collectMatchedJarEntriesAsUtf8 stops after maxEntries successful matches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-max-entries-"));
+  const jarPath = join(root, "sample.jar");
+  await createJar(jarPath, {
+    "mappings/bad.tiny": Buffer.from([0xff, 0xfe, 0xfd]),
+    "mappings/first-good.tiny": "tiny\t2\t0\tobfuscated\tintermediary\nc\ta/b/C\tinter/pkg/First",
+    "mappings/second-good.tiny": "tiny\t2\t0\tobfuscated\tintermediary\nc\tx/y/Z\tinter/pkg/Second"
+  });
+
+  const matches = await collectMatchedJarEntriesAsUtf8(
+    jarPath,
+    (entryPath) => entryPath.endsWith(".tiny"),
+    { continueOnError: true, maxEntries: 1 }
+  );
+
+  assert.deepEqual(matches, [
+    {
+      filePath: "mappings/first-good.tiny",
+      content: "tiny\t2\t0\tobfuscated\tintermediary\nc\ta/b/C\tinter/pkg/First"
+    }
+  ]);
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -103,4 +103,11 @@ test("WorkspaceMappingService detects mojang mapping from NeoForge ModDevGradle 
   assert.equal(result.resolved, true);
   assert.equal(result.mappingApplied, "mojang");
   assert.ok(result.evidence.some((entry) => entry.reason.includes("net.neoforged.moddev")));
+});
+
+test("WorkspaceMappingService uses async glob discovery on workspace hot paths", async () => {
+  const source = await readFile("src/workspace-mapping-service.ts", "utf8");
+
+  assert.doesNotMatch(source, /fastGlob\.sync\(/);
+  assert.match(source, /mapWithConcurrencyLimit/);
 });

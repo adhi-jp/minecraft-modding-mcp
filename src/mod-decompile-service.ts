@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
@@ -103,7 +103,7 @@ export class ModDecompileService {
         (f) => f === targetFile || f.endsWith(`/${targetFile}`) || f === input.className
       );
       if (matched) {
-        const content = readFileSync(join(outputDir, matched), "utf8");
+        const content = await readFile(join(outputDir, matched), "utf8");
         sourceResult = {
           className: filePathToClassName(matched),
           content,
@@ -178,7 +178,7 @@ export class ModDecompileService {
       });
     }
 
-    const fullContent = readFileSync(join(outputDir, matched), "utf8");
+    const fullContent = await readFile(join(outputDir, matched), "utf8");
     const totalLines = fullContent.split("\n").length;
     let content = fullContent;
     let truncated: boolean | undefined;
@@ -206,7 +206,7 @@ export class ModDecompileService {
       const outPath = isAbsolute(input.outputFile)
         ? input.outputFile
         : resolvePath(input.outputFile);
-      writeFileSync(outPath, content, "utf8");
+      await writeFile(outPath, content, "utf8");
       outputFilePath = outPath;
       content = `[Written to ${outPath}]`;
     }

@@ -50,6 +50,13 @@ test("entry tool schemas expose explicit defaults on safe public parameters", as
   assert.match(manageCacheSource, /executionMode:\s*executionModeSchema\.default\("preview"\)/);
 });
 
+test("validate-project workspace discovery uses async glob paths", async () => {
+  const validateProjectSource = await readFile("src/entry-tools/validate-project-service.ts", "utf8");
+
+  assert.doesNotMatch(validateProjectSource, /fastGlob\.sync\(/);
+  assert.match(validateProjectSource, /mapWithConcurrencyLimit/);
+});
+
 test("inspectMinecraftSchema applies defaults while keeping non-version includeSnapshots validation precise", () => {
   const parsedArtifact = inspectMinecraftSchema.parse({
     task: "artifact",

@@ -160,3 +160,12 @@ writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
     process.env.PATH = originalPath;
   }
 });
+
+test("decompileBinaryJar cache-hit traversal avoids sync listing and stat probes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile("src/decompiler/vineflower.ts", "utf8");
+
+  assert.doesNotMatch(source, /readdirSync\(/);
+  assert.doesNotMatch(source, /statSync\(/);
+  assert.match(source, /mapWithConcurrencyLimit/);
+});

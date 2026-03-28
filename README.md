@@ -150,6 +150,7 @@ Keep only the high-frequency notes here. For the full pitfall list, exact contra
 - `check-symbol-exists` and `analyze-symbol task="exists"` now validate `mojang` lookups on unobfuscated releases such as `26.1+` against runtime bytecode when no mapping graph exists, preserve the original `mapping_unavailable` result if the runtime JAR itself cannot be resolved, and return a targeted warning when callers provide only a short class name.
 - `analyze-mod` and `validate-project` still require structured `subject` objects and canonical `include` groups, but stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
 - `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener, Access Transformer, and Mixin checks, and blocks with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
+- Local source-jar probing, decompiled mod source reads, and workspace discovery now avoid synchronous hot-path ZIP/file scans and use bounded concurrent reads where safe, so cold `resolve-artifact`, `analyze-mod`, and `validate-project` workflows stay more responsive on larger jars and multi-module workspaces.
 
 ### Inspect Minecraft source from a version
 

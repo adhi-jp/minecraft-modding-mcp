@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
 
@@ -16,7 +16,7 @@ import {
 import { defaultDownloadPath, downloadToCache, type DownloadResult } from "./repo-downloader.js";
 import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
 import { stableArtifactId } from "./config.js";
-import { listJavaEntries } from "./source-jar-reader.js";
+import { hasAnyJarEntry, hasJavaSourceExtension } from "./source-jar-reader.js";
 
 function readStatsSignature(filePath: string): string {
   const stats = artifactSignatureFromFile(filePath);
@@ -27,8 +27,7 @@ async function hasJavaSources(jarPath: string): Promise<boolean> {
   if (!hasExistingJar(jarPath)) {
     return false;
   }
-  const entries = await listJavaEntries(jarPath);
-  return entries.length > 0;
+  return hasAnyJarEntry(jarPath, hasJavaSourceExtension);
 }
 
 function resolveExactJarSourceCandidate(inputJarPath: string): string {
@@ -49,12 +48,12 @@ function resolveSiblingBinaryJarCandidate(inputJarPath: string): string | undefi
   return hasExistingJar(candidate) ? candidate : undefined;
 }
 
-function listAdjacentJarSourceCandidates(inputJarPath: string): string[] {
+async function listAdjacentJarSourceCandidates(inputJarPath: string): Promise<string[]> {
   const directory = dirname(inputJarPath);
   const exact = resolveExactJarSourceCandidate(inputJarPath);
   const candidates = new Set<string>();
   try {
-    for (const file of readdirSync(directory)) {
+    for (const file of await readdir(directory)) {
       if (file.toLowerCase().endsWith("-sources.jar")) {
         const candidate = join(directory, file);
         if (candidate !== inputJarPath && candidate !== exact) {
@@ -112,9 +111,9 @@ function resolveGradleUserHome(): string {
   return resolvePath(homedir(), ".gradle");
 }
 
-function resolveGradleCacheCoordinateCandidate(
+async function resolveGradleCacheCoordinateCandidate(
   coordinate: string
-): { sourceJarPath?: string; binaryJarPath?: string } | undefined {
+): Promise<{ sourceJarPath?: string; binaryJarPath?: string } | undefined> {
   const parsed = parseCoordinate(coordinate);
   const baseDir = resolvePath(
     resolveGradleUserHome(),
@@ -138,7 +137,7 @@ function resolveGradleCacheCoordinateCandidate(
 
   let discoveredFiles: string[] = [];
   try {
-    discoveredFiles = fastGlob.sync("*/*", {
+    discoveredFiles = await fastGlob.glob("*/*", {
       cwd: baseDir,
       absolute: true,
       onlyFiles: true
@@ -213,7 +212,7 @@ export async function resolveSourceTarget(
     const resolvedJarPath = normalizeJarPath(input.value);
     const binarySignature = readStatsSignature(resolvedJarPath);
     const exactSourceJarPath = resolveExactJarSourceCandidate(resolvedJarPath);
-    const adjacentSourceCandidates = listAdjacentJarSourceCandidates(resolvedJarPath);
+    const adjacentSourceCandidates = await listAdjacentJarSourceCandidates(resolvedJarPath);
     const maybeAdjacentSourceCandidates =
       adjacentSourceCandidates.length > 0 ? adjacentSourceCandidates : undefined;
     const preferBinaryOnly = options.preferBinaryOnly ?? false;
@@ -299,7 +298,7 @@ export async function resolveSourceTarget(
     }
   }
 
-  const gradleCacheCandidate = resolveGradleCacheCoordinateCandidate(coordinate);
+  const gradleCacheCandidate = await resolveGradleCacheCoordinateCandidate(coordinate);
   if (gradleCacheCandidate?.sourceJarPath && (await hasJavaSources(gradleCacheCandidate.sourceJarPath))) {
     const signature = readStatsSignature(gradleCacheCandidate.sourceJarPath);
     return {
