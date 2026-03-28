@@ -49,6 +49,7 @@ import {
   ValidateProjectService,
   validateProjectSchema,
   validateProjectShape,
+  discoverWorkspaceAccessTransformers,
   discoverWorkspaceAccessWideners,
   discoverWorkspaceMixins
 } from "./entry-tools/validate-project-service.js";
@@ -192,7 +193,7 @@ const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
 const SOURCE_LOOKUP_TARGET_DESCRIPTION =
   "Object: {\"type\":\"resolve\",\"kind\":\"version\",\"value\":\"1.21.10\"} or {\"type\":\"artifact\",\"artifactId\":\"...\"}. Must be an object, not a string.";
 const SOURCE_SCOPE_DESCRIPTION =
-  'vanilla = Mojang client jar only; merged = Loom cache discovery (default); loader = currently behaves the same as "merged".';
+  "vanilla = Mojang client jar only; merged = source-oriented merged runtime discovery; loader = loader/runtime artifact discovery when the workspace exposes transformed runtime jars.";
 const SUGGESTED_CALL_DEFAULTS = {
   allowDecompile: true,
   preferProjectVersion: false,
@@ -729,6 +730,18 @@ const validateAccessWidenerShape = {
 };
 const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
 
+const validateAccessTransformerShape = {
+  content: nonEmptyString.describe("Access Transformer file content"),
+  version: nonEmptyString.describe("Minecraft version"),
+  atNamespace: z.enum(["srg", "mojang", "obfuscated"]).optional().describe("srg | mojang | obfuscated"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Forge/NeoForge runtime validation"),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
+  preferProjectVersion: z.boolean().default(false)
+    .describe("When true, detect MC version from gradle.properties and override version")
+};
+const validateAccessTransformerSchema = z.object(validateAccessTransformerShape);
+
 const analyzeModJarShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
   includeClasses: z.boolean().default(false).describe("Include full class listing")
@@ -882,8 +895,10 @@ const analyzeModService = new AnalyzeModService({
 const validateProjectService = new ValidateProjectService({
   validateMixin: (input) => sourceService.validateMixin(input as any) as Promise<Record<string, unknown> & { warnings?: string[] }>,
   validateAccessWidener: (input) => sourceService.validateAccessWidener(input),
+  validateAccessTransformer: (input) => sourceService.validateAccessTransformer(input),
   discoverMixins: discoverWorkspaceMixins,
   discoverAccessWideners: discoverWorkspaceAccessWideners,
+  discoverAccessTransformers: discoverWorkspaceAccessTransformers,
   detectProjectMinecraftVersion: (projectPath) =>
     workspaceMappingService.detectProjectMinecraftVersion(projectPath)
 });
@@ -1692,7 +1707,7 @@ function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
   if (tool === "validate-project") {
     return {
       hints: [
-        "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener.",
+        "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener|access-transformer.",
         "task=\"project-summary\" uses {\"subject\":{\"kind\":\"workspace\",\"projectPath\":\"/workspace\"}}.",
         "Legacy include names like projectSummary/detectedConfig/validationSummary are not accepted; use include:[\"workspace\"] only when you need discovery details."
       ],
@@ -1969,7 +1984,7 @@ server.tool("analyze-mod",
 );
 
 server.tool("validate-project",
-  "High-level v3 entry tool for project summary, direct mixin validation, and access widener validation.",
+  "High-level v3 entry tool for project summary, direct mixin validation, and access widener/access transformer validation.",
   validateProjectShape,
   { readOnlyHint: true },
   async (args) => runTool("validate-project", args, validateProjectSchema, async (input) =>
@@ -2361,6 +2376,23 @@ server.tool("validate-access-widener",
       content: input.content,
       version: input.version,
       mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath,
+      scope: input.scope as ArtifactScope | undefined,
+      preferProjectVersion: input.preferProjectVersion
+    }) as Promise<Record<string, unknown>>
+  )
+);
+
+server.tool("validate-access-transformer",
+  "Validate Access Transformer file entries against Minecraft bytecode signatures for a given version.",
+  validateAccessTransformerShape,
+  { readOnlyHint: true },
+  async (args) => runTool("validate-access-transformer", args, validateAccessTransformerSchema, async (input) =>
+    sourceService.validateAccessTransformer({
+      content: input.content,
+      version: input.version,
+      atNamespace: input.atNamespace,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
       scope: input.scope as ArtifactScope | undefined,

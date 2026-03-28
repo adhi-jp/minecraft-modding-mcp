@@ -37,6 +37,7 @@ const EXPECTED_TOOLS = [
   "get-runtime-metrics",
   "validate-mixin",
   "validate-access-widener",
+  "validate-access-transformer",
   "analyze-mod-jar",
   "get-registry-data",
   "compare-versions",
@@ -376,7 +377,7 @@ test("analyze-mod invalid legacy summary payload without detail still promotes m
   });
 });
 
-test("source lookup tools/list schema clarifies object target inputs and loader scope fallback", async () => {
+test("source lookup tools/list schema clarifies object target inputs and loader scope semantics", async () => {
   const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const resolveArtifactSchema = toolMap.get("resolve-artifact") as {
     properties?: { target?: { description?: string }; scope?: { description?: string } };
@@ -394,14 +395,29 @@ test("source lookup tools/list schema clarifies object target inputs and loader 
   assert.match(resolveArtifactSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
   assert.match(getClassSourceSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
   assert.match(getClassMembersSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
-  assert.match(resolveArtifactSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
-  assert.match(getClassSourceSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
-  assert.match(getClassMembersSchema.properties?.scope?.description ?? "", /loader.*same as "merged"/i);
+  assert.match(resolveArtifactSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
+  assert.match(getClassSourceSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
+  assert.match(getClassMembersSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
   assert.deepEqual(
     [...(validateMixinSchema.properties?.reportMode?.enum ?? [])].sort(),
     ["compact", "full", "summary-first"]
   );
   assert.match(validateMixinSchema.properties?.reportMode?.description ?? "", /summary-first/i);
+});
+
+test("validate-access-transformer tools/list schema exposes AT namespace and runtime-aware inputs", async () => {
+  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
+  const schema = toolMap.get("validate-access-transformer") as {
+    properties?: {
+      atNamespace?: { enum?: string[] };
+      projectPath?: { description?: string };
+      scope?: { description?: string };
+    };
+  };
+
+  assert.deepEqual([...(schema.properties?.atNamespace?.enum ?? [])].sort(), ["mojang", "obfuscated", "srg"]);
+  assert.match(schema.properties?.projectPath?.description ?? "", /workspace root/i);
+  assert.match(schema.properties?.scope?.description ?? "", /loader.*runtime/i);
 });
 
 test("tools/list schemas expose explicit defaults for public input parameters", async () => {

@@ -28,6 +28,7 @@ export interface ModAnalysisResult {
   entrypoints?: Record<string, string[]>;
   mixinConfigs?: string[];
   accessWidener?: string;
+  accessTransformers?: string[];
   dependencies?: ModDependency[];
   classCount: number;
   classes?: string[];
@@ -114,7 +115,8 @@ const forgeModsTomlSchema = z
       )
       .optional(),
     dependencies: z.record(z.array(z.unknown())).optional(),
-    mixins: z.array(z.object({ config: z.string() }).passthrough()).optional()
+    mixins: z.array(z.object({ config: z.string() }).passthrough()).optional(),
+    accessTransformers: z.array(z.object({ file: z.string().optional() }).passthrough()).optional()
   })
   .passthrough();
 
@@ -288,6 +290,9 @@ function parseForgeMod(
 
   // Mixin configs
   const mixinConfigs = toml.mixins?.map((m) => m.config);
+  const accessTransformers = toml.accessTransformers
+    ?.map((entry) => entry.file)
+    .filter((file): file is string => typeof file === "string" && file.trim().length > 0);
 
   return {
     detectedLoader,
@@ -296,6 +301,7 @@ function parseForgeMod(
     modVersion: firstMod?.version,
     description: firstMod?.description,
     mixinConfigs: mixinConfigs && mixinConfigs.length > 0 ? mixinConfigs : undefined,
+    accessTransformers: accessTransformers && accessTransformers.length > 0 ? accessTransformers : undefined,
     dependencies: dependencies.length > 0 ? dependencies : undefined
   };
 }
@@ -373,6 +379,11 @@ export async function analyzeModJar(
   // Detect loader and parse metadata
   let loader: ModLoader = "unknown";
   let metadata: Partial<ModAnalysisResult> = {};
+  const packagedAccessTransformers = [...new Set(entries.filter((entry) =>
+    /(^|\/)META-INF\/accesstransformer\.cfg$/i.test(entry) ||
+    /(^|\/)[^/]+_at\.cfg$/i.test(entry) ||
+    /(^|\/)accesstransformer[^/]*\.cfg$/i.test(entry)
+  ))].sort((left, right) => left.localeCompare(right));
 
   if (entries.includes("fabric.mod.json")) {
     loader = "fabric";
@@ -424,6 +435,14 @@ export async function analyzeModJar(
     loader,
     jarKind,
     ...metadata,
+    ...(packagedAccessTransformers.length > 0 || metadata.accessTransformers
+      ? {
+          accessTransformers: [...new Set([
+            ...(metadata.accessTransformers ?? []),
+            ...packagedAccessTransformers
+          ])]
+        }
+      : {}),
     classCount,
     ...(classes !== undefined ? { classes } : {})
   };

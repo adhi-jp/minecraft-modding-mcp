@@ -71,7 +71,7 @@ Start with these top-level workflow tools when possible. They cover the common w
     "subject": {
       "kind": "workspace",
       "projectPath": "/workspace/modid",
-      "discover": ["mixins", "access-wideners"]
+      "discover": ["mixins", "access-wideners", "access-transformers"]
     },
     "preferProjectVersion": true,
     "preferProjectMapping": true
@@ -438,6 +438,21 @@ If the input JAR was already built with Mojang mappings, use `targetMapping: "mo
     "content": "accessWidener v2 named\naccessible class net/minecraft/server/Main\naccessible method net/minecraft/server/Main tick ()V",
     "version": "1.21.10",
     "projectPath": "/workspace/example-mod",
+    "scope": "loader",
+    "preferProjectVersion": true
+  }
+}
+```
+
+### Validate Access Transformer content against a Forge or NeoForge runtime jar
+
+```json
+{
+  "tool": "validate-access-transformer",
+  "arguments": {
+    "content": "public net.minecraft.server.MinecraftServer\nprotected net.minecraft.server.MinecraftServer tickServer()V",
+    "version": "1.21.10",
+    "projectPath": "/workspace/example-neoforge-mod",
     "scope": "loader",
     "preferProjectVersion": true
   }

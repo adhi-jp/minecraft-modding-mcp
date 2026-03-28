@@ -59,7 +59,7 @@ test("tool contract manifest reflects current entry-tool purpose summaries", () 
   );
   assert.match(
     entryTable,
-    /\| `validate-project` \| Summarize workspaces and run direct Mixin or Access Widener validation \|/
+    /\| `validate-project` \| Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation \|/
   );
 });
 

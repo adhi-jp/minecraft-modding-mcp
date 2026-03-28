@@ -5875,6 +5875,156 @@ test("SourceService validateAccessWidener runtime-aware mode fails when no runti
   });
 });
 
+test("SourceService validateAccessTransformer infers srg namespace from Forge workspace loader scope", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-at-forge-"));
+  const runtimeJarPath = join(
+    root,
+    ".gradle",
+    "forge-userdev",
+    "1.20.1",
+    "minecraft-patched-srg.jar"
+  );
+  await mkdir(join(root, ".gradle", "forge-userdev", "1.20.1"), { recursive: true });
+  await writeFile(
+    join(root, "build.gradle"),
+    [
+      "plugins {",
+      "  id 'net.minecraftforge.gradle' version '[6.0,6.2)'",
+      "}",
+      "minecraft {",
+      "  accessTransformer = file('src/main/resources/META-INF/accesstransformer.cfg')",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  await createJar(runtimeJarPath, {
+    "net/minecraft/server/MinecraftServer.class": buildClassFile({
+      internalName: "net/minecraft/server/MinecraftServer",
+      accessFlags: 0x0001,
+      fields: [{ name: "field_1234", descriptor: "I", accessFlags: 0x0004 }],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "func_1234_a", descriptor: "()V", accessFlags: 0x0001 }
+      ]
+    })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  const result = await (
+    service as unknown as {
+      validateAccessTransformer: (input: Record<string, unknown>) => Promise<Record<string, any>>;
+    }
+  ).validateAccessTransformer({
+    content: [
+      "public-f net.minecraft.server.MinecraftServer",
+      "protected net.minecraft.server.MinecraftServer field_1234",
+      "public net.minecraft.server.MinecraftServer func_1234_a()V"
+    ].join("\n"),
+    version: "1.20.1",
+    projectPath: root,
+    scope: "loader"
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.provenance?.requestedScope, "loader");
+  assert.equal(result.provenance?.appliedScope, "loader");
+  assert.equal(result.provenance?.requestedMapping, "srg");
+  assert.equal(result.provenance?.mappingApplied, "srg");
+  assert.equal(result.provenance?.jarPath, runtimeJarPath);
+
+  const classEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "class");
+  const fieldEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "field");
+  const methodEntry = result.entries.find((entry: Record<string, unknown>) => entry.targetKind === "method");
+  assert.equal(classEntry?.resolvedInRuntime, true);
+  assert.equal(classEntry?.resolvedRuntimeAccess, "public");
+  assert.equal(fieldEntry?.resolvedRuntimeAccess, "protected");
+  assert.equal(methodEntry?.resolvedRuntimeAccess, "public");
+  assert.equal(methodEntry?.resolvedRuntimeJvmDescriptor, "()V");
+});
+
+test("SourceService validateAccessTransformer infers mojang namespace from NeoForge workspace loader scope", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-at-neoforge-"));
+  const runtimeJarPath = join(
+    root,
+    "build",
+    "moddev",
+    "runtime",
+    "minecraft-client-extra-1.21.10.jar"
+  );
+  await mkdir(join(root, "build", "moddev", "runtime"), { recursive: true });
+  await writeFile(
+    join(root, "build.gradle"),
+    [
+      "plugins {",
+      "  id 'net.neoforged.moddev' version '2.0.140'",
+      "}",
+      "neoForge {",
+      "  accessTransformers.from(file('src/main/resources/META-INF/accesstransformer.cfg'))",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  await createJar(runtimeJarPath, {
+    "net/minecraft/server/MinecraftServer.class": buildClassFile({
+      internalName: "net/minecraft/server/MinecraftServer",
+      accessFlags: 0x0001,
+      fields: [{ name: "serverPort", descriptor: "I", accessFlags: 0x0001 }],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "tickServer", descriptor: "()V", accessFlags: 0x0004 }
+      ]
+    })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  const result = await (
+    service as unknown as {
+      validateAccessTransformer: (input: Record<string, unknown>) => Promise<Record<string, any>>;
+    }
+  ).validateAccessTransformer({
+    content: [
+      "public net.minecraft.server.MinecraftServer",
+      "public net.minecraft.server.MinecraftServer serverPort",
+      "protected net.minecraft.server.MinecraftServer tickServer()V"
+    ].join("\n"),
+    version: "1.21.10",
+    projectPath: root,
+    scope: "loader"
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.provenance?.requestedMapping, "mojang");
+  assert.equal(result.provenance?.mappingApplied, "mojang");
+  assert.equal(result.provenance?.appliedScope, "loader");
+  assert.equal(result.provenance?.jarPath, runtimeJarPath);
+});
+
+test("SourceService validateAccessTransformer requires explicit atNamespace without workspace context", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-at-namespace-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    async () => (
+      service as unknown as {
+        validateAccessTransformer: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      }
+    ).validateAccessTransformer({
+      content: "public net.minecraft.server.MinecraftServer",
+      version: "1.21.10"
+    }),
+    (error: unknown) =>
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+  );
+});
+
 test("SourceService getClassMembers with mojang mapping remaps className and member names", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-mojang-"));

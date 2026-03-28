@@ -18,16 +18,19 @@ import {
 } from "./minecraft-explorer-service.js";
 import { parseMixinSource } from "./mixin-parser.js";
 import { parseAccessWidener } from "./access-widener-parser.js";
+import { parseAccessTransformer } from "./access-transformer-parser.js";
 import {
   validateParsedMixin,
   refreshMixinValidationOutcome,
   validateParsedAccessWidener,
+  validateParsedAccessTransformer,
   type IssueConfidence,
   type ResolvedTargetMembers,
   type MixinValidationResult,
   type MixinValidationProvenance,
   type MappingHealthReport,
-  type AccessWidenerValidationResult
+  type AccessWidenerValidationResult,
+  type AccessTransformerValidationResult
 } from "./mixin-validator.js";
 import { resolveSourceTarget as resolveSourceTargetInternal } from "./source-resolver.js";
 import { applyMappingPipeline } from "./mapping-pipeline-service.js";
@@ -60,9 +63,11 @@ import {
 } from "./search-hit-accumulator.js";
 import {
   WorkspaceMappingService,
-  type WorkspaceCompileMappingOutput
+  type WorkspaceCompileMappingOutput,
+  type WorkspaceProjectLoader
 } from "./workspace-mapping-service.js";
 import type {
+  AccessTransformerNamespace,
   ArtifactProvenance,
   ArtifactRow,
   ArtifactScope,
@@ -738,6 +743,18 @@ export type ValidateAccessWidenerInput = {
 
 export type ValidateAccessWidenerOutput = AccessWidenerValidationResult;
 
+export type ValidateAccessTransformerInput = {
+  content: string;
+  version: string;
+  atNamespace?: AccessTransformerNamespace;
+  sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
+};
+
+export type ValidateAccessTransformerOutput = AccessTransformerValidationResult;
+
 interface IndexedFileRecord {
   filePath: string;
   content: string;
@@ -927,6 +944,26 @@ function buildVersionSourceSearchRoots(projectPath: string | undefined): string[
   const homeGradle = resolveGradleUserHomePath();
   roots.add(resolvePath(homeGradle, "loom-cache"));
   roots.add(resolvePath(homeGradle, "caches", "fabric-loom"));
+  return [...roots];
+}
+
+function buildLoaderRuntimeSearchRoots(projectPath: string | undefined): string[] {
+  const roots = new Set<string>();
+  if (projectPath) {
+    roots.add(resolvePath(projectPath, "build"));
+    roots.add(resolvePath(projectPath, ".gradle"));
+    roots.add(resolvePath(projectPath, ".gradle", "forge-userdev"));
+    roots.add(resolvePath(projectPath, ".gradle", "neogradle"));
+    roots.add(resolvePath(projectPath, ".gradle", "caches", "forge_gradle"));
+    roots.add(resolvePath(projectPath, ".gradle", "caches", "neogradle"));
+    roots.add(resolvePath(projectPath, ".gradle", "caches", "neoformruntime"));
+    roots.add(resolvePath(projectPath, ".gradle", "caches", "moddev"));
+  }
+  const homeGradle = resolveGradleUserHomePath();
+  roots.add(resolvePath(homeGradle, "caches", "forge_gradle"));
+  roots.add(resolvePath(homeGradle, "caches", "neogradle"));
+  roots.add(resolvePath(homeGradle, "caches", "neoformruntime"));
+  roots.add(resolvePath(homeGradle, "caches", "moddev"));
   return [...roots];
 }
 
@@ -1145,6 +1182,25 @@ function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceM
     return normalized;
   }
   return undefined;
+}
+
+function normalizeAccessTransformerNamespace(
+  namespace: AccessTransformerNamespace | string | undefined
+): AccessTransformerNamespace | undefined {
+  const normalized = namespace?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "srg" || normalized === "mojang" || normalized === "obfuscated") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function isSourceMappingNamespace(
+  namespace: SourceMapping | AccessTransformerNamespace
+): namespace is SourceMapping {
+  return namespace === "obfuscated" || namespace === "mojang" || namespace === "intermediary" || namespace === "yarn";
 }
 
 function normalizeMemberAccess(access: MemberAccess | undefined): MemberAccess {
@@ -1764,13 +1820,123 @@ export class SourceService {
     };
   }
 
+  private discoverAccessTransformerRuntimeCandidates(input: {
+    version: string;
+    projectPath?: string;
+    requestedScope: ArtifactScope;
+    atNamespace: AccessTransformerNamespace;
+    loader: WorkspaceProjectLoader | "unknown";
+  }): { searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate } {
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    const normalizedProjectPathLower = normalizedProjectPath
+      ? normalizePathStyle(normalizedProjectPath).toLowerCase()
+      : undefined;
+    const searchRoots = buildLoaderRuntimeSearchRoots(normalizedProjectPath);
+    const searchedPaths: string[] = [];
+    const candidates: RuntimeJarCandidate[] = [];
+    const seen = new Set<string>();
+
+    const globs = [
+      "**/*minecraft*.jar",
+      "**/*patched*.jar",
+      "**/*srg*.jar",
+      "**/*joined*.jar",
+      "**/*client-extra*.jar",
+      "**/*forge*.jar",
+      "**/*neoforge*.jar",
+      "**/*moddev*.jar",
+      "**/*neoform*.jar"
+    ];
+
+    for (const root of searchRoots) {
+      searchedPaths.push(root);
+      if (!existsSync(root)) {
+        continue;
+      }
+      let discovered: string[] = [];
+      try {
+        discovered = fastGlob.sync(globs, {
+          cwd: root,
+          absolute: true,
+          onlyFiles: true,
+          ignore: ["**/*sources.jar", "**/node_modules/**", "**/.git/**", "**/out/**"]
+        });
+      } catch {
+        continue;
+      }
+
+      for (const candidatePath of discovered) {
+        const normalizedPath = normalizePathStyle(candidatePath);
+        if (seen.has(normalizedPath)) {
+          continue;
+        }
+        seen.add(normalizedPath);
+
+        const lower = normalizedPath.toLowerCase();
+        if (!hasExactVersionToken(normalizedPath, input.version)) {
+          continue;
+        }
+
+        const looksMerged = lower.includes("merged");
+        const looksSrg = lower.includes("srg");
+        const looksForge = lower.includes("forge");
+        const looksNeoForge = lower.includes("neoforge") || lower.includes("moddev") || lower.includes("neoform");
+        const looksPatchedRuntime = lower.includes("patched") || lower.includes("client-extra") || lower.includes("joined");
+        const appliedScope: ArtifactScope =
+          looksMerged
+            ? "merged"
+            : "loader";
+
+        if (input.atNamespace === "srg" && !looksSrg) {
+          continue;
+        }
+        if (input.loader === "forge" && !looksForge && !looksSrg && !looksPatchedRuntime) {
+          continue;
+        }
+        if (input.loader === "neoforge" && !looksNeoForge && !looksPatchedRuntime && !lower.includes("minecraft")) {
+          continue;
+        }
+
+        const score =
+          10_000 +
+          (normalizedProjectPathLower && lower.startsWith(normalizedProjectPathLower) ? 4_000 : 0) +
+          (looksPatchedRuntime ? 3_000 : 0) +
+          (looksSrg ? 2_500 : 0) +
+          (input.loader === "forge" && looksForge ? 1_500 : 0) +
+          (input.loader === "neoforge" && looksNeoForge ? 1_500 : 0) +
+          (input.requestedScope === appliedScope ? 1_000 : 0) +
+          (looksMerged ? -500 : 0);
+
+        candidates.push({
+          jarPath: normalizedPath,
+          score,
+          appliedScope,
+          origin: "local-jar"
+        });
+      }
+    }
+
+    candidates.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.jarPath.localeCompare(right.jarPath);
+    });
+
+    return {
+      searchedPaths,
+      candidateArtifacts: candidates.slice(0, 20).map((candidate) => candidate.jarPath),
+      selected: candidates[0]
+    };
+  }
+
   private async resolveAccessWidenerRuntimeArtifact(input: {
     version: string;
     awNamespace: SourceMapping;
     projectPath?: string;
     scope?: ArtifactScope;
     preferProjectVersion?: boolean;
-  }): Promise<RuntimeValidationProvenance> {
+  }): Promise<RuntimeValidationProvenance<SourceMapping>> {
     const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
     let version = input.version;
     if (input.preferProjectVersion && normalizedProjectPath) {
@@ -1840,6 +2006,142 @@ export class SourceService {
       requestedMapping: input.awNamespace,
       mappingApplied: isUnobfuscatedVersion(version) ? "obfuscated" : "intermediary",
       origin: discovery.selected.origin,
+      resolutionNotes: scopeFallback ? [scopeFallback.reason] : undefined,
+      scopeFallback
+    };
+  }
+
+  private async resolveAccessTransformerNamespace(input: {
+    atNamespace?: AccessTransformerNamespace;
+    projectPath?: string;
+  }): Promise<AccessTransformerNamespace> {
+    const explicit = normalizeAccessTransformerNamespace(input.atNamespace);
+    if (explicit) {
+      return explicit;
+    }
+
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    if (!normalizedProjectPath) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "atNamespace is required when projectPath is not provided.",
+        details: {
+          nextAction: "Pass atNamespace explicitly, or provide projectPath for a Forge/NeoForge workspace so the namespace can be inferred."
+        }
+      });
+    }
+
+    const loaderDetection = await this.workspaceMappingService.detectProjectLoader(normalizedProjectPath);
+    if (loaderDetection.resolved && loaderDetection.loader === "forge") {
+      return "srg";
+    }
+    if (loaderDetection.resolved && loaderDetection.loader === "neoforge") {
+      return "mojang";
+    }
+
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "Could not infer atNamespace from the workspace.",
+      details: {
+        projectPath: normalizedProjectPath,
+        evidence: loaderDetection.evidence,
+        warnings: loaderDetection.warnings,
+        nextAction: "Pass atNamespace explicitly, or point projectPath at a Forge/NeoForge workspace."
+      }
+    });
+  }
+
+  private async resolveAccessTransformerRuntimeArtifact(input: {
+    version: string;
+    atNamespace: AccessTransformerNamespace;
+    projectPath?: string;
+    scope?: ArtifactScope;
+    preferProjectVersion?: boolean;
+  }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
+    const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    let version = input.version;
+    if (input.preferProjectVersion && normalizedProjectPath) {
+      const detected = await this.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
+      version = detected ?? version;
+    }
+
+    const requestedScope: ArtifactScope = input.scope ?? (normalizedProjectPath ? "loader" : "vanilla");
+    if (requestedScope === "vanilla") {
+      if (input.atNamespace === "srg") {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: "atNamespace=srg requires projectPath and scope=loader so a Forge runtime jar can be resolved."
+        });
+      }
+      const versionJar = await this.versionService.resolveVersionJar(version);
+      return {
+        version: versionJar.version,
+        jarPath: versionJar.jarPath,
+        requestedScope,
+        appliedScope: "vanilla",
+        requestedMapping: input.atNamespace,
+        mappingApplied: "obfuscated",
+        origin: "version-jar"
+      };
+    }
+
+    const loaderDetection = normalizedProjectPath
+      ? await this.workspaceMappingService.detectProjectLoader(normalizedProjectPath)
+      : { resolved: false, loader: undefined, evidence: [], warnings: [] };
+    const loader = loaderDetection.resolved ? loaderDetection.loader ?? "unknown" : "unknown";
+    const discovery = this.discoverAccessTransformerRuntimeCandidates({
+      version,
+      projectPath: normalizedProjectPath,
+      requestedScope,
+      atNamespace: input.atNamespace,
+      loader
+    });
+
+    if (!discovery.selected) {
+      throw createError({
+        code: ERROR_CODES.CONTEXT_UNRESOLVED,
+        message: "Could not resolve a runtime jar for Access Transformer validation.",
+        details: {
+          version,
+          requestedScope,
+          atNamespace: input.atNamespace,
+          projectPath: normalizedProjectPath,
+          searchedPaths: discovery.searchedPaths,
+          candidateArtifacts: discovery.candidateArtifacts,
+          loaderEvidence: loaderDetection.evidence,
+          loaderWarnings: loaderDetection.warnings,
+          nextAction: "Provide projectPath for a Forge/NeoForge workspace with generated runtime jars, or run the Gradle tasks that populate transformed runtime artifacts before retrying."
+        }
+      });
+    }
+
+    const selected = discovery.selected;
+    const selectedLower = selected.jarPath.toLowerCase();
+    const mappingApplied: AccessTransformerNamespace =
+      input.atNamespace === "srg" || selectedLower.includes("srg")
+        ? "srg"
+        : loader === "neoforge" || selectedLower.includes("moddev") || selectedLower.includes("neoforge")
+          ? "mojang"
+          : "obfuscated";
+    const scopeFallback =
+      requestedScope !== selected.appliedScope
+        ? {
+            requested: requestedScope,
+            applied: selected.appliedScope,
+            reason: selected.appliedScope === "merged"
+              ? "Resolved a nearby merged runtime jar because no transformed loader artifact was available."
+              : "Resolved the closest transformed runtime artifact for validation."
+          }
+        : undefined;
+
+    return {
+      version,
+      jarPath: selected.jarPath,
+      requestedScope,
+      appliedScope: selected.appliedScope,
+      requestedMapping: input.atNamespace,
+      mappingApplied,
+      origin: selected.origin,
       resolutionNotes: scopeFallback ? [scopeFallback.reason] : undefined,
       scopeFallback
     };
@@ -5125,7 +5427,7 @@ export class SourceService {
     let resolvedVersion = version;
     let jarPath: string;
     let lookupMapping: SourceMapping = "obfuscated";
-    let provenance: RuntimeValidationProvenance | undefined;
+    let provenance: RuntimeValidationProvenance<SourceMapping> | undefined;
 
     if (runtimeAware) {
       provenance = await this.resolveAccessWidenerRuntimeArtifact({
@@ -5231,6 +5533,146 @@ export class SourceService {
     }
 
     const result = validateParsedAccessWidener(parsed, membersByClass, warnings, {
+      includeRuntimeEvidence: runtimeAware
+    });
+    if (provenance) {
+      result.provenance = provenance;
+    }
+    return result;
+  }
+
+  async validateAccessTransformer(input: ValidateAccessTransformerInput): Promise<ValidateAccessTransformerOutput> {
+    const version = input.version.trim();
+    if (!version) {
+      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
+    }
+    const content = input.content;
+    if (!content.trim()) {
+      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "content must be non-empty." });
+    }
+
+    const warnings: string[] = [];
+    const parsed = parseAccessTransformer(content);
+    const atNamespace = await this.resolveAccessTransformerNamespace({
+      atNamespace: input.atNamespace,
+      projectPath: input.projectPath
+    });
+    const runtimeAware = input.projectPath != null || input.scope != null || input.preferProjectVersion === true;
+    let resolvedVersion = version;
+    let jarPath: string;
+    let lookupMapping: SourceMapping | AccessTransformerNamespace = "obfuscated";
+    let provenance: RuntimeValidationProvenance<AccessTransformerNamespace> | undefined;
+
+    if (runtimeAware) {
+      provenance = await this.resolveAccessTransformerRuntimeArtifact({
+        version,
+        atNamespace,
+        projectPath: input.projectPath,
+        scope: input.scope,
+        preferProjectVersion: input.preferProjectVersion
+      });
+      resolvedVersion = provenance.version;
+      jarPath = provenance.jarPath;
+      lookupMapping = provenance.mappingApplied;
+    } else {
+      if (atNamespace === "srg") {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: "atNamespace=srg requires projectPath and scope=loader so a Forge runtime jar can be resolved."
+        });
+      }
+      ({ jarPath } = await this.versionService.resolveVersionJar(version));
+    }
+
+    const needsLookupMapping = atNamespace !== lookupMapping;
+    const classFqns = new Set(parsed.entries.map((entry) => entry.owner));
+    const membersByClass = new Map<string, ResolvedTargetMembers>();
+
+    for (const fqn of classFqns) {
+      let lookupFqn = fqn;
+      if (needsLookupMapping) {
+        if (!isSourceMappingNamespace(atNamespace) || !isSourceMappingNamespace(lookupMapping)) {
+          warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
+        } else {
+          try {
+            const mapped = await this.mappingService.findMapping({
+              version: resolvedVersion,
+              kind: "class",
+              name: fqn,
+              sourceMapping: atNamespace,
+              targetMapping: lookupMapping,
+              sourcePriority: input.sourcePriority
+            });
+            if (mapped.resolved && mapped.resolvedSymbol) {
+              lookupFqn = mapped.resolvedSymbol.name;
+            } else {
+              warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
+            }
+          } catch {
+            warnings.push(`Mapping lookup failed for class "${fqn}".`);
+          }
+        }
+      }
+
+      try {
+        const sig = await this.explorerService.getSignature({
+          fqn: lookupFqn,
+          jarPath,
+          access: "all"
+        });
+        warnings.push(...sig.warnings);
+        let constructors = sig.constructors;
+        let methods = sig.methods;
+        let fields = sig.fields;
+
+        if (needsLookupMapping && isSourceMappingNamespace(atNamespace) && isSourceMappingNamespace(lookupMapping)) {
+          const [ctorResult, methodResult, fieldResult] = await Promise.all([
+            this.remapSignatureMembers(
+              sig.constructors,
+              "method",
+              resolvedVersion,
+              lookupMapping,
+              atNamespace,
+              input.sourcePriority,
+              warnings
+            ),
+            this.remapSignatureMembers(
+              sig.methods,
+              "method",
+              resolvedVersion,
+              lookupMapping,
+              atNamespace,
+              input.sourcePriority,
+              warnings
+            ),
+            this.remapSignatureMembers(
+              sig.fields,
+              "field",
+              resolvedVersion,
+              lookupMapping,
+              atNamespace,
+              input.sourcePriority,
+              warnings
+            )
+          ]);
+          constructors = ctorResult.members;
+          methods = methodResult.members;
+          fields = fieldResult.members;
+        }
+
+        membersByClass.set(fqn, {
+          className: fqn,
+          classAccessFlags: sig.classAccessFlags,
+          constructors,
+          methods,
+          fields
+        });
+      } catch {
+        warnings.push(`Could not load signature for class "${lookupFqn}".`);
+      }
+    }
+
+    const result = validateParsedAccessTransformer(parsed, membersByClass, warnings, {
       includeRuntimeEvidence: runtimeAware
     });
     if (provenance) {

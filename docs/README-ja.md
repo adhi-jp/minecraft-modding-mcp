@@ -20,8 +20,8 @@
 - **ソース探索**: デコンパイルされた Minecraft ソースコードを、行単位の精度とカーソルページネーション付きファイル一覧で閲覧・検索
 - **マルチマッピング変換**: クラス、フィールド、メソッド名を `obfuscated`、`mojang`、`intermediary`、`yarn` の間で変換
 - **バージョン比較**: Minecraft バージョン間でクラスシグネチャとレジストリエントリを比較
-- **Mod JAR 解析**: Fabric、Forge、NeoForge の Mod JAR からメタデータ、依存関係、エントリポイント、Mixin 設定を抽出
-- **Mixin / Access Widener 検証**: ソースや `.accesswidener` ファイルを対象 Minecraft バージョンに対して検証
+- **Mod JAR 解析**: Fabric、Forge、NeoForge の Mod JAR からメタデータ、依存関係、エントリポイント、Mixin 設定、同梱 Access Transformer パスを抽出
+- **Mixin / Access Widener / Access Transformer 検証**: ソース、`.accesswidener`、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証
 - **NBT ラウンドトリップ**: NBT バイナリを型付き JSON にデコードし、RFC 6902 パッチを適用して、再び NBT にエンコード
 - **レジストリデータとランタイムメトリクス**: 生成済みレジストリスナップショットの参照と、キャッシュやレイテンシカウンターの確認
 - **MCP リソース**: バージョン、クラスソース、アーティファクトメタデータ、マッピングを URI ベースのリソースとして公開
@@ -136,7 +136,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 | `analyze-symbol` | シンボル存在確認、マッピング変換、ライフサイクル追跡、ワークスペースシンボル解決 |
 | `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要 |
 | `analyze-mod` | Mod メタデータ、デコンパイル / 検索フロー、クラスソース、安全なリマップのプレビュー / 実行 |
-| `validate-project` | ワークスペース要約と、Mixin / Access Widener の直接検証 |
+| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証 |
 | `manage-cache` | キャッシュ一覧、検証、プレビュー / 実行によるクリーンアップワークフロー |
 
 ### ワークフローノート
@@ -216,13 +216,15 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
     "subject": {
       "kind": "workspace",
       "projectPath": "/workspace/modid",
-      "discover": ["mixins", "access-wideners"]
+      "discover": ["mixins", "access-wideners", "access-transformers"]
     },
     "preferProjectVersion": true,
     "preferProjectMapping": true
   }
 }
 ```
+
+ワークスペース要約は既定では mixin と access widener を検出します。Access Transformer も含めたい場合は `subject.discover` に `"access-transformers"` を追加してください。
 
 ## ドキュメント
 
@@ -245,7 +247,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 | `analyze-symbol` | シンボル存在確認、名前空間変換、ライフサイクル追跡、ワークスペースシンボル解決、API 概要をまとめて扱う |
 | `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要を比較する |
 | `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |
-| `validate-project` | ワークスペース要約と、Mixin / Access Widener の直接検証を行う |
+| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |
 | `manage-cache` | キャッシュの一覧、検証、クリーンアップ / 再構築のプレビュー / 実行を行う |
 <!-- END GENERATED TOOL TABLE: v3-entry-tools -->
 
@@ -312,7 +314,7 @@ Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mo
 <!-- BEGIN GENERATED TOOL TABLE: mod-analysis -->
 | ツール | 役割 |
 | --- | --- |
-| `analyze-mod-jar` | JAR から Mod メタデータ、依存関係、エントリポイント、Mixin 設定情報を抽出する |
+| `analyze-mod-jar` | JAR から Mod メタデータ、依存関係、エントリポイント、Mixin 設定情報、同梱 Access Transformer パスを抽出する |
 | `decompile-mod-jar` | Mod JAR をデコンパイルし、必要に応じて 1 つのクラスソースを返す |
 | `get-mod-class-source` | デコンパイル済み Mod キャッシュから 1 つのクラスソースを読み取る |
 | `search-mod-source` | デコンパイル済み Mod ソースを class、method、field、content で検索する |
@@ -321,14 +323,16 @@ Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mo
 
 ### バリデーション
 
-Mixin ソースや Access Widener ファイルを、対象 Minecraft バージョンに対して検証するツール群です。
+Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証するツール群です。
 `validate-access-widener` は既定では従来どおり vanilla bytecode を検証し、`projectPath` / `scope` / `preferProjectVersion` を指定した場合は runtime-aware 検証に切り替わって `provenance` と各 entry の `resolvedRuntimeAccess` を返します。
+`validate-access-transformer` は `projectPath` がある場合に Forge / NeoForge ワークスペースから `atNamespace` を推定し、`scope="loader"` では loader runtime artifact を優先して Access Transformer の対象を検証します。
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | ツール | 役割 |
 | --- | --- |
 | `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する |
 | `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |
+| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### レジストリと診断

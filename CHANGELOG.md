@@ -9,9 +9,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 - `validate-access-widener` now accepts `projectPath`, `scope`, and `preferProjectVersion` for runtime-aware validation against Loom runtime jars, and reports additive `provenance`, `resolvedInRuntime`, and `resolvedRuntimeAccess` evidence for matched class, method, and field entries.
+- Added `validate-access-transformer` for Forge / NeoForge Access Transformer validation, including `atNamespace` support, workspace-driven namespace inference, runtime artifact provenance, and per-entry runtime access evidence.
+- `analyze-mod-jar` now surfaces packaged Access Transformer paths alongside mod metadata.
 
 ### Fixed
 - `validate-project` now forwards workspace runtime context to discovered Access Widener validation so project-summary runs can use the same runtime-aware behavior as direct `validate-access-widener` calls.
+- `validate-project` now discovers Access Transformer files, supports `task="access-transformer"`, and can include those validations in workspace summaries when `discover` requests them.
 - `resolve-artifact`, `get-class-source`, `get-class-members`, and `inspect-minecraft` source/class-member flows now treat unobfuscated releases such as `26.1+` as native `mojang` runtime namespaces for both version and versioned-coordinate targets, avoiding false `ERR_MAPPING_NOT_APPLIED` failures and wrong-version Loom source-jar approximations when no exact source jar is present.
 - `validate-mixin` tool-health diagnostics now treat unobfuscated `mojang` runtime names as available, while still flagging `intermediary`/`yarn` as unavailable on `26.1+`.
 - `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and workspace Mixin checks, and returns a blocked summary with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.

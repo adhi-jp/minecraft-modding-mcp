@@ -6,7 +6,12 @@
 import type { SignatureMember } from "./minecraft-explorer-service.js";
 import type { ParsedMixin, ParsedInjection, ParsedShadow, ParsedAccessor } from "./mixin-parser.js";
 import type { ParsedAccessWidener, AccessWidenerEntry } from "./access-widener-parser.js";
-import type { RuntimeValidationProvenance, SourceMapping } from "./types.js";
+import type { ParsedAccessTransformer, AccessTransformerEntry } from "./access-transformer-parser.js";
+import type {
+  AccessTransformerNamespace,
+  RuntimeValidationProvenance,
+  SourceMapping
+} from "./types.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -177,7 +182,25 @@ export type AccessWidenerValidationResult = {
     }
   >;
   summary: { total: number; valid: number; invalid: number };
-  provenance?: RuntimeValidationProvenance;
+  provenance?: RuntimeValidationProvenance<SourceMapping>;
+  warnings: string[];
+};
+
+export type AccessTransformerValidationResult = {
+  valid: boolean;
+  entries: Array<
+    AccessTransformerEntry & {
+      valid: boolean;
+      issue?: string;
+      suggestions?: string[];
+      resolvedInRuntime?: boolean;
+      resolvedRuntimeAccess?: "public" | "protected" | "private" | "package-private";
+      resolvedRuntimeJvmDescriptor?: string;
+      resolvedRuntimeJavaSignature?: string;
+    }
+  >;
+  summary: { total: number; valid: number; invalid: number };
+  provenance?: RuntimeValidationProvenance<AccessTransformerNamespace>;
   warnings: string[];
 };
 
@@ -1170,6 +1193,140 @@ export function validateParsedAccessWidener(
   return {
     headerVersion: parsed.headerVersion,
     namespace: parsed.namespace,
+    valid: invalidCount === 0,
+    entries: validatedEntries,
+    summary: {
+      total: parsed.entries.length,
+      valid: validCount,
+      invalid: invalidCount
+    },
+    warnings
+  };
+}
+
+export function validateParsedAccessTransformer(
+  parsed: ParsedAccessTransformer,
+  membersByClass: Map<string, ResolvedTargetMembers>,
+  warnings: string[],
+  options?: { includeRuntimeEvidence?: boolean }
+): AccessTransformerValidationResult {
+  warnings.push(...parsed.parseWarnings);
+
+  const validatedEntries: AccessTransformerValidationResult["entries"] = [];
+  let validCount = 0;
+  let invalidCount = 0;
+
+  for (const entry of parsed.entries) {
+    const ownerFqn = entry.owner;
+    const members = membersByClass.get(ownerFqn);
+
+    if (entry.targetKind === "class") {
+      if (!members) {
+        validatedEntries.push({
+          ...entry,
+          valid: false,
+          issue: `Class "${ownerFqn}" not found in runtime jar.`,
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        });
+        invalidCount++;
+        continue;
+      }
+
+      const runtimeAccess = accessLevelFromFlags(members.classAccessFlags);
+      validatedEntries.push({
+        ...entry,
+        valid: true,
+        ...(options?.includeRuntimeEvidence
+          ? {
+              resolvedInRuntime: true,
+              ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {})
+            }
+          : {})
+      });
+      validCount++;
+      continue;
+    }
+
+    if (!members) {
+      validatedEntries.push({
+        ...entry,
+        valid: false,
+        issue: `Owner class "${ownerFqn}" not found in runtime jar.`,
+        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+      });
+      invalidCount++;
+      continue;
+    }
+
+    if (entry.targetKind === "field") {
+      const fieldNames = allFieldNames(members);
+      const matchedField = members.fields.find((member) => member.name === entry.name);
+      if (!matchedField) {
+        const suggestions = entry.name ? suggestSimilar(entry.name, fieldNames) : [];
+        validatedEntries.push({
+          ...entry,
+          valid: false,
+          issue: `Field "${entry.name}" not found in class "${ownerFqn}".`,
+          ...(suggestions.length > 0 ? { suggestions } : {}),
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        });
+        invalidCount++;
+        continue;
+      }
+
+      const runtimeAccess = accessLevelFromFlags(matchedField.accessFlags);
+      validatedEntries.push({
+        ...entry,
+        valid: true,
+        ...(options?.includeRuntimeEvidence
+          ? {
+              resolvedInRuntime: true,
+              ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {}),
+              ...(matchedField.jvmDescriptor ? { resolvedRuntimeJvmDescriptor: matchedField.jvmDescriptor } : {}),
+              ...(matchedField.javaSignature ? { resolvedRuntimeJavaSignature: matchedField.javaSignature } : {})
+            }
+          : {})
+      });
+      validCount++;
+      continue;
+    }
+
+    const methodNames = allMethodNames(members);
+    const matchedMethod = members.methods.find(
+      (member) => member.name === entry.name && member.jvmDescriptor === entry.descriptor
+    ) ?? members.constructors.find(
+      (member) => member.name === entry.name && member.jvmDescriptor === entry.descriptor
+    );
+    if (!matchedMethod) {
+      const suggestions = entry.name ? suggestSimilar(entry.name, methodNames) : [];
+      validatedEntries.push({
+        ...entry,
+        valid: false,
+        issue: `Method "${entry.name}" not found in class "${ownerFqn}".`,
+        ...(suggestions.length > 0 ? { suggestions } : {}),
+        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+      });
+      invalidCount++;
+      continue;
+    }
+
+    const runtimeAccess = accessLevelFromFlags(matchedMethod.accessFlags);
+    validatedEntries.push({
+      ...entry,
+      valid: true,
+      ...(options?.includeRuntimeEvidence
+        ? {
+            resolvedInRuntime: true,
+            ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {}),
+            ...(matchedMethod.jvmDescriptor ? { resolvedRuntimeJvmDescriptor: matchedMethod.jvmDescriptor } : {}),
+            ...(matchedMethod.javaSignature ? { resolvedRuntimeJavaSignature: matchedMethod.javaSignature } : {})
+          }
+        : {})
+    });
+    validCount++;
+  }
+
+  return {
     valid: invalidCount === 0,
     entries: validatedEntries,
     summary: {

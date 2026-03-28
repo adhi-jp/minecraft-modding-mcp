@@ -25,11 +25,16 @@ const accessWidenerInputSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("path"), path: nonEmptyString })
 ]);
 
+const accessTransformerInputSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("inline"), content: nonEmptyString }),
+  z.object({ mode: z.literal("path"), path: nonEmptyString })
+]);
+
 const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),
     projectPath: nonEmptyString,
-    discover: z.array(z.enum(["mixins", "access-wideners"])).optional()
+    discover: z.array(z.enum(["mixins", "access-wideners", "access-transformers"])).optional()
   }),
   z.object({
     kind: z.literal("mixin"),
@@ -38,14 +43,19 @@ const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("access-widener"),
     input: accessWidenerInputSchema
+  }),
+  z.object({
+    kind: z.literal("access-transformer"),
+    input: accessTransformerInputSchema
   })
 ]);
 
 export const validateProjectShape = {
-  task: z.enum(["project-summary", "mixin", "access-widener"]),
+  task: z.enum(["project-summary", "mixin", "access-widener", "access-transformer"]),
   subject: subjectSchema,
   version: nonEmptyString.optional(),
   mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+  atNamespace: z.enum(["srg", "mojang", "obfuscated"]).optional(),
   sourcePriority: z.enum(["loom-first", "maven-first"]).optional(),
   scope: z.enum(["vanilla", "merged", "loader"]).optional(),
   preferProjectVersion: z.boolean().optional(),
@@ -85,6 +95,13 @@ export const validateProjectSchema = z.object(validateProjectShape).superRefine(
       message: "task=access-widener requires subject.kind=access-widener."
     });
   }
+  if (value.task === "access-transformer" && value.subject.kind !== "access-transformer") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["subject", "kind"],
+      message: "task=access-transformer requires subject.kind=access-transformer."
+    });
+  }
   if (value.configPaths?.length && value.task !== "project-summary") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -107,8 +124,18 @@ type ValidateProjectDeps = {
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  validateAccessTransformer?: (input: {
+    content: string;
+    version: string;
+    atNamespace?: "srg" | "mojang" | "obfuscated";
+    sourcePriority?: "loom-first" | "maven-first";
+    projectPath?: string;
+    scope?: "vanilla" | "merged" | "loader";
+    preferProjectVersion?: boolean;
+  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   discoverMixins: (projectPath: string, configPaths?: string[]) => Promise<string[]>;
   discoverAccessWideners: (projectPath: string) => Promise<string[]>;
+  discoverAccessTransformers?: (projectPath: string) => Promise<string[]>;
   detectProjectMinecraftVersion?: (projectPath: string) => Promise<string | undefined>;
 };
 
@@ -146,6 +173,144 @@ export async function discoverWorkspaceAccessWideners(projectPath: string): Prom
       // ignore malformed descriptors in discovery mode
     }
   }
+  return [...discovered].sort((left, right) => left.localeCompare(right));
+}
+
+function addDiscoveredPath(discovered: Set<string>, filePath: string, relativePath: string | undefined): void {
+  const trimmed = relativePath?.trim();
+  if (!trimmed) {
+    return;
+  }
+  discovered.add(resolve(filePath, "..", trimmed));
+}
+
+function collectFileArgumentMatches(
+  content: string,
+  filePath: string,
+  discovered: Set<string>,
+  pattern: RegExp
+): void {
+  for (const match of content.matchAll(pattern)) {
+    addDiscoveredPath(discovered, filePath, match[2]);
+  }
+}
+
+function extractNamedDslBlocks(content: string, blockName: string): string[] {
+  const blocks: string[] = [];
+  const blockPattern = new RegExp(`${blockName}\\s*\\{`, "g");
+
+  for (const match of content.matchAll(blockPattern)) {
+    const blockStart = (match.index ?? -1) + match[0].length;
+    if (blockStart < match[0].length) {
+      continue;
+    }
+
+    let depth = 1;
+    for (let index = blockStart; index < content.length; index++) {
+      const char = content[index];
+      if (char === "{") {
+        depth++;
+      } else if (char === "}") {
+        depth--;
+      }
+      if (depth === 0) {
+        blocks.push(content.slice(blockStart, index));
+        break;
+      }
+    }
+  }
+
+  return blocks;
+}
+
+function collectTomlAccessTransformerEntries(content: string, filePath: string, discovered: Set<string>): void {
+  const lines = content.split(/\r?\n/);
+  let currentBlock: string[] = [];
+
+  const flushBlock = (): void => {
+    if (currentBlock.length === 0) {
+      return;
+    }
+    for (const match of currentBlock.join("\n").matchAll(/^\s*file\s*=\s*(["'])(.+?)\1\s*$/gm)) {
+      addDiscoveredPath(discovered, filePath, match[2]);
+    }
+    currentBlock = [];
+  };
+
+  for (const line of lines) {
+    if (/^\s*\[\[accessTransformers\]\]\s*$/.test(line)) {
+      flushBlock();
+      currentBlock.push(line);
+      continue;
+    }
+    if (currentBlock.length > 0 && /^\s*(?:\[\[.*\]\]|\[[^\[])/.test(line)) {
+      flushBlock();
+    }
+    if (currentBlock.length > 0) {
+      currentBlock.push(line);
+    }
+  }
+
+  flushBlock();
+}
+
+export async function discoverWorkspaceAccessTransformers(projectPath: string): Promise<string[]> {
+  const discovered = new Set<string>();
+  const textFiles = fastGlob.sync([
+    "build.gradle",
+    "build.gradle.kts",
+    "META-INF/mods.toml",
+    "META-INF/neoforge.mods.toml",
+    "**/build.gradle",
+    "**/build.gradle.kts",
+    "**/META-INF/mods.toml",
+    "**/META-INF/neoforge.mods.toml"
+  ], {
+    cwd: projectPath,
+    absolute: true,
+    onlyFiles: true,
+    ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+  });
+
+  for (const filePath of textFiles) {
+    let content: string;
+    try {
+      content = await readFile(filePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    collectFileArgumentMatches(
+      content,
+      filePath,
+      discovered,
+      /accessTransformer\s*=\s*file\(\s*(["'])(.+?)\1\s*\)/g
+    );
+    collectFileArgumentMatches(
+      content,
+      filePath,
+      discovered,
+      /accessTransformers\.from\s*\(\s*file\(\s*(["'])(.+?)\1\s*\)\s*\)/g
+    );
+    for (const block of extractNamedDslBlocks(content, "accessTransformers")) {
+      collectFileArgumentMatches(block, filePath, discovered, /file\(\s*(["'])(.+?)\1\s*\)/g);
+    }
+    collectTomlAccessTransformerEntries(content, filePath, discovered);
+  }
+
+  for (const fallbackPath of fastGlob.sync([
+    "**/META-INF/accesstransformer.cfg",
+    "**/*_at.cfg",
+    "**/accesstransformer*.cfg"
+  ], {
+    cwd: projectPath,
+    absolute: true,
+    onlyFiles: true,
+    ignore: ["**/.git/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+  })) {
+    discovered.add(fallbackPath);
+  }
+
   return [...discovered].sort((left, right) => left.localeCompare(right));
 }
 
@@ -279,6 +444,77 @@ export class ValidateProjectService {
           warnings: Array.isArray(output.warnings) ? output.warnings : []
         };
       }
+      case "access-transformer": {
+        if (input.subject.kind !== "access-transformer") {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: "task=access-transformer requires subject.kind=access-transformer."
+          });
+        }
+        const content = input.subject.input.mode === "inline"
+          ? input.subject.input.content
+          : await readFile(input.subject.input.path, "utf8");
+        if (!this.deps.validateAccessTransformer) {
+          throw createError({
+            code: ERROR_CODES.CONTEXT_UNRESOLVED,
+            message: "Access Transformer validation is not configured."
+          });
+        }
+        const output = await this.deps.validateAccessTransformer({
+          content,
+          version: input.version!,
+          atNamespace: input.atNamespace,
+          sourcePriority: input.sourcePriority,
+          scope: input.scope,
+          preferProjectVersion: input.preferProjectVersion
+        });
+        const issueEntries = Array.isArray(output.entries)
+          ? output.entries.filter((entry) => {
+              if (!entry || typeof entry !== "object" || !("valid" in entry)) {
+                return true;
+              }
+              return (entry as { valid?: boolean }).valid !== true;
+            })
+          : undefined;
+        return {
+          ...buildEntryToolResult({
+            task: "access-transformer",
+            detail,
+            include,
+            summary: {
+              status: output.valid ? "ok" : "invalid",
+              headline: output.valid
+                ? "Access Transformer is valid."
+                : "Access Transformer contains validation issues.",
+              subject: createSummarySubject({
+                task: "access-transformer",
+                kind: input.subject.kind,
+                input: input.subject.input,
+                version: input.version,
+                sourcePriority: input.sourcePriority,
+                scope: input.scope,
+                atNamespace: input.atNamespace
+              }),
+              counts: {
+                valid: output.valid ? 1 : 0,
+                invalid: output.valid ? 0 : 1
+              }
+            },
+            blocks: {
+              project: {
+                summary: {
+                  total: 1,
+                  valid: output.valid ? 1 : 0,
+                  invalid: output.valid ? 0 : 1
+                }
+              },
+              issues: include.includes("issues") || detail !== "summary" ? issueEntries : undefined
+            },
+            alwaysBlocks: ["project"]
+          }),
+          warnings: Array.isArray(output.warnings) ? output.warnings : []
+        };
+      }
       case "project-summary": {
         if (input.subject.kind !== "workspace") {
           throw createError({
@@ -330,16 +566,19 @@ export class ValidateProjectService {
           : undefined;
         const resolvedVersion = detectedProjectVersion ?? input.version;
         const discover = input.subject.discover ?? ["mixins", "access-wideners"];
-        const [mixinConfigs, accessWideners] = await Promise.all([
+        const [mixinConfigs, accessWideners, accessTransformers] = await Promise.all([
           discover.includes("mixins")
             ? this.deps.discoverMixins(projectPath, input.configPaths)
             : Promise.resolve([]),
           discover.includes("access-wideners")
             ? this.deps.discoverAccessWideners(projectPath)
+            : Promise.resolve([]),
+          discover.includes("access-transformers")
+            ? this.deps.discoverAccessTransformers?.(projectPath) ?? Promise.resolve([])
             : Promise.resolve([])
         ]);
 
-        if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0)) {
+        if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 || accessTransformers.length > 0)) {
           return {
             ...buildEntryToolResult({
               task: "project-summary",
@@ -390,7 +629,7 @@ export class ValidateProjectService {
               include,
               summary: {
                 status: "ok",
-                headline: `Validated ${mixinConfigs.length} mixin config(s) and ${accessWideners.length} access widener(s).`,
+                headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
                 subject: createSummarySubject({
                   task: "project-summary",
                   kind: input.subject.kind,
@@ -492,7 +731,42 @@ export class ValidateProjectService {
           }
         }
 
-        const invalidCount = invalidMixins + invalidAw;
+        let validAt = 0;
+        let invalidAt = 0;
+        for (const atPath of accessTransformers) {
+          try {
+            if (!this.deps.validateAccessTransformer) {
+              throw createError({
+                code: ERROR_CODES.CONTEXT_UNRESOLVED,
+                message: "Access Transformer validation is not configured."
+              });
+            }
+            const output = await this.deps.validateAccessTransformer({
+              content: await readFile(atPath, "utf8"),
+              version: validationVersion,
+              atNamespace: input.atNamespace,
+              sourcePriority: input.sourcePriority,
+              projectPath,
+              scope: input.scope,
+              preferProjectVersion: input.preferProjectVersion
+            });
+            if (output.valid) {
+              validAt += 1;
+            } else {
+              invalidAt += 1;
+            }
+            if (Array.isArray(output.warnings)) {
+              warnings.push(...output.warnings);
+            }
+          } catch (error) {
+            invalidAt += 1;
+            if (error instanceof Error) {
+              warnings.push(error.message);
+            }
+          }
+        }
+
+        const invalidCount = invalidMixins + invalidAw + invalidAt;
         const partialCount = partialMixins;
         const status = invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok";
 
@@ -503,7 +777,7 @@ export class ValidateProjectService {
             include,
             summary: {
               status,
-              headline: `Validated ${mixinConfigs.length} mixin config(s) and ${accessWideners.length} access widener(s).`,
+              headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
               subject: createSummarySubject({
                 task: "project-summary",
                 kind: input.subject.kind,
@@ -515,7 +789,7 @@ export class ValidateProjectService {
                 scope: input.scope
               }),
               counts: {
-                valid: validMixins + validAw,
+                valid: validMixins + validAw + validAt,
                 partial: partialCount,
                 invalid: invalidCount
               }
@@ -523,7 +797,7 @@ export class ValidateProjectService {
             blocks: {
               project: {
                 summary: {
-                  valid: validMixins + validAw,
+                  valid: validMixins + validAw + validAt,
                   partial: partialCount,
                   invalid: invalidCount
                 }
@@ -531,7 +805,8 @@ export class ValidateProjectService {
               workspace: {
                 projectPath,
                 mixinConfigs,
-                accessWideners
+                accessWideners,
+                accessTransformers
               }
             },
             alwaysBlocks: ["project"]

@@ -24,7 +24,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `analyze-symbol` | Handle symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol resolution, and API overviews |",
       "| `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |",
       "| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, and preview or apply remaps |",
-      "| `validate-project` | Summarize workspaces and run direct Mixin or Access Widener validation |",
+      "| `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |",
       "| `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |"
     ],
     ja: [
@@ -32,7 +32,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `analyze-symbol` | シンボル存在確認、名前空間変換、ライフサイクル追跡、ワークスペースシンボル解決、API 概要をまとめて扱う |",
       "| `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要を比較する |",
       "| `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |",
-      "| `validate-project` | ワークスペース要約と、Mixin / Access Widener の直接検証を行う |",
+      "| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |",
       "| `manage-cache` | キャッシュの一覧、検証、クリーンアップ / 再構築のプレビュー / 実行を行う |"
     ]
   },
@@ -102,14 +102,14 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
   },
   "mod-analysis": {
     en: [
-      "| `analyze-mod-jar` | Extract mod metadata, dependencies, entrypoints, and mixin config info from a JAR |",
+      "| `analyze-mod-jar` | Extract mod metadata, dependencies, entrypoints, mixin config info, and packaged access transformer paths from a JAR |",
       "| `decompile-mod-jar` | Decompile a mod JAR and optionally return one class source |",
       "| `get-mod-class-source` | Read one class source from the decompiled mod cache |",
       "| `search-mod-source` | Search decompiled mod source by class, method, field, or content |",
       "| `remap-mod-jar` | Remap a Fabric or Quilt mod JAR to `yarn` or `mojang` names |"
     ],
     ja: [
-      "| `analyze-mod-jar` | JAR から Mod メタデータ、依存関係、エントリポイント、Mixin 設定情報を抽出する |",
+      "| `analyze-mod-jar` | JAR から Mod メタデータ、依存関係、エントリポイント、Mixin 設定情報、同梱 Access Transformer パスを抽出する |",
       "| `decompile-mod-jar` | Mod JAR をデコンパイルし、必要に応じて 1 つのクラスソースを返す |",
       "| `get-mod-class-source` | デコンパイル済み Mod キャッシュから 1 つのクラスソースを読み取る |",
       "| `search-mod-source` | デコンパイル済み Mod ソースを class、method、field、content で検索する |",
@@ -119,11 +119,13 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
   "validation": {
     en: [
       "| `validate-mixin` | Validate Mixin source against a target Minecraft version |",
-      "| `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |"
+      "| `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |",
+      "| `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |"
     ],
     ja: [
       "| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する |",
-      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |"
+      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |",
+      "| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |"
     ]
   },
   "registry-diagnostics": {

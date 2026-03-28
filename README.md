@@ -20,8 +20,8 @@
 - **Source Exploration**: browse and search decompiled Minecraft source code with line-level precision and cursor-paginated file listing
 - **Multi-Mapping Conversion**: translate class, field, and method names between `obfuscated`, `mojang`, `intermediary`, and `yarn`
 - **Version Comparison**: diff class signatures and registry entries between Minecraft versions
-- **Mod JAR Analysis**: extract metadata, dependencies, entrypoints, and Mixin configs from Fabric, Forge, and NeoForge mod JARs
-- **Mixin and Access Widener Validation**: validate source and `.accesswidener` files against a target Minecraft version
+- **Mod JAR Analysis**: extract metadata, dependencies, entrypoints, Mixin configs, and packaged Access Transformer paths from Fabric, Forge, and NeoForge mod JARs
+- **Mixin, Access Widener, and Access Transformer Validation**: validate source, `.accesswidener`, and Forge/NeoForge access transformer files against a target Minecraft version
 - **NBT Round-Trip**: decode NBT binary to typed JSON, apply RFC 6902 patches, and encode it back to NBT
 - **Registry Data and Runtime Metrics**: query generated registry snapshots and inspect cache and latency counters
 - **MCP Resources**: expose versions, class source, artifact metadata, and mappings through URI-based resources
@@ -136,7 +136,7 @@ All six return `result.summary` first, and can include `summary.nextActions` whe
 | `analyze-symbol` | symbol existence checks, mapping conversion, lifecycle tracing, and workspace symbol resolution |
 | `compare-minecraft` | version-pair diffs, class diffs, registry diffs, and migration-oriented overviews |
 | `analyze-mod` | mod metadata, decompile/search flows, class source, and safe remap preview/apply |
-| `validate-project` | workspace summaries plus direct Mixin and Access Widener validation |
+| `validate-project` | workspace summaries plus direct Mixin, Access Widener, and Access Transformer validation |
 | `manage-cache` | cache inventory, verification, and preview/apply cleanup workflows |
 
 ### Workflow Notes
@@ -149,7 +149,7 @@ Keep only the high-frequency notes here. For the full pitfall list, exact contra
 - Workspace inspection can still confirm vanilla classes when source coverage is partial, and `inspect-minecraft task="list-files"` reports a partial result with follow-up guidance when that happens.
 - `check-symbol-exists` and `analyze-symbol task="exists"` now validate `mojang` lookups on unobfuscated releases such as `26.1+` against runtime bytecode when no mapping graph exists, preserve the original `mapping_unavailable` result if the runtime JAR itself cannot be resolved, and return a targeted warning when callers provide only a short class name.
 - `analyze-mod` and `validate-project` still require structured `subject` objects and canonical `include` groups, but stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
-- `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and Mixin checks, and blocks with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
+- `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener, Access Transformer, and Mixin checks, and blocks with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
 
 ### Inspect Minecraft source from a version
 
@@ -218,13 +218,15 @@ Keep only the high-frequency notes here. For the full pitfall list, exact contra
     "subject": {
       "kind": "workspace",
       "projectPath": "/workspace/modid",
-      "discover": ["mixins", "access-wideners"]
+      "discover": ["mixins", "access-wideners", "access-transformers"]
     },
     "preferProjectVersion": true,
     "preferProjectMapping": true
   }
 }
 ```
+
+Workspace summaries still default to discovering mixins and access wideners. Add `"access-transformers"` to `subject.discover` when you want Access Transformer files included in the summary run.
 
 ## Documentation
 
@@ -245,7 +247,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 | `analyze-symbol` | Handle symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol resolution, and API overviews |
 | `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |
 | `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, and preview or apply remaps |
-| `validate-project` | Summarize workspaces and run direct Mixin or Access Widener validation |
+| `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |
 | `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |
 <!-- END GENERATED TOOL TABLE: v3-entry-tools -->
 
@@ -314,7 +316,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 <!-- BEGIN GENERATED TOOL TABLE: mod-analysis -->
 | Tool | Purpose |
 | --- | --- |
-| `analyze-mod-jar` | Extract mod metadata, dependencies, entrypoints, and mixin config info from a JAR |
+| `analyze-mod-jar` | Extract mod metadata, dependencies, entrypoints, mixin config info, and packaged access transformer paths from a JAR |
 | `decompile-mod-jar` | Decompile a mod JAR and optionally return one class source |
 | `get-mod-class-source` | Read one class source from the decompiled mod cache |
 | `search-mod-source` | Search decompiled mod source by class, method, field, or content |
@@ -323,14 +325,16 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 
 ### Validation
 
-Tools for validating Mixin source and Access Widener files against a target Minecraft version.
+Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version.
 `validate-access-widener` keeps vanilla bytecode validation by default, and now also supports runtime-aware validation through `projectPath`, `scope`, and `preferProjectVersion`, returning runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence when that mode is used.
+`validate-access-transformer` infers `atNamespace` from Forge or NeoForge workspace context when `projectPath` is provided, validates packaged or inline AT content, and uses loader/runtime artifacts for `scope="loader"` instead of treating loader as a merged-only alias.
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose |
 | --- | --- |
 | `validate-mixin` | Validate Mixin source against a target Minecraft version |
 | `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |
+| `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### Registry & Diagnostics

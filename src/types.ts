@@ -1,5 +1,7 @@
 export type SourceOrigin = "local-jar" | "local-m2" | "remote-repo" | "decompiled";
 export type SourceMapping = "obfuscated" | "mojang" | "intermediary" | "yarn";
+export type AccessTransformerNamespace = "srg" | "mojang" | "obfuscated";
+export type RuntimeValidationNamespace = SourceMapping | AccessTransformerNamespace;
 export type MappingSourcePriority = "loom-first" | "maven-first";
 
 export type ArtifactTargetKind = "version" | "jar" | "coordinate";
@@ -42,13 +44,15 @@ export interface ArtifactProvenance {
   transformChain: string[];
 }
 
-export interface RuntimeValidationProvenance {
+export interface RuntimeValidationProvenance<
+  TMapping extends RuntimeValidationNamespace = RuntimeValidationNamespace
+> {
   version: string;
   jarPath: string;
   requestedScope?: ArtifactScope;
   appliedScope?: ArtifactScope;
-  requestedMapping: SourceMapping;
-  mappingApplied: SourceMapping;
+  requestedMapping: TMapping;
+  mappingApplied: TMapping;
   origin: SourceOrigin | "loom-cache" | "version-jar";
   resolutionNotes?: string[];
   scopeFallback?: { requested: string; applied: string; reason: string };

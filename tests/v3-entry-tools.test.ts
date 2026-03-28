@@ -13,7 +13,10 @@ import {
   inspectMinecraftSchema
 } from "../src/entry-tools/inspect-minecraft-service.ts";
 import { ManageCacheService } from "../src/entry-tools/manage-cache-service.ts";
-import { ValidateProjectService } from "../src/entry-tools/validate-project-service.ts";
+import {
+  discoverWorkspaceAccessTransformers,
+  ValidateProjectService
+} from "../src/entry-tools/validate-project-service.ts";
 
 test("entry tool schemas expose explicit defaults on safe public parameters", async () => {
   const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
@@ -2003,6 +2006,93 @@ test("ValidateProjectService validates direct access widener inline input", asyn
   assert.equal(result.project?.summary?.valid, 1);
 });
 
+test("ValidateProjectService validates direct access transformer inline input", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    validateAccessTransformer: async () => ({
+      valid: true,
+      entries: [],
+      summary: { total: 1, valid: 1, invalid: 0 },
+      warnings: []
+    }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => []
+  });
+
+  const result = await service.execute({
+    task: "access-transformer",
+    detail: "summary",
+    version: "1.21.10",
+    atNamespace: "mojang",
+    subject: {
+      kind: "access-transformer",
+      input: {
+        mode: "inline",
+        content: "public net.minecraft.server.MinecraftServer"
+      }
+    }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  assert.equal(result.project?.summary?.valid, 1);
+});
+
+test("ValidateProjectService access-transformer issues block only includes invalid entries", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    validateAccessTransformer: async () => ({
+      valid: false,
+      entries: [
+        {
+          target: "net.minecraft.server.MinecraftServer",
+          targetKind: "class",
+          valid: true
+        },
+        {
+          target: "net.minecraft.server.MinecraftServer#missingField",
+          targetKind: "field",
+          valid: false,
+          issue: "Field missingField not found."
+        }
+      ],
+      summary: { total: 2, valid: 1, invalid: 1 },
+      warnings: []
+    }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => []
+  });
+
+  const result = await service.execute({
+    task: "access-transformer",
+    detail: "full",
+    version: "1.21.10",
+    subject: {
+      kind: "access-transformer",
+      input: {
+        mode: "inline",
+        content: "public net.minecraft.server.MinecraftServer"
+      }
+    }
+  });
+
+  assert.equal(result.summary.status, "invalid");
+  assert.equal(Array.isArray(result.issues), true);
+  assert.equal((result.issues as Array<Record<string, unknown>>).length, 1);
+  assert.equal((result.issues as Array<Record<string, unknown>>)[0]?.valid, false);
+});
+
 test("ValidateProjectService project-summary blocked recovery omits a hardcoded version when no version source is available", async () => {
   const service = new ValidateProjectService({
     validateMixin: async () => {
@@ -2243,6 +2333,142 @@ test("ValidateProjectService project-summary forwards runtime-aware access widen
   assert.equal(seenPreferProjectVersion, true);
   assert.equal(result.summary.status, "ok");
   assert.equal(result.project?.summary?.valid, 1);
+});
+
+test("ValidateProjectService project-summary discovers and forwards runtime-aware access transformer inputs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-project-at-runtime-aware-"));
+  const atPath = join(root, "src", "main", "resources", "META-INF", "accesstransformer.cfg");
+  await mkdir(join(root, "src", "main", "resources", "META-INF"), { recursive: true });
+  await writeFile(
+    atPath,
+    "public net.minecraft.server.MinecraftServer\n",
+    "utf8"
+  );
+
+  let seenProjectPath: string | undefined;
+  let seenScope: string | undefined;
+  let seenAtNamespace: string | undefined;
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({
+      summary: {
+        valid: 0,
+        partial: 0,
+        invalid: 0
+      },
+      warnings: []
+    }),
+    validateAccessWidener: async () => ({
+      valid: true,
+      header: "accessWidener v2 named",
+      namespace: "named",
+      issues: [],
+      warnings: []
+    }),
+    validateAccessTransformer: async (input) => {
+      seenProjectPath = input.projectPath;
+      seenScope = input.scope;
+      seenAtNamespace = input.atNamespace;
+      return {
+        valid: true,
+        entries: [],
+        summary: { total: 1, valid: 1, invalid: 0 },
+        warnings: []
+      };
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [atPath]
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    version: "1.21.10",
+    scope: "loader",
+    subject: {
+      kind: "workspace",
+      projectPath: root,
+      discover: ["access-transformers"]
+    }
+  });
+
+  assert.equal(seenProjectPath, root);
+  assert.equal(seenScope, "loader");
+  assert.equal(seenAtNamespace, undefined);
+  assert.equal(result.summary.status, "ok");
+  assert.equal(result.project?.summary?.valid, 1);
+});
+
+test("ValidateProjectService project-summary does not discover access transformers unless requested", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-project-at-default-discover-"));
+  let accessTransformerDiscoveryCalls = 0;
+
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({
+      summary: {
+        valid: 0,
+        partial: 0,
+        invalid: 0
+      },
+      warnings: []
+    }),
+    validateAccessWidener: async () => ({
+      valid: true,
+      header: "accessWidener v2 named",
+      namespace: "named",
+      issues: [],
+      warnings: []
+    }),
+    validateAccessTransformer: async () => ({
+      valid: true,
+      entries: [],
+      summary: { total: 1, valid: 1, invalid: 0 },
+      warnings: []
+    }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => {
+      accessTransformerDiscoveryCalls += 1;
+      return [];
+    }
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    version: "1.21.10",
+    subject: {
+      kind: "workspace",
+      projectPath: root
+    }
+  });
+
+  assert.equal(accessTransformerDiscoveryCalls, 0);
+  assert.equal(result.summary.status, "ok");
+});
+
+test("discoverWorkspaceAccessTransformers keeps accessTransformers block matches scoped to the block", async () => {
+  const root = await mkdtemp(join(tmpdir(), "discover-workspace-at-blocks-"));
+  const buildFilePath = join(root, "build.gradle");
+  await writeFile(
+    buildFilePath,
+    [
+      "neoForge {",
+      "  accessTransformers {",
+      "    file('src/main/resources/META-INF/accesstransformer.cfg')",
+      "  }",
+      "}",
+      "",
+      "tasks.register('demo') {",
+      "  file('should-not-be-picked.cfg')",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const result = await discoverWorkspaceAccessTransformers(root);
+
+  assert.deepEqual(result, [join(root, "src", "main", "resources", "META-INF", "accesstransformer.cfg")]);
 });
 
 test("ValidateProjectService project-summary uses detected project version consistently across mixins and access wideners", async () => {

@@ -23,8 +23,28 @@ export type WorkspaceCompileMappingOutput = {
   warnings: string[];
 };
 
+export type WorkspaceProjectLoader = "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
+
+export type WorkspaceLoaderEvidence = {
+  filePath: string;
+  loader: WorkspaceProjectLoader;
+  reason: string;
+};
+
+export type WorkspaceProjectLoaderOutput = {
+  resolved: boolean;
+  loader?: WorkspaceProjectLoader;
+  evidence: WorkspaceLoaderEvidence[];
+  warnings: string[];
+};
+
 type MappingDetection = {
   mapping: SourceMapping;
+  reason: string;
+};
+
+type LoaderDetection = {
+  loader: WorkspaceProjectLoader;
   reason: string;
 };
 
@@ -58,6 +78,47 @@ function detectMappingsFromContent(content: string): MappingDetection[] {
     detections.push({
       mapping: "mojang",
       reason: "neoForge parchment block"
+    });
+  }
+  return detections;
+}
+
+function detectLoadersFromContent(content: string): LoaderDetection[] {
+  const detections: LoaderDetection[] = [];
+  if (/\bid\s*(?:\(\s*)?["']net\.neoforged\.moddev["']\s*\)?/i.test(content)) {
+    detections.push({
+      loader: "neoforge",
+      reason: "net.neoforged.moddev plugin"
+    });
+  }
+  if (/\bid\s*(?:\(\s*)?["']net\.minecraftforge\.gradle["']\s*\)?/i.test(content)) {
+    detections.push({
+      loader: "forge",
+      reason: "net.minecraftforge.gradle plugin"
+    });
+  }
+  if (/\bid\s*(?:\(\s*)?["']org\.quiltmc\.loom["']\s*\)?/i.test(content)) {
+    detections.push({
+      loader: "quilt",
+      reason: "org.quiltmc.loom plugin"
+    });
+  }
+  if (/\bid\s*(?:\(\s*)?["']fabric-loom["']\s*\)?/i.test(content) || /\bid\s*(?:\(\s*)?["']dev\.architectury\.loom["']\s*\)?/i.test(content)) {
+    detections.push({
+      loader: "fabric",
+      reason: "fabric/dev.architectury loom plugin"
+    });
+  }
+  if (/\bminecraft\s*\{[\s\S]*?\baccessTransformer\b/i.test(content)) {
+    detections.push({
+      loader: "forge",
+      reason: "minecraft { accessTransformer ... } block"
+    });
+  }
+  if (/\bneoForge\s*\{[\s\S]*?\baccessTransformers\b/i.test(content)) {
+    detections.push({
+      loader: "neoforge",
+      reason: "neoForge { accessTransformers ... } block"
     });
   }
   return detections;
@@ -154,5 +215,106 @@ export class WorkspaceMappingService {
       }
     }
     return undefined;
+  }
+
+  async detectProjectLoader(projectPath: string): Promise<WorkspaceProjectLoaderOutput> {
+    const root = resolve(projectPath);
+    const buildFiles = fastGlob.sync(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
+      cwd: root,
+      absolute: true,
+      onlyFiles: true,
+      ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+    });
+    const descriptorFiles = fastGlob.sync([
+      "fabric.mod.json",
+      "quilt.mod.json",
+      "META-INF/mods.toml",
+      "META-INF/neoforge.mods.toml",
+      "**/fabric.mod.json",
+      "**/quilt.mod.json",
+      "**/META-INF/mods.toml",
+      "**/META-INF/neoforge.mods.toml"
+    ], {
+      cwd: root,
+      absolute: true,
+      onlyFiles: true,
+      ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+    });
+
+    const evidence: WorkspaceLoaderEvidence[] = [];
+    for (const filePath of buildFiles.sort((left, right) => left.localeCompare(right))) {
+      let content: string;
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      for (const detection of detectLoadersFromContent(content)) {
+        evidence.push({
+          filePath,
+          loader: detection.loader,
+          reason: detection.reason
+        });
+      }
+    }
+
+    for (const descriptorPath of descriptorFiles.sort((left, right) => left.localeCompare(right))) {
+      const normalized = descriptorPath.replaceAll("\\", "/");
+      if (normalized.endsWith("fabric.mod.json")) {
+        evidence.push({
+          filePath: descriptorPath,
+          loader: "fabric",
+          reason: "fabric.mod.json"
+        });
+      } else if (normalized.endsWith("quilt.mod.json")) {
+        evidence.push({
+          filePath: descriptorPath,
+          loader: "quilt",
+          reason: "quilt.mod.json"
+        });
+      } else if (normalized.endsWith("META-INF/neoforge.mods.toml")) {
+        evidence.push({
+          filePath: descriptorPath,
+          loader: "neoforge",
+          reason: "META-INF/neoforge.mods.toml"
+        });
+      } else if (normalized.endsWith("META-INF/mods.toml")) {
+        evidence.push({
+          filePath: descriptorPath,
+          loader: "forge",
+          reason: "META-INF/mods.toml"
+        });
+      }
+    }
+
+    if (evidence.length === 0) {
+      return {
+        resolved: false,
+        evidence,
+        warnings: ["No workspace loader declaration was detected from build.gradle(.kts) files or mod descriptors."]
+      };
+    }
+
+    const loaderSet = new Set(
+      evidence
+        .map((entry) => entry.loader)
+        .filter((loader): loader is Exclude<WorkspaceProjectLoader, "unknown"> => loader !== "unknown")
+    );
+    if (loaderSet.size !== 1) {
+      return {
+        resolved: false,
+        evidence,
+        warnings: [
+          `Multiple or ambiguous workspace loaders were detected: ${[...loaderSet].join(", ") || "unknown"}.`
+        ]
+      };
+    }
+
+    return {
+      resolved: true,
+      loader: [...loaderSet][0],
+      evidence,
+      warnings: []
+    };
   }
 }

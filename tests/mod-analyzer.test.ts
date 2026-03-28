@@ -144,6 +144,7 @@ versionRange = "[1.0,)"
 `;
   await createJar(jarPath, {
     "META-INF/mods.toml": modsToml,
+    "META-INF/accesstransformer.cfg": "public net.minecraft.server.MinecraftServer\n",
     "com/example/ForgeMod.class": Buffer.alloc(4),
     "com/example/util/Helper.class": Buffer.alloc(4),
     "com/example/util/Other.class": Buffer.alloc(4)
@@ -156,6 +157,7 @@ versionRange = "[1.0,)"
   assert.equal(result.modName, "Forge Mod");
   assert.equal(result.modVersion, "3.0.0");
   assert.equal(result.classCount, 3);
+  assert.deepEqual(result.accessTransformers, ["META-INF/accesstransformer.cfg"]);
 
   assert.ok(result.dependencies);
   const forgeDep = result.dependencies.find((d) => d.modId === "forge");
@@ -179,9 +181,17 @@ loaderVersion = "[1,)"
 modId = "neomod"
 displayName = "Neo Mod"
 version = "1.0.0"
+
+[[accessTransformers]]
+file = "META-INF/accesstransformer.cfg"
+
+[[accessTransformers]]
+file = "accesstransformer_extra.cfg"
 `;
   await createJar(jarPath, {
     "META-INF/neoforge.mods.toml": toml,
+    "META-INF/accesstransformer.cfg": "public net.minecraft.server.MinecraftServer\n",
+    "accesstransformer_extra.cfg": "protected net.minecraft.server.MinecraftServer field_1234\n",
     "com/example/NeoMod.class": Buffer.alloc(4)
   });
 
@@ -191,6 +201,10 @@ version = "1.0.0"
   assert.equal(result.modId, "neomod");
   assert.equal(result.modName, "Neo Mod");
   assert.equal(result.classCount, 1);
+  assert.deepEqual(result.accessTransformers, [
+    "META-INF/accesstransformer.cfg",
+    "accesstransformer_extra.cfg"
+  ]);
 });
 
 // ---------------------------------------------------------------------------

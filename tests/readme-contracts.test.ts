@@ -45,7 +45,7 @@ test("Tool reference owns exact contract, migration, and environment details", a
   assert.match(toolReference, /`mapping="mojang"` requires source-backed artifacts/);
   assert.match(toolReference, /`search-class-source` defaults to `queryMode="auto"`/);
   assert.match(toolReference, /`search-class-source` returns compact hits only/);
-  assert.match(toolReference, /`scope="loader"` currently resolves through the same lookup path as `scope="merged"`/);
+  assert.match(toolReference, /`scope="loader"` now means runtime artifact discovery/);
   assert.match(toolReference, /`remap-mod-jar` requires Java and supports Fabric\/Quilt inputs/);
   assert.match(
     toolReference,
