@@ -106,6 +106,7 @@ type ValidateProjectDeps = {
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   discoverMixins: (projectPath: string, configPaths?: string[]) => Promise<string[]>;
   discoverAccessWideners: (projectPath: string) => Promise<string[]>;
+  detectProjectMinecraftVersion?: (projectPath: string) => Promise<string | undefined>;
 };
 
 export async function discoverWorkspaceMixins(projectPath: string, configPaths?: string[]): Promise<string[]> {
@@ -300,10 +301,12 @@ export class ValidateProjectService {
                     tool: "validate-project",
                     params: {
                       task: "project-summary",
-                      version: "1.21.10",
                       subject: input.subject
                     }
                   }
+                ],
+                notes: [
+                  "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version."
                 ]
               },
               blocks: {
@@ -317,6 +320,10 @@ export class ValidateProjectService {
         }
 
         const projectPath = input.subject.projectPath;
+        const detectedProjectVersion = input.preferProjectVersion
+          ? await this.deps.detectProjectMinecraftVersion?.(projectPath)
+          : undefined;
+        const resolvedVersion = detectedProjectVersion ?? input.version;
         const discover = input.subject.discover ?? ["mixins", "access-wideners"];
         const [mixinConfigs, accessWideners] = await Promise.all([
           discover.includes("mixins")
@@ -327,6 +334,84 @@ export class ValidateProjectService {
             : Promise.resolve([])
         ]);
 
+        if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0)) {
+          return {
+            ...buildEntryToolResult({
+              task: "project-summary",
+              detail,
+              include,
+              summary: {
+                status: "blocked",
+                headline: "Could not resolve Minecraft version for discovered workspace validators.",
+                subject: createSummarySubject({
+                  task: "project-summary",
+                  kind: input.subject.kind,
+                  projectPath,
+                  discover: input.subject.discover,
+                  mapping: input.mapping,
+                  sourcePriority: input.sourcePriority,
+                  scope: input.scope
+                }),
+                nextActions: [
+                  {
+                    tool: "validate-project",
+                    params: {
+                      task: "project-summary",
+                      subject: input.subject
+                    }
+                  }
+                ],
+                notes: [
+                  "Pass version explicitly, or make sure gradle.properties declares the Minecraft version before using preferProjectVersion=true."
+                ]
+              },
+              blocks: {
+                workspace: {
+                  projectPath
+                }
+              }
+            }),
+            warnings: [
+              "Could not resolve Minecraft version from gradle.properties for discovered workspace validators."
+            ]
+          };
+        }
+
+        if (!resolvedVersion) {
+          return {
+            ...buildEntryToolResult({
+              task: "project-summary",
+              detail,
+              include,
+              summary: {
+                status: "ok",
+                headline: `Validated ${mixinConfigs.length} mixin config(s) and ${accessWideners.length} access widener(s).`,
+                subject: createSummarySubject({
+                  task: "project-summary",
+                  kind: input.subject.kind,
+                  projectPath,
+                  discover: input.subject.discover,
+                  mapping: input.mapping,
+                  sourcePriority: input.sourcePriority,
+                  scope: input.scope
+                }),
+                counts: {
+                  valid: 0,
+                  partial: 0,
+                  invalid: 0
+                }
+              },
+              blocks: {
+                workspace: {
+                  projectPath
+                }
+              }
+            }),
+            warnings: []
+          };
+        }
+
+        const validationVersion = resolvedVersion;
         const warnings: string[] = [];
         let validMixins = 0;
         let partialMixins = 0;
@@ -338,11 +423,12 @@ export class ValidateProjectService {
                 mode: "config",
                 configPaths: [configPath]
               },
-              version: input.version,
+              version: validationVersion,
               mapping: input.mapping,
               sourcePriority: input.sourcePriority,
               scope: input.scope,
-              preferProjectVersion: input.preferProjectVersion,
+              projectPath,
+              preferProjectVersion: false,
               preferProjectMapping: input.preferProjectMapping,
               sourceRoots: input.sourceRoots,
               minSeverity: input.minSeverity,
@@ -378,7 +464,7 @@ export class ValidateProjectService {
           try {
             const output = await this.deps.validateAccessWidener({
               content: await readFile(awPath, "utf8"),
-              version: input.version!,
+              version: validationVersion,
               mapping: input.mapping,
               sourcePriority: input.sourcePriority
             });
@@ -415,7 +501,7 @@ export class ValidateProjectService {
                 kind: input.subject.kind,
                 projectPath,
                 discover: input.subject.discover,
-                version: input.version,
+                version: resolvedVersion,
                 mapping: input.mapping,
                 sourcePriority: input.sourcePriority,
                 scope: input.scope

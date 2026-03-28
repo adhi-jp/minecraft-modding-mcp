@@ -879,7 +879,9 @@ const validateProjectService = new ValidateProjectService({
   validateMixin: (input) => sourceService.validateMixin(input as any) as Promise<Record<string, unknown> & { warnings?: string[] }>,
   validateAccessWidener: (input) => sourceService.validateAccessWidener(input),
   discoverMixins: discoverWorkspaceMixins,
-  discoverAccessWideners: discoverWorkspaceAccessWideners
+  discoverAccessWideners: discoverWorkspaceAccessWideners,
+  detectProjectMinecraftVersion: (projectPath) =>
+    workspaceMappingService.detectProjectMinecraftVersion(projectPath)
 });
 const manageCacheService = new ManageCacheService({
   registry: createCacheRegistry({

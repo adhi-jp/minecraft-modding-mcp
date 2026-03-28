@@ -147,7 +147,9 @@ Keep only the high-frequency notes here. For the full pitfall list, exact contra
 - If you do not already have an artifact, prefer `subject.kind="workspace"` for `inspect-minecraft` instead of guessing artifact details. When artifact context is the only missing input, a retryable `suggestedCall` preserves the requested task.
 - `trace-symbol-lifecycle` expects `Class.method` in `symbol`. Keep exact overload matching in the separate `descriptor` field.
 - Workspace inspection can still confirm vanilla classes when source coverage is partial, and `inspect-minecraft task="list-files"` reports a partial result with follow-up guidance when that happens.
+- `check-symbol-exists` and `analyze-symbol task="exists"` now validate `mojang` lookups on unobfuscated releases such as `26.1+` against runtime bytecode when no mapping graph exists, preserve the original `mapping_unavailable` result if the runtime JAR itself cannot be resolved, and return a targeted warning when callers provide only a short class name.
 - `analyze-mod` and `validate-project` still require structured `subject` objects and canonical `include` groups, but stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
+- `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and Mixin checks, and blocks with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
 
 ### Inspect Minecraft source from a version
 

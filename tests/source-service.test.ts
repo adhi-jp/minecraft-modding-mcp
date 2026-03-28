@@ -4022,6 +4022,163 @@ test("SourceService supports mojang mapping on unobfuscated version targets with
   });
 });
 
+test("SourceService checkSymbolExists falls back to unobfuscated runtime bytecode for mojang class queries", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-check-symbol-exists-unobfuscated-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async checkSymbolExists() {
+      return {
+        querySymbol: {
+          kind: "class",
+          name: "net.minecraft.client.Minecraft",
+          symbol: "net.minecraft.client.Minecraft"
+        },
+        mappingContext: {
+          version: "26.1",
+          sourceMapping: "mojang",
+          sourcePriorityApplied: "loom-first"
+        },
+        resolved: false,
+        status: "mapping_unavailable",
+        candidates: [],
+        candidateCount: 0,
+        warnings: ["Version 26.1 is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names."]
+      };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, "client-26.1.jar"),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string }) {
+      assert.equal(input.fqn, "net.minecraft.client.Minecraft");
+      return {
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: [],
+        context: {
+          minecraftVersion: "26.1",
+          mappingType: "mojang",
+          mappingNamespace: "mojang",
+          jarHash: "hash",
+          generatedAt: new Date().toISOString()
+        }
+      };
+    }
+  };
+
+  const result = await service.checkSymbolExists({
+    version: "26.1",
+    kind: "class",
+    name: "net.minecraft.client.Minecraft",
+    sourceMapping: "mojang"
+  });
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.status, "resolved");
+  assert.equal(result.resolvedSymbol?.name, "net.minecraft.client.Minecraft");
+  assert.ok(result.warnings.some((warning) => warning.includes("runtime bytecode")));
+});
+
+test("SourceService checkSymbolExists keeps mapping_unavailable when unobfuscated runtime jar resolution fails", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-check-symbol-exists-jar-failure-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async checkSymbolExists() {
+      return {
+        querySymbol: {
+          kind: "class",
+          name: "net.minecraft.client.Minecraft",
+          symbol: "net.minecraft.client.Minecraft"
+        },
+        mappingContext: {
+          version: "26.1",
+          sourceMapping: "mojang",
+          sourcePriorityApplied: "loom-first"
+        },
+        resolved: false,
+        status: "mapping_unavailable",
+        candidates: [],
+        candidateCount: 0,
+        warnings: ["Version 26.1 is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names."]
+      };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      throw new Error("jar missing");
+    }
+  };
+
+  const result = await service.checkSymbolExists({
+    version: "26.1",
+    kind: "class",
+    name: "net.minecraft.client.Minecraft",
+    sourceMapping: "mojang"
+  });
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.status, "mapping_unavailable");
+  assert.equal(result.warnings.length, 1);
+  assert.ok(result.warnings[0]?.includes("mapping graph is empty"));
+});
+
+test("SourceService checkSymbolExists reports short unobfuscated class names when nameMode is omitted", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-check-symbol-exists-short-name-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async checkSymbolExists() {
+      return {
+        querySymbol: {
+          kind: "class",
+          name: "Minecraft",
+          symbol: "Minecraft"
+        },
+        mappingContext: {
+          version: "26.1",
+          sourceMapping: "mojang",
+          sourcePriorityApplied: "loom-first"
+        },
+        resolved: false,
+        status: "mapping_unavailable",
+        candidates: [],
+        candidateCount: 0,
+        warnings: ["Version 26.1 is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names."]
+      };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      assert.fail("short class names should return a targeted warning before jar resolution");
+    }
+  };
+
+  const result = await service.checkSymbolExists({
+    version: "26.1",
+    kind: "class",
+    name: "Minecraft",
+    sourceMapping: "mojang"
+  });
+
+  assert.equal(result.resolved, false);
+  assert.equal(result.status, "mapping_unavailable");
+  assert.ok(result.warnings.some((warning) => warning.includes("short class name")));
+});
+
 test("SourceService traces symbol lifecycle across versions and reports gaps", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-"));

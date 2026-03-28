@@ -10,6 +10,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 - `resolve-artifact`, `get-class-source`, `get-class-members`, and `inspect-minecraft` source/class-member flows now treat unobfuscated releases such as `26.1+` as native `mojang` runtime namespaces for both version and versioned-coordinate targets, avoiding false `ERR_MAPPING_NOT_APPLIED` failures and wrong-version Loom source-jar approximations when no exact source jar is present.
 - `validate-mixin` tool-health diagnostics now treat unobfuscated `mojang` runtime names as available, while still flagging `intermediary`/`yarn` as unavailable on `26.1+`.
+- `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and workspace Mixin checks, and returns a blocked summary with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
+- `check-symbol-exists` and `analyze-symbol task="exists"` now fall back to unobfuscated runtime bytecode for `mojang`/runtime-name existence checks on `26.1+`, preserve the original `mapping_unavailable` result when the runtime JAR cannot be resolved, and return a targeted warning when callers provide only a short class name.
 
 ## [3.1.1] - 2026-03-21
 
