@@ -14,6 +14,9 @@ import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { parseCoordinate } from "./maven-resolver.js";
 import {
   MinecraftExplorerService,
+  modifierPrefix,
+  parseFieldType,
+  parseMethodDescriptor,
   type ResponseContext as ExplorerResponseContext,
   type SignatureMember
 } from "./minecraft-explorer-service.js";
@@ -48,7 +51,7 @@ import {
   type SymbolExistenceOutput as MappingSymbolExistenceOutput
 } from "./mapping-service.js";
 import { extractSymbolsFromSource } from "./symbols/symbol-extractor.js";
-import { iterateJavaEntriesAsUtf8, listJavaEntries } from "./source-jar-reader.js";
+import { detectFabricLikeInputNamespace, iterateJavaEntriesAsUtf8, listJavaEntries } from "./source-jar-reader.js";
 import { openDatabase } from "./storage/db.js";
 import { ArtifactsRepo } from "./storage/artifacts-repo.js";
 import { FilesRepo } from "./storage/files-repo.js";
@@ -1977,15 +1980,30 @@ export class SourceService {
           }
         : undefined;
 
+    let detectedMapping: "obfuscated" | "intermediary" | "mojang";
+    const notes: string[] = [];
+    if (scopeFallback) {
+      notes.push(scopeFallback.reason);
+    }
+    if (isUnobfuscatedVersion(version)) {
+      detectedMapping = "obfuscated";
+    } else {
+      const detection = await detectFabricLikeInputNamespace(discovery.selected.jarPath);
+      detectedMapping = detection.fromNamespace;
+      if (detection.warnings.length > 0) {
+        notes.push(...detection.warnings);
+      }
+    }
+
     return {
       version,
       jarPath: discovery.selected.jarPath,
       requestedScope,
       appliedScope,
       requestedMapping: input.awNamespace,
-      mappingApplied: isUnobfuscatedVersion(version) ? "obfuscated" : "intermediary",
+      mappingApplied: detectedMapping,
       origin: discovery.selected.origin,
-      resolutionNotes: scopeFallback ? [scopeFallback.reason] : undefined,
+      resolutionNotes: notes.length > 0 ? notes : undefined,
       scopeFallback
     };
   }
@@ -6481,15 +6499,16 @@ export class SourceService {
 
     // Build deduplicated lookup tables for member names and owner FQNs
     const memberKeyToRemapped = new Map<string, string>();
+    const memberDescriptorRemapped = new Map<string, string>();
     const ownerToRemapped = new Map<string, string>();
 
     for (const member of members) {
       const memberKey = `${member.ownerFqn}\0${member.name}\0${member.jvmDescriptor}`;
       if (!memberKeyToRemapped.has(memberKey)) {
-        memberKeyToRemapped.set(memberKey, member.name); // default = obfuscated name
+        memberKeyToRemapped.set(memberKey, member.name); // default = source name
       }
       if (!ownerToRemapped.has(member.ownerFqn)) {
-        ownerToRemapped.set(member.ownerFqn, member.ownerFqn); // default = obfuscated FQN
+        ownerToRemapped.set(member.ownerFqn, member.ownerFqn); // default = source FQN
       }
     }
 
@@ -6510,18 +6529,100 @@ export class SourceService {
             ownerToRemapped.set(obfuscatedFqn, mapped.resolvedSymbol.name);
           }
         } catch {
-          // keep obfuscated FQN as fallback
+          // keep source FQN as fallback
         }
       })
     );
 
-    // Phase 2: Remap member names using resolved owners for disambiguation
+    // Phase 1.5: Collect class references from descriptors and remap them
+    const descriptorClassRefs = new Set<string>();
+    for (const member of members) {
+      for (const match of member.jvmDescriptor.matchAll(/L([^;]+);/g)) {
+        const dotFqn = match[1]!.replace(/\//g, ".");
+        if (!ownerToRemapped.has(dotFqn)) {
+          descriptorClassRefs.add(dotFqn);
+        }
+      }
+    }
+    if (descriptorClassRefs.size > 0) {
+      const refs = [...descriptorClassRefs];
+      for (const ref of refs) {
+        ownerToRemapped.set(ref, ref); // default = source name
+      }
+      await Promise.all(
+        refs.map(async (dotFqn) => {
+          try {
+            const mapped = await this.mappingService.findMapping({
+              version,
+              kind: "class",
+              name: dotFqn,
+              sourceMapping,
+              targetMapping,
+              sourcePriority
+            });
+            if (mapped.resolved && mapped.resolvedSymbol) {
+              ownerToRemapped.set(dotFqn, mapped.resolvedSymbol.name);
+            }
+          } catch {
+            // keep source name as fallback
+          }
+        })
+      );
+    }
+
+    // Build a class map for descriptor remapping (dot-FQN → dot-FQN)
+    const classMap = new Map<string, string>();
+    for (const [src, tgt] of ownerToRemapped) {
+      if (src !== tgt) {
+        classMap.set(src, tgt);
+      }
+    }
+
+    // Phase 2: Remap member names (and descriptors for methods) using resolved owners
+    const canResolveMethodExactly =
+      kind === "method" &&
+      "resolveMethodMappingExact" in this.mappingService &&
+      typeof this.mappingService.resolveMethodMappingExact === "function";
+
     const memberEntries = [...memberKeyToRemapped.entries()];
     await Promise.all(
-      memberEntries.map(async ([key, _obfuscatedName]) => {
+      memberEntries.map(async ([key, _sourceName]) => {
         const [ownerFqn, name, descriptor] = key.split("\0");
         try {
           const targetOwner = ownerToRemapped.get(ownerFqn!) ?? ownerFqn;
+
+          // For methods with descriptors, try exact resolution first
+          if (canResolveMethodExactly && descriptor) {
+            try {
+              const exactResult = await this.mappingService.resolveMethodMappingExact({
+                version,
+                owner: ownerFqn!,
+                name: name!,
+                descriptor,
+                sourceMapping,
+                targetMapping,
+                sourcePriority
+              });
+              if (exactResult.resolved && exactResult.resolvedSymbol) {
+                memberKeyToRemapped.set(key, exactResult.resolvedSymbol.name);
+                if (exactResult.resolvedSymbol.descriptor) {
+                  memberDescriptorRemapped.set(key, exactResult.resolvedSymbol.descriptor);
+                }
+                return; // exact resolution succeeded
+              }
+              // Fall through to findMapping with descriptorHint
+            } catch (exactError) {
+              warnings.push(
+                `Exact method resolution failed for "${name}" (falling back to name-based lookup): ${exactError instanceof Error ? exactError.message : String(exactError)}`
+              );
+            }
+          }
+
+          // Fallback: findMapping with descriptorHint for overload disambiguation
+          const remappedDescriptorHint = kind === "method" && descriptor
+            ? remapJvmDescriptor(descriptor, classMap)
+            : undefined;
+
           const mapped = await this.mappingService.findMapping({
             version,
             kind,
@@ -6531,10 +6632,16 @@ export class SourceService {
             sourceMapping,
             targetMapping,
             sourcePriority,
-            disambiguation: { ownerHint: targetOwner }
+            disambiguation: {
+              ownerHint: targetOwner,
+              descriptorHint: remappedDescriptorHint
+            }
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             memberKeyToRemapped.set(key, mapped.resolvedSymbol.name);
+            if (kind === "method" && mapped.resolvedSymbol.descriptor) {
+              memberDescriptorRemapped.set(key, mapped.resolvedSymbol.descriptor);
+            }
           } else if (mapped.status === "ambiguous" && mapped.candidates && mapped.candidates.length > 0) {
             // Disambiguate: filter by target owner and pick the best candidate
             const ownerMatched = mapped.candidates.filter(
@@ -6562,13 +6669,24 @@ export class SourceService {
       })
     );
 
+    const isField = kind === "field";
     return {
       members: members.map((member) => {
         const memberKey = `${member.ownerFqn}\0${member.name}\0${member.jvmDescriptor}`;
+        const remappedName = memberKeyToRemapped.get(memberKey) ?? member.name;
+        const remappedOwner = ownerToRemapped.get(member.ownerFqn) ?? member.ownerFqn;
+        const remappedDescriptor = memberDescriptorRemapped.get(memberKey)
+          ?? remapJvmDescriptor(member.jvmDescriptor, classMap);
         return {
           ...member,
-          name: memberKeyToRemapped.get(memberKey) ?? member.name,
-          ownerFqn: ownerToRemapped.get(member.ownerFqn) ?? member.ownerFqn
+          name: remappedName,
+          ownerFqn: remappedOwner,
+          jvmDescriptor: remappedDescriptor,
+          javaSignature: rebuildJavaSignature(
+            { name: remappedName, ownerFqn: remappedOwner, accessFlags: member.accessFlags },
+            remappedDescriptor,
+            isField
+          )
         };
       }),
       failedNames
@@ -6962,5 +7080,44 @@ export class SourceService {
     this.metrics.setCacheEntries(this.cacheMetricsState.entries);
     this.metrics.setCacheTotalContentBytes(this.cacheMetricsState.totalContentBytes);
     this.metrics.setCacheArtifactByteAccountingRef(this.cacheMetricsState.lru);
+  }
+}
+
+function remapJvmDescriptor(descriptor: string, classMap: Map<string, string>): string {
+  if (classMap.size === 0) {
+    return descriptor;
+  }
+  return descriptor.replace(/L([^;]+);/g, (match, ref: string) => {
+    const dotFqn = ref.replace(/\//g, ".");
+    const remapped = classMap.get(dotFqn);
+    return remapped ? `L${remapped.replace(/\./g, "/")};` : match;
+  });
+}
+
+function rebuildJavaSignature(
+  member: { name: string; ownerFqn: string; accessFlags: number },
+  remappedDescriptor: string,
+  isField: boolean
+): string {
+  const modifiers = modifierPrefix(member.accessFlags, isField ? "field" : "method");
+  const prefix = modifiers ? `${modifiers} ` : "";
+  if (isField) {
+    try {
+      const { type } = parseFieldType(remappedDescriptor, 0, { allowVoid: false });
+      return `${prefix}${type} ${member.name}`.trim();
+    } catch {
+      return `${prefix}${member.name}`.trim();
+    }
+  }
+  try {
+    const { args, returnType } = parseMethodDescriptor(remappedDescriptor);
+    const argStr = args.join(", ");
+    if (member.name === "<init>") {
+      const ownerSimple = member.ownerFqn.split(".").pop()!;
+      return `${prefix}${ownerSimple}(${argStr})`.trim();
+    }
+    return `${prefix}${returnType} ${member.name}(${argStr})`.trim();
+  } catch {
+    return `${prefix}${member.name}`.trim();
   }
 }

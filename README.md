@@ -327,7 +327,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 ### Validation
 
 Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version.
-`validate-access-widener` keeps vanilla bytecode validation by default, and now also supports runtime-aware validation through `projectPath`, `scope`, and `preferProjectVersion`, returning runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence when that mode is used.
+`validate-access-widener` keeps vanilla bytecode validation by default, and now also supports runtime-aware validation through `projectPath`, `scope`, and `preferProjectVersion`, returning runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence when that mode is used. Class references inside JVM method and field descriptors are correctly remapped across namespaces, and `scope: "merged"` auto-detects whether the Loom merged jar uses intermediary or mojang names.
 `validate-access-transformer` infers `atNamespace` from Forge or NeoForge workspace context when `projectPath` is provided, validates packaged or inline AT content, and uses loader/runtime artifacts for `scope="loader"` instead of treating loader as a merged-only alias.
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->

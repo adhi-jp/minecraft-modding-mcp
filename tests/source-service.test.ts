@@ -5781,6 +5781,18 @@ test("SourceService validateAccessWidener resolves merged runtime artifacts and 
         { name: "<init>", descriptor: "()V", accessFlags: 0x0001 },
         { name: "method_1234", descriptor: "()V", accessFlags: 0x0001 }
       ]
+    }),
+    // Additional intermediary-style classes so namespace detection scores intermediary > mojang
+    "net/minecraft/class_1937.class": buildClassFile({
+      internalName: "net/minecraft/class_1937",
+      accessFlags: 0x0001,
+      fields: [{ name: "field_2000", descriptor: "Z", accessFlags: 0x0004 }],
+      methods: [{ name: "method_2000", descriptor: "()V", accessFlags: 0x0001 }]
+    }),
+    "net/minecraft/class_1938.class": buildClassFile({
+      internalName: "net/minecraft/class_1938",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_2001", descriptor: "()V", accessFlags: 0x0001 }]
     })
   });
   await createJar(sourceJarPath, {
@@ -5873,11 +5885,11 @@ test("SourceService validateAccessWidener resolves merged runtime artifacts and 
     assert.equal(methodEntry?.resolvedInRuntime, true);
     assert.equal(methodEntry?.resolvedRuntimeAccess, "public");
     assert.equal(methodEntry?.resolvedRuntimeJvmDescriptor, "()V");
-    assert.match(methodEntry?.resolvedRuntimeJavaSignature ?? "", /method_1234/);
+    assert.match(methodEntry?.resolvedRuntimeJavaSignature ?? "", /tickServer/);
     assert.equal(fieldEntry?.resolvedInRuntime, true);
     assert.equal(fieldEntry?.resolvedRuntimeAccess, "private");
     assert.equal(fieldEntry?.resolvedRuntimeJvmDescriptor, "I");
-    assert.match(fieldEntry?.resolvedRuntimeJavaSignature ?? "", /field_1234/);
+    assert.match(fieldEntry?.resolvedRuntimeJavaSignature ?? "", /serverPort/);
   });
 });
 
@@ -9077,4 +9089,353 @@ test("target.kind=jar preserves ERR_JAR_NOT_FOUND across representative entry po
       await testCase.run(fixture);
     });
   }
+});
+
+// ── descriptor remap regression tests ──────────────────────────────────────
+
+test("SourceService validateAccessWidener remaps class references inside method descriptors", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "aw-descriptor-remap-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const loomCacheDir = join(gradleUserHome, "loom-cache", "runtime");
+  const binaryJarPath = join(loomCacheDir, "minecraft-merged-1.21.10.jar");
+  const sourceJarPath = join(loomCacheDir, "minecraft-merged-1.21.10-sources.jar");
+
+  // Binary jar: class uses intermediary names with class-referencing descriptors
+  await createJar(binaryJarPath, {
+    "net/minecraft/class_1937.class": buildClassFile({
+      internalName: "net/minecraft/class_1937",
+      accessFlags: 0x0421,
+      fields: [{ name: "field_9236", descriptor: "Z", accessFlags: 0x0004 }],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0004 },
+        { name: "method_1725", descriptor: "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z", accessFlags: 0x0001 }
+      ]
+    }),
+    "net/minecraft/class_2338.class": buildClassFile({
+      internalName: "net/minecraft/class_2338",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_100", descriptor: "()V", accessFlags: 0x0001 }]
+    }),
+    "net/minecraft/class_2680.class": buildClassFile({
+      internalName: "net/minecraft/class_2680",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_200", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+  await createJar(sourceJarPath, {
+    "net/minecraft/class_1937.java": "package net.minecraft; public abstract class class_1937 {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string; name: string; owner?: string; sourceMapping: string; targetMapping: string }) {
+      // intermediary → yarn class mappings
+      const classMappings: Record<string, string> = {
+        "net.minecraft.class_1937": "net.minecraft.world.level.Level",
+        "net.minecraft.class_2338": "net.minecraft.core.BlockPos",
+        "net.minecraft.class_2680": "net.minecraft.world.level.block.state.BlockState"
+      };
+      const reverseClassMappings: Record<string, string> = {
+        "net.minecraft.world.level.Level": "net.minecraft.class_1937",
+        "net.minecraft.core.BlockPos": "net.minecraft.class_2338",
+        "net.minecraft.world.level.block.state.BlockState": "net.minecraft.class_2680"
+      };
+      if (input.kind === "class") {
+        if (input.sourceMapping === "yarn" && input.targetMapping === "intermediary" && reverseClassMappings[input.name]) {
+          return { resolved: true, status: "resolved", resolvedSymbol: { name: reverseClassMappings[input.name] }, candidates: [], candidateCount: 1, warnings: [] };
+        }
+        if (input.sourceMapping === "intermediary" && input.targetMapping === "yarn" && classMappings[input.name]) {
+          return { resolved: true, status: "resolved", resolvedSymbol: { name: classMappings[input.name] }, candidates: [], candidateCount: 1, warnings: [] };
+        }
+      }
+      if (input.kind === "field" && input.name === "field_9236" && input.sourceMapping === "intermediary" && input.targetMapping === "yarn") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "isClientSide", descriptor: "Z" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      return { resolved: false, status: "not_found", candidates: [], candidateCount: 0, warnings: [] };
+    },
+    async resolveMethodMappingExact(input: { owner: string; name: string; descriptor: string; sourceMapping: string; targetMapping: string }) {
+      if (
+        input.owner === "net.minecraft.class_1937" &&
+        input.name === "method_1725" &&
+        input.descriptor === "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z" &&
+        input.sourceMapping === "intermediary" &&
+        input.targetMapping === "yarn"
+      ) {
+        return {
+          resolved: true, status: "resolved",
+          resolvedSymbol: { name: "setBlock", descriptor: "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z" },
+          querySymbol: {}, mappingContext: {}, candidates: [], candidateCount: 1, warnings: []
+        };
+      }
+      return { resolved: false, status: "not_found", querySymbol: {}, mappingContext: {}, candidates: [], candidateCount: 0, warnings: [] };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      assert.fail("should use runtime artifact");
+    }
+  };
+
+  await withGradleUserHome(gradleUserHome, async () => {
+    const result = await (service as unknown as { validateAccessWidener: (input: Record<string, unknown>) => Promise<Record<string, any>> }).validateAccessWidener({
+      content: [
+        "accessWidener v2 named",
+        "accessible class net/minecraft/world/level/Level",
+        "accessible method net/minecraft/world/level/Level setBlock (Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z",
+        "accessible field net/minecraft/world/level/Level isClientSide Z"
+      ].join("\n"),
+      version: "1.21.10",
+      projectPath: root,
+      scope: "merged"
+    });
+
+    assert.equal(result.valid, true, `expected valid=true but got entries: ${JSON.stringify(result.entries)}`);
+    assert.equal(result.entries.length, 3);
+
+    const classEntry = result.entries.find((e: any) => e.targetKind === "class");
+    const methodEntry = result.entries.find((e: any) => e.targetKind === "method");
+    const fieldEntry = result.entries.find((e: any) => e.targetKind === "field");
+    assert.equal(classEntry?.valid, true);
+    assert.equal(methodEntry?.valid, true, `method entry: ${JSON.stringify(methodEntry)}`);
+    assert.equal(fieldEntry?.valid, true);
+
+    // Verify remapped descriptor is returned in runtime evidence
+    assert.equal(methodEntry?.resolvedRuntimeJvmDescriptor, "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z");
+    assert.match(methodEntry?.resolvedRuntimeJavaSignature ?? "", /setBlock/);
+  });
+});
+
+test("SourceService validateAccessTransformer remaps class references inside method descriptors", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "at-descriptor-remap-"));
+  const cacheDir = join(root, "cache");
+  await mkdir(cacheDir, { recursive: true });
+
+  // Use a version jar directly (non-runtime-aware path)
+  const vanillaJarPath = join(cacheDir, "1.21.10.jar");
+  await createJar(vanillaJarPath, {
+    "a/b.class": buildClassFile({
+      internalName: "a/b",
+      accessFlags: 0x0421,
+      fields: [{ name: "c", descriptor: "Z", accessFlags: 0x0004 }],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0004 },
+        { name: "d", descriptor: "(La/e;La/f;I)Z", accessFlags: 0x0001 }
+      ]
+    }),
+    "a/e.class": buildClassFile({ internalName: "a/e", accessFlags: 0x0001 }),
+    "a/f.class": buildClassFile({ internalName: "a/f", accessFlags: 0x0001 })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
+      const classMappings: Record<string, string> = {
+        "net.minecraft.world.level.Level": "a.b",
+        "net.minecraft.core.BlockPos": "a.e",
+        "net.minecraft.world.level.block.state.BlockState": "a.f"
+      };
+      const reverseClassMappings: Record<string, string> = {
+        "a.b": "net.minecraft.world.level.Level",
+        "a.e": "net.minecraft.core.BlockPos",
+        "a.f": "net.minecraft.world.level.block.state.BlockState"
+      };
+      if (input.kind === "class" && input.sourceMapping === "mojang" && input.targetMapping === "obfuscated" && classMappings[input.name]) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: classMappings[input.name] }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (input.kind === "class" && input.sourceMapping === "obfuscated" && input.targetMapping === "mojang" && reverseClassMappings[input.name]) {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: reverseClassMappings[input.name] }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (input.kind === "field" && input.name === "c" && input.sourceMapping === "obfuscated" && input.targetMapping === "mojang") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "isClientSide", descriptor: "Z" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      return { resolved: false, status: "not_found", candidates: [], candidateCount: 0, warnings: [] };
+    },
+    async resolveMethodMappingExact(input: { owner: string; name: string; descriptor: string; sourceMapping: string; targetMapping: string }) {
+      if (input.owner === "a.b" && input.name === "d" && input.sourceMapping === "obfuscated" && input.targetMapping === "mojang") {
+        return {
+          resolved: true, status: "resolved",
+          resolvedSymbol: { name: "setBlock", descriptor: "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z" },
+          querySymbol: {}, mappingContext: {}, candidates: [], candidateCount: 1, warnings: []
+        };
+      }
+      return { resolved: false, status: "not_found", querySymbol: {}, mappingContext: {}, candidates: [], candidateCount: 0, warnings: [] };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      return { jarPath: vanillaJarPath };
+    }
+  };
+
+  const result = await (service as unknown as { validateAccessTransformer: (input: Record<string, unknown>) => Promise<Record<string, any>> }).validateAccessTransformer({
+    content: [
+      "public net.minecraft.world.level.Level isClientSide",
+      "public net.minecraft.world.level.Level setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"
+    ].join("\n"),
+    version: "1.21.10",
+    atNamespace: "mojang"
+  });
+
+  assert.equal(result.valid, true, `expected valid=true but got entries: ${JSON.stringify(result.entries)}`);
+  const fieldEntry = result.entries.find((e: any) => e.targetKind === "field");
+  const methodEntry = result.entries.find((e: any) => e.targetKind === "method");
+  assert.equal(fieldEntry?.valid, true);
+  assert.equal(methodEntry?.valid, true, `method entry: ${JSON.stringify(methodEntry)}`);
+});
+
+test("SourceService detectFabricLikeInputNamespace detects intermediary vs mojang jars", async () => {
+  const { detectFabricLikeInputNamespace } = await import("../src/source-jar-reader.ts");
+  const root = await mkdtemp(join(tmpdir(), "ns-detect-"));
+
+  // intermediary jar
+  const intermediaryJar = join(root, "intermediary.jar");
+  await createJar(intermediaryJar, {
+    "net/minecraft/class_1937.class": buildClassFile({
+      internalName: "net/minecraft/class_1937",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_1234", descriptor: "()V", accessFlags: 0x0001 }],
+      fields: [{ name: "field_1234", descriptor: "I", accessFlags: 0x0002 }]
+    }),
+    "net/minecraft/class_2338.class": buildClassFile({
+      internalName: "net/minecraft/class_2338",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_5678", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+  const intermediaryResult = await detectFabricLikeInputNamespace(intermediaryJar);
+  assert.equal(intermediaryResult.fromNamespace, "intermediary");
+
+  // mojang jar
+  const mojangJar = join(root, "mojang.jar");
+  await createJar(mojangJar, {
+    "net/minecraft/world/level/Level.class": buildClassFile({
+      internalName: "net/minecraft/world/level/Level",
+      accessFlags: 0x0421,
+      methods: [{ name: "setBlock", descriptor: "()V", accessFlags: 0x0001 }],
+      fields: [{ name: "isClientSide", descriptor: "Z", accessFlags: 0x0004 }]
+    }),
+    "net/minecraft/core/BlockPos.class": buildClassFile({
+      internalName: "net/minecraft/core/BlockPos",
+      accessFlags: 0x0001
+    })
+  });
+  const mojangResult = await detectFabricLikeInputNamespace(mojangJar);
+  assert.equal(mojangResult.fromNamespace, "mojang");
+});
+
+test("SourceService remapSignatureMembers logs warning when resolveMethodMappingExact throws", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "exact-resolver-warn-"));
+  const cacheDir = join(root, "cache");
+  await mkdir(cacheDir, { recursive: true });
+
+  const vanillaJarPath = join(cacheDir, "1.21.10.jar");
+  await createJar(vanillaJarPath, {
+    "a/b.class": buildClassFile({
+      internalName: "a/b",
+      accessFlags: 0x0421,
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0004 },
+        { name: "d", descriptor: "(La/e;I)Z", accessFlags: 0x0001 }
+      ]
+    }),
+    "a/e.class": buildClassFile({ internalName: "a/e", accessFlags: 0x0001 })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
+      if (input.kind === "class" && input.name === "net.minecraft.world.level.Level" && input.sourceMapping === "mojang" && input.targetMapping === "obfuscated") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "a.b" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (input.kind === "class" && input.sourceMapping === "obfuscated" && input.targetMapping === "mojang") {
+        const map: Record<string, string> = { "a.b": "net.minecraft.world.level.Level", "a.e": "net.minecraft.core.BlockPos" };
+        if (map[input.name]) return { resolved: true, status: "resolved", resolvedSymbol: { name: map[input.name] }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      // findMapping fallback for methods — returns name-only
+      if (input.kind === "method" && input.name === "d" && input.sourceMapping === "obfuscated" && input.targetMapping === "mojang") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "setBlock", descriptor: "(Lnet/minecraft/core/BlockPos;I)Z" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      return { resolved: false, status: "not_found", candidates: [], candidateCount: 0, warnings: [] };
+    },
+    async resolveMethodMappingExact() {
+      throw new Error("mapping graph unavailable for test");
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() { return { jarPath: vanillaJarPath }; }
+  };
+
+  const result = await (service as unknown as { validateAccessTransformer: (input: Record<string, unknown>) => Promise<Record<string, any>> }).validateAccessTransformer({
+    content: "public net.minecraft.world.level.Level setBlock(Lnet/minecraft/core/BlockPos;I)Z",
+    version: "1.21.10",
+    atNamespace: "mojang"
+  });
+
+  // Method should still resolve via findMapping fallback
+  const methodEntry = result.entries.find((e: any) => e.targetKind === "method");
+  assert.equal(methodEntry?.valid, true, `method should resolve via fallback: ${JSON.stringify(methodEntry)}`);
+
+  // The exact resolver failure should surface as a warning
+  const warnings: string[] = result.warnings ?? [];
+  assert.ok(
+    warnings.some((w: string) => w.includes("Exact method resolution failed") && w.includes("mapping graph unavailable for test")),
+    `warnings should contain exact resolver failure message, got: ${JSON.stringify(warnings)}`
+  );
+});
+
+test("SourceService validateAccessWidener runtime-aware namespace detection warnings appear in provenance.resolutionNotes", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "ns-detect-notes-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const loomCacheDir = join(gradleUserHome, "loom-cache", "runtime");
+  const binaryJarPath = join(loomCacheDir, "minecraft-merged-1.21.10.jar");
+  const sourceJarPath = join(loomCacheDir, "minecraft-merged-1.21.10-sources.jar");
+
+  // Create a jar with NO class entries at all — namespace detection will warn and fallback
+  await createJar(binaryJarPath, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n"
+  });
+  await createJar(sourceJarPath, {
+    "net/minecraft/server/Main.java": "package net.minecraft.server; public class Main {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string; name: string; sourceMapping: string; targetMapping: string }) {
+      if (input.kind === "class" && input.name === "net.minecraft.server.Main" && input.sourceMapping === "intermediary" && input.targetMapping === "yarn") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "net.minecraft.server.MinecraftServer" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      if (input.kind === "class" && input.name === "net.minecraft.server.MinecraftServer" && input.sourceMapping === "yarn" && input.targetMapping === "intermediary") {
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: "net.minecraft.server.Main" }, candidates: [], candidateCount: 1, warnings: [] };
+      }
+      return { resolved: false, status: "not_found", candidates: [], candidateCount: 0, warnings: [] };
+    }
+  };
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar() {
+      assert.fail("should use runtime artifact");
+    }
+  };
+
+  await withGradleUserHome(gradleUserHome, async () => {
+    const result = await (service as unknown as { validateAccessWidener: (input: Record<string, unknown>) => Promise<Record<string, any>> }).validateAccessWidener({
+      content: "accessWidener v2 named\naccessible class net/minecraft/server/MinecraftServer\n",
+      version: "1.21.10",
+      projectPath: root,
+      scope: "merged"
+    });
+
+    // Namespace detection should have warned about empty jar and fallen back to intermediary
+    assert.ok(result.provenance, "provenance should be present");
+    assert.equal(result.provenance.mappingApplied, "intermediary");
+    assert.ok(result.provenance.resolutionNotes, "resolutionNotes should be present");
+    const notes = result.provenance.resolutionNotes as string[];
+    assert.ok(
+      notes.some((n: string) => n.includes("Could not inspect class entries")),
+      `resolutionNotes should contain namespace detection warning, got: ${JSON.stringify(notes)}`
+    );
+  });
 });

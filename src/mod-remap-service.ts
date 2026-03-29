@@ -9,7 +9,7 @@ import { resolveTinyMappingFile } from "./mapping-service.js";
 import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { analyzeModJar, type ModLoader } from "./mod-analyzer.js";
 import { normalizePathForHost } from "./path-converter.js";
-import { listJarEntries, readJarEntryAsBuffer } from "./source-jar-reader.js";
+import { detectFabricLikeInputNamespace, listJarEntries, readJarEntryAsBuffer } from "./source-jar-reader.js";
 import { remapJar } from "./tiny-remapper-service.js";
 import { resolveTinyRemapperJar } from "./tiny-remapper-resolver.js";
 import type { Config } from "./types.js";
@@ -61,71 +61,6 @@ function extractMinecraftVersion(
   // Try to extract exact version from ranges like ">=1.20.4", "~1.20.4", "1.20.4", "^1.20.4"
   const match = mcDep.versionRange.match(/(\d+\.\d+(?:\.\d+)?)/);
   return match?.[1];
-}
-
-function countMatches(input: string, pattern: RegExp): number {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  const globalPattern = new RegExp(pattern.source, flags);
-  let count = 0;
-  while (globalPattern.exec(input)) {
-    count += 1;
-  }
-  return count;
-}
-
-async function detectFabricLikeInputNamespace(
-  inputJar: string
-): Promise<{ fromNamespace: "intermediary" | "mojang"; warnings: string[] }> {
-  const warnings: string[] = [];
-  const classEntries = (await listJarEntries(inputJar))
-    .filter((entry) => entry.endsWith(".class"))
-    .slice(0, 24);
-
-  if (classEntries.length === 0) {
-    warnings.push("Could not inspect class entries to detect input mapping; assuming intermediary.");
-    return {
-      fromNamespace: "intermediary",
-      warnings
-    };
-  }
-
-  let mojangScore = 0;
-  let intermediaryScore = 0;
-  for (const entry of classEntries) {
-    let text = "";
-    try {
-      text = (await readJarEntryAsBuffer(inputJar, entry)).toString("latin1");
-    } catch {
-      continue;
-    }
-    mojangScore += countMatches(
-      text,
-      /net\/minecraft\/(?:advancements|client|commands|core|data|gametest|nbt|network|recipe|resources|server|sounds|stats|tags|util|world)\//g
-    ) * 3;
-    intermediaryScore += countMatches(text, /net\/minecraft\/class_\d+/g) * 3;
-    intermediaryScore += countMatches(text, /\b(?:method|field)_\d+\b/g);
-  }
-
-  if (mojangScore > intermediaryScore && mojangScore > 0) {
-    return {
-      fromNamespace: "mojang",
-      warnings
-    };
-  }
-  if (intermediaryScore > mojangScore && intermediaryScore > 0) {
-    return {
-      fromNamespace: "intermediary",
-      warnings
-    };
-  }
-
-  warnings.push(
-    "Could not confidently detect whether the input jar uses intermediary or mojang names; assuming intermediary."
-  );
-  return {
-    fromNamespace: "intermediary",
-    warnings
-  };
 }
 
 async function detectInputNamespaceForLoader(

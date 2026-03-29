@@ -83,7 +83,7 @@ function lower(value: string): string {
   return value.toLocaleLowerCase();
 }
 
-function modifierPrefix(flags: number, category: "method" | "field"): string {
+export function modifierPrefix(flags: number, category: "method" | "field"): string {
   const parts: string[] = [];
   if ((flags & ACC_PUBLIC) !== 0) {
     parts.push("public");
@@ -128,7 +128,7 @@ function modifierPrefix(flags: number, category: "method" | "field"): string {
   return parts.join(" ");
 }
 
-function parseFieldType(
+export function parseFieldType(
   descriptor: string,
   position = 0,
   options: { allowVoid?: boolean; invalidVoidMessage?: string } = {}
@@ -193,7 +193,7 @@ function parseFieldType(
   }
 }
 
-function parseMethodDescriptor(descriptor: string): { args: string[]; returnType: string } {
+export function parseMethodDescriptor(descriptor: string): { args: string[]; returnType: string } {
   if (!descriptor.startsWith("(")) {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
