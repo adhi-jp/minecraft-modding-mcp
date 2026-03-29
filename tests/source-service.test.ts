@@ -5893,6 +5893,68 @@ test("SourceService validateAccessWidener resolves merged runtime artifacts and 
   });
 });
 
+test("SourceService validateAccessWidener prefers explicit mapped merged jars over ambiguous merged jars", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-aw-explicit-merged-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const fabricLoomDir = join(gradleUserHome, "caches", "fabric-loom", "1.21.10");
+  const ambiguousJarPath = join(fabricLoomDir, "minecraft-merged-1.21.10.jar");
+  const explicitJarPath = join(fabricLoomDir, "minecraft-merged-intermediary-v2-1.21.10.jar");
+  await mkdir(fabricLoomDir, { recursive: true });
+  await createJar(ambiguousJarPath, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n"
+  });
+  await createJar(explicitJarPath, {
+    "net/minecraft/class_1937.class": buildClassFile({
+      internalName: "net/minecraft/class_1937",
+      accessFlags: 0x0001,
+      methods: [{ name: "method_1725", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  await withGradleUserHome(gradleUserHome, async () => {
+    const discovery = await (
+      service as unknown as {
+        discoverAccessWidenerRuntimeCandidates: (input: {
+          version: string;
+          projectPath?: string;
+          requestedScope: "merged";
+        }) => Promise<{ candidateArtifacts: string[]; selected?: { jarPath: string } }>;
+      }
+    ).discoverAccessWidenerRuntimeCandidates({
+      version: "1.21.10",
+      projectPath: root,
+      requestedScope: "merged"
+    });
+
+    assert.equal(discovery.selected?.jarPath, explicitJarPath);
+    assert.ok(discovery.candidateArtifacts.includes(explicitJarPath));
+    assert.ok(discovery.candidateArtifacts.includes(ambiguousJarPath));
+    assert.ok(discovery.candidateArtifacts.every((candidate) => !candidate.includes("#namespace=")));
+
+    const provenance = await (
+      service as unknown as {
+        resolveAccessWidenerRuntimeArtifact: (input: {
+          version: string;
+          awNamespace: "yarn";
+          projectPath?: string;
+          scope: "merged";
+        }) => Promise<{ jarPath: string; mappingApplied: string; resolutionNotes?: string[] }>;
+      }
+    ).resolveAccessWidenerRuntimeArtifact({
+      version: "1.21.10",
+      awNamespace: "yarn",
+      projectPath: root,
+      scope: "merged"
+    });
+
+    assert.equal(provenance.jarPath, explicitJarPath);
+    assert.equal(provenance.mappingApplied, "intermediary");
+  });
+});
+
 test("SourceService validateAccessWidener runtime-aware mode fails when no runtime jar can be resolved", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-aw-runtime-missing-"));

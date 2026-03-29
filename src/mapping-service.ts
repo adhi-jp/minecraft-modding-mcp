@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import fastGlob from "fast-glob";
 
 import { createError, ERROR_CODES } from "./errors.js";
+import { buildVersionSourceSearchRoots, normalizeOptionalProjectPath } from "./gradle-paths.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
 import { collectMatchedJarEntriesAsUtf8, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
@@ -141,6 +142,7 @@ export type FindMappingInput = {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
   disambiguation?: {
     ownerHint?: string;
     descriptorHint?: string;
@@ -155,6 +157,7 @@ export type EnsureMappingAvailableInput = {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
 };
 
 export type EnsureMappingAvailableOutput = {
@@ -171,6 +174,7 @@ export type ResolveMethodMappingExactInput = {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
   maxCandidates?: number;
 };
 
@@ -1219,13 +1223,48 @@ function applyDisambiguationHints(
 
   const descriptorHint = normalizeDescriptorHint(disambiguation.descriptorHint);
   if (descriptorHint) {
-    const descriptorMatched = filtered.filter((candidate) => candidate.descriptor === descriptorHint);
+    const descriptorMatched = filtered.filter((candidate) =>
+      candidate.descriptor != null && candidate.descriptor === descriptorHint
+    );
     if (descriptorMatched.length > 0) {
       filtered = descriptorMatched;
     }
   }
 
   return filtered;
+}
+
+type DescriptorProjection = {
+  descriptor: string;
+  hadClassReferences: boolean;
+  complete: boolean;
+};
+
+function projectLookupCandidateDescriptor(
+  candidate: MappingLookupCandidate,
+  sourceDescriptor: string,
+  targetDescriptor: string | undefined
+): MappingLookupCandidate {
+  // Tiny mappings preserve method descriptors verbatim, so single-hop tiny paths often
+  // return the source descriptor even though the final symbol is already in the target
+  // namespace. Multi-hop paths that already produced a target-side descriptor are left
+  // unchanged by design.
+  if (
+    candidate.kind !== "method" ||
+    !candidate.descriptor ||
+    !targetDescriptor ||
+    candidate.descriptor !== sourceDescriptor
+  ) {
+    return candidate;
+  }
+  return {
+    ...candidate,
+    descriptor: targetDescriptor
+  };
+}
+
+function effectiveLoomSearchProjectPath(projectPath: string | undefined): string | undefined {
+  return normalizeOptionalProjectPath(projectPath) ?? normalizeOptionalProjectPath(process.cwd());
 }
 
 function collectTargetRecords(graph: LoadedGraph, targetMapping: SourceMapping): MappingSymbolRecord[] {
@@ -1400,7 +1439,8 @@ export class MappingService {
     const graph = await this.loadGraph(
       version,
       priority,
-      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
+      input.projectPath
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
@@ -1417,7 +1457,19 @@ export class MappingService {
       };
     }
 
-    const rawCandidates = this.mapCandidatesAlongPath(graph, path, queryRecord);
+    const descriptorProjection =
+      queryRecord.kind === "method" && queryRecord.descriptor
+        ? this.projectMethodDescriptorToTarget(graph, path, queryRecord.descriptor)
+        : undefined;
+    const projectedDescriptor =
+      descriptorProjection?.complete ? descriptorProjection.descriptor : undefined;
+    const rawCandidates = this
+      .mapCandidatesAlongPath(graph, path, queryRecord)
+      .map((candidate) =>
+        queryRecord.kind === "method" && queryRecord.descriptor
+          ? projectLookupCandidateDescriptor(candidate, queryRecord.descriptor, projectedDescriptor)
+          : candidate
+      );
     const warnings: string[] = [];
     const disambiguatedCandidates = applyDisambiguationHints(rawCandidates, input.disambiguation);
     if (rawCandidates.length > disambiguatedCandidates.length) {
@@ -1505,7 +1557,8 @@ export class MappingService {
     const graph = await this.loadGraph(
       version,
       priority,
-      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
+      input.projectPath
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
@@ -1601,7 +1654,8 @@ export class MappingService {
     const graph = await this.loadGraph(
       version,
       priority,
-      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full"
+      requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
+      input.projectPath
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
 
@@ -1620,13 +1674,18 @@ export class MappingService {
     }
 
     const warnings: string[] = [];
+    const descriptorProjection = this.projectMethodDescriptorToTarget(graph, path, descriptor);
+    const projectedDescriptor =
+      descriptorProjection.complete ? descriptorProjection.descriptor : undefined;
     const rawCandidates = this
       .mapCandidatesAlongPath(graph, path, queryRecord)
-      .filter((candidate) => candidate.kind === "method");
+      .filter((candidate) => candidate.kind === "method")
+      .map((candidate) => projectLookupCandidateDescriptor(candidate, descriptor, projectedDescriptor));
     const candidates = rawCandidates.map(toResolutionCandidate);
     const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
 
-    const strictCandidates = rawCandidates.filter((candidate) => candidate.descriptor === descriptor);
+    const strictDescriptor = projectedDescriptor ?? descriptor;
+    const strictCandidates = rawCandidates.filter((candidate) => candidate.descriptor === strictDescriptor);
     if (strictCandidates.length === 1) {
       const resolved = toResolutionCandidate(strictCandidates[0]!);
       return {
@@ -1658,9 +1717,11 @@ export class MappingService {
       };
     }
 
-    if (pathUsesSource(graph.pairs, path, "mojang-client-mappings")) {
+    if (descriptorProjection.hadClassReferences && !descriptorProjection.complete) {
       warnings.push(
-        "Method descriptor could not be preserved through mojang-client-mappings and exact resolution is unavailable."
+        pathUsesSource(graph.pairs, path, "mojang-client-mappings")
+          ? "Method descriptor could not be preserved through mojang-client-mappings and exact resolution is unavailable."
+          : "Method descriptor could not be fully remapped across the mapping path and exact resolution is unavailable."
       );
       return {
         querySymbol,
@@ -2226,6 +2287,42 @@ export class MappingService {
       }));
   }
 
+  private projectMethodDescriptorToTarget(
+    graph: LoadedGraph,
+    path: SourceMapping[],
+    descriptor: string
+  ): DescriptorProjection {
+    let hadClassReferences = false;
+    let complete = true;
+    const classProjectionCache = new Map<string, string>();
+
+    const projectedDescriptor = descriptor.replace(/L([^;]+);/g, (fullMatch, internalName: string) => {
+      hadClassReferences = true;
+      const cached = classProjectionCache.get(internalName);
+      if (cached) {
+        return `L${cached};`;
+      }
+
+      const projectedClassCandidates = this
+        .mapCandidatesAlongPath(graph, path, createClassSymbolRecord(internalName.replace(/\//g, ".")))
+        .filter((candidate) => candidate.kind === "class");
+      if (projectedClassCandidates.length !== 1) {
+        complete = false;
+        return fullMatch;
+      }
+
+      const projectedInternalName = projectedClassCandidates[0]!.symbol.replace(/\./g, "/");
+      classProjectionCache.set(internalName, projectedInternalName);
+      return `L${projectedInternalName};`;
+    });
+
+    return {
+      descriptor: projectedDescriptor,
+      hadClassReferences,
+      complete
+    };
+  }
+
   private provenanceForPath(
     graph: LoadedGraph,
     path: SourceMapping[]
@@ -2328,9 +2425,11 @@ export class MappingService {
   private async loadGraph(
     version: string,
     priority: MappingSourcePriority,
-    mode: GraphLoadMode
+    mode: GraphLoadMode,
+    projectPath?: string
   ): Promise<LoadedGraph> {
-    const cacheKey = `${version}|${priority}|${mode}`;
+    const effectiveProjectPath = effectiveLoomSearchProjectPath(projectPath);
+    const cacheKey = `${version}|${priority}|${mode}|${effectiveProjectPath ?? ""}`;
     const cached = this.graphCache.get(cacheKey);
     if (cached) {
       this.graphCache.delete(cacheKey);
@@ -2343,7 +2442,7 @@ export class MappingService {
       return existingLock;
     }
 
-    const buildPromise = this.buildGraph(version, priority, mode);
+    const buildPromise = this.buildGraph(version, priority, mode, effectiveProjectPath);
     this.buildLocks.set(cacheKey, buildPromise);
     try {
       const built = await buildPromise;
@@ -2358,7 +2457,8 @@ export class MappingService {
   private async buildGraph(
     version: string,
     priority: MappingSourcePriority,
-    mode: GraphLoadMode
+    mode: GraphLoadMode,
+    projectPath?: string
   ): Promise<LoadedGraph> {
     if (isUnobfuscatedVersion(version)) {
       return {
@@ -2396,7 +2496,7 @@ export class MappingService {
       for (const source of mappingSourceOrder(priority)) {
         const tinyLoad =
           source === "loom-cache"
-            ? await this.loadTinyPairsFromLoom(version)
+            ? await this.loadTinyPairsFromLoom(version, projectPath)
             : await this.loadTinyPairsFromMaven(version);
         if (tinyLoad.pairs.size === 0) {
           deferredTinyWarnings.push(...tinyLoad.warnings);
@@ -2521,50 +2621,72 @@ export class MappingService {
     }
   }
 
-  private async loadTinyPairsFromLoom(version: string): Promise<{
+  private async loadTinyPairsFromLoom(version: string, projectPath?: string): Promise<{
     pairs: Map<PairKey, DirectionIndex>;
     warnings: string[];
     mappingArtifact: string;
   }> {
-    const patterns = [".gradle/loom-cache/**/*.tiny", ".gradle/loom-cache/**/*.tinyv2"];
-    const candidates = await fastGlob.glob(patterns, {
-      cwd: process.cwd(),
-      absolute: true,
-      onlyFiles: true
-    });
-    const byVersion = candidates
-      .filter((p) => p.replaceAll("\\", "/").includes(`/${version}/`))
-      .sort((left, right) => left.localeCompare(right));
-    if (byVersion.length === 0) {
-      return {
-        pairs: new Map(),
-        warnings: [`No Loom tiny mapping files matched version "${version}".`],
-        mappingArtifact: "loom-cache:none"
-      };
-    }
-
+    const searchRoots = buildVersionSourceSearchRoots(effectiveLoomSearchProjectPath(projectPath));
     const merged = new Map<PairKey, DirectionIndex>();
-    for (const path of byVersion) {
+    const discoveredPaths = new Set<string>();
+
+    for (const root of searchRoots) {
+      let discovered: string[] = [];
+      const versionRoot = join(root, version);
       try {
-        const content = await readFile(path, "utf8");
-        const parsed = parseTinyMappings(content);
-        for (const [key, index] of parsed.entries()) {
-          const existing = merged.get(key);
-          if (!existing) {
-            merged.set(key, index);
-          } else {
-            mergeDirectionIndexes(existing, index);
-          }
-        }
+        discovered = existsSync(versionRoot)
+          ? await fastGlob.glob(["**/*.tiny", "**/*.tinyv2"], {
+              cwd: versionRoot,
+              absolute: true,
+              onlyFiles: true
+            })
+          : await fastGlob.glob([`**/${version}/**/*.tiny`, `**/${version}/**/*.tinyv2`], {
+              cwd: root,
+              absolute: true,
+              onlyFiles: true
+            });
       } catch {
-        // best effort: skip unreadable or invalid files
+        continue;
+      }
+      const byVersion = discovered
+        .filter((path) => path.replaceAll("\\", "/").includes(`/${version}/`))
+        .sort((left, right) => left.localeCompare(right));
+      if (byVersion.length === 0) {
+        continue;
+      }
+
+      for (const path of byVersion) {
+        discoveredPaths.add(path);
+        try {
+          const content = await readFile(path, "utf8");
+          const parsed = parseTinyMappings(content);
+          for (const [key, index] of parsed.entries()) {
+            const existing = merged.get(key);
+            if (!existing) {
+              merged.set(key, index);
+            } else {
+              mergeDirectionIndexes(existing, index);
+            }
+          }
+        } catch {
+          // best effort: skip unreadable or invalid files
+        }
       }
     }
 
+    const orderedPaths = [...discoveredPaths].sort((left, right) => left.localeCompare(right));
+    if (orderedPaths.length > 0) {
+      return {
+        pairs: merged,
+        warnings: [],
+        mappingArtifact: orderedPaths[0]!
+      };
+    }
+
     return {
-      pairs: merged,
-      warnings: [],
-      mappingArtifact: byVersion[0]
+      pairs: new Map(),
+      warnings: [`No Loom tiny mapping files matched version "${version}".`],
+      mappingArtifact: "loom-cache:none"
     };
   }
 

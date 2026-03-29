@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { access, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
@@ -60,6 +59,11 @@ import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
 import { log } from "./logger.js";
 import { normalizePathForHost } from "./path-converter.js";
+import {
+  buildLoaderRuntimeSearchRoots,
+  buildVersionSourceSearchRoots,
+  normalizeOptionalProjectPath
+} from "./gradle-paths.js";
 import {
   createSearchHitAccumulator,
   decodeSearchCursor,
@@ -839,6 +843,7 @@ type RuntimeJarCandidate = {
   score: number;
   appliedScope: ArtifactScope;
   origin: RuntimeValidationProvenance["origin"];
+  namespaceHint?: "intermediary" | "mojang" | "named";
 };
 
 function normalizePathStyle(path: string): string {
@@ -865,6 +870,38 @@ function hasExactVersionToken(path: string, version: string): boolean {
       new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`, "i")
     );
   return pattern.test(normalizedPath);
+}
+
+function inferMergedRuntimeNamespaceHint(
+  path: string
+): RuntimeJarCandidate["namespaceHint"] {
+  const normalizedPath = normalizePathStyle(path).toLowerCase();
+  if (
+    normalizedPath.includes("merged-intermediary-v2") ||
+    normalizedPath.includes("merged-intermediary")
+  ) {
+    return "intermediary";
+  }
+  if (
+    normalizedPath.includes("minecraft-merged-mojang") ||
+    normalizedPath.includes("merged-mojang")
+  ) {
+    return "mojang";
+  }
+  if (normalizedPath.includes("merged-named")) {
+    return "named";
+  }
+  return undefined;
+}
+
+function runtimeJarNamespaceHintScore(hint: RuntimeJarCandidate["namespaceHint"]): number {
+  if (hint === "intermediary" || hint === "mojang") {
+    return 8_000;
+  }
+  if (hint === "named") {
+    return 1_000;
+  }
+  return 0;
 }
 
 function looksLikeDeobfuscatedClassName(value: string): boolean {
@@ -900,18 +937,6 @@ function buildResolveArtifactParams(
   };
 }
 
-function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
-  if (!projectPath) {
-    return undefined;
-  }
-  const trimmed = projectPath.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = normalizePathForHost(trimmed, undefined, "projectPath");
-  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
-}
-
 function looksLikeClassSegment(name: string): boolean {
   const trimmed = name.trim();
   return /^[A-Z_$]/.test(trimmed);
@@ -924,51 +949,6 @@ function looksLikeJvmMethodDescriptor(descriptor: string | undefined): boolean {
   }
   const closing = trimmed.indexOf(")");
   return closing > 0 && closing < trimmed.length - 1;
-}
-
-function resolveGradleUserHomePath(): string {
-  const configured = process.env.GRADLE_USER_HOME?.trim();
-  if (!configured) {
-    return resolvePath(homedir(), ".gradle");
-  }
-  const normalized = normalizePathForHost(configured, undefined, "GRADLE_USER_HOME");
-  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
-}
-
-function buildVersionSourceSearchRoots(projectPath: string | undefined): string[] {
-  const roots = new Set<string>();
-  if (projectPath) {
-    roots.add(resolvePath(projectPath, ".gradle", "loom-cache"));
-    roots.add(resolvePath(projectPath, ".gradle-user", "caches", "fabric-loom"));
-    roots.add(resolvePath(projectPath, ".gradle", "caches", "fabric-loom"));
-    const projectParent = dirname(projectPath);
-    roots.add(resolvePath(projectParent, ".gradle-user-home", "loom-cache"));
-    roots.add(resolvePath(projectParent, ".gradle-user-home", "caches", "fabric-loom"));
-  }
-  const homeGradle = resolveGradleUserHomePath();
-  roots.add(resolvePath(homeGradle, "loom-cache"));
-  roots.add(resolvePath(homeGradle, "caches", "fabric-loom"));
-  return [...roots];
-}
-
-function buildLoaderRuntimeSearchRoots(projectPath: string | undefined): string[] {
-  const roots = new Set<string>();
-  if (projectPath) {
-    roots.add(resolvePath(projectPath, "build"));
-    roots.add(resolvePath(projectPath, ".gradle"));
-    roots.add(resolvePath(projectPath, ".gradle", "forge-userdev"));
-    roots.add(resolvePath(projectPath, ".gradle", "neogradle"));
-    roots.add(resolvePath(projectPath, ".gradle", "caches", "forge_gradle"));
-    roots.add(resolvePath(projectPath, ".gradle", "caches", "neogradle"));
-    roots.add(resolvePath(projectPath, ".gradle", "caches", "neoformruntime"));
-    roots.add(resolvePath(projectPath, ".gradle", "caches", "moddev"));
-  }
-  const homeGradle = resolveGradleUserHomePath();
-  roots.add(resolvePath(homeGradle, "caches", "forge_gradle"));
-  roots.add(resolvePath(homeGradle, "caches", "neogradle"));
-  roots.add(resolvePath(homeGradle, "caches", "neoformruntime"));
-  roots.add(resolvePath(homeGradle, "caches", "moddev"));
-  return [...roots];
 }
 
 function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: boolean): boolean {
@@ -1733,6 +1713,9 @@ export class SourceService {
     requestedScope: ArtifactScope;
   }): Promise<{ searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate }> {
     const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+    const normalizedProjectPathLower = normalizedProjectPath
+      ? normalizePathStyle(normalizedProjectPath).toLowerCase()
+      : undefined;
     const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
     const searchedPaths: string[] = [];
     const candidates: RuntimeJarCandidate[] = [];
@@ -1766,6 +1749,7 @@ export class SourceService {
 
         const exactVersionMatch = hasExactVersionToken(normalizedPath, input.version);
         const looksMerged = lower.includes("minecraft-merged") || lower.includes("/merged/") || lower.includes("-merged");
+        const namespaceHint = inferMergedRuntimeNamespaceHint(normalizedPath);
         const appliedScope: ArtifactScope =
           looksMerged
             ? "merged"
@@ -1776,14 +1760,20 @@ export class SourceService {
         const score =
           (exactVersionMatch ? 5_000 : 0) +
           (looksMerged ? 4_000 : 0) +
-          (lower.includes("loom-cache") ? 500 : 0) +
+          runtimeJarNamespaceHintScore(namespaceHint) +
+          (normalizedProjectPathLower && lower.startsWith(normalizedProjectPathLower) ? 2_000 : 0) +
+          (lower.includes("loom-cache") || lower.includes("/caches/fabric-loom/") ? 500 : 0) +
           (lower.includes("minecraft-client") || lower.includes("client") ? 100 : 0);
 
         candidates.push({
           jarPath: normalizedPath,
           score,
           appliedScope,
-          origin: lower.includes("loom-cache") ? "loom-cache" : "local-jar"
+          origin:
+            lower.includes("loom-cache") || lower.includes("/caches/fabric-loom/")
+              ? "loom-cache"
+              : "local-jar",
+          namespaceHint
         });
       }
     }
@@ -1987,6 +1977,11 @@ export class SourceService {
     }
     if (isUnobfuscatedVersion(version)) {
       detectedMapping = "obfuscated";
+    } else if (
+      discovery.selected.namespaceHint === "intermediary" ||
+      discovery.selected.namespaceHint === "mojang"
+    ) {
+      detectedMapping = discovery.selected.namespaceHint;
     } else {
       const detection = await detectFabricLikeInputNamespace(discovery.selected.jarPath);
       detectedMapping = detection.fromNamespace;
@@ -4577,6 +4572,7 @@ export class SourceService {
     sourceMapping: SourceMapping;
     targetMapping: SourceMapping;
     sourcePriority: MappingSourcePriority;
+    projectPath?: string;
     batchCaches?: ValidateMixinSingleInput["batchCaches"];
   }): Promise<MappingFindMappingOutput> {
     const cache = input.batchCaches?.classMappings;
@@ -4587,7 +4583,8 @@ export class SourceService {
         name: input.className,
         sourceMapping: input.sourceMapping,
         targetMapping: input.targetMapping,
-        sourcePriority: input.sourcePriority
+        sourcePriority: input.sourcePriority,
+        projectPath: input.projectPath
       });
     }
 
@@ -4596,7 +4593,8 @@ export class SourceService {
       input.className,
       input.sourceMapping,
       input.targetMapping,
-      input.sourcePriority
+      input.sourcePriority,
+      input.projectPath ?? ""
     ].join("\0");
     const cached = cache.get(cacheKey);
     if (cached) {
@@ -4609,7 +4607,8 @@ export class SourceService {
       name: input.className,
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath
     }).catch((error) => {
       cache.delete(cacheKey);
       throw error;
@@ -4797,6 +4796,7 @@ export class SourceService {
             sourceMapping: requestedMapping,
             targetMapping: signatureLookupMapping,
             sourcePriority: currentSourcePriority,
+            projectPath: input.projectPath,
             batchCaches: input.batchCaches
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
@@ -4842,7 +4842,8 @@ export class SourceService {
                 signatureLookupMapping,
                 requestedMapping,
                 currentSourcePriority,
-                warnings
+                warnings,
+                input.projectPath
               ),
               this.remapSignatureMembers(
                 sig.methods,
@@ -4851,7 +4852,8 @@ export class SourceService {
                 signatureLookupMapping,
                 requestedMapping,
                 currentSourcePriority,
-                warnings
+                warnings,
+                input.projectPath
               ),
               this.remapSignatureMembers(
                 sig.fields,
@@ -4860,7 +4862,8 @@ export class SourceService {
                 signatureLookupMapping,
                 requestedMapping,
                 currentSourcePriority,
-                warnings
+                warnings,
+                input.projectPath
               )
             ]);
             constructors = ctorResult.members;
@@ -5471,7 +5474,8 @@ export class SourceService {
             name: fqn,
             sourceMapping: awNamespace,
             targetMapping: lookupMapping,
-            sourcePriority: input.sourcePriority
+            sourcePriority: input.sourcePriority,
+            projectPath: input.projectPath
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             lookupFqn = mapped.resolvedSymbol.name;
@@ -5502,7 +5506,8 @@ export class SourceService {
               lookupMapping,
               awNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             ),
             this.remapSignatureMembers(
               sig.methods,
@@ -5511,7 +5516,8 @@ export class SourceService {
               lookupMapping,
               awNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             ),
             this.remapSignatureMembers(
               sig.fields,
@@ -5520,7 +5526,8 @@ export class SourceService {
               lookupMapping,
               awNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             )
           ]);
           constructors = ctorResult.members;
@@ -5608,7 +5615,8 @@ export class SourceService {
               name: fqn,
               sourceMapping: atNamespace,
               targetMapping: lookupMapping,
-              sourcePriority: input.sourcePriority
+              sourcePriority: input.sourcePriority,
+              projectPath: input.projectPath
             });
             if (mapped.resolved && mapped.resolvedSymbol) {
               lookupFqn = mapped.resolvedSymbol.name;
@@ -5641,7 +5649,8 @@ export class SourceService {
               lookupMapping,
               atNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             ),
             this.remapSignatureMembers(
               sig.methods,
@@ -5650,7 +5659,8 @@ export class SourceService {
               lookupMapping,
               atNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             ),
             this.remapSignatureMembers(
               sig.fields,
@@ -5659,7 +5669,8 @@ export class SourceService {
               lookupMapping,
               atNamespace,
               input.sourcePriority,
-              warnings
+              warnings,
+              input.projectPath
             )
           ]);
           constructors = ctorResult.members;
@@ -6490,7 +6501,8 @@ export class SourceService {
     sourceMapping: SourceMapping,
     targetMapping: SourceMapping,
     sourcePriority: MappingSourcePriority | undefined,
-    warnings: string[]
+    warnings: string[],
+    projectPath?: string
   ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
     const failedNames = new Set<string>();
     if (sourceMapping === targetMapping) {
@@ -6523,7 +6535,8 @@ export class SourceService {
             name: obfuscatedFqn,
             sourceMapping,
             targetMapping,
-            sourcePriority
+            sourcePriority,
+            projectPath
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             ownerToRemapped.set(obfuscatedFqn, mapped.resolvedSymbol.name);
@@ -6558,7 +6571,8 @@ export class SourceService {
               name: dotFqn,
               sourceMapping,
               targetMapping,
-              sourcePriority
+              sourcePriority,
+              projectPath
             });
             if (mapped.resolved && mapped.resolvedSymbol) {
               ownerToRemapped.set(dotFqn, mapped.resolvedSymbol.name);
@@ -6601,7 +6615,8 @@ export class SourceService {
                 descriptor,
                 sourceMapping,
                 targetMapping,
-                sourcePriority
+                sourcePriority,
+                projectPath
               });
               if (exactResult.resolved && exactResult.resolvedSymbol) {
                 memberKeyToRemapped.set(key, exactResult.resolvedSymbol.name);
@@ -6632,6 +6647,7 @@ export class SourceService {
             sourceMapping,
             targetMapping,
             sourcePriority,
+            projectPath,
             disambiguation: {
               ownerHint: targetOwner,
               descriptorHint: remappedDescriptorHint

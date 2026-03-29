@@ -42,6 +42,20 @@ async function withCwd<T>(nextCwd: string, action: () => Promise<T>): Promise<T>
   }
 }
 
+async function withGradleUserHome<T>(gradleUserHome: string, action: () => Promise<T>): Promise<T> {
+  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = gradleUserHome;
+  try {
+    return await action();
+  } finally {
+    if (previousGradleUserHome === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previousGradleUserHome;
+    }
+  }
+}
+
 const TEST_MOJANG_CLIENT_MAPPINGS = [
   "com.mojang.NamedClass -> a.b.C:",
   "    int namedField -> d",
@@ -57,6 +71,11 @@ const TEST_TINY = [
   "\tm\t(I)V\te\tinterMethod\tnamedMethod",
   "\tm\t(I)V\tf\tinterOverloadInt\toverloaded",
   "\tm\t(Ljava/lang/String;)V\tf\tinterOverloadString\toverloaded"
+].join("\n");
+
+const TEST_TINY_ALT = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tintermediary/pkg/InterClass\tyarn/pkg/AltNamedClass"
 ].join("\n");
 
 const TEST_TINY_OFFICIAL = [
@@ -81,6 +100,26 @@ const TEST_AMBIGUOUS_CLASS_TINY = [
   "c\ta/b/C\tinter/two/C\tyarn/two/C"
 ].join("\n");
 
+const TEST_DESCRIPTOR_REMAP_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\tnet/minecraft/class_2338\tnet/minecraft/class_2338\tnet/minecraft/core/BlockPos",
+  "c\tnet/minecraft/class_2680\tnet/minecraft/class_2680\tnet/minecraft/world/level/block/state/BlockState",
+  "c\tnet/minecraft/class_1937\tnet/minecraft/class_1937\tnet/minecraft/world/level/Level",
+  "\tm\t(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z\tmethod_1725\tmethod_1725\tsetBlock"
+].join("\n");
+
+const TEST_DESCRIPTOR_REMAP_TINY_PROJECT = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\tnet/minecraft/class_2338\tnet/minecraft/class_2338\tnet/minecraft/core/BlockPos",
+  "c\tnet/minecraft/class_1937\tnet/minecraft/class_1937\tnet/minecraft/world/level/Level",
+  "\tm\t(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z\tmethod_1725\tmethod_1725\tsetBlock"
+].join("\n");
+
+const TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\tnet/minecraft/class_2680\tnet/minecraft/class_2680\tnet/minecraft/world/level/block/state/BlockState"
+].join("\n");
+
 function createVersionServiceStub(mappingsUrl?: string) {
   return {
     async resolveVersionMappings(version: string) {
@@ -97,6 +136,18 @@ function createVersionServiceStub(mappingsUrl?: string) {
 async function writeLoomTinyCache(root: string, tiny: string, version = "1.21.10"): Promise<string> {
   const loomTinyPath = join(root, ".gradle", "loom-cache", version, "mappings.tiny");
   await mkdir(join(root, ".gradle", "loom-cache", version), { recursive: true });
+  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+  return loomTinyPath;
+}
+
+async function writeFabricLoomTinyCache(
+  gradleUserHome: string,
+  tiny: string,
+  version = "1.21.10",
+  fileName = "mappings.tiny"
+): Promise<string> {
+  const loomTinyPath = join(gradleUserHome, "caches", "fabric-loom", version, fileName);
+  await mkdir(join(gradleUserHome, "caches", "fabric-loom", version), { recursive: true });
   await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
   return loomTinyPath;
 }
@@ -301,6 +352,91 @@ test("MappingService maps obfuscated -> yarn from Loom tiny cache", async () => 
 
   assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
   assert.equal(result.provenance?.source, "loom-cache");
+});
+
+test("MappingService loads Loom tiny mappings from GRADLE_USER_HOME fabric-loom cache", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-gradle-home-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  await writeFabricLoomTinyCache(gradleUserHome, TEST_TINY);
+
+  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+  const result = await withGradleUserHome(gradleUserHome, () =>
+    service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "obfuscated",
+      targetMapping: "yarn"
+    })
+  );
+
+  assert.equal(result.resolved, true);
+  assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
+  assert.equal(result.provenance?.source, "loom-cache");
+});
+
+test("MappingService merges Loom tiny mappings across project and GRADLE_USER_HOME roots", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-gradle-merge-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const config = buildTestConfig(root, { sourceRepos: [] });
+  await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_TINY_PROJECT);
+  await writeFabricLoomTinyCache(gradleUserHome, TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME, "1.21.10", "mappings-mojang.tiny");
+
+  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+  const result = await withGradleUserHome(gradleUserHome, () =>
+    withCwd(root, () =>
+      service.resolveMethodMappingExact({
+        version: "1.21.10",
+        owner: "net.minecraft.class_1937",
+        name: "method_1725",
+        descriptor: "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z",
+        sourceMapping: "intermediary",
+        targetMapping: "yarn"
+      })
+    )
+  );
+
+  assert.equal(result.resolved, true);
+  assert.equal(
+    result.resolvedSymbol?.descriptor,
+    "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"
+  );
+});
+
+test("MappingService caches Loom graphs by effective cwd when projectPath is omitted", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const serviceRoot = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-service-"));
+  const projectRootA = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-a-"));
+  const projectRootB = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-b-"));
+  const gradleUserHome = join(serviceRoot, "gradle-home");
+  const config = buildTestConfig(serviceRoot, { sourceRepos: [] });
+  await writeLoomTinyCache(projectRootA, TEST_TINY);
+  await writeLoomTinyCache(projectRootB, TEST_TINY_ALT);
+
+  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+  const [first, second] = await withGradleUserHome(gradleUserHome, async () => [
+    await withCwd(projectRootA, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      })
+    ),
+    await withCwd(projectRootB, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      })
+    )
+  ]);
+
+  assert.equal(first.resolvedSymbol?.name, "yarn.pkg.NamedClass");
+  assert.equal(second.resolvedSymbol?.name, "yarn.pkg.AltNamedClass");
 });
 
 test("MappingService falls back to Maven tiny when Loom cache is unavailable", async () => {
@@ -856,6 +992,47 @@ test("MappingService returns identity candidate when source/target mapping are e
 
 test("MappingService resolveMethodMappingExact resolves representative exact lookup backends", async (t) => {
   const { MappingService } = await import("../src/mapping-service.ts");
+
+  await t.test("remaps descriptor class refs before strict matching", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-descriptor-remap-",
+      TEST_DESCRIPTOR_REMAP_TINY
+    );
+    const descriptor = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z";
+    const expectedTargetDescriptor =
+      "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
+
+    const exactResult = await withCwd(root, () =>
+      service.resolveMethodMappingExact({
+        version: "1.21.10",
+        owner: "net.minecraft.class_1937",
+        name: "method_1725",
+        descriptor,
+        sourceMapping: "intermediary",
+        targetMapping: "yarn"
+      })
+    );
+
+    assert.equal(exactResult.resolved, true);
+    assert.equal(exactResult.status, "resolved");
+    assert.equal(exactResult.resolvedSymbol?.name, "setBlock");
+    assert.equal(exactResult.resolvedSymbol?.owner, "net.minecraft.world.level.Level");
+    assert.equal(exactResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
+
+    const findResult = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.class_1937",
+        name: "method_1725",
+        descriptor,
+        sourceMapping: "intermediary",
+        targetMapping: "yarn"
+      })
+    );
+    assert.equal(findResult.resolved, true);
+    assert.equal(findResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
+  });
 
   await t.test("preserves descriptor path through tiny mappings", async () => {
     const { root, service } = await createLoomService("mapping-service-method-exact-", TEST_TINY);
