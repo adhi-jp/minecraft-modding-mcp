@@ -1059,24 +1059,30 @@ test("find-mapping compact:true does not corrupt identity-branch result and pres
     assert.deepEqual(value, normalResult[key], `compact corrupted key: ${key}`);
   }
 
-  // Any key missing from compact must have been null/undefined/empty in normal
+  // Keys that compact is allowed to drop:
+  // - empty/null/undefined values (P1 compactResponse)
+  // - "candidates" when provably redundant (P4 compactMappingResponse)
+  const ALLOWED_COMPACT_DROPS = new Set(["candidates", "candidatesTruncated"]);
   const droppedKeys: string[] = [];
   for (const key of Object.keys(normalResult)) {
     if (!(key in compactResult)) {
       droppedKeys.push(key);
-      const v = normalResult[key];
-      const isEmpty =
-        v === null ||
-        v === undefined ||
-        (Array.isArray(v) && v.length === 0) ||
-        (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0);
-      assert.ok(isEmpty, `compact dropped non-empty key: ${key} = ${JSON.stringify(v)}`);
+      if (!ALLOWED_COMPACT_DROPS.has(key)) {
+        const v = normalResult[key];
+        const isEmpty =
+          v === null ||
+          v === undefined ||
+          (Array.isArray(v) && v.length === 0) ||
+          (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0);
+        assert.ok(isEmpty, `compact dropped non-empty key: ${key} = ${JSON.stringify(v)}`);
+      }
     }
   }
 
   // At least one key must have been dropped to prove compact is active
-  assert.ok(droppedKeys.length > 0, `compact must drop at least one empty key, but none were dropped`);
-  assert.ok(droppedKeys.includes("candidatesTruncated"), "candidatesTruncated (undefined) must be dropped");
+  assert.ok(droppedKeys.length > 0, `compact must drop at least one key, but none were dropped`);
+  // candidates must be dropped (P4: identity branch resolved + exact + count=1)
+  assert.ok(droppedKeys.includes("candidates"), "candidates should be dropped for resolved exact identity branch");
 
   // meta.warnings must survive — compact only applies to result, not meta
   assert.ok(Array.isArray(withCompact.structuredContent?.meta?.warnings));

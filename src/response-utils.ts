@@ -91,11 +91,40 @@ export function compactArtifactResponse(
 }
 
 /**
- * Compact projection for mapping tool responses (P4 stub).
- * Full implementation in P4 plan.
+ * Mapping tool compact: omit candidates only when provably redundant.
+ *
+ * Candidates are omitted when ALL of:
+ * 1. resolved === true
+ * 2. resolvedSymbol exists
+ * 3. candidates is an array of length 1
+ * 4. candidateCount === 1
+ * 5. candidatesTruncated is falsy
+ * 6. candidates[0].matchKind === "exact"
+ * 7. candidates[0].confidence is undefined or 1
  */
 export function compactMappingResponse(
   obj: Record<string, unknown>
 ): Record<string, unknown> {
-  return obj;
+  const projected = { ...obj };
+  const candidates = projected.candidates;
+
+  if (
+    projected.resolved === true &&
+    projected.resolvedSymbol !== undefined &&
+    Array.isArray(candidates) &&
+    candidates.length === 1 &&
+    projected.candidateCount === 1 &&
+    !projected.candidatesTruncated
+  ) {
+    const candidate = candidates[0] as Record<string, unknown> | undefined;
+    if (
+      candidate &&
+      candidate.matchKind === "exact" &&
+      (candidate.confidence === undefined || candidate.confidence === 1)
+    ) {
+      delete projected.candidates;
+    }
+  }
+
+  return projected;
 }

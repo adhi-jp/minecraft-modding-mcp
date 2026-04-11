@@ -383,7 +383,10 @@ const findMappingShape = {
     .partial()
     .optional(),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
+  compact: z.boolean().default(false).describe(
+    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  )
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -455,7 +458,10 @@ const resolveMethodMappingExactShape = {
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
+  compact: z.boolean().default(false).describe(
+    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  )
 };
 const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
@@ -514,7 +520,10 @@ const resolveWorkspaceSymbolShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)"),
-  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
+  compact: z.boolean().default(false).describe(
+    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  )
 };
 const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
@@ -588,7 +597,10 @@ const checkSymbolExistsShape = {
   signatureMode: z.enum(["exact", "name-only"]).default("exact")
     .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
+  compact: z.boolean().default(false).describe(
+    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  )
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {

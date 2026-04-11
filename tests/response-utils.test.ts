@@ -232,12 +232,156 @@ test("compactArtifactResponse + compactResponse pipeline on resolve-artifact sha
 });
 
 // ---------------------------------------------------------------------------
-// compactMappingResponse (P4 stub)
+// compactMappingResponse (P4)
 // ---------------------------------------------------------------------------
 
-test("compactMappingResponse is identity (P4 stub)", () => {
-  const input = { mapped: { name: "foo" }, candidates: [] };
-  assert.deepEqual(compactMappingResponse(input), input);
+const RESOLVED_EXACT_CANDIDATE = {
+  kind: "class", name: "Level", symbol: "net.minecraft.world.level.Level",
+  matchKind: "exact", confidence: 1
+};
+
+const MAPPING_BASE: Record<string, unknown> = {
+  querySymbol: { kind: "class", name: "Level", symbol: "net.minecraft.world.level.Level" },
+  mappingContext: { version: "1.21.10", sourceMapping: "mojang", targetMapping: "intermediary", sourcePriorityApplied: "loom-first" },
+  resolved: true,
+  status: "resolved",
+  resolvedSymbol: { kind: "class", name: "Level", symbol: "net.minecraft.world.level.Level" },
+  candidates: [RESOLVED_EXACT_CANDIDATE],
+  candidateCount: 1
+};
+
+test("compactMappingResponse omits candidates when resolved + count=1 + exact + confidence=1", () => {
+  const result = compactMappingResponse({ ...MAPPING_BASE });
+  assert.equal("candidates" in result, false, "candidates should be omitted");
+  assert.equal(result.candidateCount, 1, "candidateCount must survive");
+  assert.ok(result.resolvedSymbol, "resolvedSymbol must survive");
+});
+
+test("compactMappingResponse omits candidates when confidence is undefined (defaults to exact)", () => {
+  const candidate = { ...RESOLVED_EXACT_CANDIDATE, confidence: undefined };
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: [candidate]
+  });
+  assert.equal("candidates" in result, false);
+});
+
+test("compactMappingResponse preserves candidates when matchKind is not exact", () => {
+  const candidate = { ...RESOLVED_EXACT_CANDIDATE, matchKind: "simple-name" };
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: [candidate]
+  });
+  assert.ok("candidates" in result, "candidates must be preserved for non-exact matchKind");
+  assert.equal((result.candidates as unknown[]).length, 1);
+});
+
+test("compactMappingResponse preserves candidates when confidence < 1", () => {
+  const candidate = { ...RESOLVED_EXACT_CANDIDATE, confidence: 0.8 };
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: [candidate]
+  });
+  assert.ok("candidates" in result, "candidates must be preserved for low confidence");
+});
+
+test("compactMappingResponse preserves candidates when candidateCount > 1", () => {
+  const second = { ...RESOLVED_EXACT_CANDIDATE, name: "Level2" };
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: [RESOLVED_EXACT_CANDIDATE, second],
+    candidateCount: 2
+  });
+  assert.ok("candidates" in result, "candidates must be preserved when count > 1");
+  assert.equal((result.candidates as unknown[]).length, 2);
+});
+
+test("compactMappingResponse preserves candidates when candidatesTruncated is true", () => {
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidatesTruncated: true
+  });
+  assert.ok("candidates" in result, "candidates must be preserved when truncated");
+});
+
+test("compactMappingResponse preserves candidates when count/length mismatch", () => {
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidateCount: 5  // length=1 but count=5 — mismatch
+  });
+  assert.ok("candidates" in result, "candidates must be preserved on count/length mismatch");
+});
+
+test("compactMappingResponse preserves candidates for ambiguous status", () => {
+  const second = { ...RESOLVED_EXACT_CANDIDATE, name: "OtherLevel" };
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    resolved: false,
+    status: "ambiguous",
+    resolvedSymbol: undefined,
+    candidates: [RESOLVED_EXACT_CANDIDATE, second],
+    candidateCount: 2
+  });
+  assert.ok("candidates" in result, "candidates must be preserved for ambiguous");
+  assert.equal((result.candidates as unknown[]).length, 2);
+});
+
+test("compactMappingResponse preserves candidates for not_found status (empty array for P1 to strip)", () => {
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    resolved: false,
+    status: "not_found",
+    resolvedSymbol: undefined,
+    candidates: [],
+    candidateCount: 0
+  });
+  // not_found has candidates:[] — compactMappingResponse should leave it;
+  // P1's compactResponse will strip the empty array later
+  assert.ok("candidates" in result);
+  assert.deepEqual(result.candidates, []);
+});
+
+test("compactMappingResponse preserves candidates when candidates is not an array", () => {
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: "not-an-array"
+  });
+  assert.equal(result.candidates, "not-an-array");
+});
+
+test("compactMappingResponse preserves candidates when candidates[0] is null", () => {
+  const result = compactMappingResponse({
+    ...MAPPING_BASE,
+    candidates: [null]
+  });
+  assert.ok("candidates" in result);
+});
+
+test("compactMappingResponse preserves candidates when candidateCount is absent", () => {
+  const input = { ...MAPPING_BASE };
+  delete input.candidateCount;
+  const result = compactMappingResponse(input);
+  assert.ok("candidates" in result);
+});
+
+test("compactMappingResponse + compactResponse pipeline strips candidates for resolved exact", () => {
+  const afterMapping = compactMappingResponse({ ...MAPPING_BASE });
+  const afterCompact = compactResponse(afterMapping);
+  assert.equal("candidates" in afterCompact, false);
+  assert.equal(afterCompact.candidateCount, 1);
+  assert.ok(afterCompact.resolvedSymbol);
+});
+
+test("compactMappingResponse + compactResponse pipeline strips empty candidates for not_found", () => {
+  const notFound = {
+    ...MAPPING_BASE,
+    resolved: false, status: "not_found",
+    resolvedSymbol: undefined, candidates: [], candidateCount: 0
+  };
+  const afterMapping = compactMappingResponse(notFound);
+  const afterCompact = compactResponse(afterMapping);
+  assert.equal("candidates" in afterCompact, false, "empty candidates stripped by compactResponse");
+  assert.equal(afterCompact.candidateCount, 0);
 });
 
 // ---------------------------------------------------------------------------
