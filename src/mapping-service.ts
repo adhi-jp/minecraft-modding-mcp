@@ -2837,8 +2837,12 @@ export class MappingService {
       return;
     }
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, sourcePriority);
-    this.graphCache.delete(`${normalizedVersion}|${priority}|full`);
-    this.graphCache.delete(`${normalizedVersion}|${priority}|obfuscated-mojang-only`);
+    const prefix = `${normalizedVersion}|${priority}|`;
+    for (const key of this.graphCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.graphCache.delete(key);
+      }
+    }
   }
 }
 

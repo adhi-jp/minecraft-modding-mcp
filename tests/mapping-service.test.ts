@@ -234,6 +234,47 @@ function queryFromSymbol(symbol: string): SymbolQueryInput {
   };
 }
 
+test("MappingService releaseGraphCacheEntry evicts all mode/projectPath variants for a version", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-release-cache-"));
+  try {
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const service = new MappingService(
+      config,
+      createVersionServiceStub("https://example.test/mappings/client.txt"),
+      fetchStub
+    );
+
+    // Populate the graph cache with a lookup
+    await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    });
+
+    const graphCache = (service as any).graphCache as Map<string, unknown>;
+    const keysBefore = [...graphCache.keys()].filter((k: string) => k.startsWith("1.21.10|"));
+    assert.ok(keysBefore.length > 0, "Graph cache should have entries for 1.21.10");
+
+    // Evict
+    service.releaseGraphCacheEntry("1.21.10");
+
+    const keysAfter = [...graphCache.keys()].filter((k: string) => k.startsWith("1.21.10|"));
+    assert.equal(keysAfter.length, 0, "All 1.21.10 entries should be evicted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("MappingService maps obfuscated -> mojang and caches repeated lookups", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-"));
