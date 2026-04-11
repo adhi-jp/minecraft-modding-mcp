@@ -1,5 +1,5 @@
 import { createError, ERROR_CODES } from "../errors.js";
-import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS } from "./schema.js";
+import { SCHEMA_V1_STATEMENTS, SCHEMA_V2_STATEMENTS, SCHEMA_V3_STATEMENTS } from "./schema.js";
 
 interface MigrationMeta {
   version: number;
@@ -15,7 +15,7 @@ type MigrationRunner = {
   transaction<T>(fn: () => T): () => T;
 };
 
-export const LATEST_SCHEMA_VERSION = 2;
+export const LATEST_SCHEMA_VERSION = 3;
 
 const migrations: MigrationMeta[] = [
   {
@@ -25,6 +25,10 @@ const migrations: MigrationMeta[] = [
   {
     version: 2,
     statements: SCHEMA_V2_STATEMENTS
+  },
+  {
+    version: 3,
+    statements: SCHEMA_V3_STATEMENTS
   }
 ];
 

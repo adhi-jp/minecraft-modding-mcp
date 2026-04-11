@@ -50,6 +50,11 @@ export interface RuntimeMetricSnapshot {
   cache_artifact_bytes_lru: CacheArtifactByteAccountingRow[];
   cache_hit_rate: number;
   repo_failover_count: number;
+  tool_call_counts: Record<string, number>;
+  tool_call_duration_ms: Record<string, MetricTimingSnapshot>;
+  mapping_resolution_cache_hits: number;
+  mapping_resolution_cache_misses: number;
+  mapping_resolution_cache_size: number;
 }
 
 type DurationMetricName = keyof Pick<
@@ -107,6 +112,11 @@ export class RuntimeMetrics {
   private cacheEntries = 0;
   private cacheTotalContentBytes = 0;
   private cacheArtifactBytesLruRef: ReadonlyArray<CacheArtifactByteAccountingRefRow> = [];
+  private toolCallCounts = new Map<string, number>();
+  private toolCallTimings = new Map<string, DurationState>();
+  private mappingResolutionCacheHits = 0;
+  private mappingResolutionCacheMisses = 0;
+  private mappingResolutionCacheSize = 0;
 
   constructor() {
     const names: DurationMetricName[] = [
@@ -241,6 +251,30 @@ export class RuntimeMetrics {
     this.cacheArtifactBytesLruRef = entries;
   }
 
+  recordToolCall(tool: string, durationMs: number): void {
+    this.toolCallCounts.set(tool, (this.toolCallCounts.get(tool) ?? 0) + 1);
+
+    let timing = this.toolCallTimings.get(tool);
+    if (!timing) {
+      timing = { count: 0, totalMs: 0, lastMs: 0, samples: [] };
+      this.toolCallTimings.set(tool, timing);
+    }
+    const normalizedDuration = Math.max(0, Math.trunc(durationMs));
+    timing.count += 1;
+    timing.totalMs += normalizedDuration;
+    timing.lastMs = normalizedDuration;
+    timing.samples.push(normalizedDuration);
+    if (timing.samples.length > MAX_TIMING_SAMPLES) {
+      timing.samples.shift();
+    }
+  }
+
+  setMappingResolutionCacheStats(stats: { hits: number; misses: number; size: number }): void {
+    this.mappingResolutionCacheHits = stats.hits;
+    this.mappingResolutionCacheMisses = stats.misses;
+    this.mappingResolutionCacheSize = stats.size;
+  }
+
   snapshot(): RuntimeMetricSnapshot {
     return {
       resolve_duration_ms: this.toSnapshot("resolve_duration_ms"),
@@ -276,7 +310,24 @@ export class RuntimeMetrics {
         updated_at: entry.updatedAt
       })),
       cache_hit_rate: this.resolveCacheHitRate(),
-      repo_failover_count: this.repoFailoverCount
+      repo_failover_count: this.repoFailoverCount,
+      tool_call_counts: Object.fromEntries(this.toolCallCounts),
+      tool_call_duration_ms: Object.fromEntries(
+        [...this.toolCallTimings].map(([tool, timing]) => [
+          tool,
+          {
+            count: timing.count,
+            totalMs: timing.totalMs,
+            avgMs: timing.count > 0 ? timing.totalMs / timing.count : 0,
+            lastMs: timing.lastMs,
+            p95Ms: percentile(timing.samples, 95),
+            p99Ms: percentile(timing.samples, 99)
+          }
+        ])
+      ),
+      mapping_resolution_cache_hits: this.mappingResolutionCacheHits,
+      mapping_resolution_cache_misses: this.mappingResolutionCacheMisses,
+      mapping_resolution_cache_size: this.mappingResolutionCacheSize
     };
   }
 

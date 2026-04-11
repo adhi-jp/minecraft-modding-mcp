@@ -295,7 +295,7 @@ Minecraft バージョン間でのクラス / レジストリ変更比較と、�
 | `check-symbol-exists` | 名前空間内でクラス、フィールド、メソッドが存在するかを確認する |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`、`find-mapping`、`resolve-method-mapping-exact`、`resolve-workspace-symbol`、`check-symbol-exists` はオプションの `compact` パラメータ（デフォルト `false`）を受け付けます。`true` にすると、空配列・null・空オブジェクトがトップレベルのレスポンスから除去され、トークン消費を抑えられます。`resolve-artifact` の compact モードでは `provenance` 等の診断フィールドも省略し、後続ツール呼び出しに必要な最小限のフィールドのみを返します。マッピングツールの compact モードでは、完全一致の単一候補が返る場合に冗長な `candidates` 配列を省略します。
+`resolve-artifact`、`find-mapping`、`resolve-method-mapping-exact`、`resolve-workspace-symbol`、`check-symbol-exists` はオプションの `compact` パラメータ（デフォルト `true`）を受け付けます。有効時は空配列・null・空オブジェクトがトップレベルのレスポンスから除去され、トークン消費を抑えられます。完全な診断出力が必要な場合は `compact: false` を指定してください。`resolve-artifact` の compact モードでは `provenance` 等の診断フィールドも省略し、後続ツール呼び出しに必要な最小限のフィールドのみを返します。マッピングツールの compact モードでは、完全一致の単一候補が返る場合に冗長な `candidates` 配列を省略します。
 
 ### NBT ユーティリティ
 

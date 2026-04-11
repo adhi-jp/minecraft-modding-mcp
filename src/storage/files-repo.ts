@@ -202,8 +202,6 @@ function buildIndexedMatchQuery(
 export class FilesRepo {
   private readonly deleteStmt;
   private readonly insertFilesStmt;
-  private readonly insertFtsStmt;
-  private readonly deleteFtsStmt;
   private readonly getContentStmt;
   private readonly listStmt;
   private readonly listRowsStmt;
@@ -217,18 +215,9 @@ export class FilesRepo {
       DELETE FROM files WHERE artifact_id = ?
     `);
 
-    this.deleteFtsStmt = this.db.prepare(`
-      DELETE FROM files_fts WHERE artifact_id = ?
-    `);
-
     this.insertFilesStmt = this.db.prepare(`
       INSERT INTO files (artifact_id, file_path, content, content_bytes, content_hash)
       VALUES (?, ?, ?, ?, ?)
-    `);
-
-    this.insertFtsStmt = this.db.prepare(`
-      INSERT INTO files_fts (artifact_id, file_path, content)
-      VALUES (?, ?, ?)
     `);
 
     this.getContentStmt = this.db.prepare(`
@@ -273,7 +262,6 @@ export class FilesRepo {
 
   clearFilesForArtifact(artifactId: string): void {
     this.deleteStmt.run([artifactId]);
-    this.deleteFtsStmt.run([artifactId]);
   }
 
   insertFilesForArtifact(artifactId: string, files: IndexedFile[]): void {
@@ -286,7 +274,6 @@ export class FilesRepo {
         file.contentBytes,
         contentHash
       ]);
-      this.insertFtsStmt.run([artifactId, file.filePath, file.content]);
     }
   }
 

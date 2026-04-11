@@ -248,9 +248,10 @@ const resolveArtifactShape = {
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
-  compact: z.boolean().default(false).describe(
-    "When true, return minimal fields (artifactId, origin, isDecompiled, version, requestedMapping, mappingApplied, qualityFlags). "
-    + "Omit provenance, artifactContents, sampleEntries, adjacentSourceCandidates, binaryJarPath, coordinate, repoUrl, resolvedSourceJarPath."
+  compact: z.boolean().default(true).describe(
+    "Return minimal fields (artifactId, origin, isDecompiled, version, requestedMapping, mappingApplied, qualityFlags). "
+    + "Omit provenance, artifactContents, sampleEntries, adjacentSourceCandidates, binaryJarPath, coordinate, repoUrl, resolvedSourceJarPath. "
+    + "Enabled by default; set to false for full output."
   )
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
@@ -383,9 +384,10 @@ const findMappingShape = {
     .partial()
     .optional(),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe(
-    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  compact: z.boolean().default(true).describe(
+    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
+    + "Enabled by default; set to false for full output."
   )
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
@@ -458,9 +460,10 @@ const resolveMethodMappingExactShape = {
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe(
-    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  compact: z.boolean().default(true).describe(
+    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
+    + "Enabled by default; set to false for full output."
   )
 };
 const resolveMethodMappingExactSchema = z
@@ -520,9 +523,10 @@ const resolveWorkspaceSymbolShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)"),
-  compact: z.boolean().default(false).describe(
-    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  compact: z.boolean().default(true).describe(
+    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
+    + "Enabled by default; set to false for full output."
   )
 };
 const resolveWorkspaceSymbolSchema = z
@@ -597,9 +601,10 @@ const checkSymbolExistsShape = {
   signatureMode: z.enum(["exact", "name-only"]).default("exact")
     .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
   maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
-  compact: z.boolean().default(false).describe(
-    "When true, omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions."
+  compact: z.boolean().default(true).describe(
+    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
+    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
+    + "Enabled by default; set to false for full output."
   )
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
@@ -1916,6 +1921,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         })
       : undefined;
 
+    const durationMs = Date.now() - startedAt;
+    sourceService.recordToolCall(tool, durationMs);
     return objectResult({
       result: projectedResult,
       meta: {
@@ -1923,7 +1930,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         ...resultMeta,
         requestId,
         tool,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         warnings
       } satisfies ToolMeta
     });
@@ -1963,12 +1970,14 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       });
     }
 
+    const errorDurationMs = Date.now() - startedAt;
+    sourceService.recordToolCall(tool, errorDurationMs);
     return objectResult({
       error: problem,
       meta: {
         requestId,
         tool,
-        durationMs: Date.now() - startedAt,
+        durationMs: errorDurationMs,
         warnings: []
       } satisfies ToolMeta
     }, { isError: true });
@@ -2054,7 +2063,8 @@ server.tool("resolve-artifact",
       projectPath: input.projectPath,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
-      strictVersion: input.strictVersion
+      strictVersion: input.strictVersion,
+      compact: input.compact
     }) as Promise<Record<string, unknown>>
   )
 );

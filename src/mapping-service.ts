@@ -1369,6 +1369,19 @@ export class MappingService {
   private readonly fetchFn: typeof fetch;
   private readonly graphCache = new Map<string, LoadedGraph>();
   private readonly buildLocks = new Map<string, Promise<LoadedGraph>>();
+  private readonly resolutionCache = new Map<string, { result: FindMappingOutput; cachedAt: number }>();
+  private static readonly RESOLUTION_CACHE_MAX = 512;
+  private static readonly RESOLUTION_CACHE_TTL_MS = 5 * 60 * 1000;
+  private resolutionCacheHits = 0;
+  private resolutionCacheMisses = 0;
+
+  get resolutionCacheStats() {
+    return {
+      hits: this.resolutionCacheHits,
+      misses: this.resolutionCacheMisses,
+      size: this.resolutionCache.size
+    };
+  }
 
   constructor(
     config: Config,
@@ -1395,6 +1408,14 @@ export class MappingService {
     const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode, {
       allowShortClassName: input.kind === "class" && input.sourceMapping === "obfuscated"
     });
+
+    const cacheKey = this.buildResolutionCacheKey(version, input, querySymbol);
+    const cached = this.resolutionCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < MappingService.RESOLUTION_CACHE_TTL_MS) {
+      this.resolutionCacheHits += 1;
+      return cached.result;
+    }
+    this.resolutionCacheMisses += 1;
 
     const sourceMapping = input.sourceMapping;
     const targetMapping = input.targetMapping;
@@ -1506,7 +1527,7 @@ export class MappingService {
         ? inferAmbiguityReasons(candidates, pathUsesSource(graph.pairs, path, "mojang-client-mappings"))
         : undefined;
 
-    return {
+    const output: FindMappingOutput = {
       querySymbol,
       mappingContext,
       resolved: status === "resolved",
@@ -1519,6 +1540,9 @@ export class MappingService {
       provenance: this.provenanceForPath(graph, path),
       ambiguityReasons
     };
+    this.resolutionCache.set(cacheKey, { result: output, cachedAt: Date.now() });
+    this.trimResolutionCache();
+    return output;
   }
 
   async ensureMappingAvailable(input: EnsureMappingAvailableInput): Promise<EnsureMappingAvailableOutput> {
@@ -2831,6 +2855,11 @@ export class MappingService {
     }
   }
 
+  // Note: in-flight buildLocks may re-populate graphCache after release.
+  // Resolution cache entries created by concurrent findMapping() calls may also
+  // survive this invalidation. Both are bounded by TTL (5 min) and will expire
+  // naturally. A full epoch-based invalidation would add complexity for a rare
+  // user-initiated operation (manage-cache).
   releaseGraphCacheEntry(version: string, sourcePriority?: MappingSourcePriority): void {
     const normalizedVersion = version.trim();
     if (!normalizedVersion) {
@@ -2842,6 +2871,42 @@ export class MappingService {
       if (key.startsWith(prefix)) {
         this.graphCache.delete(key);
       }
+    }
+    const resolutionPrefix = `${normalizedVersion}\0`;
+    for (const key of this.resolutionCache.keys()) {
+      if (key.startsWith(resolutionPrefix)) {
+        this.resolutionCache.delete(key);
+      }
+    }
+  }
+
+  private buildResolutionCacheKey(version: string, input: FindMappingInput, querySymbol: SymbolReference): string {
+    return [
+      version,
+      input.kind,
+      querySymbol.symbol,
+      querySymbol.descriptor ?? "",
+      input.sourceMapping,
+      input.targetMapping,
+      input.sourcePriority ?? "",
+      effectiveLoomSearchProjectPath(input.projectPath) ?? "",
+      input.signatureMode ?? "",
+      String(input.maxCandidates ?? ""),
+      JSON.stringify(input.disambiguation ?? "")
+    ].join("\0");
+  }
+
+  private trimResolutionCache(): void {
+    if (this.resolutionCache.size <= MappingService.RESOLUTION_CACHE_MAX) return;
+    const now = Date.now();
+    for (const [key, entry] of this.resolutionCache) {
+      if (now - entry.cachedAt > MappingService.RESOLUTION_CACHE_TTL_MS) {
+        this.resolutionCache.delete(key);
+      }
+    }
+    while (this.resolutionCache.size > MappingService.RESOLUTION_CACHE_MAX) {
+      const firstKey = this.resolutionCache.keys().next().value;
+      if (firstKey !== undefined) this.resolutionCache.delete(firstKey);
     }
   }
 }

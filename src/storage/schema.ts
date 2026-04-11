@@ -165,3 +165,25 @@ export const SCHEMA_V2_STATEMENTS: string[] = [
   `DELETE FROM artifact_index_meta`,
   `DELETE FROM artifacts`
 ];
+
+export const SCHEMA_V3_STATEMENTS: string[] = [
+  `DROP TABLE IF EXISTS files_fts`,
+  `CREATE VIRTUAL TABLE files_fts USING fts5(
+    artifact_id UNINDEXED,
+    file_path,
+    content,
+    content='files',
+    content_rowid='rowid',
+    tokenize = 'unicode61 separators ''._$'''
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS trg_fts_insert AFTER INSERT ON files BEGIN
+    INSERT INTO files_fts(rowid, artifact_id, file_path, content)
+    VALUES (NEW.rowid, NEW.artifact_id, NEW.file_path, NEW.content);
+  END`,
+  // No UPDATE trigger: FilesRepo uses delete+insert, never updates rows in place.
+  `CREATE TRIGGER IF NOT EXISTS trg_fts_delete BEFORE DELETE ON files BEGIN
+    INSERT INTO files_fts(files_fts, rowid, artifact_id, file_path, content)
+    VALUES ('delete', OLD.rowid, OLD.artifact_id, OLD.file_path, OLD.content);
+  END`,
+  `INSERT INTO files_fts(files_fts) VALUES('rebuild')`
+];

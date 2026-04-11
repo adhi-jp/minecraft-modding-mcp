@@ -7224,7 +7224,8 @@ test("SourceService resolveArtifact returns sampleEntries for source JAR", async
   const service = new SourceService(buildTestConfig(root));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
+    mapping: "obfuscated",
+    compact: false
   });
 
   assert.ok(resolved.sampleEntries);

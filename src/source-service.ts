@@ -57,6 +57,7 @@ import { FilesRepo } from "./storage/files-repo.js";
 import { IndexMetaRepo, type ArtifactIndexMetaRow } from "./storage/index-meta-repo.js";
 import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
+import { LruList } from "./lru-list.js";
 import { log } from "./logger.js";
 import { normalizePathForHost } from "./path-converter.js";
 import {
@@ -126,6 +127,7 @@ export type ResolveArtifactInput = {
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
+  compact?: boolean;
 };
 
 export type ResolveArtifactOutput = {
@@ -1587,15 +1589,8 @@ export class SourceService {
   private readonly versionDiffService: VersionDiffService;
   private readonly modDecompileService: ModDecompileService;
   private readonly modSearchService: ModSearchService;
-  private cacheMetricsState: {
-    entries: number;
-    totalContentBytes: number;
-    lru: Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
-  } = {
-    entries: 0,
-    totalContentBytes: 0,
-    lru: []
-  };
+  private readonly lru = new LruList<{ totalContentBytes: number; updatedAt: string }>();
+  private cacheTotalContentBytes = 0;
 
   constructor(explicitConfig?: Config, metrics = new RuntimeMetrics()) {
     this.config = explicitConfig ?? loadConfig();
@@ -2491,7 +2486,7 @@ export class SourceService {
       await this.ingestIfNeeded(resolved);
 
       let sampleEntries: string[] | undefined;
-      if (resolved.sourceJarPath) {
+      if (input.compact === false && resolved.sourceJarPath) {
         try {
           const javaEntries = await listJavaEntries(resolved.sourceJarPath);
           const MAX_SAMPLE = 10;
@@ -5699,7 +5694,13 @@ export class SourceService {
     return result;
   }
 
+  recordToolCall(tool: string, durationMs: number): void {
+    this.metrics.recordToolCall(tool, durationMs);
+  }
+
   getRuntimeMetrics(): RuntimeMetricSnapshot {
+    this.snapshotLruAccounting();
+    this.metrics.setMappingResolutionCacheStats(this.mappingService.resolutionCacheStats);
     return this.metrics.snapshot();
   }
 
@@ -6970,13 +6971,13 @@ export class SourceService {
   }
 
   private enforceCacheLimits(): void {
-    let artifactCount = this.cacheMetricsState.entries;
-    let totalBytes = this.cacheMetricsState.totalContentBytes;
+    let artifactCount = this.lru.size;
+    let totalBytes = this.cacheTotalContentBytes;
     if (artifactCount <= this.config.maxArtifacts && totalBytes <= this.config.maxCacheBytes) {
       return;
     }
 
-    const candidates = [...this.cacheMetricsState.lru];
+    const candidates = this.lru.toArray();
     for (const candidate of candidates) {
       const shouldEvict = artifactCount > this.config.maxArtifacts || totalBytes > this.config.maxCacheBytes;
       if (!shouldEvict || artifactCount <= 1) {
@@ -6985,17 +6986,17 @@ export class SourceService {
 
       const artifactCountBefore = artifactCount;
       const totalBytesBefore = totalBytes;
-      this.filesRepo.deleteFilesForArtifact(candidate.artifactId);
-      this.artifactsRepo.deleteArtifact(candidate.artifactId);
-      this.removeCacheMetrics(candidate.artifactId, false);
+      this.filesRepo.deleteFilesForArtifact(candidate.key);
+      this.artifactsRepo.deleteArtifact(candidate.key);
+      this.removeCacheMetrics(candidate.key, false);
       artifactCount = Math.max(0, artifactCount - 1);
-      totalBytes = Math.max(0, totalBytes - candidate.totalContentBytes);
+      totalBytes = Math.max(0, totalBytes - candidate.value.totalContentBytes);
       this.metrics.recordCacheEviction();
       log("warn", "cache.evict", {
-        artifactId: candidate.artifactId,
+        artifactId: candidate.key,
         artifactCountBefore,
         totalBytesBefore,
-        artifactBytes: candidate.totalContentBytes
+        artifactBytes: candidate.value.totalContentBytes
       });
     }
 
@@ -7005,97 +7006,69 @@ export class SourceService {
   private refreshCacheMetrics(): void {
     const cacheEntries = this.artifactsRepo.countArtifacts();
     const totalContentBytes = this.artifactsRepo.totalContentBytes();
-    const lruAccounting = this.artifactsRepo
-      .listArtifactsByLruWithContentBytes(Math.max(cacheEntries, 1))
-      .map((row) => ({
-        artifactId: row.artifactId,
+    const lruAccounting = this.artifactsRepo.listArtifactsByLruWithContentBytes(Math.max(cacheEntries, 1));
+
+    this.lru.clear();
+    for (const row of lruAccounting) {
+      this.lru.upsert(row.artifactId, {
         totalContentBytes: row.totalContentBytes,
         updatedAt: row.updatedAt
-      }));
-    this.cacheMetricsState = {
-      entries: cacheEntries,
-      totalContentBytes,
-      lru: lruAccounting
-    };
+      });
+    }
+    this.cacheTotalContentBytes = totalContentBytes;
     this.publishCacheMetrics();
   }
 
   private touchCacheMetrics(artifactId: string, updatedAt: string): void {
-    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
-    if (existingIndex < 0) {
+    const entry = this.lru.touch(artifactId);
+    if (!entry) {
       this.refreshCacheMetrics();
       return;
     }
-
-    const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
-    if (!existing) {
-      this.refreshCacheMetrics();
-      return;
-    }
-
-    existing.updatedAt = updatedAt;
-    this.cacheMetricsState.lru.push(existing);
+    entry.updatedAt = updatedAt;
     this.publishCacheMetrics();
   }
 
   private upsertCacheMetrics(artifactId: string, totalContentBytes: number, updatedAt: string): void {
     const normalizedBytes = Math.max(0, Math.trunc(totalContentBytes));
-    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
-    if (existingIndex >= 0) {
-      const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
-      if (!existing) {
-        this.refreshCacheMetrics();
-        return;
-      }
-
-      this.cacheMetricsState.totalContentBytes = Math.max(
+    const existing = this.lru.remove(artifactId);
+    if (existing) {
+      this.cacheTotalContentBytes = Math.max(
         0,
-        this.cacheMetricsState.totalContentBytes - existing.totalContentBytes + normalizedBytes
+        this.cacheTotalContentBytes - existing.totalContentBytes + normalizedBytes
       );
-      existing.totalContentBytes = normalizedBytes;
-      existing.updatedAt = updatedAt;
-      this.cacheMetricsState.lru.push(existing);
     } else {
-      this.cacheMetricsState.entries += 1;
-      this.cacheMetricsState.totalContentBytes += normalizedBytes;
-      this.cacheMetricsState.lru.push({
-        artifactId,
-        totalContentBytes: normalizedBytes,
-        updatedAt
-      });
+      this.cacheTotalContentBytes += normalizedBytes;
     }
-
-    this.cacheMetricsState.entries = this.cacheMetricsState.lru.length;
+    this.lru.upsert(artifactId, { totalContentBytes: normalizedBytes, updatedAt });
     this.publishCacheMetrics();
   }
 
   private removeCacheMetrics(artifactId: string, publish = true): void {
-    const existingIndex = this.cacheMetricsState.lru.findIndex((row) => row.artifactId === artifactId);
-    if (existingIndex < 0) {
-      this.refreshCacheMetrics();
-      return;
-    }
-
-    const [existing] = this.cacheMetricsState.lru.splice(existingIndex, 1);
+    const existing = this.lru.remove(artifactId);
     if (!existing) {
       this.refreshCacheMetrics();
       return;
     }
-
-    this.cacheMetricsState.entries = this.cacheMetricsState.lru.length;
-    this.cacheMetricsState.totalContentBytes = Math.max(
-      0,
-      this.cacheMetricsState.totalContentBytes - existing.totalContentBytes
-    );
+    this.cacheTotalContentBytes = Math.max(0, this.cacheTotalContentBytes - existing.totalContentBytes);
     if (publish) {
       this.publishCacheMetrics();
     }
   }
 
   private publishCacheMetrics(): void {
-    this.metrics.setCacheEntries(this.cacheMetricsState.entries);
-    this.metrics.setCacheTotalContentBytes(this.cacheMetricsState.totalContentBytes);
-    this.metrics.setCacheArtifactByteAccountingRef(this.cacheMetricsState.lru);
+    this.metrics.setCacheEntries(this.lru.size);
+    this.metrics.setCacheTotalContentBytes(this.cacheTotalContentBytes);
+  }
+
+  private snapshotLruAccounting(): void {
+    this.metrics.setCacheArtifactByteAccountingRef(
+      this.lru.toArray().map(({ key, value }) => ({
+        artifactId: key,
+        totalContentBytes: value.totalContentBytes,
+        updatedAt: value.updatedAt
+      }))
+    );
   }
 }
 
