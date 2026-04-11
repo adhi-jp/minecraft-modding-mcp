@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.0] - 2026-04-12
 
 ### Added
 - `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` now accept an optional `compact` parameter (default `false`). When `true`, empty arrays, null values, and empty objects are stripped from the top-level response. For `resolve-artifact`, compact mode additionally omits `provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, and `resolvedSourceJarPath`. For mapping tools, compact mode omits the redundant `candidates` array when the result is a single full-confidence exact-match resolution.
@@ -22,6 +22,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` tool-health diagnostics now treat unobfuscated `mojang` runtime names as available, while still flagging `intermediary`/`yarn` as unavailable on `26.1+`.
 - `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener and workspace Mixin checks, and returns a blocked summary with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
 - `check-symbol-exists` and `analyze-symbol task="exists"` now fall back to unobfuscated runtime bytecode for `mojang`/runtime-name existence checks on `26.1+`, preserve the original `mapping_unavailable` result when the runtime JAR cannot be resolved, and return a targeted warning when callers provide only a short class name.
+- Loom tiny mapping discovery no longer performs unbounded directory traversal when the version-specific cache directory is absent, preventing excessive memory consumption on systems with large Gradle caches.
+- Mapping graph cache eviction after lifecycle scans now correctly releases all cached entries for a version instead of silently skipping them.
 
 ### Performance
 - `resolve-artifact` source-jar detection and mapping tiny-jar loading now reuse a single ZIP walk per jar probe instead of reopening and fully enumerating matching archives on each helper call.

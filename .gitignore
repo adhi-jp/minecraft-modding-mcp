@@ -42,6 +42,7 @@ coverage/
 .agents/*
 !.agents/skills/
 !.agents/skills/**
+.codex
 
 # Development artifacts
 .plans/
