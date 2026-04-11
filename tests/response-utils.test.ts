@@ -446,3 +446,111 @@ test("resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING", () => 
   assert.equal(COMPACT_ENABLED_TOOL_NAMES.has("resolve-artifact"), true);
   assert.equal(COMPACT_MAPPING_TOOL_NAMES.has("resolve-artifact"), false);
 });
+
+// ---------------------------------------------------------------------------
+// P5: Regression — size reduction threshold
+// ---------------------------------------------------------------------------
+
+test("compactArtifactResponse reduces serialized size below 60% of full", () => {
+  const full: Record<string, unknown> = {
+    artifactId: "artifact-1.21.10-mojang",
+    origin: "remote-repo",
+    isDecompiled: false,
+    version: "1.21.10",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-jar"],
+    resolvedSourceJarPath: "/cache/sources/1.21.10-mojang-sources.jar",
+    adjacentSourceCandidates: ["/cache/alt-sources.jar"],
+    binaryJarPath: "/cache/1.21.10-client.jar",
+    coordinate: "net.minecraft:client:1.21.10:sources",
+    repoUrl: "https://libraries.minecraft.net",
+    provenance: { source: "mojang-manifest", mappingArtifact: "mojmap.tiny", version: "1.21.10", priority: "loom-first" },
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" },
+    sampleEntries: ["net/minecraft/world/level/Level.java", "net/minecraft/server/MinecraftServer.java"]
+  };
+  const compact = compactArtifactResponse(full);
+
+  const fullBytes = Buffer.byteLength(JSON.stringify(full), "utf8");
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact), "utf8");
+
+  assert.ok(
+    compactBytes < fullBytes * 0.6,
+    `compact (${compactBytes}B) should be < 60% of full (${fullBytes}B)`
+  );
+});
+
+test("compactMappingResponse + compactResponse reduces serialized size for resolved result", () => {
+  const full: Record<string, unknown> = {
+    querySymbol: { kind: "class", name: "Level", symbol: "net.minecraft.world.level.Level" },
+    mappingContext: { version: "1.21.10", sourceMapping: "mojang", targetMapping: "intermediary", sourcePriorityApplied: "loom-first" },
+    resolved: true,
+    status: "resolved",
+    resolvedSymbol: { kind: "class", name: "class_310", symbol: "net.minecraft.class_310" },
+    candidates: [{ kind: "class", name: "class_310", symbol: "net.minecraft.class_310", matchKind: "exact", confidence: 1 }],
+    candidateCount: 1,
+    candidatesTruncated: undefined
+  };
+  const compact = compactResponse(compactMappingResponse(full));
+
+  const fullBytes = Buffer.byteLength(JSON.stringify(full), "utf8");
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact), "utf8");
+
+  assert.ok(
+    compactBytes < fullBytes,
+    `compact (${compactBytes}B) should be smaller than full (${fullBytes}B)`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// P5: Regression — idempotency
+// ---------------------------------------------------------------------------
+
+test("compactMappingResponse is idempotent", () => {
+  const input: Record<string, unknown> = {
+    resolved: true,
+    resolvedSymbol: { name: "Level", kind: "class" },
+    candidates: [{ name: "Level", kind: "class", matchKind: "exact", confidence: 1 }],
+    candidateCount: 1,
+    querySymbol: { name: "Level" },
+    mappingContext: { version: "1.21.10" }
+  };
+  const once = compactMappingResponse(input);
+  const twice = compactMappingResponse(once);
+  assert.deepEqual(once, twice, "applying compactMappingResponse twice must produce identical output");
+});
+
+test("compactArtifactResponse is idempotent", () => {
+  const input: Record<string, unknown> = {
+    artifactId: "abc",
+    origin: "remote-repo",
+    isDecompiled: false,
+    provenance: { source: "mojang" },
+    artifactContents: { sourceKind: "source-jar" }
+  };
+  const once = compactArtifactResponse(input);
+  const twice = compactArtifactResponse(once);
+  assert.deepEqual(once, twice, "applying compactArtifactResponse twice must produce identical output");
+});
+
+test("compactResponse is idempotent", () => {
+  const input = { a: 1, b: null, c: [], d: {}, e: "hello" };
+  const once = compactResponse(input);
+  const twice = compactResponse(once);
+  assert.deepEqual(once, twice, "applying compactResponse twice must produce identical output");
+});
+
+// ---------------------------------------------------------------------------
+// P5: Regression — default path invariance
+// ---------------------------------------------------------------------------
+
+test("isCompactEnabled returns false when compact is omitted from input", () => {
+  assert.equal(isCompactEnabled("find-mapping", {}), false);
+  assert.equal(isCompactEnabled("resolve-artifact", {}), false);
+  assert.equal(isCompactEnabled("check-symbol-exists", { kind: "class", name: "Foo" }), false);
+});
+
+test("isCompactEnabled returns false when compact is explicitly false", () => {
+  assert.equal(isCompactEnabled("find-mapping", { compact: false }), false);
+  assert.equal(isCompactEnabled("resolve-artifact", { compact: false }), false);
+});
