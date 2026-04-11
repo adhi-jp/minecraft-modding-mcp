@@ -25,6 +25,7 @@ const MATCH_RANK = {
 } as const;
 const DESCRIPTOR_FALLBACK_CONFIDENCE = 0.85;
 const MAX_CANDIDATES = 200;
+const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
 
 type MatchRankKey = keyof typeof MATCH_RANK;
 type PairKey = `${SourceMapping}->${SourceMapping}`;
@@ -2640,7 +2641,7 @@ export class MappingService {
               absolute: true,
               onlyFiles: true
             })
-          : await fastGlob.glob([`**/${version}/**/*.tiny`, `**/${version}/**/*.tinyv2`], {
+          : await fastGlob.glob([`${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tiny`, `${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tinyv2`], {
               cwd: root,
               absolute: true,
               onlyFiles: true

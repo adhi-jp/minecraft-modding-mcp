@@ -1,14 +1,30 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { before, after, test } from "node:test";
 import fastGlob from "fast-glob";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import type { MappingService as MappingServiceType } from "../src/mapping-service.ts";
 import type { Config, SourceMapping } from "../src/types.ts";
 import { createJar } from "./helpers/zip.ts";
+
+// Isolate all tests from the host's real ~/.gradle to avoid scanning
+// large real Loom caches (which can cause OOM in the single-process runner).
+let savedGradleUserHome: string | undefined;
+before(() => {
+  savedGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = join(tmpdir(), "mapping-service-test-gradle-home-nonexistent");
+});
+after(() => {
+  if (savedGradleUserHome === undefined) {
+    delete process.env.GRADLE_USER_HOME;
+  } else {
+    process.env.GRADLE_USER_HOME = savedGradleUserHome;
+  }
+});
 
 function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config {
   return {
@@ -28,6 +44,14 @@ function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config 
     maxNbtInputBytes: 4 * 1024 * 1024,
     maxNbtInflatedBytes: 16 * 1024 * 1024,
     maxNbtResponseBytes: 8 * 1024 * 1024,
+    searchScanPageSize: 250,
+    indexInsertChunkSize: 200,
+    maxMappingGraphCache: 1,
+    maxSignatureCache: 2_000,
+    maxVersionDetailCache: 256,
+    tinyRemapperJarPath: undefined,
+    remapTimeoutMs: 600_000,
+    remapMaxMemoryMb: 4_096,
     ...overrides
   };
 }
@@ -213,196 +237,263 @@ function queryFromSymbol(symbol: string): SymbolQueryInput {
 test("MappingService maps obfuscated -> mojang and caches repeated lookups", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-"));
-  const config = buildTestConfig(root);
+  try {
+    const config = buildTestConfig(root);
 
-  const fetchCalls: string[] = [];
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    fetchCalls.push(url);
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchCalls: string[] = [];
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      fetchCalls.push(url);
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const first = await service.findMapping({
-    version: "1.21.10",
-    ...queryFromSymbol("a.b.C"),
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang"
-  });
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const first = await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    });
 
-  assert.equal(first.candidates[0]?.symbol, "com.mojang.NamedClass");
-  assert.equal(first.mappingContext.sourceMapping, "obfuscated");
-  assert.equal(first.mappingContext.targetMapping, "mojang");
+    assert.equal(first.candidates[0]?.symbol, "com.mojang.NamedClass");
+    assert.equal(first.mappingContext.sourceMapping, "obfuscated");
+    assert.equal(first.mappingContext.targetMapping, "mojang");
 
-  const second = await service.findMapping({
-    version: "1.21.10",
-    ...queryFromSymbol("a.b.C"),
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang"
-  });
-  assert.equal(second.candidates[0]?.symbol, "com.mojang.NamedClass");
-  assert.equal(fetchCalls.filter((url) => url === "https://example.test/mappings/client.txt").length, 1);
+    const second = await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C"),
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    });
+    assert.equal(second.candidates[0]?.symbol, "com.mojang.NamedClass");
+    assert.equal(fetchCalls.filter((url) => url === "https://example.test/mappings/client.txt").length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService skips tiny namespace loading for mojang <-> obfuscated lookups", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-obf-only-"));
-  const config = buildTestConfig(root);
+  try {
+    const config = buildTestConfig(root);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const service = new MappingService(config, createVersionServiceStub("https://example.test/mappings/client.txt"), fetchStub);
+    const service = new MappingService(config, createVersionServiceStub("https://example.test/mappings/client.txt"), fetchStub);
 
-  let loomTinyLoads = 0;
-  let mavenTinyLoads = 0;
-  (service as unknown as {
-    loadTinyPairsFromLoom: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
-    loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
-  }).loadTinyPairsFromLoom = async () => {
-    loomTinyLoads += 1;
-    return {
-      pairs: new Map(),
-      warnings: [],
-      mappingArtifact: "loom-cache:none"
+    let loomTinyLoads = 0;
+    let mavenTinyLoads = 0;
+    (service as unknown as {
+      loadTinyPairsFromLoom: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+      loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+    }).loadTinyPairsFromLoom = async () => {
+      loomTinyLoads += 1;
+      return {
+        pairs: new Map(),
+        warnings: [],
+        mappingArtifact: "loom-cache:none"
+      };
     };
-  };
-  (service as unknown as {
-    loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
-  }).loadTinyPairsFromMaven = async () => {
-    mavenTinyLoads += 1;
-    return {
-      pairs: new Map(),
-      warnings: [],
-      mappingArtifact: "maven:none"
+    (service as unknown as {
+      loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+    }).loadTinyPairsFromMaven = async () => {
+      mavenTinyLoads += 1;
+      return {
+        pairs: new Map(),
+        warnings: [],
+        mappingArtifact: "maven:none"
+      };
     };
-  };
 
-  const classResult = await service.findMapping({
-    version: "1.21.10",
-    kind: "class",
-    name: "com.mojang.NamedClass",
-    sourceMapping: "mojang",
-    targetMapping: "obfuscated"
-  });
-  const methodResult = await service.resolveMethodMappingExact({
-    version: "1.21.10",
-    owner: "com.mojang.NamedClass",
-    name: "namedMethod",
-    descriptor: "(I)V",
-    sourceMapping: "mojang",
-    targetMapping: "obfuscated"
-  });
+    const classResult = await service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "com.mojang.NamedClass",
+      sourceMapping: "mojang",
+      targetMapping: "obfuscated"
+    });
+    const methodResult = await service.resolveMethodMappingExact({
+      version: "1.21.10",
+      owner: "com.mojang.NamedClass",
+      name: "namedMethod",
+      descriptor: "(I)V",
+      sourceMapping: "mojang",
+      targetMapping: "obfuscated"
+    });
 
-  assert.equal(classResult.status, "resolved");
-  assert.equal(classResult.resolvedSymbol?.symbol, "a.b.C");
-  assert.equal(methodResult.status, "resolved");
-  assert.equal(methodResult.resolvedSymbol?.symbol, "a.b.C.e(I)V");
-  assert.equal(loomTinyLoads, 0);
-  assert.equal(mavenTinyLoads, 0);
+    assert.equal(classResult.status, "resolved");
+    assert.equal(classResult.resolvedSymbol?.symbol, "a.b.C");
+    assert.equal(methodResult.status, "resolved");
+    assert.equal(methodResult.resolvedSymbol?.symbol, "a.b.C.e(I)V");
+    assert.equal(loomTinyLoads, 0);
+    assert.equal(mavenTinyLoads, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService maps obfuscated -> yarn from Loom tiny cache", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-loom-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "yarn"
-    })
-  );
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      })
+    );
 
-  assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
-  assert.equal(result.provenance?.source, "loom-cache");
+    assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
+    assert.equal(result.provenance?.source, "loom-cache");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService loads Loom tiny mappings from GRADLE_USER_HOME fabric-loom cache", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-gradle-home-"));
-  const gradleUserHome = join(root, "gradle-home");
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  await writeFabricLoomTinyCache(gradleUserHome, TEST_TINY);
+  try {
+    const gradleUserHome = join(root, "gradle-home");
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeFabricLoomTinyCache(gradleUserHome, TEST_TINY);
 
-  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-  const result = await withGradleUserHome(gradleUserHome, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "yarn"
-    })
-  );
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+    const result = await withGradleUserHome(gradleUserHome, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn"
+      })
+    );
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
-  assert.equal(result.provenance?.source, "loom-cache");
+    assert.equal(result.resolved, true);
+    assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
+    assert.equal(result.provenance?.source, "loom-cache");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService does not issue unbounded Loom tiny version globs", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-bounded-loom-glob-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = await writeLoomTinyCache(root, TEST_TINY);
+    const gradleUserHome = join(root, "gradle-home");
+    await mkdir(join(gradleUserHome, "caches", "fabric-loom"), { recursive: true });
+
+    const unboundedCalls: Array<{ cwd: string | undefined; patterns: string[] }> = [];
+    const projectVersionRoot = join(root, ".gradle", "loom-cache", "1.21.10");
+    const originalGlob = fastGlob.glob;
+    fastGlob.glob = async (patterns, options) => {
+      const patternList = Array.isArray(patterns) ? patterns : [patterns];
+      if (patternList.some((pattern) => pattern.startsWith("**/1.21.10/"))) {
+        unboundedCalls.push({
+          cwd: typeof options?.cwd === "string" ? options.cwd : undefined,
+          patterns: patternList
+        });
+        return [];
+      }
+      return options?.cwd === projectVersionRoot ? [loomTinyPath] : [];
+    };
+
+    try {
+      const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+      const result = await withGradleUserHome(gradleUserHome, () =>
+        withCwd(root, () =>
+          service.findMapping({
+            version: "1.21.10",
+            ...queryFromSymbol("a.b.C"),
+            sourceMapping: "obfuscated",
+            targetMapping: "yarn"
+          })
+        )
+      );
+
+      assert.equal(result.resolved, true);
+      assert.equal(unboundedCalls.length, 0);
+    } finally {
+      fastGlob.glob = originalGlob;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService merges Loom tiny mappings across project and GRADLE_USER_HOME roots", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-gradle-merge-"));
-  const gradleUserHome = join(root, "gradle-home");
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_TINY_PROJECT);
-  await writeFabricLoomTinyCache(gradleUserHome, TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME, "1.21.10", "mappings-mojang.tiny");
+  try {
+    const gradleUserHome = join(root, "gradle-home");
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_TINY_PROJECT);
+    await writeFabricLoomTinyCache(gradleUserHome, TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME, "1.21.10", "mappings-mojang.tiny");
 
-  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-  const result = await withGradleUserHome(gradleUserHome, () =>
-    withCwd(root, () =>
-      service.resolveMethodMappingExact({
-        version: "1.21.10",
-        owner: "net.minecraft.class_1937",
-        name: "method_1725",
-        descriptor: "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z",
-        sourceMapping: "intermediary",
-        targetMapping: "yarn"
-      })
-    )
-  );
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+    const result = await withGradleUserHome(gradleUserHome, () =>
+      withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "net.minecraft.class_1937",
+          name: "method_1725",
+          descriptor: "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z",
+          sourceMapping: "intermediary",
+          targetMapping: "yarn"
+        })
+      )
+    );
 
-  assert.equal(result.resolved, true);
-  assert.equal(
-    result.resolvedSymbol?.descriptor,
-    "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"
-  );
+    assert.equal(result.resolved, true);
+    assert.equal(
+      result.resolvedSymbol?.descriptor,
+      "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService caches Loom graphs by effective cwd when projectPath is omitted", async () => {
@@ -410,389 +501,419 @@ test("MappingService caches Loom graphs by effective cwd when projectPath is omi
   const serviceRoot = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-service-"));
   const projectRootA = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-a-"));
   const projectRootB = await mkdtemp(join(tmpdir(), "mapping-service-cwd-cache-b-"));
-  const gradleUserHome = join(serviceRoot, "gradle-home");
-  const config = buildTestConfig(serviceRoot, { sourceRepos: [] });
-  await writeLoomTinyCache(projectRootA, TEST_TINY);
-  await writeLoomTinyCache(projectRootB, TEST_TINY_ALT);
+  try {
+    const gradleUserHome = join(serviceRoot, "gradle-home");
+    const config = buildTestConfig(serviceRoot, { sourceRepos: [], maxMappingGraphCache: 2 });
+    await writeLoomTinyCache(projectRootA, TEST_TINY);
+    await writeLoomTinyCache(projectRootB, TEST_TINY_ALT);
 
-  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-  const [first, second] = await withGradleUserHome(gradleUserHome, async () => [
-    await withCwd(projectRootA, () =>
-      service.findMapping({
-        version: "1.21.10",
-        ...queryFromSymbol("a.b.C"),
-        sourceMapping: "obfuscated",
-        targetMapping: "yarn"
-      })
-    ),
-    await withCwd(projectRootB, () =>
-      service.findMapping({
-        version: "1.21.10",
-        ...queryFromSymbol("a.b.C"),
-        sourceMapping: "obfuscated",
-        targetMapping: "yarn"
-      })
-    )
-  ]);
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+    const [first, second] = await withGradleUserHome(gradleUserHome, async () => [
+      await withCwd(projectRootA, () =>
+        service.findMapping({
+          version: "1.21.10",
+          ...queryFromSymbol("a.b.C"),
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn"
+        })
+      ),
+      await withCwd(projectRootB, () =>
+        service.findMapping({
+          version: "1.21.10",
+          ...queryFromSymbol("a.b.C"),
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn"
+        })
+      )
+    ]);
 
-  assert.equal(first.resolvedSymbol?.name, "yarn.pkg.NamedClass");
-  assert.equal(second.resolvedSymbol?.name, "yarn.pkg.AltNamedClass");
+    assert.equal(first.resolvedSymbol?.name, "yarn.pkg.NamedClass");
+    assert.equal(second.resolvedSymbol?.name, "yarn.pkg.AltNamedClass");
+  } finally {
+    rmSync(serviceRoot, { recursive: true, force: true });
+    rmSync(projectRootA, { recursive: true, force: true });
+    rmSync(projectRootB, { recursive: true, force: true });
+  }
 });
 
 test("MappingService falls back to Maven tiny when Loom cache is unavailable", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-fallback-"));
-  const config = buildTestConfig(root);
+  try {
+    const config = buildTestConfig(root);
 
-  const tinyJarPath = join(root, "tiny.jar");
-  await createJar(tinyJarPath, {
-    "mappings/mappings.tiny": `${TEST_TINY}\n`
-  });
-  const tinyJarBuffer = await readFile(tinyJarPath);
+    const tinyJarPath = join(root, "tiny.jar");
+    await createJar(tinyJarPath, {
+      "mappings/mappings.tiny": `${TEST_TINY}\n`
+    });
+    const tinyJarBuffer = await readFile(tinyJarPath);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
-      return new Response(
-        [
-          "<metadata>",
-          "<versioning>",
-          "<versions>",
-          "<version>1.21.10+build.1</version>",
-          "</versions>",
-          "</versioning>",
-          "</metadata>"
-        ].join(""),
-        { status: 200 }
-      );
-    }
-    if (url.endsWith(".jar")) {
-      return new Response(tinyJarBuffer, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        return new Response(
+          [
+            "<metadata>",
+            "<versioning>",
+            "<versions>",
+            "<version>1.21.10+build.1</version>",
+            "</versions>",
+            "</versioning>",
+            "</metadata>"
+          ].join(""),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(".jar")) {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-  assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass");
-  assert.equal(result.provenance?.source, "maven");
+    assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass");
+    assert.equal(result.provenance?.source, "maven");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService resolves mojang named namespace paths through official tiny headers from Loom cache", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-official-loom-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  await writeLoomTinyCache(root, TEST_TINY_OFFICIAL);
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, TEST_TINY_OFFICIAL);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
-  const service = new MappingService(config, versionServiceStub, fetchStub);
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
+    const service = new MappingService(config, versionServiceStub, fetchStub);
 
-  const mojangToIntermediary = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "com.mojang.NamedClass",
-      sourceMapping: "mojang",
-      targetMapping: "intermediary"
-    })
-  );
-  const mojangToYarn = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "com.mojang.NamedClass",
-      sourceMapping: "mojang",
-      targetMapping: "yarn"
-    })
-  );
-  const intermediaryToMojang = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "intermediary.pkg.InterClass",
-      sourceMapping: "intermediary",
-      targetMapping: "mojang"
-    })
-  );
+    const mojangToIntermediary = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "com.mojang.NamedClass",
+        sourceMapping: "mojang",
+        targetMapping: "intermediary"
+      })
+    );
+    const mojangToYarn = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "com.mojang.NamedClass",
+        sourceMapping: "mojang",
+        targetMapping: "yarn"
+      })
+    );
+    const intermediaryToMojang = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "intermediary.pkg.InterClass",
+        sourceMapping: "intermediary",
+        targetMapping: "mojang"
+      })
+    );
 
-  assert.equal(mojangToIntermediary.status, "resolved");
-  assert.equal(mojangToIntermediary.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
-  assert.equal(mojangToYarn.status, "resolved");
-  assert.equal(mojangToYarn.resolvedSymbol?.symbol, "yarn.pkg.NamedClass");
-  assert.equal(intermediaryToMojang.status, "resolved");
-  assert.equal(intermediaryToMojang.resolvedSymbol?.symbol, "com.mojang.NamedClass");
-  assert.ok(mojangToIntermediary.warnings.every((warning) => !warning.includes("No mapping path is available")));
+    assert.equal(mojangToIntermediary.status, "resolved");
+    assert.equal(mojangToIntermediary.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
+    assert.equal(mojangToYarn.status, "resolved");
+    assert.equal(mojangToYarn.resolvedSymbol?.symbol, "yarn.pkg.NamedClass");
+    assert.equal(intermediaryToMojang.status, "resolved");
+    assert.equal(intermediaryToMojang.resolvedSymbol?.symbol, "com.mojang.NamedClass");
+    assert.ok(mojangToIntermediary.warnings.every((warning) => !warning.includes("No mapping path is available")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService resolves mojang named namespace paths through official tiny headers from Maven fallback", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-official-maven-"));
-  const config = buildTestConfig(root, { mappingSourcePriority: "maven-first" });
+  try {
+    const config = buildTestConfig(root, { mappingSourcePriority: "maven-first" });
 
-  const tinyJarPath = join(root, "official-tiny.jar");
-  await createJar(tinyJarPath, {
-    "mappings/mappings.tiny": `${TEST_TINY_OFFICIAL}\n`
-  });
-  const tinyJarBuffer = await readFile(tinyJarPath);
+    const tinyJarPath = join(root, "official-tiny.jar");
+    await createJar(tinyJarPath, {
+      "mappings/mappings.tiny": `${TEST_TINY_OFFICIAL}\n`
+    });
+    const tinyJarBuffer = await readFile(tinyJarPath);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
-      return new Response(
-        [
-          "<metadata>",
-          "<versioning>",
-          "<versions>",
-          "<version>1.21.10+build.1</version>",
-          "</versions>",
-          "</versioning>",
-          "</metadata>"
-        ].join(""),
-        { status: 200 }
-      );
-    }
-    if (url.endsWith(".jar")) {
-      return new Response(tinyJarBuffer, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        return new Response(
+          [
+            "<metadata>",
+            "<versioning>",
+            "<versions>",
+            "<version>1.21.10+build.1</version>",
+            "</versions>",
+            "</versioning>",
+            "</metadata>"
+          ].join(""),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(".jar")) {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
-  const service = new MappingService(config, versionServiceStub, fetchStub);
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
+    const service = new MappingService(config, versionServiceStub, fetchStub);
 
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      kind: "class",
-      name: "com.mojang.NamedClass",
-      sourceMapping: "mojang",
-      targetMapping: "intermediary"
-    })
-  );
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "class",
+        name: "com.mojang.NamedClass",
+        sourceMapping: "mojang",
+        targetMapping: "intermediary"
+      })
+    );
 
-  assert.equal(result.status, "resolved");
-  assert.equal(result.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
-  assert.equal(result.mappingContext.sourcePriorityApplied, "maven-first");
-  assert.ok(result.warnings.every((warning) => !warning.includes("No mapping path is available")));
+    assert.equal(result.status, "resolved");
+    assert.equal(result.resolvedSymbol?.symbol, "intermediary.pkg.InterClass");
+    assert.equal(result.mappingContext.sourcePriorityApplied, "maven-first");
+    assert.ok(result.warnings.every((warning) => !warning.includes("No mapping path is available")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService fetches Maven tiny jars in parallel during fallback loading", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-parallel-"));
-  const config = buildTestConfig(root);
+  try {
+    const config = buildTestConfig(root);
 
-  const tinyJarPath = join(root, "parallel-tiny.jar");
-  await createJar(tinyJarPath, {
-    "mappings/mappings.tiny": `${TEST_TINY}\n`
-  });
-  const tinyJarBuffer = await readFile(tinyJarPath);
+    const tinyJarPath = join(root, "parallel-tiny.jar");
+    await createJar(tinyJarPath, {
+      "mappings/mappings.tiny": `${TEST_TINY}\n`
+    });
+    const tinyJarBuffer = await readFile(tinyJarPath);
 
-  let activeJarFetches = 0;
-  let maxActiveJarFetches = 0;
+    let activeJarFetches = 0;
+    let maxActiveJarFetches = 0;
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
-      return new Response(
-        [
-          "<metadata>",
-          "<versioning>",
-          "<versions>",
-          "<version>1.21.10+build.1</version>",
-          "</versions>",
-          "</versioning>",
-          "</metadata>"
-        ].join(""),
-        { status: 200 }
-      );
-    }
-    if (url.endsWith(".jar")) {
-      activeJarFetches += 1;
-      maxActiveJarFetches = Math.max(maxActiveJarFetches, activeJarFetches);
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      activeJarFetches -= 1;
-      return new Response(tinyJarBuffer, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        return new Response(
+          [
+            "<metadata>",
+            "<versioning>",
+            "<versions>",
+            "<version>1.21.10+build.1</version>",
+            "</versions>",
+            "</versioning>",
+            "</metadata>"
+          ].join(""),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(".jar")) {
+        activeJarFetches += 1;
+        maxActiveJarFetches = Math.max(maxActiveJarFetches, activeJarFetches);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        activeJarFetches -= 1;
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-  assert.ok(maxActiveJarFetches > 1, `expected parallel jar fetches, got ${maxActiveJarFetches}`);
+    assert.ok(maxActiveJarFetches > 1, `expected parallel jar fetches, got ${maxActiveJarFetches}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService supports sourcePriority override over config default", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-priority-"));
-  const config = buildTestConfig(root, {
-    mappingSourcePriority: "loom-first"
-  });
+  try {
+    const config = buildTestConfig(root, {
+      mappingSourcePriority: "loom-first"
+    });
 
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(
-    loomTinyPath,
-    [
-      "tiny\t2\t0\tobfuscated\tintermediary",
-      "c\ta/b/C\tloom/pkg/InterClass"
-    ].join("\n"),
-    "utf8"
-  );
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(
+      loomTinyPath,
+      [
+        "tiny\t2\t0\tobfuscated\tintermediary",
+        "c\ta/b/C\tloom/pkg/InterClass"
+      ].join("\n"),
+      "utf8"
+    );
 
-  const mavenTinyJar = join(root, "maven-tiny.jar");
-  await createJar(mavenTinyJar, {
-    "mappings/mappings.tiny": [
-      "tiny\t2\t0\tobfuscated\tintermediary",
-      "c\ta/b/C\tmaven/pkg/InterClass"
-    ].join("\n")
-  });
-  const tinyJarBuffer = await readFile(mavenTinyJar);
+    const mavenTinyJar = join(root, "maven-tiny.jar");
+    await createJar(mavenTinyJar, {
+      "mappings/mappings.tiny": [
+        "tiny\t2\t0\tobfuscated\tintermediary",
+        "c\ta/b/C\tmaven/pkg/InterClass"
+      ].join("\n")
+    });
+    const tinyJarBuffer = await readFile(mavenTinyJar);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.endsWith(".jar")) {
-      return new Response(tinyJarBuffer, { status: 200 });
-    }
-    if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
-      return new Response("<metadata><versioning><versions></versions></versioning></metadata>", {
-        status: 200
-      });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith(".jar")) {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        return new Response("<metadata><versioning><versions></versions></versioning></metadata>", {
+          status: 200
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C"),
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary",
-      sourcePriority: "maven-first"
-    })
-  );
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary",
+        sourcePriority: "maven-first"
+      })
+    );
 
-  assert.equal(result.candidates[0]?.symbol, "maven.pkg.InterClass");
-  assert.equal(result.provenance?.source, "maven");
+    assert.equal(result.candidates[0]?.symbol, "maven.pkg.InterClass");
+    assert.equal(result.provenance?.source, "maven");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService suppresses raw Loom miss warnings when Maven fallback resolves tiny mappings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-priority-warning-fallback-"));
-  const config = buildTestConfig(root, {
-    mappingSourcePriority: "loom-first",
-    sourceRepos: ["https://example.test"]
-  });
+  try {
+    const config = buildTestConfig(root, {
+      mappingSourcePriority: "loom-first",
+      sourceRepos: ["https://example.test"]
+    });
 
-  const mavenTinyJar = join(root, "maven-tiny.jar");
-  await createJar(mavenTinyJar, {
-    "mappings/mappings.tiny": [
-      "tiny\t2\t0\tobfuscated\tintermediary",
-      "c\ta/b/C\tmaven/pkg/InterClass"
-    ].join("\n")
-  });
-  const tinyJarBuffer = await readFile(mavenTinyJar);
+    const mavenTinyJar = join(root, "maven-tiny.jar");
+    await createJar(mavenTinyJar, {
+      "mappings/mappings.tiny": [
+        "tiny\t2\t0\tobfuscated\tintermediary",
+        "c\ta/b/C\tmaven/pkg/InterClass"
+      ].join("\n")
+    });
+    const tinyJarBuffer = await readFile(mavenTinyJar);
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10-v2.jar") {
-      return new Response(tinyJarBuffer, { status: 200 });
-    }
-    if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10.jar") {
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10-v2.jar") {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      if (url === "https://example.test/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10.jar") {
+        return new Response("not found", { status: 404 });
+      }
+      if (url === "https://example.test/net/fabricmc/yarn/maven-metadata.xml") {
+        return new Response("<metadata><versioning><versions></versions></versioning></metadata>", {
+          status: 200
+        });
+      }
       return new Response("not found", { status: 404 });
-    }
-    if (url === "https://example.test/net/fabricmc/yarn/maven-metadata.xml") {
-      return new Response("<metadata><versioning><versions></versions></versioning></metadata>", {
-        status: 200
-      });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    service.checkSymbolExists({
-      version: "1.21.10",
-      kind: "class",
-      name: "a.b.C",
-      sourceMapping: "obfuscated"
-    } as never)
-  );
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      service.checkSymbolExists({
+        version: "1.21.10",
+        kind: "class",
+        name: "a.b.C",
+        sourceMapping: "obfuscated"
+      } as never)
+    );
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
-  assert.ok(result.warnings.every((warning) => !warning.includes("No Loom tiny mapping files matched version")));
+    assert.equal(result.resolved, true);
+    assert.equal(result.status, "resolved");
+    assert.ok(result.warnings.every((warning) => !warning.includes("No Loom tiny mapping files matched version")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService extractTinyFromJar limits single-open tiny extraction to the first matching entry", async () => {
@@ -807,187 +928,207 @@ test("MappingService extractTinyFromJar limits single-open tiny extraction to th
 test("MappingService limits returned candidates while preserving ambiguity metadata", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-max-candidates-"));
-  const config = buildTestConfig(root);
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  try {
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await service.findMapping({
-    version: "1.21.10",
-    kind: "method",
-    owner: "a.b.C",
-    name: "f",
-    descriptor: "(I)V",
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang",
-    maxCandidates: 1
-  } as never);
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await service.findMapping({
+      version: "1.21.10",
+      kind: "method",
+      owner: "a.b.C",
+      name: "f",
+      descriptor: "(I)V",
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang",
+      maxCandidates: 1
+    } as never);
 
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "ambiguous");
-  assert.equal(result.candidateCount, 2);
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidatesTruncated, true);
+    assert.equal(result.resolved, false);
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.candidateCount, 2);
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidatesTruncated, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService maps field symbols and returns structured candidate metadata", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-field-"));
-  const config = buildTestConfig(root);
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  try {
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await service.findMapping({
-    version: "1.21.10",
-    ...queryFromSymbol("a.b.C.d"),
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang"
-  });
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C.d"),
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    });
 
-  assert.equal(result.warnings.length, 0);
-  assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedField");
-  assert.equal(result.candidates[0]?.kind, "field");
-  assert.equal(result.candidates[0]?.owner, "com.mojang.NamedClass");
-  assert.equal(result.candidates[0]?.name, "namedField");
-  assert.equal(result.candidates[0]?.descriptor, undefined);
+    assert.equal(result.warnings.length, 0);
+    assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedField");
+    assert.equal(result.candidates[0]?.kind, "field");
+    assert.equal(result.candidates[0]?.owner, "com.mojang.NamedClass");
+    assert.equal(result.candidates[0]?.name, "namedField");
+    assert.equal(result.candidates[0]?.descriptor, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService maps descriptor-qualified methods through tiny mappings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-method-tiny-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    service.findMapping({
-      version: "1.21.10",
-      ...queryFromSymbol("a.b.C.e(I)V"),
-      sourceMapping: "obfuscated",
-      targetMapping: "intermediary"
-    })
-  );
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C.e(I)V"),
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
 
-  assert.equal(result.warnings.length, 0);
-  assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass.interMethod(I)V");
-  assert.equal(result.candidates[0]?.kind, "method");
-  assert.equal(result.candidates[0]?.owner, "intermediary.pkg.InterClass");
-  assert.equal(result.candidates[0]?.name, "interMethod");
-  assert.equal(result.candidates[0]?.descriptor, "(I)V");
+    assert.equal(result.warnings.length, 0);
+    assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass.interMethod(I)V");
+    assert.equal(result.candidates[0]?.kind, "method");
+    assert.equal(result.candidates[0]?.owner, "intermediary.pkg.InterClass");
+    assert.equal(result.candidates[0]?.name, "interMethod");
+    assert.equal(result.candidates[0]?.descriptor, "(I)V");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService resolves exact method descriptor through mojang client mappings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-method-mojang-fallback-"));
-  const config = buildTestConfig(root);
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+  try {
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await service.findMapping({
-    version: "1.21.10",
-    ...queryFromSymbol("a.b.C.e(I)V"),
-    sourceMapping: "obfuscated",
-    targetMapping: "mojang"
-  });
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("a.b.C.e(I)V"),
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    });
 
-  assert.equal(result.resolved, true);
-  assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedMethod(I)V");
-  assert.equal(result.candidates[0]?.kind, "method");
-  assert.equal(result.candidates[0]?.descriptor, "(I)V");
+    assert.equal(result.resolved, true);
+    assert.equal(result.candidates[0]?.symbol, "com.mojang.NamedClass.namedMethod(I)V");
+    assert.equal(result.candidates[0]?.kind, "method");
+    assert.equal(result.candidates[0]?.descriptor, "(I)V");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService returns identity candidate when source/target mapping are equal", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-identity-"));
-  const config = buildTestConfig(root);
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+  try {
+    const config = buildTestConfig(root);
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const sourceMapping: SourceMapping = "yarn";
-  const result = await service.findMapping({
-    version: "1.21.10",
-    ...queryFromSymbol("net.minecraft.server.MinecraftServer"),
-    sourceMapping,
-    targetMapping: sourceMapping
-  });
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const sourceMapping: SourceMapping = "yarn";
+    const result = await service.findMapping({
+      version: "1.21.10",
+      ...queryFromSymbol("net.minecraft.server.MinecraftServer"),
+      sourceMapping,
+      targetMapping: sourceMapping
+    });
 
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidates[0]?.symbol, "net.minecraft.server.MinecraftServer");
-  assert.equal(result.candidates[0]?.confidence, 1);
-  assert.equal(result.candidates[0]?.kind, "class");
-  assert.equal(result.candidates[0]?.name, "net.minecraft.server.MinecraftServer");
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.candidates[0]?.symbol, "net.minecraft.server.MinecraftServer");
+    assert.equal(result.candidates[0]?.confidence, 1);
+    assert.equal(result.candidates[0]?.kind, "class");
+    assert.equal(result.candidates[0]?.name, "net.minecraft.server.MinecraftServer");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService resolveMethodMappingExact resolves representative exact lookup backends", async (t) => {
@@ -998,46 +1139,112 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
       "mapping-service-method-exact-descriptor-remap-",
       TEST_DESCRIPTOR_REMAP_TINY
     );
-    const descriptor = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z";
-    const expectedTargetDescriptor =
-      "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
+    try {
+      const descriptor = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z";
+      const expectedTargetDescriptor =
+        "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
 
-    const exactResult = await withCwd(root, () =>
-      service.resolveMethodMappingExact({
-        version: "1.21.10",
-        owner: "net.minecraft.class_1937",
-        name: "method_1725",
-        descriptor,
-        sourceMapping: "intermediary",
-        targetMapping: "yarn"
-      })
-    );
+      const exactResult = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "net.minecraft.class_1937",
+          name: "method_1725",
+          descriptor,
+          sourceMapping: "intermediary",
+          targetMapping: "yarn"
+        })
+      );
 
-    assert.equal(exactResult.resolved, true);
-    assert.equal(exactResult.status, "resolved");
-    assert.equal(exactResult.resolvedSymbol?.name, "setBlock");
-    assert.equal(exactResult.resolvedSymbol?.owner, "net.minecraft.world.level.Level");
-    assert.equal(exactResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
+      assert.equal(exactResult.resolved, true);
+      assert.equal(exactResult.status, "resolved");
+      assert.equal(exactResult.resolvedSymbol?.name, "setBlock");
+      assert.equal(exactResult.resolvedSymbol?.owner, "net.minecraft.world.level.Level");
+      assert.equal(exactResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
 
-    const findResult = await withCwd(root, () =>
-      service.findMapping({
-        version: "1.21.10",
-        kind: "method",
-        owner: "net.minecraft.class_1937",
-        name: "method_1725",
-        descriptor,
-        sourceMapping: "intermediary",
-        targetMapping: "yarn"
-      })
-    );
-    assert.equal(findResult.resolved, true);
-    assert.equal(findResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
+      const findResult = await withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "method",
+          owner: "net.minecraft.class_1937",
+          name: "method_1725",
+          descriptor,
+          sourceMapping: "intermediary",
+          targetMapping: "yarn"
+        })
+      );
+      assert.equal(findResult.resolved, true);
+      assert.equal(findResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   await t.test("preserves descriptor path through tiny mappings", async () => {
     const { root, service } = await createLoomService("mapping-service-method-exact-", TEST_TINY);
-    const result = await withCwd(root, () =>
-      (
+    try {
+      const result = await withCwd(root, () =>
+        (
+          service as unknown as {
+            resolveMethodMappingExact: (input: {
+              version: string;
+              kind: "method";
+              owner: string;
+              name: string;
+              descriptor: string;
+              sourceMapping: SourceMapping;
+              targetMapping: SourceMapping;
+              sourcePriority?: "loom-first" | "maven-first";
+            }) => Promise<{
+              resolved: boolean;
+              status: string;
+              resolvedSymbol?: {
+                name: string;
+                owner?: string;
+                descriptor?: string;
+              };
+              warnings: string[];
+            }>;
+          }
+        ).resolveMethodMappingExact({
+          version: "1.21.10",
+          kind: "method",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        })
+      );
+
+      assert.equal(result.resolved, true);
+      assert.equal(result.status, "resolved");
+      assert.equal(result.resolvedSymbol?.name, "interMethod");
+      assert.equal(result.resolvedSymbol?.owner, "intermediary.pkg.InterClass");
+      assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
+      assert.equal(result.warnings.length, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("resolves through mojang client mappings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-mojang-"));
+    try {
+      const config = buildTestConfig(root);
+      const fetchStub = (async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === "https://example.test/mappings/client.txt") {
+          return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+
+      const service = new MappingService(
+        config,
+        createVersionServiceStub("https://example.test/mappings/client.txt"),
+        fetchStub
+      );
+      const result = await (
         service as unknown as {
           resolveMethodMappingExact: (input: {
             version: string;
@@ -1047,15 +1254,9 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
             descriptor: string;
             sourceMapping: SourceMapping;
             targetMapping: SourceMapping;
-            sourcePriority?: "loom-first" | "maven-first";
           }) => Promise<{
             resolved: boolean;
             status: string;
-            resolvedSymbol?: {
-              name: string;
-              owner?: string;
-              descriptor?: string;
-            };
             warnings: string[];
           }>;
         }
@@ -1063,24 +1264,139 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
         version: "1.21.10",
         kind: "method",
         owner: "a.b.C",
-        name: "e",
+        name: "f",
         descriptor: "(I)V",
         sourceMapping: "obfuscated",
-        targetMapping: "intermediary"
-      })
-    );
+        targetMapping: "mojang"
+      });
 
-    assert.equal(result.resolved, true);
-    assert.equal(result.status, "resolved");
-    assert.equal(result.resolvedSymbol?.name, "interMethod");
-    assert.equal(result.resolvedSymbol?.owner, "intermediary.pkg.InterClass");
-    assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
-    assert.equal(result.warnings.length, 0);
+      assert.equal(result.resolved, true);
+      assert.equal(result.status, "resolved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+test("MappingService resolveMethodMappingExact reports representative unresolved result states", async (t) => {
+  await t.test("returns explicit not_found for misses", async () => {
+    const { root, service } = await createLoomService("mapping-service-method-exact-miss-", TEST_TINY);
+    try {
+      const result = await withCwd(root, () =>
+        (
+          service as unknown as {
+            resolveMethodMappingExact: (input: {
+              version: string;
+              kind: "method";
+              owner: string;
+              name: string;
+              descriptor: string;
+              sourceMapping: SourceMapping;
+              targetMapping: SourceMapping;
+            }) => Promise<{
+              resolved: boolean;
+              status: string;
+              candidates: unknown[];
+            }>;
+          }
+        ).resolveMethodMappingExact({
+          version: "1.21.10",
+          kind: "method",
+          owner: "a.b.C",
+          name: "missing",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        })
+      );
+
+      assert.equal(result.resolved, false);
+      assert.equal(result.status, "not_found");
+      assert.equal(result.candidates.length, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  await t.test("resolves through mojang client mappings", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mapping-service-method-exact-mojang-"));
-    const config = buildTestConfig(root);
+  await t.test("returns ambiguous when duplicate target names exist", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-ambiguous-",
+      TEST_AMBIGUOUS_METHOD_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        (
+          service as unknown as {
+            resolveMethodMappingExact: (input: {
+              version: string;
+              kind: "method";
+              owner: string;
+              name: string;
+              descriptor: string;
+              sourceMapping: SourceMapping;
+              targetMapping: SourceMapping;
+            }) => Promise<{
+              resolved: boolean;
+              status: string;
+              candidates: Array<{ name: string }>;
+            }>;
+          }
+        ).resolveMethodMappingExact({
+          version: "1.21.10",
+          kind: "method",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        })
+      );
+
+      assert.equal(result.resolved, false);
+      assert.equal(result.status, "ambiguous");
+      assert.equal(result.candidates.length, 2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("applies maxCandidates to ambiguous result sets", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-max-candidates-",
+      TEST_AMBIGUOUS_METHOD_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary",
+          maxCandidates: 1
+        } as never)
+      );
+
+      assert.equal(result.status, "ambiguous");
+      assert.equal(result.candidateCount, 2);
+      assert.equal(result.candidates.length, 1);
+      assert.equal(result.candidatesTruncated, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+test("MappingService builds class API matrix across mappings", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url === "https://example.test/mappings/client.txt") {
@@ -1089,129 +1405,448 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const service = new MappingService(
-      config,
-      createVersionServiceStub("https://example.test/mappings/client.txt"),
-      fetchStub
-    );
-    const result = await (
-      service as unknown as {
-        resolveMethodMappingExact: (input: {
-          version: string;
-          kind: "method";
-          owner: string;
-          name: string;
-          descriptor: string;
-          sourceMapping: SourceMapping;
-          targetMapping: SourceMapping;
-        }) => Promise<{
-          resolved: boolean;
-          status: string;
-          warnings: string[];
-        }>;
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
       }
-    ).resolveMethodMappingExact({
+    };
+
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          getClassApiMatrix: (input: {
+            version: string;
+            className: string;
+            classNameMapping: SourceMapping;
+          }) => Promise<{
+            classIdentity: Record<string, string | undefined>;
+            rows: Array<{
+              kind: string;
+              descriptor?: string;
+              obfuscated?: { name: string };
+              intermediary?: { name: string };
+              yarn?: { name: string };
+              mojang?: { name: string };
+            }>;
+          }>;
+        }
+      ).getClassApiMatrix({
+        version: "1.21.10",
+        className: "a.b.C",
+        classNameMapping: "obfuscated"
+      })
+    );
+
+    assert.equal(result.classIdentity.obfuscated, "a.b.C");
+    assert.equal(result.classIdentity.intermediary, "intermediary.pkg.InterClass");
+    assert.equal(result.classIdentity.yarn, "yarn.pkg.NamedClass");
+    assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
+
+    const row = result.rows.find(
+      (entry) => entry.kind === "method" && entry.descriptor === "(I)V" && entry.obfuscated?.name === "e"
+    );
+    assert.ok(row);
+    assert.equal(row?.intermediary?.name, "interMethod");
+    assert.equal(row?.yarn?.name, "namedMethod");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService getClassApiMatrix supports maxRows", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-maxrows-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      service.getClassApiMatrix({
+        version: "1.21.10",
+        className: "a.b.C",
+        classNameMapping: "obfuscated",
+        maxRows: 2
+      } as never)
+    );
+
+    assert.equal(result.rowCount > 2, true);
+    assert.equal(result.rows.length, 2);
+    assert.equal(result.rowsTruncated, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService getClassApiMatrix prefers the explicit classNameMapping over obfuscated base rows", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-explicit-base-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+
+    (service as any).loadGraph = async () => ({
       version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "f",
-      descriptor: "(I)V",
-      sourceMapping: "obfuscated",
-      targetMapping: "mojang"
+      priority: "loom-first",
+      pairs: new Map(),
+      adjacency: new Map(),
+      pathCache: new Map(),
+      warnings: [],
+      recordsByTarget: new Map([
+        [
+          "mojang",
+          [
+            {
+              kind: "class",
+              symbol: "com.mojang.NamedClass",
+              name: "NamedClass"
+            },
+            {
+              kind: "method",
+              symbol: "com.mojang.NamedClass.namedMethod(I)V",
+              owner: "com.mojang.NamedClass",
+              name: "namedMethod",
+              descriptor: "(I)V"
+            }
+          ]
+        ],
+        ["obfuscated", []],
+        ["intermediary", []],
+        ["yarn", []]
+      ])
     });
+
+    (service as any).mapRecordBetweenMappings = (
+      _graph: unknown,
+      sourceMapping: SourceMapping,
+      targetMapping: SourceMapping,
+      record: {
+        kind: "class" | "field" | "method";
+        owner?: string;
+        name: string;
+        descriptor?: string;
+        symbol: string;
+      }
+    ) => {
+      if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
+        return [{ kind: "class", symbol: "a.b.C", name: "C" }];
+      }
+      if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "intermediary") {
+        return [{ kind: "class", symbol: "intermediary.pkg.InterClass", name: "InterClass" }];
+      }
+      if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "yarn") {
+        return [{ kind: "class", symbol: "yarn.pkg.NamedClass", name: "NamedClass" }];
+      }
+      if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
+        return [{
+          kind: "method",
+          symbol: "a.b.C.e(I)V",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V"
+        }];
+      }
+      if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "intermediary") {
+        return [{
+          kind: "method",
+          symbol: "intermediary.pkg.InterClass.interMethod(I)V",
+          owner: "intermediary.pkg.InterClass",
+          name: "interMethod",
+          descriptor: "(I)V"
+        }];
+      }
+      if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "yarn") {
+        return [{
+          kind: "method",
+          symbol: "yarn.pkg.NamedClass.namedMethod(I)V",
+          owner: "yarn.pkg.NamedClass",
+          name: "namedMethod",
+          descriptor: "(I)V"
+        }];
+      }
+      return [];
+    };
+
+    const result = await service.getClassApiMatrix({
+      version: "1.21.10",
+      className: "com.mojang.NamedClass",
+      classNameMapping: "mojang"
+    } as never);
+
+    assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
+    assert.equal(result.classIdentity.obfuscated, "a.b.C");
+    assert.equal(result.rowCount, 2);
+    assert.ok(
+      result.rows.some(
+        (row) => row.kind === "method" && row.mojang?.name === "namedMethod" && row.obfuscated?.name === "e"
+      )
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService checks symbol existence across class/field/method kinds", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const classExists = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            name: string;
+            owner?: string;
+            sourceMapping: SourceMapping;
+            descriptor?: string;
+          }) => Promise<{ resolved: boolean; status: string }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "class",
+        name: "a.b.C",
+        sourceMapping: "obfuscated"
+      })
+    );
+    assert.equal(classExists.resolved, true);
+    assert.equal(classExists.status, "resolved");
+
+    await assert.rejects(
+      () =>
+        withCwd(root, () =>
+          (
+            service as unknown as {
+              checkSymbolExists: (input: {
+                version: string;
+                kind: "class" | "field" | "method";
+                owner?: string;
+                name: string;
+                sourceMapping: SourceMapping;
+                descriptor?: string;
+              }) => Promise<{ resolved: boolean; status: string }>;
+            }
+          ).checkSymbolExists({
+            version: "1.21.10",
+            kind: "method",
+            owner: "a.b.C",
+            name: "f",
+            sourceMapping: "obfuscated"
+          })
+        ),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+    );
+
+    const methodExists = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            sourceMapping: SourceMapping;
+            descriptor?: string;
+          }) => Promise<{ resolved: boolean; status: string }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "f",
+        descriptor: "(I)V",
+        sourceMapping: "obfuscated"
+      })
+    );
+    assert.equal(methodExists.resolved, true);
+    assert.equal(methodExists.status, "resolved");
+
+    // signatureMode=name-only should NOT throw when descriptor is omitted
+    const nameOnlyResult = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            sourceMapping: SourceMapping;
+            signatureMode?: "exact" | "name-only";
+          }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "f",
+        sourceMapping: "obfuscated",
+        signatureMode: "name-only"
+      })
+    );
+    // Two overloads of "f" exist, so name-only resolves as ambiguous
+    assert.equal(nameOnlyResult.status, "ambiguous");
+    assert.ok(nameOnlyResult.candidates.length >= 2);
+
+    // signatureMode=name-only with unique method "e" should resolve
+    const nameOnlyUnique = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            sourceMapping: SourceMapping;
+            signatureMode?: "exact" | "name-only";
+          }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "e",
+        sourceMapping: "obfuscated",
+        signatureMode: "name-only"
+      })
+    );
+    assert.equal(nameOnlyUnique.resolved, true);
+    assert.equal(nameOnlyUnique.status, "resolved");
+    assert.equal(nameOnlyUnique.candidates.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService supports short class name checks when nameMode=auto", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            name: string;
+            sourceMapping: SourceMapping;
+            nameMode?: "fqcn" | "auto";
+          }) => Promise<{ resolved: boolean; status: string; resolvedSymbol?: { symbol: string } }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "class",
+        name: "C",
+        sourceMapping: "obfuscated",
+        nameMode: "auto"
+      })
+    );
 
     assert.equal(result.resolved, true);
     assert.equal(result.status, "resolved");
-  });
+    assert.equal(result.resolvedSymbol?.symbol, "a.b.C");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("MappingService resolveMethodMappingExact reports representative unresolved result states", async (t) => {
-  await t.test("returns explicit not_found for misses", async () => {
-    const { root, service } = await createLoomService("mapping-service-method-exact-miss-", TEST_TINY);
+test("MappingService checkSymbolExists supports maxCandidates", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-max-candidates-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const tiny = [
+      "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+      "c\ta/b/C\tinter/one/C\tyarn/one/C",
+      "c\tx/y/C\tinter/two/C\tyarn/two/C"
+    ].join("\n");
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          resolveMethodMappingExact: (input: {
-            version: string;
-            kind: "method";
-            owner: string;
-            name: string;
-            descriptor: string;
-            sourceMapping: SourceMapping;
-            targetMapping: SourceMapping;
-          }) => Promise<{
-            resolved: boolean;
-            status: string;
-            candidates: unknown[];
-          }>;
-        }
-      ).resolveMethodMappingExact({
+      service.checkSymbolExists({
         version: "1.21.10",
-        kind: "method",
-        owner: "a.b.C",
-        name: "missing",
-        descriptor: "(I)V",
+        kind: "class",
+        name: "C",
         sourceMapping: "obfuscated",
-        targetMapping: "intermediary"
-      })
-    );
-
-    assert.equal(result.resolved, false);
-    assert.equal(result.status, "not_found");
-    assert.equal(result.candidates.length, 0);
-  });
-
-  await t.test("returns ambiguous when duplicate target names exist", async () => {
-    const { root, service } = await createLoomService(
-      "mapping-service-method-exact-ambiguous-",
-      TEST_AMBIGUOUS_METHOD_TINY
-    );
-    const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          resolveMethodMappingExact: (input: {
-            version: string;
-            kind: "method";
-            owner: string;
-            name: string;
-            descriptor: string;
-            sourceMapping: SourceMapping;
-            targetMapping: SourceMapping;
-          }) => Promise<{
-            resolved: boolean;
-            status: string;
-            candidates: Array<{ name: string }>;
-          }>;
-        }
-      ).resolveMethodMappingExact({
-        version: "1.21.10",
-        kind: "method",
-        owner: "a.b.C",
-        name: "e",
-        descriptor: "(I)V",
-        sourceMapping: "obfuscated",
-        targetMapping: "intermediary"
-      })
-    );
-
-    assert.equal(result.resolved, false);
-    assert.equal(result.status, "ambiguous");
-    assert.equal(result.candidates.length, 2);
-  });
-
-  await t.test("applies maxCandidates to ambiguous result sets", async () => {
-    const { root, service } = await createLoomService(
-      "mapping-service-method-exact-max-candidates-",
-      TEST_AMBIGUOUS_METHOD_TINY
-    );
-    const result = await withCwd(root, () =>
-      service.resolveMethodMappingExact({
-        version: "1.21.10",
-        owner: "a.b.C",
-        name: "e",
-        descriptor: "(I)V",
-        sourceMapping: "obfuscated",
-        targetMapping: "intermediary",
+        nameMode: "auto",
         maxCandidates: 1
       } as never)
     );
@@ -1220,267 +1855,186 @@ test("MappingService resolveMethodMappingExact reports representative unresolved
     assert.equal(result.candidateCount, 2);
     assert.equal(result.candidates.length, 1);
     assert.equal(result.candidatesTruncated, true);
-  });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("MappingService builds class API matrix across mappings", async () => {
+test("MappingService returns ambiguous for short class names when multiple FQCNs match nameMode=auto", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-ambiguous-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const tiny = [
+      "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+      "c\ta/b/C\tinter/one/C\tyarn/one/C",
+      "c\tx/y/C\tinter/two/C\tyarn/two/C"
+    ].join("\n");
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        getClassApiMatrix: (input: {
-          version: string;
-          className: string;
-          classNameMapping: SourceMapping;
-        }) => Promise<{
-          classIdentity: Record<string, string | undefined>;
-          rows: Array<{
-            kind: string;
-            descriptor?: string;
-            obfuscated?: { name: string };
-            intermediary?: { name: string };
-            yarn?: { name: string };
-            mojang?: { name: string };
-          }>;
-        }>;
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
       }
-    ).getClassApiMatrix({
-      version: "1.21.10",
-      className: "a.b.C",
-      classNameMapping: "obfuscated"
-    })
-  );
+    };
 
-  assert.equal(result.classIdentity.obfuscated, "a.b.C");
-  assert.equal(result.classIdentity.intermediary, "intermediary.pkg.InterClass");
-  assert.equal(result.classIdentity.yarn, "yarn.pkg.NamedClass");
-  assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            name: string;
+            sourceMapping: SourceMapping;
+            nameMode?: "fqcn" | "auto";
+          }) => Promise<{ resolved: boolean; status: string; candidates: Array<{ symbol: string }>; warnings: string[] }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "class",
+        name: "C",
+        sourceMapping: "obfuscated",
+        nameMode: "auto"
+      })
+    );
 
-  const row = result.rows.find(
-    (entry) => entry.kind === "method" && entry.descriptor === "(I)V" && entry.obfuscated?.name === "e"
-  );
-  assert.ok(row);
-  assert.equal(row?.intermediary?.name, "interMethod");
-  assert.equal(row?.yarn?.name, "namedMethod");
+    assert.equal(result.resolved, false);
+    assert.equal(result.status, "ambiguous");
+    assert.equal(result.candidates.length, 2);
+    assert.ok(result.warnings.some((warning) => warning.includes("fully-qualified class name")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("MappingService getClassApiMatrix supports maxRows", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-maxrows-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+test("MappingService findMapping handles representative ambiguity metadata flows", async (t) => {
+  await t.test("includes ambiguityReasons and warning when multiple owners match", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-ambiguity-reasons-",
+      TEST_AMBIGUOUS_CLASS_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "class",
+          name: "a.b.C",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        })
+      );
 
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/mappings/client.txt") {
-      return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      assert.equal(result.status, "ambiguous");
+      assert.ok(result.warnings.some((warning) => warning.includes("Ambiguous mapping")));
+      assert.ok(result.ambiguityReasons);
+      assert.ok(result.ambiguityReasons.length > 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: "https://example.test/mappings/client.txt"
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    service.getClassApiMatrix({
-      version: "1.21.10",
-      className: "a.b.C",
-      classNameMapping: "obfuscated",
-      maxRows: 2
-    } as never)
-  );
-
-  assert.equal(result.rowCount > 2, true);
-  assert.equal(result.rows.length, 2);
-  assert.equal(result.rowsTruncated, true);
-});
-
-test("MappingService getClassApiMatrix prefers the explicit classNameMapping over obfuscated base rows", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-explicit-base-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-
-  (service as any).loadGraph = async () => ({
-    version: "1.21.10",
-    priority: "loom-first",
-    pairs: new Map(),
-    adjacency: new Map(),
-    pathCache: new Map(),
-    warnings: [],
-    recordsByTarget: new Map([
-      [
-        "mojang",
-        [
-          {
-            kind: "class",
-            symbol: "com.mojang.NamedClass",
-            name: "NamedClass"
-          },
-          {
-            kind: "method",
-            symbol: "com.mojang.NamedClass.namedMethod(I)V",
-            owner: "com.mojang.NamedClass",
-            name: "namedMethod",
-            descriptor: "(I)V"
-          }
-        ]
-      ],
-      ["obfuscated", []],
-      ["intermediary", []],
-      ["yarn", []]
-    ])
   });
 
-  (service as any).mapRecordBetweenMappings = (
-    _graph: unknown,
-    sourceMapping: SourceMapping,
-    targetMapping: SourceMapping,
-    record: {
-      kind: "class" | "field" | "method";
-      owner?: string;
-      name: string;
-      descriptor?: string;
-      symbol: string;
-    }
-  ) => {
-    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
-      return [{ kind: "class", symbol: "a.b.C", name: "C" }];
-    }
-    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "intermediary") {
-      return [{ kind: "class", symbol: "intermediary.pkg.InterClass", name: "InterClass" }];
-    }
-    if (record.kind === "class" && sourceMapping === "mojang" && targetMapping === "yarn") {
-      return [{ kind: "class", symbol: "yarn.pkg.NamedClass", name: "NamedClass" }];
-    }
-    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "obfuscated") {
-      return [{
-        kind: "method",
-        symbol: "a.b.C.e(I)V",
-        owner: "a.b.C",
-        name: "e",
-        descriptor: "(I)V"
-      }];
-    }
-    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "intermediary") {
-      return [{
-        kind: "method",
-        symbol: "intermediary.pkg.InterClass.interMethod(I)V",
-        owner: "intermediary.pkg.InterClass",
-        name: "interMethod",
-        descriptor: "(I)V"
-      }];
-    }
-    if (record.kind === "method" && sourceMapping === "mojang" && targetMapping === "yarn") {
-      return [{
-        kind: "method",
-        symbol: "yarn.pkg.NamedClass.namedMethod(I)V",
-        owner: "yarn.pkg.NamedClass",
-        name: "namedMethod",
-        descriptor: "(I)V"
-      }];
-    }
-    return [];
-  };
+  await t.test("supports disambiguation hints for ambiguous class matches", async () => {
+    const { root, service } = await createLoomService(
+      "mapping-service-find-disambiguation-",
+      TEST_AMBIGUOUS_CLASS_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        (
+          service as unknown as {
+            findMapping: (input: {
+              version: string;
+              kind: "class" | "field" | "method";
+              name: string;
+              sourceMapping: SourceMapping;
+              targetMapping: SourceMapping;
+              disambiguation?: { ownerHint?: string; descriptorHint?: string };
+            }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
+          }
+        ).findMapping({
+          version: "1.21.10",
+          kind: "class",
+          name: "a.b.C",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary",
+          disambiguation: { ownerHint: "inter.two" }
+        })
+      );
 
-  const result = await service.getClassApiMatrix({
-    version: "1.21.10",
-    className: "com.mojang.NamedClass",
-    classNameMapping: "mojang"
-  } as never);
+      assert.equal(result.status, "resolved");
+      assert.equal(result.resolvedSymbol?.symbol, "inter.two.C");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-  assert.equal(result.classIdentity.mojang, "com.mojang.NamedClass");
-  assert.equal(result.classIdentity.obfuscated, "a.b.C");
-  assert.equal(result.rowCount, 2);
-  assert.ok(
-    result.rows.some(
-      (row) => row.kind === "method" && row.mojang?.name === "namedMethod" && row.obfuscated?.name === "e"
-    )
-  );
+  await t.test("omits ambiguityReasons when a single candidate resolves", async () => {
+    const { root, service } = await createLoomService("mapping-service-no-ambiguity-", TEST_TINY);
+    try {
+      const result = await withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.10",
+          ...queryFromSymbol("a.b.C"),
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        })
+      );
+
+      assert.equal(result.status, "resolved");
+      assert.equal(result.ambiguityReasons, undefined);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
-test("MappingService checks symbol existence across class/field/method kinds", async () => {
+test("MappingService returns mapping_unavailable for symbol existence when mapping graph is absent", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-unavailable-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const classExists = await withCwd(root, () =>
-    (
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    const result = await (
       service as unknown as {
         checkSymbolExists: (input: {
           version: string;
           kind: "class" | "field" | "method";
-          name: string;
           owner?: string;
+          name: string;
           sourceMapping: SourceMapping;
-          descriptor?: string;
         }) => Promise<{ resolved: boolean; status: string }>;
       }
     ).checkSymbolExists({
       version: "1.21.10",
       kind: "class",
-      name: "a.b.C",
-      sourceMapping: "obfuscated"
-    })
-  );
-  assert.equal(classExists.resolved, true);
-  assert.equal(classExists.status, "resolved");
+      name: "intermediary.pkg.InterClass",
+      sourceMapping: "intermediary"
+    });
 
-  await assert.rejects(
-    () =>
-      withCwd(root, () =>
+    assert.equal(result.resolved, false);
+    assert.equal(result.status, "mapping_unavailable");
+
+    await assert.rejects(
+      () =>
         (
           service as unknown as {
             checkSymbolExists: (input: {
@@ -1498,468 +2052,131 @@ test("MappingService checks symbol existence across class/field/method kinds", a
           owner: "a.b.C",
           name: "f",
           sourceMapping: "obfuscated"
-        })
-      ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
-
-  const methodExists = await withCwd(root, () =>
-    (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          owner?: string;
-          name: string;
-          sourceMapping: SourceMapping;
-          descriptor?: string;
-        }) => Promise<{ resolved: boolean; status: string }>;
-      }
-    ).checkSymbolExists({
-      version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "f",
-      descriptor: "(I)V",
-      sourceMapping: "obfuscated"
-    })
-  );
-  assert.equal(methodExists.resolved, true);
-  assert.equal(methodExists.status, "resolved");
-
-  // signatureMode=name-only should NOT throw when descriptor is omitted
-  const nameOnlyResult = await withCwd(root, () =>
-    (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          owner?: string;
-          name: string;
-          sourceMapping: SourceMapping;
-          signatureMode?: "exact" | "name-only";
-        }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
-      }
-    ).checkSymbolExists({
-      version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "f",
-      sourceMapping: "obfuscated",
-      signatureMode: "name-only"
-    })
-  );
-  // Two overloads of "f" exist, so name-only resolves as ambiguous
-  assert.equal(nameOnlyResult.status, "ambiguous");
-  assert.ok(nameOnlyResult.candidates.length >= 2);
-
-  // signatureMode=name-only with unique method "e" should resolve
-  const nameOnlyUnique = await withCwd(root, () =>
-    (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          owner?: string;
-          name: string;
-          sourceMapping: SourceMapping;
-          signatureMode?: "exact" | "name-only";
-        }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
-      }
-    ).checkSymbolExists({
-      version: "1.21.10",
-      kind: "method",
-      owner: "a.b.C",
-      name: "e",
-      sourceMapping: "obfuscated",
-      signatureMode: "name-only"
-    })
-  );
-  assert.equal(nameOnlyUnique.resolved, true);
-  assert.equal(nameOnlyUnique.status, "resolved");
-  assert.equal(nameOnlyUnique.candidates.length, 1);
-});
-
-test("MappingService supports short class name checks when nameMode=auto", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          name: string;
-          sourceMapping: SourceMapping;
-          nameMode?: "fqcn" | "auto";
-        }) => Promise<{ resolved: boolean; status: string; resolvedSymbol?: { symbol: string } }>;
-      }
-    ).checkSymbolExists({
-      version: "1.21.10",
-      kind: "class",
-      name: "C",
-      sourceMapping: "obfuscated",
-      nameMode: "auto"
-    })
-  );
-
-  assert.equal(result.resolved, true);
-  assert.equal(result.status, "resolved");
-  assert.equal(result.resolvedSymbol?.symbol, "a.b.C");
-});
-
-test("MappingService checkSymbolExists supports maxCandidates", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-max-candidates-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const tiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/one/C\tyarn/one/C",
-    "c\tx/y/C\tinter/two/C\tyarn/two/C"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    service.checkSymbolExists({
-      version: "1.21.10",
-      kind: "class",
-      name: "C",
-      sourceMapping: "obfuscated",
-      nameMode: "auto",
-      maxCandidates: 1
-    } as never)
-  );
-
-  assert.equal(result.status, "ambiguous");
-  assert.equal(result.candidateCount, 2);
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidatesTruncated, true);
-});
-
-test("MappingService returns ambiguous for short class names when multiple FQCNs match nameMode=auto", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-ambiguous-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const tiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/one/C\tyarn/one/C",
-    "c\tx/y/C\tinter/two/C\tyarn/two/C"
-  ].join("\n");
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
-
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          name: string;
-          sourceMapping: SourceMapping;
-          nameMode?: "fqcn" | "auto";
-        }) => Promise<{ resolved: boolean; status: string; candidates: Array<{ symbol: string }>; warnings: string[] }>;
-      }
-    ).checkSymbolExists({
-      version: "1.21.10",
-      kind: "class",
-      name: "C",
-      sourceMapping: "obfuscated",
-      nameMode: "auto"
-    })
-  );
-
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "ambiguous");
-  assert.equal(result.candidates.length, 2);
-  assert.ok(result.warnings.some((warning) => warning.includes("fully-qualified class name")));
-});
-
-test("MappingService findMapping handles representative ambiguity metadata flows", async (t) => {
-  await t.test("includes ambiguityReasons and warning when multiple owners match", async () => {
-    const { root, service } = await createLoomService(
-      "mapping-service-ambiguity-reasons-",
-      TEST_AMBIGUOUS_CLASS_TINY
-    );
-    const result = await withCwd(root, () =>
-      service.findMapping({
-        version: "1.21.10",
-        kind: "class",
-        name: "a.b.C",
-        sourceMapping: "obfuscated",
-        targetMapping: "intermediary"
-      })
+        }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
     );
 
-    assert.equal(result.status, "ambiguous");
-    assert.ok(result.warnings.some((warning) => warning.includes("Ambiguous mapping")));
-    assert.ok(result.ambiguityReasons);
-    assert.ok(result.ambiguityReasons.length > 0);
-  });
-
-  await t.test("supports disambiguation hints for ambiguous class matches", async () => {
-    const { root, service } = await createLoomService(
-      "mapping-service-find-disambiguation-",
-      TEST_AMBIGUOUS_CLASS_TINY
+    await assert.rejects(
+      () =>
+        (
+          service as unknown as {
+            checkSymbolExists: (input: {
+              version: string;
+              kind: "class" | "field" | "method";
+              owner?: string;
+              name: string;
+              sourceMapping: SourceMapping;
+            }) => Promise<{ resolved: boolean; status: string }>;
+          }
+        ).checkSymbolExists({
+          version: "1.21.10",
+          kind: "class",
+          owner: "a.b.C",
+          name: "a.b.C",
+          sourceMapping: "obfuscated"
+        }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
     );
-    const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          findMapping: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            name: string;
-            sourceMapping: SourceMapping;
-            targetMapping: SourceMapping;
-            disambiguation?: { ownerHint?: string; descriptorHint?: string };
-          }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
-        }
-      ).findMapping({
-        version: "1.21.10",
-        kind: "class",
-        name: "a.b.C",
-        sourceMapping: "obfuscated",
-        targetMapping: "intermediary",
-        disambiguation: { ownerHint: "inter.two" }
-      })
-    );
-
-    assert.equal(result.status, "resolved");
-    assert.equal(result.resolvedSymbol?.symbol, "inter.two.C");
-  });
-
-  await t.test("omits ambiguityReasons when a single candidate resolves", async () => {
-    const { root, service } = await createLoomService("mapping-service-no-ambiguity-", TEST_TINY);
-    const result = await withCwd(root, () =>
-      service.findMapping({
-        version: "1.21.10",
-        ...queryFromSymbol("a.b.C"),
-        sourceMapping: "obfuscated",
-        targetMapping: "intermediary"
-      })
-    );
-
-    assert.equal(result.status, "resolved");
-    assert.equal(result.ambiguityReasons, undefined);
-  });
-});
-
-test("MappingService returns mapping_unavailable for symbol existence when mapping graph is absent", async () => {
-  const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-unavailable-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  const result = await (
-    service as unknown as {
-      checkSymbolExists: (input: {
-        version: string;
-        kind: "class" | "field" | "method";
-        owner?: string;
-        name: string;
-        sourceMapping: SourceMapping;
-      }) => Promise<{ resolved: boolean; status: string }>;
-    }
-  ).checkSymbolExists({
-    version: "1.21.10",
-    kind: "class",
-    name: "intermediary.pkg.InterClass",
-    sourceMapping: "intermediary"
-  });
-
-  assert.equal(result.resolved, false);
-  assert.equal(result.status, "mapping_unavailable");
-
-  await assert.rejects(
-    () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: SourceMapping;
-            descriptor?: string;
-          }) => Promise<{ resolved: boolean; status: string }>;
-        }
-      ).checkSymbolExists({
-        version: "1.21.10",
-        kind: "method",
-        owner: "a.b.C",
-        name: "f",
-        sourceMapping: "obfuscated"
-      }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
-
-  await assert.rejects(
-    () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: SourceMapping;
-          }) => Promise<{ resolved: boolean; status: string }>;
-        }
-      ).checkSymbolExists({
-        version: "1.21.10",
-        kind: "class",
-        owner: "a.b.C",
-        name: "a.b.C",
-        sourceMapping: "obfuscated"
-      }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService returns empty graph for unobfuscated version (26.1)", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-unobfuscated-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
 
-  const fetchCalls: string[] = [];
-  const fetchStub = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    fetchCalls.push(url);
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchCalls: string[] = [];
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      fetchCalls.push(url);
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: `https://example.test/versions/${version}.json`,
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await service.findMapping({
-    version: "26.1",
-    kind: "class",
-    name: "a.b.C",
-    sourceMapping: "obfuscated",
-    targetMapping: "yarn"
-  });
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await service.findMapping({
+      version: "26.1",
+      kind: "class",
+      name: "a.b.C",
+      sourceMapping: "obfuscated",
+      targetMapping: "yarn"
+    });
 
-  assert.equal(result.status, "mapping_unavailable");
-  assert.ok(
-    result.warnings.some((w) => w.includes("No mapping path")),
-    "Expected a warning about missing mapping path"
-  );
-  assert.equal(fetchCalls.length, 0, "No network requests should be made for unobfuscated versions");
+    assert.equal(result.status, "mapping_unavailable");
+    assert.ok(
+      result.warnings.some((w) => w.includes("No mapping path")),
+      "Expected a warning about missing mapping path"
+    );
+    assert.equal(fetchCalls.length, 0, "No network requests should be made for unobfuscated versions");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService checkMappingHealth treats unobfuscated mojang runtime names as healthy", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-unobfuscated-health-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
 
-  const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: `https://example.test/versions/${version}.json`,
-        mappingsUrl: undefined
-      };
-    }
-  };
+    const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const mojangHealth = await service.checkMappingHealth({
-    version: "26.1",
-    requestedMapping: "mojang"
-  });
-  const yarnHealth = await service.checkMappingHealth({
-    version: "26.1",
-    requestedMapping: "yarn"
-  });
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const mojangHealth = await service.checkMappingHealth({
+      version: "26.1",
+      requestedMapping: "mojang"
+    });
+    const yarnHealth = await service.checkMappingHealth({
+      version: "26.1",
+      requestedMapping: "yarn"
+    });
 
-  assert.deepEqual(mojangHealth, {
-    mojangMappingsAvailable: true,
-    tinyMappingsAvailable: false,
-    memberRemapAvailable: true,
-    degradations: []
-  });
-  assert.deepEqual(yarnHealth, {
-    mojangMappingsAvailable: true,
-    tinyMappingsAvailable: false,
-    memberRemapAvailable: false,
-    degradations: ["Version 26.1 is unobfuscated; yarn mappings are not applicable."]
-  });
+    assert.deepEqual(mojangHealth, {
+      mojangMappingsAvailable: true,
+      tinyMappingsAvailable: false,
+      memberRemapAvailable: true,
+      degradations: []
+    });
+    assert.deepEqual(yarnHealth, {
+      mojangMappingsAvailable: true,
+      tinyMappingsAvailable: false,
+      memberRemapAvailable: false,
+      degradations: ["Version 26.1 is unobfuscated; yarn mappings are not applicable."]
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 const TEST_TINY_V1 = [
@@ -1984,48 +2201,56 @@ test("MappingService Loom cache version filter handles representative candidate 
 
   await t.test("ignores version prefix collisions between Loom cache directories", async () => {
     const root = await mkdtemp(join(tmpdir(), "mapping-service-version-collision-"));
-    const config = buildTestConfig(root, { sourceRepos: [] });
+    try {
+      const config = buildTestConfig(root, { sourceRepos: [] });
 
-    await writeLoomTinyCache(root, TEST_TINY_V1, "1.21.1");
-    await writeLoomTinyCache(root, TEST_TINY, "1.21.10");
+      await writeLoomTinyCache(root, TEST_TINY_V1, "1.21.1");
+      await writeLoomTinyCache(root, TEST_TINY, "1.21.10");
 
-    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-    const result = await withCwd(root, () =>
-      service.findMapping({
-        version: "1.21.1",
-        ...queryFromSymbol("a.b.C"),
-        sourceMapping: "obfuscated",
-        targetMapping: "yarn"
-      })
-    );
+      const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+      const result = await withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.1",
+          ...queryFromSymbol("a.b.C"),
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn"
+        })
+      );
 
-    assertVersionFilteredResult(result);
+      assertVersionFilteredResult(result);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   await t.test("normalizes backslash separated candidate paths", async () => {
     const root = await mkdtemp(join(tmpdir(), "mapping-service-backslash-path-"));
-    const config = buildTestConfig(root, { sourceRepos: [] });
-
-    const pseudoWindowsPath121_1 = join(root, ".gradle", "loom-cache\\1.21.1\\mappings.tiny");
-    const pseudoWindowsPath121_10 = join(root, ".gradle", "loom-cache\\1.21.10\\mappings.tiny");
-    await mkdir(join(root, ".gradle"), { recursive: true });
-    await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
-    await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
-
-    const originalGlob = fastGlob.glob;
-    fastGlob.glob = async () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
     try {
-      const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-      const result = await service.findMapping({
-        version: "1.21.1",
-        ...queryFromSymbol("a.b.C"),
-        sourceMapping: "obfuscated",
-        targetMapping: "yarn"
-      });
+      const config = buildTestConfig(root, { sourceRepos: [] });
 
-      assertVersionFilteredResult(result);
+      const pseudoWindowsPath121_1 = join(root, ".gradle", "loom-cache\\1.21.1\\mappings.tiny");
+      const pseudoWindowsPath121_10 = join(root, ".gradle", "loom-cache\\1.21.10\\mappings.tiny");
+      await mkdir(join(root, ".gradle"), { recursive: true });
+      await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
+      await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
+
+      const originalGlob = fastGlob.glob;
+      fastGlob.glob = async () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
+      try {
+        const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+        const result = await service.findMapping({
+          version: "1.21.1",
+          ...queryFromSymbol("a.b.C"),
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn"
+        });
+
+        assertVersionFilteredResult(result);
+      } finally {
+        fastGlob.glob = originalGlob;
+      }
     } finally {
-      fastGlob.glob = originalGlob;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -2033,35 +2258,39 @@ test("MappingService Loom cache version filter handles representative candidate 
 test("MappingService rejects class queries that include owner", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-owner-invalid-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
 
-  const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-  await assert.rejects(
-    () =>
-      service.findMapping({
-        version: "1.21.10",
-        kind: "class",
-        name: "a.b.C",
-        owner: "a.b",
-        sourceMapping: "obfuscated",
-        targetMapping: "mojang"
-      }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-  );
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+    await assert.rejects(
+      () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "class",
+          name: "a.b.C",
+          owner: "a.b",
+          sourceMapping: "obfuscated",
+          targetMapping: "mojang"
+        }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MappingService uses async Loom cache candidate discovery", async () => {
@@ -2073,57 +2302,61 @@ test("MappingService uses async Loom cache candidate discovery", async () => {
 test("MappingService getClassApiMatrix includes competing candidates in ambiguity warnings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-"));
-  const config = buildTestConfig(root, { sourceRepos: [] });
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
 
-  // Create ambiguous tiny data: two intermediary mappings for the same obfuscated method
-  const ambiguousTiny = [
-    "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
-    "c\ta/b/C\tinter/pkg/C\tyarn/pkg/C",
-    "\tm\t(I)V\te\tinterMethod1\tnamedMethod",
-    "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
-  ].join("\n");
+    // Create ambiguous tiny data: two intermediary mappings for the same obfuscated method
+    const ambiguousTiny = [
+      "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+      "c\ta/b/C\tinter/pkg/C\tyarn/pkg/C",
+      "\tm\t(I)V\te\tinterMethod1\tnamedMethod",
+      "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
+    ].join("\n");
 
-  const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-  await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-  await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
 
-  const fetchStub = (async () => {
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
+    const fetchStub = (async () => {
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
 
-  const versionServiceStub = {
-    async resolveVersionMappings(version: string) {
-      return {
-        version,
-        versionManifestUrl: "https://example.test/version_manifest_v2.json",
-        versionDetailUrl: "https://example.test/versions/1.21.10.json",
-        mappingsUrl: undefined
-      };
-    }
-  };
-
-  const service = new MappingService(config, versionServiceStub, fetchStub);
-  const result = await withCwd(root, () =>
-    (
-      service as unknown as {
-        getClassApiMatrix: (input: {
-          version: string;
-          className: string;
-          classNameMapping: SourceMapping;
-        }) => Promise<{
-          warnings: string[];
-          ambiguousRowCount?: number;
-          rows: Array<{ kind: string }>;
-        }>;
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
       }
-    ).getClassApiMatrix({
-      version: "1.21.10",
-      className: "a.b.C",
-      classNameMapping: "obfuscated"
-    })
-  );
+    };
 
-  const competingWarnings = result.warnings.filter((w: string) => w.includes("competing="));
-  assert.equal(result.ambiguousRowCount, 1);
-  assert.ok(competingWarnings.length >= 2);
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const result = await withCwd(root, () =>
+      (
+        service as unknown as {
+          getClassApiMatrix: (input: {
+            version: string;
+            className: string;
+            classNameMapping: SourceMapping;
+          }) => Promise<{
+            warnings: string[];
+            ambiguousRowCount?: number;
+            rows: Array<{ kind: string }>;
+          }>;
+        }
+      ).getClassApiMatrix({
+        version: "1.21.10",
+        className: "a.b.C",
+        classNameMapping: "obfuscated"
+      })
+    );
+
+    const competingWarnings = result.warnings.filter((w: string) => w.includes("competing="));
+    assert.equal(result.ambiguousRowCount, 1);
+    assert.ok(competingWarnings.length >= 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
