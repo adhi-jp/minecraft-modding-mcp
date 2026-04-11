@@ -1018,3 +1018,93 @@ test("index.ts wires check-symbol-exists into inspect-minecraft partial-source f
   assert.match(source, /const inspectMinecraftService = new InspectMinecraftService\(\{/);
   assert.match(source, /checkSymbolExists:\s*\(input\)\s*=>\s*sourceService\.checkSymbolExists\(input\)/);
 });
+
+// ---------------------------------------------------------------------------
+// compact mode integration (P1)
+// ---------------------------------------------------------------------------
+
+test("find-mapping compact:true does not corrupt identity-branch result and preserves meta.warnings", async () => {
+  type ToolResult = {
+    isError?: boolean;
+    structuredContent?: {
+      result?: Record<string, unknown>;
+      meta?: { warnings?: string[] };
+    };
+  };
+
+  const baseArgs = {
+    version: "1.21.10",
+    kind: "class",
+    name: "dhl",
+    sourceMapping: "obfuscated",
+    targetMapping: "obfuscated"
+  };
+
+  const [withCompact, withoutCompact] = await Promise.all([
+    callTool("find-mapping", { ...baseArgs, compact: true }) as Promise<ToolResult>,
+    callTool("find-mapping", { ...baseArgs, compact: false }) as Promise<ToolResult>
+  ]);
+
+  assert.notEqual(withCompact.isError, true);
+  assert.notEqual(withoutCompact.isError, true);
+
+  const compactResult = withCompact.structuredContent?.result;
+  const normalResult = withoutCompact.structuredContent?.result;
+  assert.ok(compactResult);
+  assert.ok(normalResult);
+
+  // Compact must not add or corrupt any key
+  for (const [key, value] of Object.entries(compactResult)) {
+    assert.ok(key in normalResult, `compact added unexpected key: ${key}`);
+    assert.deepEqual(value, normalResult[key], `compact corrupted key: ${key}`);
+  }
+
+  // Any key missing from compact must have been null/undefined/empty in normal
+  const droppedKeys: string[] = [];
+  for (const key of Object.keys(normalResult)) {
+    if (!(key in compactResult)) {
+      droppedKeys.push(key);
+      const v = normalResult[key];
+      const isEmpty =
+        v === null ||
+        v === undefined ||
+        (Array.isArray(v) && v.length === 0) ||
+        (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length === 0);
+      assert.ok(isEmpty, `compact dropped non-empty key: ${key} = ${JSON.stringify(v)}`);
+    }
+  }
+
+  // At least one key must have been dropped to prove compact is active
+  assert.ok(droppedKeys.length > 0, `compact must drop at least one empty key, but none were dropped`);
+  assert.ok(droppedKeys.includes("candidatesTruncated"), "candidatesTruncated (undefined) must be dropped");
+
+  // meta.warnings must survive — compact only applies to result, not meta
+  assert.ok(Array.isArray(withCompact.structuredContent?.meta?.warnings));
+  assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
+});
+
+test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)", async () => {
+  const withCompact = await callTool("get-runtime-metrics", {
+    compact: true
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      result?: Record<string, unknown>;
+    };
+  };
+
+  const withoutCompact = await callTool("get-runtime-metrics", {}) as {
+    isError?: boolean;
+    structuredContent?: {
+      result?: Record<string, unknown>;
+    };
+  };
+
+  assert.notEqual(withCompact.isError, true);
+  assert.notEqual(withoutCompact.isError, true);
+
+  // Both results should have the same keys — compact must NOT have stripped anything
+  const keysWithCompact = Object.keys(withCompact.structuredContent?.result ?? {}).sort();
+  const keysWithoutCompact = Object.keys(withoutCompact.structuredContent?.result ?? {}).sort();
+  assert.deepEqual(keysWithCompact, keysWithoutCompact);
+});

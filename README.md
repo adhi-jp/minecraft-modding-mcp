@@ -298,6 +298,8 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
+`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `false`). When `true`, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead.
+
 ### NBT Utilities
 
 Tools for decoding, patching, and encoding Java Edition NBT binary data using a typed JSON representation.

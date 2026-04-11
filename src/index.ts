@@ -7,6 +7,13 @@ import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 
 import { objectResult } from "./mcp-helpers.js";
 import { prepareToolInput } from "./tool-input.js";
+import {
+  isCompactEnabled,
+  COMPACT_MAPPING_TOOL_NAMES,
+  compactResponse,
+  compactArtifactResponse,
+  compactMappingResponse
+} from "./response-utils.js";
 
 import { loadConfig } from "./config.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
@@ -240,7 +247,8 @@ const resolveArtifactShape = {
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
+  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
 
@@ -371,7 +379,8 @@ const findMappingShape = {
     })
     .partial()
     .optional(),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
 };
 const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -442,7 +451,8 @@ const resolveMethodMappingExactShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
 };
 const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
@@ -500,7 +510,8 @@ const resolveWorkspaceSymbolShape = {
   descriptor: optionalNonEmptyString,
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)"),
+  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
 };
 const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
@@ -573,7 +584,8 @@ const checkSymbolExistsShape = {
   nameMode: classNameModeSchema.default("fqcn").describe("fqcn | auto"),
   signatureMode: z.enum(["exact", "name-only"]).default("exact")
     .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)")
+  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
 };
 const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -1857,6 +1869,19 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         : action(parsedInput)
     );
     const { result, warnings, meta: resultMeta } = splitWarnings(payload);
+
+    const isCompact = isCompactEnabled(tool, parsedInput);
+    let projectedResult = result;
+    if (isCompact) {
+      if (tool === "resolve-artifact") {
+        projectedResult = compactArtifactResponse(projectedResult);
+      }
+      if (COMPACT_MAPPING_TOOL_NAMES.has(tool)) {
+        projectedResult = compactMappingResponse(projectedResult);
+      }
+      projectedResult = compactResponse(projectedResult);
+    }
+
     const entryMeta = ENTRY_TOOL_NAMES.has(tool)
       ? buildEntryToolMeta({
           detail:
@@ -1877,7 +1902,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       : undefined;
 
     return objectResult({
-      result,
+      result: projectedResult,
       meta: {
         ...(entryMeta ?? {}),
         ...resultMeta,

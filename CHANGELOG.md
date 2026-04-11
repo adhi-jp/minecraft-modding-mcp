@@ -8,6 +8,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [Unreleased]
 
 ### Added
+- `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` now accept an optional `compact` parameter (default `false`). When `true`, empty arrays, null values, and empty objects are stripped from the top-level response.
 - `validate-access-widener` now accepts `projectPath`, `scope`, and `preferProjectVersion` for runtime-aware validation against Loom runtime jars, and reports additive `provenance`, `resolvedInRuntime`, and `resolvedRuntimeAccess` evidence for matched class, method, and field entries.
 - Added `validate-access-transformer` for Forge / NeoForge Access Transformer validation, including `atNamespace` support, workspace-driven namespace inference, runtime artifact provenance, and per-entry runtime access evidence.
 - `analyze-mod-jar` now surfaces packaged Access Transformer paths alongside mod metadata.
