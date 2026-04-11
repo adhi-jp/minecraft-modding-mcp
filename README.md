@@ -298,7 +298,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `false`). When `true`, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead.
+`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `false`). When `true`, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead. For `resolve-artifact`, compact mode additionally omits diagnostic fields (`provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, `resolvedSourceJarPath`), returning only the essential fields needed for downstream tool calls.
 
 ### NBT Utilities
 

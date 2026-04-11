@@ -1083,6 +1083,65 @@ test("find-mapping compact:true does not corrupt identity-branch result and pres
   assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
 });
 
+test("resolve-artifact compact:true omits diagnostic fields from local-jar result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "compact-artifact-"));
+  const jarPath = join(root, "test-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/Example.java": "package net.minecraft;\npublic class Example {}\n"
+  });
+
+  type ToolResult = {
+    isError?: boolean;
+    structuredContent?: {
+      result?: Record<string, unknown>;
+      meta?: { warnings?: string[] };
+    };
+  };
+
+  const [withCompact, withoutCompact] = await Promise.all([
+    callTool("resolve-artifact", {
+      target: { kind: "jar", value: jarPath },
+      compact: true
+    }) as Promise<ToolResult>,
+    callTool("resolve-artifact", {
+      target: { kind: "jar", value: jarPath },
+      compact: false
+    }) as Promise<ToolResult>
+  ]);
+
+  assert.notEqual(withCompact.isError, true);
+  assert.notEqual(withoutCompact.isError, true);
+
+  const compactResult = withCompact.structuredContent?.result;
+  const normalResult = withoutCompact.structuredContent?.result;
+  assert.ok(compactResult);
+  assert.ok(normalResult);
+
+  // Diagnostic fields must be omitted in compact mode
+  const omitKeys = [
+    "provenance", "artifactContents", "sampleEntries",
+    "adjacentSourceCandidates", "binaryJarPath", "coordinate",
+    "repoUrl", "resolvedSourceJarPath"
+  ];
+  for (const key of omitKeys) {
+    assert.equal(key in compactResult, false, `${key} should be omitted in compact mode`);
+  }
+
+  // Essential fields must be preserved
+  const keptKeys = ["artifactId", "origin", "isDecompiled", "mappingApplied", "qualityFlags"];
+  for (const key of keptKeys) {
+    assert.ok(key in compactResult, `${key} should be preserved`);
+    assert.deepEqual(compactResult[key], normalResult[key], `${key} value should match`);
+  }
+
+  // Normal result must have at least some of the diagnostic fields
+  assert.ok("artifactContents" in normalResult, "normal result should have artifactContents");
+
+  // meta.warnings must be present in both
+  assert.ok(Array.isArray(withCompact.structuredContent?.meta?.warnings));
+  assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
+});
+
 test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)", async () => {
   const withCompact = await callTool("get-runtime-metrics", {
     compact: true

@@ -248,7 +248,10 @@ const resolveArtifactShape = {
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
-  compact: z.boolean().default(false).describe("When true, omit top-level empty arrays, null/undefined values, and empty objects from the response.")
+  compact: z.boolean().default(false).describe(
+    "When true, return minimal fields (artifactId, origin, isDecompiled, version, requestedMapping, mappingApplied, qualityFlags). "
+    + "Omit provenance, artifactContents, sampleEntries, adjacentSourceCandidates, binaryJarPath, coordinate, repoUrl, resolvedSourceJarPath."
+  )
 };
 const resolveArtifactSchema = z.object(resolveArtifactShape);
 

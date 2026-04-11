@@ -140,13 +140,100 @@ test("passthrough schema lets compact survive but allowlist blocks it", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Stub functions (P2/P4) are identity
+// compactArtifactResponse (P2)
 // ---------------------------------------------------------------------------
 
-test("compactArtifactResponse is identity (P2 stub)", () => {
-  const input = { jarPath: "/some/path", candidates: [] };
-  assert.deepEqual(compactArtifactResponse(input), input);
+const ARTIFACT_FIXTURE: Record<string, unknown> = {
+  artifactId: "artifact-1.21.10-mojang",
+  origin: "remote-repo",
+  isDecompiled: false,
+  version: "1.21.10",
+  requestedMapping: "mojang",
+  mappingApplied: "mojang",
+  qualityFlags: ["source-jar"],
+  resolvedSourceJarPath: "/cache/sources/1.21.10-mojang-sources.jar",
+  adjacentSourceCandidates: ["/cache/alt-sources.jar"],
+  binaryJarPath: "/cache/1.21.10-client.jar",
+  coordinate: "net.minecraft:client:1.21.10:sources",
+  repoUrl: "https://libraries.minecraft.net",
+  provenance: { source: "mojang-manifest", mappingArtifact: "mojmap.tiny", version: "1.21.10", priority: "loom-first" },
+  artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" },
+  sampleEntries: ["net/minecraft/world/level/Level.java", "net/minecraft/server/MinecraftServer.java"]
+};
+
+const ARTIFACT_KEPT_KEYS = [
+  "artifactId", "origin", "isDecompiled", "version",
+  "requestedMapping", "mappingApplied", "qualityFlags"
+];
+
+const ARTIFACT_OMITTED_KEYS = [
+  "provenance", "artifactContents", "sampleEntries",
+  "adjacentSourceCandidates", "binaryJarPath", "coordinate",
+  "repoUrl", "resolvedSourceJarPath"
+];
+
+test("compactArtifactResponse omits diagnostic/debug fields", () => {
+  const result = compactArtifactResponse(ARTIFACT_FIXTURE);
+  for (const key of ARTIFACT_OMITTED_KEYS) {
+    assert.equal(key in result, false, `${key} should be omitted`);
+  }
 });
+
+test("compactArtifactResponse preserves essential fields", () => {
+  const result = compactArtifactResponse(ARTIFACT_FIXTURE);
+  for (const key of ARTIFACT_KEPT_KEYS) {
+    assert.ok(key in result, `${key} should be preserved`);
+    assert.deepEqual(result[key], ARTIFACT_FIXTURE[key]);
+  }
+});
+
+test("compactArtifactResponse preserves fields not in the omit set", () => {
+  const input = { ...ARTIFACT_FIXTURE, customField: "extra" };
+  const result = compactArtifactResponse(input);
+  assert.equal(result.customField, "extra");
+});
+
+test("compactArtifactResponse handles missing optional fields gracefully", () => {
+  const minimal: Record<string, unknown> = {
+    artifactId: "artifact-1.21.10",
+    origin: "decompiled",
+    isDecompiled: true,
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: [],
+    provenance: { source: "decompiled" },
+    artifactContents: { sourceKind: "decompiled-binary", indexedContentKinds: [], resourcesIncluded: false, sourceCoverage: "partial" }
+  };
+  const result = compactArtifactResponse(minimal);
+  assert.equal(result.artifactId, "artifact-1.21.10");
+  assert.equal("provenance" in result, false);
+  assert.equal("artifactContents" in result, false);
+  // version is absent in input, so absent in output — no crash
+  assert.equal("version" in result, false);
+});
+
+test("compactArtifactResponse + compactResponse pipeline on resolve-artifact shape", () => {
+  // Simulates runTool: splitWarnings → compactArtifactResponse → compactResponse
+  const withWarnings = { ...ARTIFACT_FIXTURE, warnings: ["version approximated"] };
+  const afterSplit = { ...withWarnings };
+  delete afterSplit.warnings; // splitWarnings moves this to meta
+
+  const afterArtifactProjection = compactArtifactResponse(afterSplit);
+  const afterCompact = compactResponse(afterArtifactProjection);
+
+  // Omitted fields must be gone
+  for (const key of ARTIFACT_OMITTED_KEYS) {
+    assert.equal(key in afterCompact, false, `${key} should be omitted after pipeline`);
+  }
+  // Essential fields must survive
+  for (const key of ARTIFACT_KEPT_KEYS) {
+    assert.ok(key in afterCompact, `${key} should survive pipeline`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// compactMappingResponse (P4 stub)
+// ---------------------------------------------------------------------------
 
 test("compactMappingResponse is identity (P4 stub)", () => {
   const input = { mapped: { name: "foo" }, candidates: [] };

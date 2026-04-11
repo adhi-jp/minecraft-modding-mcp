@@ -66,14 +66,28 @@ export function compactResponse(
   return result;
 }
 
-/**
- * Compact projection for resolve-artifact responses (P2 stub).
- * Full implementation in P2 plan.
- */
+/** Fields to omit from resolve-artifact in compact mode. */
+const ARTIFACT_COMPACT_OMIT_KEYS = new Set([
+  "provenance",
+  "artifactContents",
+  "sampleEntries",
+  "adjacentSourceCandidates",
+  "binaryJarPath",
+  "coordinate",
+  "repoUrl",
+  "resolvedSourceJarPath"
+]);
+
+/** resolve-artifact compact: omit debug/diagnostic fields. */
 export function compactArtifactResponse(
   obj: Record<string, unknown>
 ): Record<string, unknown> {
-  return obj;
+  const projected: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (ARTIFACT_COMPACT_OMIT_KEYS.has(key)) continue;
+    projected[key] = value;
+  }
+  return projected;
 }
 
 /**
