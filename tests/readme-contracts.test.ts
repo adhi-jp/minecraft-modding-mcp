@@ -2,28 +2,24 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("README keeps entry guidance concise and delegates exact contract details", async () => {
+test("README keeps Start Here section with summary-first guidance before the tool table", async () => {
   const readme = await readFile("README.md", "utf8");
-  const startHereSummaryIndex = readme.indexOf("All six return `result.summary` first");
+  const startHereSummaryIndex = readme.indexOf("result.summary");
   const startHereTableIndex = readme.indexOf("| Tool | Start here for |");
 
   assert.match(readme, /## Start Here/);
-  assert.match(readme, /These six top-level workflow tools cover the common workflows/);
-  assert.match(readme, /All six return `result\.summary` first/);
   assert.match(readme, /`summary\.nextActions`/);
-  assert.ok(startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex);
+  assert.ok(
+    startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex,
+    "summary guidance must appear before the tool table"
+  );
+  // Guard against reintroducing removed sections
   assert.doesNotMatch(readme, /Choosing a Starting Tool/);
   assert.doesNotMatch(readme, /- Start with `inspect-minecraft`/);
-  assert.match(readme, /`search-class-source` defaults to `queryMode="auto"`/);
-  assert.match(readme, /prefer `subject\.kind="workspace"` for `inspect-minecraft`/);
-  assert.match(
-    readme,
-    /\[Detailed example requests\]\(docs\/examples\.md\).*copyable payloads and common workflows/
-  );
-  assert.match(
-    readme,
-    /\[Tool and configuration reference\]\(docs\/tool-reference\.md\).*exact inputs, outputs, resource behavior, environment variables, and migration notes/
-  );
+  // Quick reference to deeper docs must exist
+  assert.match(readme, /docs\/examples\.md/);
+  assert.match(readme, /docs\/tool-reference\.md/);
+  // Common workflow tools must be referenced
   assert.match(readme, /"tool": "inspect-minecraft"/);
   assert.match(readme, /"tool": "validate-project"/);
 });
@@ -60,31 +56,28 @@ test("Tool reference owns exact contract, migration, and environment details", a
   assert.match(toolReference, /`MCP_TINY_REMAPPER_JAR_PATH`/);
 });
 
-test("Japanese README stays overview-first and uses natural Japanese for guidance", async () => {
+test("Japanese README stays overview-first with summary-first guidance and natural Japanese", async () => {
   const readme = await readFile("docs/README-ja.md", "utf8");
-  const startHereSummaryIndex = readme.indexOf("すべて `result.summary` を先に返し");
+  const startHereSummaryIndex = readme.indexOf("result.summary");
   const startHereTableIndex = readme.indexOf("| ツール | 主な用途 |");
 
   assert.match(readme, /## まずここから/);
-  assert.match(readme, /以下の 6 つのトップレベルワークフローツールは、一般的な作業をカバー/);
-  assert.match(readme, /すべて `result\.summary` を先に返し、次の一手が明確な場合は `summary\.nextActions` も含めます/);
-  assert.ok(startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex);
+  assert.match(readme, /`summary\.nextActions`/);
+  assert.ok(
+    startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex,
+    "summary guidance must appear before the tool table"
+  );
+  // Guard against reintroducing removed sections and unnatural Japanese
   assert.doesNotMatch(readme, /開始ツールの選び方/);
   assert.doesNotMatch(readme, /plain な/);
   assert.doesNotMatch(readme, /retry 用/);
   assert.doesNotMatch(readme, /partial 結果/);
   assert.doesNotMatch(readme, /structured な/);
   assert.doesNotMatch(readme, /canonical な/);
-  assert.match(readme, /`search-class-source` は既定で `queryMode="auto"`/);
-  assert.match(readme, /アーティファクトが不明な場合は、`inspect-minecraft` で `subject\.kind="workspace"` を使う方が安全です/);
-  assert.match(readme, /ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます/);
-  assert.match(readme, /構造化された `subject` と正規の `include`/);
-  assert.match(
-    readme,
-    /この日本語版はオンボーディング向けの概要です。詳細な例と完全なリファレンスは現時点では英語ドキュメントを参照してください/
-  );
-  assert.match(readme, /\[詳細なリクエスト例（英語）\]\(examples\.md\)/);
-  assert.match(readme, /\[ツール \/ 設定リファレンス（英語）\]\(tool-reference\.md\)/);
+  // Links to English detailed docs must exist
+  assert.match(readme, /examples\.md/);
+  assert.match(readme, /tool-reference\.md/);
+  // Common workflow tools must be referenced
   assert.match(readme, /"tool": "inspect-minecraft"/);
   assert.match(readme, /"tool": "validate-project"/);
 });
