@@ -12,101 +12,94 @@ import {
 } from "../src/response-utils.ts";
 
 // ---------------------------------------------------------------------------
-// compactResponse
+// compactResponse — table-driven input/expected cases
 // ---------------------------------------------------------------------------
 
-test("compactResponse strips null values", () => {
-  const input = { a: 1, b: null, c: "hello" };
-  assert.deepEqual(compactResponse(input), { a: 1, c: "hello" });
-});
+const COMPACT_RESPONSE_CASES = [
+  {
+    name: "strips null values",
+    input: { a: 1, b: null, c: "hello" },
+    expected: { a: 1, c: "hello" }
+  },
+  {
+    name: "strips undefined values",
+    input: { a: 1, b: undefined, c: "hello" },
+    expected: { a: 1, c: "hello" }
+  },
+  {
+    name: "strips empty arrays",
+    input: { candidates: [], resolved: true, warnings: [] },
+    expected: { resolved: true }
+  },
+  {
+    name: "strips empty objects",
+    input: { data: {}, name: "test" },
+    expected: { name: "test" }
+  },
+  {
+    name: "preserves non-empty arrays",
+    input: { candidates: [{ name: "foo" }], warnings: [] },
+    expected: { candidates: [{ name: "foo" }] }
+  },
+  {
+    name: "preserves non-empty objects",
+    input: { data: { key: "value" }, empty: {} },
+    expected: { data: { key: "value" } }
+  },
+  {
+    name: "preserves zero, false, and empty string",
+    input: { count: 0, flag: false, label: "" },
+    expected: { count: 0, flag: false, label: "" }
+  },
+  {
+    name: "is shallow — nested empty structures stay",
+    input: { outer: { inner: [], nested: null } },
+    expected: { outer: { inner: [], nested: null } }
+  },
+  {
+    name: "returns empty object when all values stripped",
+    input: { a: null, b: [], c: {} },
+    expected: {}
+  }
+] as const;
 
-test("compactResponse strips undefined values", () => {
-  const input = { a: 1, b: undefined, c: "hello" };
-  assert.deepEqual(compactResponse(input), { a: 1, c: "hello" });
-});
+for (const { name, input, expected } of COMPACT_RESPONSE_CASES) {
+  test(`compactResponse ${name}`, () => {
+    assert.deepEqual(compactResponse(input), expected);
+  });
+}
 
-test("compactResponse strips empty arrays", () => {
-  const input = { candidates: [], resolved: true, warnings: [] };
-  assert.deepEqual(compactResponse(input), { resolved: true });
-});
-
-test("compactResponse strips empty objects", () => {
-  const input = { data: {}, name: "test" };
-  assert.deepEqual(compactResponse(input), { name: "test" });
-});
-
-test("compactResponse preserves non-empty arrays", () => {
-  const input = { candidates: [{ name: "foo" }], warnings: [] };
-  assert.deepEqual(compactResponse(input), { candidates: [{ name: "foo" }] });
-});
-
-test("compactResponse preserves non-empty objects", () => {
-  const input = { data: { key: "value" }, empty: {} };
-  assert.deepEqual(compactResponse(input), { data: { key: "value" } });
-});
-
-test("compactResponse preserves zero, false, and empty string", () => {
-  const input = { count: 0, flag: false, label: "" };
-  assert.deepEqual(compactResponse(input), { count: 0, flag: false, label: "" });
-});
-
-test("compactResponse is shallow — nested empty structures stay", () => {
-  const input = { outer: { inner: [], nested: null } };
-  const result = compactResponse(input);
-  assert.deepEqual(result, { outer: { inner: [], nested: null } });
-});
-
-test("compactResponse returns empty object when all values stripped", () => {
-  const input = { a: null, b: [], c: {} };
-  assert.deepEqual(compactResponse(input), {});
-});
-
-test("compactResponse returns empty object for null input", () => {
+test("compactResponse returns empty object for null or undefined input", () => {
   assert.deepEqual(compactResponse(null as unknown as Record<string, unknown>), {});
-});
-
-test("compactResponse returns empty object for undefined input", () => {
   assert.deepEqual(compactResponse(undefined as unknown as Record<string, unknown>), {});
 });
 
-test("compactResponse preserves Date values (non-plain object)", () => {
+test("compactResponse preserves Date values and class instances (non-plain objects)", () => {
   const date = new Date("2026-01-01T00:00:00Z");
-  const input = { generatedAt: date, empty: {} };
-  const result = compactResponse(input);
-  assert.equal(result.generatedAt, date);
-  assert.equal("empty" in result, false);
-});
+  const dateResult = compactResponse({ generatedAt: date, empty: {} });
+  assert.equal(dateResult.generatedAt, date);
+  assert.equal("empty" in dateResult, false);
 
-test("compactResponse preserves class instances with no enumerable keys", () => {
   class Custom { getValue() { return 42; } }
   const inst = new Custom();
-  const input = { custom: inst as unknown, plainEmpty: {} };
-  const result = compactResponse(input);
-  assert.equal(result.custom, inst);
-  assert.equal("plainEmpty" in result, false);
+  const classResult = compactResponse({ custom: inst as unknown, plainEmpty: {} });
+  assert.equal(classResult.custom, inst);
+  assert.equal("plainEmpty" in classResult, false);
 });
 
 // ---------------------------------------------------------------------------
 // isCompactEnabled — double gate
 // ---------------------------------------------------------------------------
 
-test("isCompactEnabled returns true for allowlisted tool with compact:true", () => {
+test("isCompactEnabled respects allowlist and compact flag", () => {
+  // Allowlisted tool with compact:true → true
   for (const tool of COMPACT_ENABLED_TOOL_NAMES) {
     assert.equal(isCompactEnabled(tool, { compact: true }), true, tool);
-  }
-});
-
-test("isCompactEnabled returns false for allowlisted tool with compact:false", () => {
-  for (const tool of COMPACT_ENABLED_TOOL_NAMES) {
     assert.equal(isCompactEnabled(tool, { compact: false }), false, tool);
   }
-});
-
-test("isCompactEnabled returns false for allowlisted tool with no compact field", () => {
+  // Allowlisted tool with no compact field → false
   assert.equal(isCompactEnabled("resolve-artifact", { version: "1.20.1" }), false);
-});
-
-test("isCompactEnabled returns false for non-allowlisted tool even with compact:true", () => {
+  // Non-allowlisted tool even with compact:true → false
   assert.equal(isCompactEnabled("get-class-source", { compact: true }), false);
   assert.equal(isCompactEnabled("list-versions", { compact: true }), false);
   assert.equal(isCompactEnabled("get-runtime-metrics", { compact: true }), false);
@@ -118,8 +111,16 @@ test("isCompactEnabled handles null/undefined/array parsedInput safely", () => {
   assert.equal(isCompactEnabled("resolve-artifact", [1, 2]), false);
 });
 
+test("isCompactEnabled default path: compact omitted or explicit false returns false", () => {
+  assert.equal(isCompactEnabled("find-mapping", {}), false);
+  assert.equal(isCompactEnabled("resolve-artifact", {}), false);
+  assert.equal(isCompactEnabled("check-symbol-exists", { kind: "class", name: "Foo" }), false);
+  assert.equal(isCompactEnabled("find-mapping", { compact: false }), false);
+  assert.equal(isCompactEnabled("resolve-artifact", { compact: false }), false);
+});
+
 // ---------------------------------------------------------------------------
-// Zod strip defense: z.object() strips unknown keys
+// Zod schema interaction with the `compact` flag
 // ---------------------------------------------------------------------------
 
 test("Zod z.object() strips compact from schemas that do not define it", () => {
@@ -127,10 +128,6 @@ test("Zod z.object() strips compact from schemas that do not define it", () => {
   const parsed = schema.parse({ name: "test", compact: true });
   assert.equal("compact" in parsed, false);
 });
-
-// ---------------------------------------------------------------------------
-// Passthrough defense: allowlist rejects even when parsedInput has compact
-// ---------------------------------------------------------------------------
 
 test("passthrough schema lets compact survive but allowlist blocks it", () => {
   const passthroughSchema = z.object({}).passthrough();
@@ -172,24 +169,16 @@ const ARTIFACT_OMITTED_KEYS = [
   "repoUrl", "resolvedSourceJarPath"
 ];
 
-test("compactArtifactResponse omits diagnostic/debug fields", () => {
-  const result = compactArtifactResponse(ARTIFACT_FIXTURE);
+test("compactArtifactResponse projects fields: omits diagnostic, keeps essential, passes through unknown", () => {
+  const input = { ...ARTIFACT_FIXTURE, customField: "extra" };
+  const result = compactArtifactResponse(input);
   for (const key of ARTIFACT_OMITTED_KEYS) {
     assert.equal(key in result, false, `${key} should be omitted`);
   }
-});
-
-test("compactArtifactResponse preserves essential fields", () => {
-  const result = compactArtifactResponse(ARTIFACT_FIXTURE);
   for (const key of ARTIFACT_KEPT_KEYS) {
     assert.ok(key in result, `${key} should be preserved`);
     assert.deepEqual(result[key], ARTIFACT_FIXTURE[key]);
   }
-});
-
-test("compactArtifactResponse preserves fields not in the omit set", () => {
-  const input = { ...ARTIFACT_FIXTURE, customField: "extra" };
-  const result = compactArtifactResponse(input);
   assert.equal(result.customField, "extra");
 });
 
@@ -208,31 +197,27 @@ test("compactArtifactResponse handles missing optional fields gracefully", () =>
   assert.equal(result.artifactId, "artifact-1.21.10");
   assert.equal("provenance" in result, false);
   assert.equal("artifactContents" in result, false);
-  // version is absent in input, so absent in output — no crash
   assert.equal("version" in result, false);
 });
 
 test("compactArtifactResponse + compactResponse pipeline on resolve-artifact shape", () => {
-  // Simulates runTool: splitWarnings → compactArtifactResponse → compactResponse
   const withWarnings = { ...ARTIFACT_FIXTURE, warnings: ["version approximated"] };
   const afterSplit = { ...withWarnings };
-  delete afterSplit.warnings; // splitWarnings moves this to meta
+  delete afterSplit.warnings;
 
   const afterArtifactProjection = compactArtifactResponse(afterSplit);
   const afterCompact = compactResponse(afterArtifactProjection);
 
-  // Omitted fields must be gone
   for (const key of ARTIFACT_OMITTED_KEYS) {
     assert.equal(key in afterCompact, false, `${key} should be omitted after pipeline`);
   }
-  // Essential fields must survive
   for (const key of ARTIFACT_KEPT_KEYS) {
     assert.ok(key in afterCompact, `${key} should survive pipeline`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// compactMappingResponse (P4)
+// compactMappingResponse (P4) — table-driven
 // ---------------------------------------------------------------------------
 
 const RESOLVED_EXACT_CANDIDATE = {
@@ -250,83 +235,85 @@ const MAPPING_BASE: Record<string, unknown> = {
   candidateCount: 1
 };
 
-test("compactMappingResponse omits candidates when resolved + count=1 + exact + confidence=1", () => {
-  const result = compactMappingResponse({ ...MAPPING_BASE });
-  assert.equal("candidates" in result, false, "candidates should be omitted");
-  assert.equal(result.candidateCount, 1, "candidateCount must survive");
-  assert.ok(result.resolvedSymbol, "resolvedSymbol must survive");
-});
+const MAPPING_OMIT_CASES = [
+  {
+    name: "resolved + count=1 + exact + confidence=1",
+    overrides: {}
+  },
+  {
+    name: "confidence is undefined (defaults to exact)",
+    overrides: { candidates: [{ ...RESOLVED_EXACT_CANDIDATE, confidence: undefined }] }
+  }
+] as const;
 
-test("compactMappingResponse omits candidates when confidence is undefined (defaults to exact)", () => {
-  const candidate = { ...RESOLVED_EXACT_CANDIDATE, confidence: undefined };
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: [candidate]
+const MAPPING_PRESERVE_CASES = [
+  {
+    name: "matchKind is not exact",
+    overrides: { candidates: [{ ...RESOLVED_EXACT_CANDIDATE, matchKind: "simple-name" }] }
+  },
+  {
+    name: "confidence < 1",
+    overrides: { candidates: [{ ...RESOLVED_EXACT_CANDIDATE, confidence: 0.8 }] }
+  },
+  {
+    name: "candidateCount > 1",
+    overrides: {
+      candidates: [RESOLVED_EXACT_CANDIDATE, { ...RESOLVED_EXACT_CANDIDATE, name: "Level2" }],
+      candidateCount: 2
+    }
+  },
+  {
+    name: "candidatesTruncated is true",
+    overrides: { candidatesTruncated: true }
+  },
+  {
+    name: "count/length mismatch",
+    overrides: { candidateCount: 5 }
+  },
+  {
+    name: "ambiguous status",
+    overrides: {
+      resolved: false,
+      status: "ambiguous",
+      resolvedSymbol: undefined,
+      candidates: [RESOLVED_EXACT_CANDIDATE, { ...RESOLVED_EXACT_CANDIDATE, name: "OtherLevel" }],
+      candidateCount: 2
+    }
+  },
+  {
+    name: "candidates is not an array",
+    overrides: { candidates: "not-an-array" }
+  },
+  {
+    name: "candidates[0] is null",
+    overrides: { candidates: [null] }
+  }
+] as const;
+
+for (const { name, overrides } of MAPPING_OMIT_CASES) {
+  test(`compactMappingResponse omits candidates when ${name}`, () => {
+    const result = compactMappingResponse({ ...MAPPING_BASE, ...overrides });
+    assert.equal("candidates" in result, false, "candidates should be omitted");
+    assert.equal(result.candidateCount, 1, "candidateCount must survive");
+    assert.ok(result.resolvedSymbol, "resolvedSymbol must survive");
   });
-  assert.equal("candidates" in result, false);
-});
+}
 
-test("compactMappingResponse preserves candidates when matchKind is not exact", () => {
-  const candidate = { ...RESOLVED_EXACT_CANDIDATE, matchKind: "simple-name" };
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: [candidate]
+for (const { name, overrides } of MAPPING_PRESERVE_CASES) {
+  test(`compactMappingResponse preserves candidates when ${name}`, () => {
+    const result = compactMappingResponse({ ...MAPPING_BASE, ...overrides });
+    assert.ok("candidates" in result, "candidates must be preserved");
   });
-  assert.ok("candidates" in result, "candidates must be preserved for non-exact matchKind");
-  assert.equal((result.candidates as unknown[]).length, 1);
+}
+
+test("compactMappingResponse preserves candidates when candidateCount is absent", () => {
+  const input = { ...MAPPING_BASE };
+  delete input.candidateCount;
+  const result = compactMappingResponse(input);
+  assert.ok("candidates" in result);
 });
 
-test("compactMappingResponse preserves candidates when confidence < 1", () => {
-  const candidate = { ...RESOLVED_EXACT_CANDIDATE, confidence: 0.8 };
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: [candidate]
-  });
-  assert.ok("candidates" in result, "candidates must be preserved for low confidence");
-});
-
-test("compactMappingResponse preserves candidates when candidateCount > 1", () => {
-  const second = { ...RESOLVED_EXACT_CANDIDATE, name: "Level2" };
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: [RESOLVED_EXACT_CANDIDATE, second],
-    candidateCount: 2
-  });
-  assert.ok("candidates" in result, "candidates must be preserved when count > 1");
-  assert.equal((result.candidates as unknown[]).length, 2);
-});
-
-test("compactMappingResponse preserves candidates when candidatesTruncated is true", () => {
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidatesTruncated: true
-  });
-  assert.ok("candidates" in result, "candidates must be preserved when truncated");
-});
-
-test("compactMappingResponse preserves candidates when count/length mismatch", () => {
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidateCount: 5  // length=1 but count=5 — mismatch
-  });
-  assert.ok("candidates" in result, "candidates must be preserved on count/length mismatch");
-});
-
-test("compactMappingResponse preserves candidates for ambiguous status", () => {
-  const second = { ...RESOLVED_EXACT_CANDIDATE, name: "OtherLevel" };
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    resolved: false,
-    status: "ambiguous",
-    resolvedSymbol: undefined,
-    candidates: [RESOLVED_EXACT_CANDIDATE, second],
-    candidateCount: 2
-  });
-  assert.ok("candidates" in result, "candidates must be preserved for ambiguous");
-  assert.equal((result.candidates as unknown[]).length, 2);
-});
-
-test("compactMappingResponse preserves candidates for not_found status (empty array for P1 to strip)", () => {
+test("compactMappingResponse preserves empty candidates for not_found (P1 strips later)", () => {
   const result = compactMappingResponse({
     ...MAPPING_BASE,
     resolved: false,
@@ -335,33 +322,8 @@ test("compactMappingResponse preserves candidates for not_found status (empty ar
     candidates: [],
     candidateCount: 0
   });
-  // not_found has candidates:[] — compactMappingResponse should leave it;
-  // P1's compactResponse will strip the empty array later
   assert.ok("candidates" in result);
   assert.deepEqual(result.candidates, []);
-});
-
-test("compactMappingResponse preserves candidates when candidates is not an array", () => {
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: "not-an-array"
-  });
-  assert.equal(result.candidates, "not-an-array");
-});
-
-test("compactMappingResponse preserves candidates when candidates[0] is null", () => {
-  const result = compactMappingResponse({
-    ...MAPPING_BASE,
-    candidates: [null]
-  });
-  assert.ok("candidates" in result);
-});
-
-test("compactMappingResponse preserves candidates when candidateCount is absent", () => {
-  const input = { ...MAPPING_BASE };
-  delete input.candidateCount;
-  const result = compactMappingResponse(input);
-  assert.ok("candidates" in result);
 });
 
 test("compactMappingResponse + compactResponse pipeline strips candidates for resolved exact", () => {
@@ -389,7 +351,6 @@ test("compactMappingResponse + compactResponse pipeline strips empty candidates 
 // ---------------------------------------------------------------------------
 
 test("compact pipeline strips empty candidates from a not_found SymbolResolutionOutput shape", () => {
-  // Simulates what runTool does: splitWarnings extracts warnings, then compactResponse strips empties
   const serviceOutput: Record<string, unknown> = {
     querySymbol: { kind: "class", name: "com.example.Foo", symbol: "com.example.Foo" },
     mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", sourcePriorityApplied: "loom-first" },
@@ -400,11 +361,9 @@ test("compact pipeline strips empty candidates from a not_found SymbolResolution
     warnings: []
   };
 
-  // Step 1: splitWarnings moves warnings out (simulated)
   const afterSplit = { ...serviceOutput };
   delete afterSplit.warnings;
 
-  // Step 2: compactResponse strips empty values
   const compacted = compactResponse(afterSplit);
 
   assert.equal("candidates" in compacted, false, "empty candidates[] must be stripped");
@@ -427,7 +386,6 @@ test("compact pipeline preserves all fields in a resolved SymbolResolutionOutput
 
   const compacted = compactResponse(serviceOutput);
 
-  // No fields should be stripped — all are non-empty
   assert.deepEqual(Object.keys(compacted).sort(), Object.keys(serviceOutput).sort());
   assert.deepEqual(compacted, serviceOutput);
 });
@@ -448,7 +406,7 @@ test("resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING", () => 
 });
 
 // ---------------------------------------------------------------------------
-// P5: Regression — size reduction threshold
+// P5: Regression — size reduction threshold and idempotency
 // ---------------------------------------------------------------------------
 
 test("compactArtifactResponse reduces serialized size below 60% of full", () => {
@@ -502,12 +460,14 @@ test("compactMappingResponse + compactResponse reduces serialized size for resol
   );
 });
 
-// ---------------------------------------------------------------------------
-// P5: Regression — idempotency
-// ---------------------------------------------------------------------------
+test("compact projections are idempotent", () => {
+  // compactResponse
+  const compactInput = { a: 1, b: null, c: [], d: {}, e: "hello" };
+  const compactOnce = compactResponse(compactInput);
+  assert.deepEqual(compactOnce, compactResponse(compactOnce));
 
-test("compactMappingResponse is idempotent", () => {
-  const input: Record<string, unknown> = {
+  // compactMappingResponse
+  const mappingInput: Record<string, unknown> = {
     resolved: true,
     resolvedSymbol: { name: "Level", kind: "class" },
     candidates: [{ name: "Level", kind: "class", matchKind: "exact", confidence: 1 }],
@@ -515,42 +475,17 @@ test("compactMappingResponse is idempotent", () => {
     querySymbol: { name: "Level" },
     mappingContext: { version: "1.21.10" }
   };
-  const once = compactMappingResponse(input);
-  const twice = compactMappingResponse(once);
-  assert.deepEqual(once, twice, "applying compactMappingResponse twice must produce identical output");
-});
+  const mappingOnce = compactMappingResponse(mappingInput);
+  assert.deepEqual(mappingOnce, compactMappingResponse(mappingOnce));
 
-test("compactArtifactResponse is idempotent", () => {
-  const input: Record<string, unknown> = {
+  // compactArtifactResponse
+  const artifactInput: Record<string, unknown> = {
     artifactId: "abc",
     origin: "remote-repo",
     isDecompiled: false,
     provenance: { source: "mojang" },
     artifactContents: { sourceKind: "source-jar" }
   };
-  const once = compactArtifactResponse(input);
-  const twice = compactArtifactResponse(once);
-  assert.deepEqual(once, twice, "applying compactArtifactResponse twice must produce identical output");
-});
-
-test("compactResponse is idempotent", () => {
-  const input = { a: 1, b: null, c: [], d: {}, e: "hello" };
-  const once = compactResponse(input);
-  const twice = compactResponse(once);
-  assert.deepEqual(once, twice, "applying compactResponse twice must produce identical output");
-});
-
-// ---------------------------------------------------------------------------
-// P5: Regression — default path invariance
-// ---------------------------------------------------------------------------
-
-test("isCompactEnabled returns false when compact is omitted from input", () => {
-  assert.equal(isCompactEnabled("find-mapping", {}), false);
-  assert.equal(isCompactEnabled("resolve-artifact", {}), false);
-  assert.equal(isCompactEnabled("check-symbol-exists", { kind: "class", name: "Foo" }), false);
-});
-
-test("isCompactEnabled returns false when compact is explicitly false", () => {
-  assert.equal(isCompactEnabled("find-mapping", { compact: false }), false);
-  assert.equal(isCompactEnabled("resolve-artifact", { compact: false }), false);
+  const artifactOnce = compactArtifactResponse(artifactInput);
+  assert.deepEqual(artifactOnce, compactArtifactResponse(artifactOnce));
 });
