@@ -9,6 +9,7 @@ import fastGlob from "fast-glob";
 import { ERROR_CODES } from "../src/errors.ts";
 import type { MappingService as MappingServiceType } from "../src/mapping-service.ts";
 import type { SourceMapping } from "../src/types.ts";
+import { withGradleUserHome } from "./helpers/env.ts";
 import { buildMappingTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
 
@@ -36,20 +37,6 @@ async function withCwd<T>(nextCwd: string, action: () => Promise<T>): Promise<T>
     return await action();
   } finally {
     process.chdir(previous);
-  }
-}
-
-async function withGradleUserHome<T>(gradleUserHome: string, action: () => Promise<T>): Promise<T> {
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await action();
-  } finally {
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
   }
 }
 
