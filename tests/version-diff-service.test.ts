@@ -6,35 +6,9 @@ import test from "node:test";
 
 import { createError, ERROR_CODES } from "../src/errors.ts";
 import type { RegistryData } from "../src/registry-service.ts";
-import type { Config } from "../src/types.ts";
 import { VersionDiffService } from "../src/version-diff-service.ts";
+import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
-
-function buildTestConfig(root = "/tmp"): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
 
 function createRegistryData(entries: string[]): RegistryData {
   return {
@@ -46,7 +20,7 @@ function createRegistryData(entries: string[]): RegistryData {
 
 test("compareVersions throws when registry-only comparison fails", async () => {
   const service = new VersionDiffService(
-    buildTestConfig(),
+    buildTestConfig("/tmp"),
     {} as any,
     {
       async getRegistryData() {
@@ -73,7 +47,7 @@ test("compareVersions throws when registry-only comparison fails", async () => {
 });
 
 test("compareVersions rejects blank version inputs", async () => {
-  const service = new VersionDiffService(buildTestConfig(), {} as any, {} as any);
+  const service = new VersionDiffService(buildTestConfig("/tmp"), {} as any, {} as any);
 
   await assert.rejects(
     () =>
@@ -148,7 +122,7 @@ test("compareVersions filters class diffs, ignores nested classes, and warns on 
 
 test("compareVersions summarizes registry additions, removals, and registry creation/removal", async () => {
   const service = new VersionDiffService(
-    buildTestConfig(),
+    buildTestConfig("/tmp"),
     {} as any,
     {
       async getRegistryData({ version }: { version: string }) {

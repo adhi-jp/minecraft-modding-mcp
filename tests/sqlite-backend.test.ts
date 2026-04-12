@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
 import { openDatabase } from "../src/storage/db.ts";
 import { runMigrations } from "../src/storage/migrations.ts";
 import Database from "../src/storage/sqlite.ts";
-import type { Config } from "../src/types.ts";
+import { withTempDir } from "./helpers/temp-dir.ts";
+import { buildTestConfig } from "./helpers/test-config.ts";
 
 const LATEST_SCHEMA_VERSION = 3;
 
@@ -26,30 +26,8 @@ function readTrackedContentBytes(db: Database, artifactId: string): number {
   return row?.total ?? 0;
 }
 
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
-
-test("openDatabase initializes cache schema without native addon prerequisites", async () => {
-  const root = await mkdtemp(join(tmpdir(), "sqlite-backend-"));
-  try {
+test("openDatabase initializes cache schema without native addon prerequisites", () =>
+  withTempDir("sqlite-backend-", async (root) => {
     const initialized = openDatabase(buildTestConfig(root));
     assert.equal(initialized.schemaVersion, LATEST_SCHEMA_VERSION);
     const table = initialized.db
@@ -78,15 +56,11 @@ test("openDatabase initializes cache schema without native addon prerequisites",
       )
       .get() as { name?: string } | undefined;
     assert.equal(contentBytesInsertTrigger?.name, "trg_files_content_bytes_insert");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+  }));
 
-test("openDatabase fails when cache schema_version exceeds supported version", async () => {
-  const root = await mkdtemp(join(tmpdir(), "sqlite-backend-"));
-  const config = buildTestConfig(root);
-  try {
+test("openDatabase fails when cache schema_version exceeds supported version", () =>
+  withTempDir("sqlite-backend-", async (root) => {
+    const config = buildTestConfig(root);
     await mkdir(join(root, "cache"), { recursive: true });
 
     const db = new Database(config.sqlitePath);
@@ -107,10 +81,7 @@ test("openDatabase fails when cache schema_version exceeds supported version", a
     assert.equal(existsSync(config.sqlitePath), true);
     const cacheEntries = await readdir(join(root, "cache"));
     assert.equal(cacheEntries.some((entry) => entry.includes(".corrupted.")), false);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+  }));
 
 test("artifact_content_bytes stays in sync when files rows change", () => {
   const db = new Database(":memory:");

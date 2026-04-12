@@ -4,29 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { Config } from "../src/types.ts";
+import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
 
 test("getArtifactFile applies maxBytes truncation", async () => {
   const { SourceService } = await import("../src/source-service.ts");

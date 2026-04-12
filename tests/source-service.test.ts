@@ -7,48 +7,9 @@ import test from "node:test";
 import { ERROR_CODES } from "../src/errors.ts";
 import type { Config } from "../src/types.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
+import { withGradleUserHome } from "./helpers/env.ts";
+import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
-
-function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    ...overrides
-  };
-}
-
-async function withGradleUserHome<T>(gradleUserHome: string, fn: () => Promise<T>): Promise<T> {
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await fn();
-  } finally {
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
-  }
-}
 
 function readSearchPathMetrics(service: { getRuntimeMetrics: () => unknown }): {
   indexedHits: number;

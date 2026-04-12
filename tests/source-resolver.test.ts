@@ -5,34 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { resolveSourceTarget } from "../src/source-resolver.ts";
-import type { Config } from "../src/types.ts";
+import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
 
 test("resolveSourceTarget(targetKind=jar) ignores unrelated adjacent *-sources.jar and keeps decompile fallback", async () => {
   const root = await mkdtemp(join(tmpdir(), "resolver-jar-unrelated-"));

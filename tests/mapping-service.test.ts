@@ -8,7 +8,8 @@ import fastGlob from "fast-glob";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import type { MappingService as MappingServiceType } from "../src/mapping-service.ts";
-import type { Config, SourceMapping } from "../src/types.ts";
+import type { SourceMapping } from "../src/types.ts";
+import { buildMappingTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
 
 // Isolate all tests from the host's real ~/.gradle to avoid scanning
@@ -26,35 +27,7 @@ after(() => {
   }
 });
 
-function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: ["https://maven.fabricmc.net"],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 1,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    tinyRemapperJarPath: undefined,
-    remapTimeoutMs: 600_000,
-    remapMaxMemoryMb: 4_096,
-    ...overrides
-  };
-}
+const buildTestConfig = buildMappingTestConfig;
 
 async function withCwd<T>(nextCwd: string, action: () => Promise<T>): Promise<T> {
   const previous = process.cwd();

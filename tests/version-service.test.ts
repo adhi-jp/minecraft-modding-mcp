@@ -8,35 +8,11 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import { defaultDownloadPath } from "../src/repo-downloader.ts";
-import type { Config } from "../src/types.ts";
+import { buildTestConfig as _buildTestConfig } from "./helpers/test-config.ts";
 import { isUnobfuscatedVersion, VersionService } from "../src/version-service.ts";
 
-function buildTestConfig(root: string, overrides: Partial<Config> = {}): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 2_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    ...overrides
-  };
-}
+const buildTestConfig: typeof _buildTestConfig = (root, overrides = {}) =>
+  _buildTestConfig(root, { fetchTimeoutMs: 2_000, ...overrides });
 
 const DEFAULT_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 

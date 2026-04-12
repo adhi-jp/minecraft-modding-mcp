@@ -7,36 +7,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import { RegistryService } from "../src/registry-service.ts";
-import type { Config } from "../src/types.ts";
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: join(root, "cache", "source-cache.db"),
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    searchScanPageSize: 250,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    tinyRemapperJarPath: undefined,
-    remapTimeoutMs: 600_000,
-    remapMaxMemoryMb: 4096
-  };
-}
+import { buildTestConfig } from "./helpers/test-config.ts";
 
 async function installFakeJava(binDir: string, body: string): Promise<void> {
   const runnerPath = join(binDir, "java-runner.cjs");
