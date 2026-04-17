@@ -92,6 +92,18 @@ const TEST_DESCRIPTOR_REMAP_TINY = [
   "\tm\t(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z\tmethod_1725\tmethod_1725\tsetBlock"
 ].join("\n");
 
+// Fixture where the method descriptor mixes a remapped Minecraft class and an unmapped
+// JDK class (java/lang/String). The projection graph has no entry for java/lang/String,
+// so projectMethodDescriptorToTarget leaves it unchanged and marks the projection
+// incomplete. checkSymbolExists must still accept the partial projection and match the
+// record, otherwise the most common "MC class + String name" overload shape fails lookup.
+const TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\tnet/minecraft/class_1792\tnet/minecraft/class_1792\tnet/minecraft/world/item/Item",
+  "c\tnet/minecraft/class_1799\tnet/minecraft/class_1799\tnet/minecraft/world/item/ItemStack",
+  "\tm\t(Lnet/minecraft/class_1799;Ljava/lang/String;)V\tmethod_9000\tmethod_9000\ttagWithLabel"
+].join("\n");
+
 const TEST_DESCRIPTOR_REMAP_TINY_PROJECT = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\tnet/minecraft/class_2338\tnet/minecraft/class_2338\tnet/minecraft/core/BlockPos",
@@ -1162,6 +1174,8 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
       assert.equal(exactResult.resolvedSymbol?.owner, "net.minecraft.world.level.Level");
       assert.equal(exactResult.resolvedSymbol?.descriptor, expectedTargetDescriptor);
 
+      // findMapping now defaults to signatureMode="name-only" at the service layer too, so
+      // internal callers that want strict descriptor preservation must opt in explicitly.
       const findResult = await withCwd(root, () =>
         service.findMapping({
           version: "1.21.10",
@@ -1170,7 +1184,8 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
           name: "method_1725",
           descriptor,
           sourceMapping: "intermediary",
-          targetMapping: "yarn"
+          targetMapping: "yarn",
+          signatureMode: "exact"
         })
       );
       assert.equal(findResult.resolved, true);
@@ -1761,6 +1776,291 @@ test("MappingService checks symbol existence across class/field/method kinds", a
     assert.equal(nameOnlyUnique.resolved, true);
     assert.equal(nameOnlyUnique.status, "resolved");
     assert.equal(nameOnlyUnique.candidates.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService checkSymbolExists projects descriptor class references before matching overloads", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-projection-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+    // Tiny records store the descriptor with intermediary/obfuscated class refs like
+    // `Lnet/minecraft/class_2338;`. The caller uses yarn namespace with the named class
+    // references (`BlockPos`, `BlockState`). Without descriptor projection the verbatim
+    // comparison would fail; with projection the yarn descriptor is translated to the
+    // intermediary/obfuscated form before matching and the lookup resolves.
+    const yarnDescriptor =
+      "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
+    const resolved = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            descriptor?: string;
+            sourceMapping: SourceMapping;
+            signatureMode?: "exact" | "name-only";
+          }) => Promise<{
+            resolved: boolean;
+            status: string;
+            candidates: Array<{ name: string; descriptor?: string }>;
+          }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.world.level.Level",
+        name: "setBlock",
+        descriptor: yarnDescriptor,
+        sourceMapping: "yarn",
+        signatureMode: "exact"
+      })
+    );
+
+    assert.equal(resolved.resolved, true, "exact descriptor with remapped class refs should resolve");
+    assert.equal(resolved.status, "resolved");
+    assert.equal(resolved.candidates.length, 1);
+    assert.equal(resolved.candidates[0]?.name, "setBlock");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService findMapping signatureMode=exact accepts partial projection for mixed MC + JDK descriptors", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-exact-mixed-jdk-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+    // Before the fix, findMapping returned mapping_unavailable here because projection.complete
+    // was false (Ljava/lang/String; is not in the mapping graph). The partial projection is
+    // still useful: ItemStack gets remapped to class_1799 while String passes through, and the
+    // resulting descriptor matches the stored record verbatim.
+    const yarnDescriptor = "(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V";
+    const mapped = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.world.item.ItemStack",
+        name: "tagWithLabel",
+        descriptor: yarnDescriptor,
+        sourceMapping: "yarn",
+        targetMapping: "obfuscated",
+        signatureMode: "exact"
+      })
+    );
+
+    assert.equal(mapped.resolved, true, "mixed MC + JDK descriptor should still resolve in exact mode");
+    assert.equal(mapped.status, "resolved");
+    assert.equal(mapped.resolvedSymbol?.name, "method_9000");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService findMapping signatureMode=exact accepts obfuscated-canonical descriptors on multi-hop paths", async () => {
+  // Mojang -> Yarn lookups traverse mojang -> obfuscated -> intermediary -> yarn. Tiny v2
+  // stores a single descriptor (typically obfuscated) and shares it across columns, so the
+  // final Yarn candidate can carry an obfuscated-form descriptor instead of the yarn-form
+  // projection that the strict filter's `strictDescriptor` holds. The filter must still
+  // accept the candidate; otherwise the advertised exact retry path produces false `not_found`
+  // for the most common migration shape (Mojang method whose descriptor references a remapped
+  // Minecraft class).
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-exact-multihop-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+    // Use the obfuscated-form descriptor the caller sees via resolveMethodMappingExact's
+    // projection target. Source namespace is obfuscated so the lookup is exact-identity on
+    // the descriptor side but still exercises the strict filter's accepted-descriptors set.
+    const descriptor = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z";
+    const mapped = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.class_1937",
+        name: "method_1725",
+        descriptor,
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn",
+        signatureMode: "exact"
+      })
+    );
+
+    assert.equal(
+      mapped.resolved,
+      true,
+      "multi-hop exact lookup must resolve even when candidate descriptor stays in obfuscated form"
+    );
+    assert.equal(mapped.status, "resolved");
+    assert.equal(mapped.resolvedSymbol?.name, "setBlock");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService findMapping omitted signatureMode behaves as name-only at the service layer", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-omitted-sigmode-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_AMBIGUOUS_METHOD_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+    // When signatureMode is omitted the service default must match the public tool schema
+    // default ("name-only"). Callers that omit the descriptor entirely on kind=method must
+    // therefore not receive ERR_INVALID_INPUT from the descriptor-required path.
+    const result = await withCwd(root, () =>
+      service.findMapping({
+        version: "1.21.10",
+        kind: "method",
+        owner: "a.b.C",
+        name: "e",
+        sourceMapping: "obfuscated",
+        targetMapping: "intermediary"
+      })
+    );
+
+    // The fixture has two `e` overloads sharing `(I)V`, so name-only returns both.
+    assert.notEqual(result.status, "mapping_unavailable");
+    assert.ok(result.candidates.length >= 1, "omitted signatureMode must not error on missing descriptor");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService checkSymbolExists accepts partial projection when descriptor mixes remapped MC classes with unmapped JDK classes", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-mixed-jdk-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY}\n`, "utf8");
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+    // Caller uses yarn-named classes for the MC type and the JDK String class reference.
+    // projectMethodDescriptorToTarget cannot resolve `java/lang/String` (not in the mapping
+    // graph) and marks the projection incomplete, but the partial projection still maps
+    // `ItemStack -> class_1799` while leaving `Ljava/lang/String;` pass-through, so the
+    // result aligns with the stored record descriptor `(Lclass_1799;Ljava/lang/String;)V`.
+    const yarnDescriptor = "(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V";
+    const resolved = await withCwd(root, () =>
+      (
+        service as unknown as {
+          checkSymbolExists: (input: {
+            version: string;
+            kind: "class" | "field" | "method";
+            owner?: string;
+            name: string;
+            descriptor?: string;
+            sourceMapping: SourceMapping;
+            signatureMode?: "exact" | "name-only";
+          }) => Promise<{
+            resolved: boolean;
+            status: string;
+            candidates: Array<{ name: string }>;
+          }>;
+        }
+      ).checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.world.item.ItemStack",
+        name: "tagWithLabel",
+        descriptor: yarnDescriptor,
+        sourceMapping: "yarn",
+        signatureMode: "exact"
+      })
+    );
+
+    assert.equal(
+      resolved.resolved,
+      true,
+      "partial projection (MC class remapped, JDK class pass-through) should still resolve the exact overload"
+    );
+    assert.equal(resolved.status, "resolved");
+    assert.equal(resolved.candidates.length, 1);
+    assert.equal(resolved.candidates[0]?.name, "tagWithLabel");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

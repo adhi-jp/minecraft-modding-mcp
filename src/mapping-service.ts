@@ -1091,14 +1091,88 @@ function normalizeMemberName(name: string): string {
   return normalized;
 }
 
+/**
+ * Validate a JVM method descriptor such as `(I)V`, `()Lfoo/Bar;`, `(Lfoo/Bar;[I)V`.
+ * Rejects empty strings, missing/mis-positioned parens, empty return type, and invalid base
+ * type tokens so "(" or "()" style half-descriptors surface as ERR_INVALID_INPUT instead of
+ * being silently accepted.
+ */
 function normalizeMethodDescriptor(descriptor: string | undefined): string {
   const normalized = descriptor?.trim() ?? "";
-  if (!normalized || !normalized.startsWith("(") || !normalized.includes(")")) {
+  if (!normalized) {
+    throw invalidInputError("descriptor must be a valid JVM descriptor when kind=method.", {
+      descriptor
+    });
+  }
+  if (!isValidMethodDescriptor(normalized)) {
     throw invalidInputError("descriptor must be a valid JVM descriptor when kind=method.", {
       descriptor
     });
   }
   return normalized;
+}
+
+function isValidMethodDescriptor(descriptor: string): boolean {
+  if (!descriptor.startsWith("(")) return false;
+  const closingIndex = descriptor.indexOf(")");
+  if (closingIndex < 0) return false;
+  const argsSection = descriptor.slice(1, closingIndex);
+  const returnSection = descriptor.slice(closingIndex + 1);
+  if (returnSection.length === 0) return false;
+  let cursor = 0;
+  while (cursor < argsSection.length) {
+    const next = consumeFieldType(argsSection, cursor, /*allowVoid*/ false);
+    if (next < 0) return false;
+    cursor = next;
+  }
+  const returnEnd = consumeFieldType(returnSection, 0, /*allowVoid*/ true);
+  return returnEnd === returnSection.length;
+}
+
+/**
+ * JVM specification §4.3.2: "An array type descriptor is valid only if it represents a type
+ * with 255 or fewer dimensions." Matches the `multianewarray` / field-signature limit.
+ */
+const JVM_MAX_ARRAY_DIMENSIONS = 255;
+
+function consumeFieldType(descriptor: string, position: number, allowVoid: boolean): number {
+  // Arrays are handled iteratively so pathological inputs such as `(` + "[".repeat(20000) + `I)V`
+  // cannot blow the call stack. After consuming every leading `[`, only the element type token
+  // is dispatched through the switch below. Dimensions above the JVM limit are rejected rather
+  // than merely accepted as "syntactically valid but semantically absurd" — clients must not be
+  // able to push a 20000-dimension descriptor through cache-key construction.
+  let cursor = position;
+  let arrayDimensions = 0;
+  while (cursor < descriptor.length && descriptor[cursor] === "[") {
+    cursor += 1;
+    arrayDimensions += 1;
+    if (arrayDimensions > JVM_MAX_ARRAY_DIMENSIONS) return -1;
+  }
+  if (cursor >= descriptor.length) return -1;
+  // Void is only valid at the outermost position — inside an array element it is illegal.
+  const elementAllowsVoid = cursor === position && allowVoid;
+  const token = descriptor[cursor];
+  switch (token) {
+    case "B":
+    case "C":
+    case "D":
+    case "F":
+    case "I":
+    case "J":
+    case "S":
+    case "Z":
+      return cursor + 1;
+    case "V":
+      return elementAllowsVoid ? cursor + 1 : -1;
+    case "L": {
+      const end = descriptor.indexOf(";", cursor);
+      // Reject empty class names like L; and unterminated references.
+      if (end < 0 || end === cursor + 1) return -1;
+      return end + 1;
+    }
+    default:
+      return -1;
+  }
 }
 
 function normalizeQuerySymbol(
@@ -1172,9 +1246,18 @@ function normalizeQuerySymbol(
     };
   }
 
-  const descriptor = signatureMode === "name-only"
-    ? (input.descriptor?.trim() || "")
-    : normalizeMethodDescriptor(input.descriptor);
+  let descriptor: string;
+  if (signatureMode === "name-only") {
+    // name-only matches by owner+name only; a supplied descriptor is validated (so malformed
+    // input still surfaces as ERR_INVALID_INPUT) but discarded afterwards so downstream
+    // projection / filtering treats the query as "no descriptor".
+    if (input.descriptor?.trim()) {
+      normalizeMethodDescriptor(input.descriptor);
+    }
+    descriptor = "";
+  } else {
+    descriptor = normalizeMethodDescriptor(input.descriptor);
+  }
   const record = createMethodSymbolRecord(
     owner,
     normalizeMemberName(normalizedName),
@@ -1405,11 +1488,21 @@ export class MappingService {
       });
     }
 
-    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode, {
+    // Normalize the effective signatureMode exactly once so every downstream path — query
+    // symbol normalization, the strict-overload filter, the cache key, and warning text —
+    // sees the same value. The public tool schema defaults to "name-only", so an omitted
+    // signatureMode reaching the service (e.g. internal callers, MCP resource handlers, the
+    // resolution cache) must default to "name-only" too, otherwise the service contradicts
+    // the advertised default and silently reverts to the old descriptor-required path.
+    // Callers that genuinely need strict descriptor matching pass `signatureMode: "exact"`
+    // explicitly.
+    const effectiveSignatureMode: "exact" | "name-only" = input.signatureMode ?? "name-only";
+
+    const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode, {
       allowShortClassName: input.kind === "class" && input.sourceMapping === "obfuscated"
     });
 
-    const cacheKey = this.buildResolutionCacheKey(version, input, querySymbol);
+    const cacheKey = this.buildResolutionCacheKey(version, input, querySymbol, effectiveSignatureMode);
     const cached = this.resolutionCache.get(cacheKey);
     if (cached && Date.now() - cached.cachedAt < MappingService.RESOLUTION_CACHE_TTL_MS) {
       this.resolutionCacheHits += 1;
@@ -1483,9 +1576,15 @@ export class MappingService {
       queryRecord.kind === "method" && queryRecord.descriptor
         ? this.projectMethodDescriptorToTarget(graph, path, queryRecord.descriptor)
         : undefined;
+    // Partial projections are still useful for comparison: projectMethodDescriptorToTarget
+    // leaves unmapped `L...;` references unchanged, so JDK / external classes pass through
+    // while Minecraft class references get rewritten to the target namespace. Using the
+    // projected descriptor even when `complete === false` produces descriptors shaped like
+    // the stored records (`(Lnet/minecraft/class_1799;Ljava/lang/String;)V`) and avoids
+    // false negatives for the very common mixed MC + JDK descriptor shape.
     const projectedDescriptor =
-      descriptorProjection?.complete ? descriptorProjection.descriptor : undefined;
-    const rawCandidates = this
+      descriptorProjection?.hadClassReferences ? descriptorProjection.descriptor : undefined;
+    let rawCandidates = this
       .mapCandidatesAlongPath(graph, path, queryRecord)
       .map((candidate) =>
         queryRecord.kind === "method" && queryRecord.descriptor
@@ -1493,6 +1592,47 @@ export class MappingService {
           : candidate
       );
     const warnings: string[] = [];
+    // signatureMode="exact" on kind=method must not return descriptorless fallback candidates
+    // (lookupCandidates adds owner+name fallbacks by design for the loose path). Without this
+    // filter a caller who supplied `foo(I)V` could be told `foo(Z)V` is the exact mapping,
+    // which would be wrong for migration tooling. Mirror resolveMethodMappingExact's strict
+    // behavior: keep only candidates whose descriptor equals the (projected) requested
+    // descriptor. If nothing passes, the normal "candidates.length === 0 -> not_found" path
+    // takes over. Partial projection is accepted here for the same reason as above — we do
+    // not reject mixed MC + JDK descriptors as mapping_unavailable just because the JDK
+    // class reference was not in the mapping graph.
+    if (
+      queryRecord.kind === "method" &&
+      queryRecord.descriptor &&
+      effectiveSignatureMode === "exact"
+    ) {
+      // Tiny v2 stores a single descriptor per method entry (typically in the obfuscated
+      // namespace) and shares it across every column, while client mappings attach a mojang
+      // descriptor on the mojang side and an obfuscated descriptor on the obfuscated side.
+      // In multi-hop paths (e.g. mojang -> obfuscated -> intermediary -> yarn) the final
+      // candidate's owner and name live in the target namespace but its descriptor can still
+      // be the obfuscated form that rode along the Tiny hop. A strict filter that compared
+      // only against the fully projected target descriptor dropped those valid candidates
+      // and produced false `not_found` for common Mojang -> Yarn lookups. Accept any
+      // candidate whose descriptor matches the caller's descriptor, the target-space
+      // projection, or the obfuscated-space projection — the three forms that actually
+      // appear in the mapping graph.
+      const strictDescriptor = projectedDescriptor ?? queryRecord.descriptor;
+      const acceptedDescriptors = new Set<string>([queryRecord.descriptor, strictDescriptor]);
+      const toObfuscatedPath = namespacePath(graph, sourceMapping, "obfuscated");
+      if (toObfuscatedPath) {
+        const obfuscatedProjection = this.projectMethodDescriptorToTarget(
+          graph,
+          toObfuscatedPath,
+          queryRecord.descriptor
+        );
+        acceptedDescriptors.add(obfuscatedProjection.descriptor);
+      }
+      rawCandidates = rawCandidates.filter(
+        (candidate) =>
+          candidate.descriptor !== undefined && acceptedDescriptors.has(candidate.descriptor)
+      );
+    }
     const disambiguatedCandidates = applyDisambiguationHints(rawCandidates, input.disambiguation);
     if (rawCandidates.length > disambiguatedCandidates.length) {
       warnings.push(
@@ -1517,6 +1657,18 @@ export class MappingService {
       warnings.push(
         `Ambiguous mapping: ${candidates.length} candidates matched. Provide a stricter symbol input or disambiguation hints.`
       );
+      if (queryRecord.kind === "method") {
+        // find-mapping defaults to signatureMode="name-only", which discards any supplied
+        // descriptor. Telling the caller to "add descriptor" would be ineffective unless they
+        // also switch mode, so we point to the exact alternatives instead.
+        warnings.push(
+          "Retry with signatureMode=\"exact\" plus a JVM descriptor, or pass disambiguation.descriptorHint, or raise maxCandidates up to 200 to inspect the full candidate list."
+        );
+      } else {
+        warnings.push(
+          "Raise maxCandidates up to 200 to inspect the full candidate list, or use disambiguation.ownerHint to narrow the search."
+        );
+      }
     }
 
     const status: SymbolResolutionStatus =
@@ -1729,6 +1881,11 @@ export class MappingService {
 
     if (strictCandidates.length > 1) {
       warnings.push("Exact method mapping is ambiguous for owner+method+descriptor.");
+      if (limitedCandidates.candidatesTruncated) {
+        warnings.push(
+          "Raise maxCandidates up to 200 to inspect the full candidate list, or narrow the lookup via find-mapping disambiguation hints."
+        );
+      }
       return {
         querySymbol,
         mappingContext,
@@ -2093,6 +2250,11 @@ export class MappingService {
     ): SymbolExistenceOutput => {
       const candidates = matched.map((record) => toResolutionCandidate(toLookupCandidate(record)));
       const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
+      if (status === "ambiguous" && limitedCandidates.candidatesTruncated) {
+        warnings.push(
+          "Raise maxCandidates up to 200 to inspect the full candidate list."
+        );
+      }
       return {
         querySymbol,
         mappingContext,
@@ -2161,15 +2323,48 @@ export class MappingService {
       const status: SymbolResolutionStatus =
         methodCandidates.length === 1 ? "resolved" : methodCandidates.length > 1 ? "ambiguous" : "not_found";
       if (status === "ambiguous") {
+        // name-only discards any supplied descriptor, so telling the caller to "provide
+        // descriptor" would not disambiguate — they need to switch to signatureMode="exact".
         warnings.push(
-          `Multiple method overloads matched name "${queryRecord.name}" in owner "${queryRecord.owner}". Provide descriptor for exact match.`
+          `Multiple method overloads matched name "${queryRecord.name}" in owner "${queryRecord.owner}". Retry with signatureMode="exact" plus a JVM descriptor to pick one overload.`
         );
       }
       return buildOutput(querySymbol, methodCandidates, status);
     }
 
+    // Tiny parsing stores a single descriptor per method entry (typically in the obfuscated
+    // namespace) and copies it into every namespace at load time. That means a descriptor
+    // supplied in `sourceMapping` coordinates will not string-compare equal to the record
+    // for any method whose descriptor references remapped Minecraft classes. Project the
+    // caller's descriptor to obfuscated coordinates first so class references line up with
+    // the stored record descriptors. The projection is accepted even when
+    // `projection.complete` is false: `projectMethodDescriptorToTarget` leaves every
+    // unresolvable `L...;` reference unchanged (JDK/external classes like
+    // `Ljava/lang/String;` are never in the mapping graph and pass through by design), so a
+    // partial projection still aligns the Minecraft class refs with the stored descriptor
+    // form while leaving external class refs identical to the user input. Falling back to
+    // verbatim comparison on `complete === false` would send mixed descriptors like
+    // `(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V` down the raw-compare path
+    // and produce false negatives in the most common lookup shape. When no class references
+    // exist at all (primitives-only descriptors such as `(I)V`) the projector marks
+    // `hadClassReferences === false` and we simply reuse the original descriptor.
+    const queryDescriptor = queryRecord.descriptor as string;
+    let effectiveDescriptor = queryDescriptor;
+    if (sourceMapping !== "obfuscated") {
+      const projectionPath = namespacePath(graph, sourceMapping, "obfuscated");
+      if (projectionPath) {
+        const projection = this.projectMethodDescriptorToTarget(
+          graph,
+          projectionPath,
+          queryDescriptor
+        );
+        if (projection.hadClassReferences) {
+          effectiveDescriptor = projection.descriptor;
+        }
+      }
+    }
     const descriptorMatched = methodCandidates.filter(
-      (record) => record.descriptor === queryRecord.descriptor
+      (record) => record.descriptor === effectiveDescriptor || record.descriptor === queryDescriptor
     );
     if (descriptorMatched.length === 1) {
       return buildOutput(querySymbol, descriptorMatched, "resolved");
@@ -2880,7 +3075,12 @@ export class MappingService {
     }
   }
 
-  private buildResolutionCacheKey(version: string, input: FindMappingInput, querySymbol: SymbolReference): string {
+  private buildResolutionCacheKey(
+    version: string,
+    input: FindMappingInput,
+    querySymbol: SymbolReference,
+    effectiveSignatureMode: "exact" | "name-only"
+  ): string {
     return [
       version,
       input.kind,
@@ -2890,7 +3090,7 @@ export class MappingService {
       input.targetMapping,
       input.sourcePriority ?? "",
       effectiveLoomSearchProjectPath(input.projectPath) ?? "",
-      input.signatureMode ?? "",
+      effectiveSignatureMode,
       String(input.maxCandidates ?? ""),
       JSON.stringify(input.disambiguation ?? "")
     ].join("\0");

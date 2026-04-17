@@ -19,6 +19,16 @@ import {
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 
 const nonEmptyString = z.string().trim().min(1);
+// Descriptor field that treats empty/whitespace strings as omitted so callers can pass
+// `descriptor: ""` interchangeably with omitting the field when signatureMode="name-only".
+const optionalDescriptorString = z
+  .string()
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  });
 const INCLUDE_GROUPS = ["warnings", "candidates", "matrix", "workspace", "timings"] as const;
 const TASKS = ["exists", "map", "exact-map", "lifecycle", "workspace", "api-overview"] as const;
 
@@ -28,7 +38,7 @@ export const analyzeSymbolShape = {
     kind: z.enum(["class", "method", "field", "symbol"]),
     name: nonEmptyString,
     owner: nonEmptyString.optional(),
-    descriptor: nonEmptyString.optional()
+    descriptor: optionalDescriptorString
   }),
   version: nonEmptyString.optional(),
   sourceMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
@@ -39,7 +49,7 @@ export const analyzeSymbolShape = {
   nameMode: z.enum(["fqcn", "auto"]).default("fqcn"),
   includeKinds: z.array(z.enum(["class", "field", "method"])).optional(),
   maxRows: positiveIntSchema.optional(),
-  maxCandidates: positiveIntSchema.default(200),
+  maxCandidates: positiveIntSchema.default(5),
   detail: detailSchema.optional(),
   include: buildIncludeSchema(INCLUDE_GROUPS)
 };

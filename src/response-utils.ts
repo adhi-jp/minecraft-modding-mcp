@@ -90,17 +90,38 @@ export function compactArtifactResponse(
   return projected;
 }
 
+/** Max number of unresolved candidates that get full metadata in compact mode. */
+const UNRESOLVED_FULL_DETAIL_LIMIT = 3;
+
 /**
- * Mapping tool compact: omit candidates only when provably redundant.
+ * Slim projection of a candidate: retains only identification + confidence fields.
  *
- * Candidates are omitted when ALL of:
- * 1. resolved === true
- * 2. resolvedSymbol exists
- * 3. candidates is an array of length 1
- * 4. candidateCount === 1
- * 5. candidatesTruncated is falsy
- * 6. candidates[0].matchKind === "exact"
- * 7. candidates[0].confidence is undefined or 1
+ * `kind` and `symbol` are part of the public `SymbolReference` / candidate contract that
+ * clients branch on and use as rendering keys, so they MUST survive the slim. The heavy
+ * fields removed here are the cycle-local diagnostic metadata (provenance, context,
+ * ambiguityReasons, warnings on the candidate, etc.) — not the identity fields.
+ */
+function slimCandidate(candidate: unknown): Record<string, unknown> | unknown {
+  if (!isPlainObject(candidate)) return candidate;
+  const picked: Record<string, unknown> = {};
+  for (const key of ["kind", "symbol", "owner", "name", "descriptor", "confidence", "matchKind"]) {
+    if (candidate[key] !== undefined) {
+      picked[key] = candidate[key];
+    }
+  }
+  return picked;
+}
+
+/**
+ * Mapping tool compact: project candidates for size reduction.
+ *
+ * Resolved-exact path: omit candidates entirely when provably redundant.
+ *   All of: resolved===true, resolvedSymbol exists, single exact candidate, not truncated,
+ *           confidence missing or 1.
+ *
+ * Unresolved/ambiguous path: keep top {@link UNRESOLVED_FULL_DETAIL_LIMIT} candidates with full
+ *   metadata, slim the tail to {owner,name,descriptor,confidence,matchKind}, and surface
+ *   `candidatesTruncated:true` + `totalCandidateCount` so the caller knows what it's seeing.
  */
 export function compactMappingResponse(
   obj: Record<string, unknown>
@@ -123,7 +144,24 @@ export function compactMappingResponse(
       (candidate.confidence === undefined || candidate.confidence === 1)
     ) {
       delete projected.candidates;
+      return projected;
     }
+  }
+
+  if (
+    projected.resolved === false &&
+    Array.isArray(candidates) &&
+    candidates.length > UNRESOLVED_FULL_DETAIL_LIMIT
+  ) {
+    const head = candidates.slice(0, UNRESOLVED_FULL_DETAIL_LIMIT);
+    const tail = candidates.slice(UNRESOLVED_FULL_DETAIL_LIMIT).map(slimCandidate);
+    projected.candidates = [...head, ...tail];
+    // Tail slimming keeps the full candidate array; only metadata was dropped. Use a
+    // dedicated `candidateDetailsTruncated` signal so clients do not confuse it with the
+    // existing `candidatesTruncated` semantics ("more candidates exist than this response
+    // contains"). If the upstream already reported list-level truncation via
+    // `candidatesTruncated`, that value is preserved unchanged.
+    projected.candidateDetailsTruncated = true;
   }
 
   return projected;

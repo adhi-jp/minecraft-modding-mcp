@@ -3017,6 +3017,10 @@ export class SourceService {
       };
     }
 
+    // By this point the method and class branches have already returned; only the field
+    // branch reaches the generic findMapping fallthrough, and fields do not consume
+    // signatureMode on the service side. Leave signatureMode undefined (service default =
+    // "name-only" for any accidental future non-field caller hitting this path).
     const mapped = await this.mappingService.findMapping({
       version,
       kind,
@@ -6471,7 +6475,16 @@ export class SourceService {
             name,
             owner: ownerInSourceMapping,
             descriptor,
-            signatureMode: kind === "method" && !descriptor ? "name-only" : undefined,
+            // When we do have a descriptor this path is an exact lookup (the resolveMethodMappingExact
+            // fast path is chosen instead whenever possible). findMapping's service-layer default is
+            // "name-only" to match the public tool schema, so we must opt in to strict semantics here
+            // to preserve the descriptor-aware overload selection this caller relies on.
+            signatureMode:
+              kind === "method"
+                ? descriptor
+                  ? "exact"
+                  : "name-only"
+                : undefined,
             sourceMapping: mapping,
             targetMapping: "obfuscated",
             sourcePriority
@@ -6482,6 +6495,33 @@ export class SourceService {
           name: mapped.resolvedSymbol.name,
           descriptor: kind === "method" ? mapped.resolvedSymbol.descriptor ?? descriptor : undefined
         };
+      }
+      // resolveMethodMappingExact still rejects partial descriptor projections, so a
+      // Mojang / Yarn method whose descriptor mixes a remapped Minecraft class with a JDK
+      // type (e.g. `(L...ItemStack;Ljava/lang/String;)V`) bottoms out as unresolved /
+      // mapping_unavailable here even though `findMapping` with signatureMode="exact" would
+      // accept the partially projected descriptor. Fall back to `findMapping` before giving
+      // up so downstream paths (access-widener remap, trace-symbol-lifecycle, signature
+      // member remap) do not silently miss real methods.
+      if (canResolveMethodExactly && (mapped.status === "not_found" || mapped.status === "mapping_unavailable")) {
+        const fallbackMapped = await this.mappingService.findMapping({
+          version,
+          kind,
+          name,
+          owner: ownerInSourceMapping,
+          descriptor,
+          signatureMode: "exact",
+          sourceMapping: mapping,
+          targetMapping: "obfuscated",
+          sourcePriority
+        });
+        warnings.push(...fallbackMapped.warnings);
+        if (fallbackMapped.resolved && fallbackMapped.resolvedSymbol) {
+          return {
+            name: fallbackMapped.resolvedSymbol.name,
+            descriptor: kind === "method" ? fallbackMapped.resolvedSymbol.descriptor ?? descriptor : undefined
+          };
+        }
       }
       warnings.push(`Could not map ${kind} "${name}" from ${mapping} to obfuscated.`);
     } catch (caughtError) {
@@ -6645,6 +6685,10 @@ export class SourceService {
             name,
             owner: ownerFqn,
             descriptor: kind === "method" ? descriptor : undefined,
+            // Access-widener / access-transformer remap runs after validation has accepted
+            // the descriptor as authoritative, so preserve exact overload matching even
+            // though the descriptorHint path also exists for ambiguity fallback.
+            signatureMode: kind === "method" && descriptor ? "exact" : undefined,
             sourceMapping,
             targetMapping,
             sourcePriority,

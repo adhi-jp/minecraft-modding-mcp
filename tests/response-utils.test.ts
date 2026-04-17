@@ -313,6 +313,114 @@ test("compactMappingResponse preserves candidates when candidateCount is absent"
   assert.ok("candidates" in result);
 });
 
+test("compactMappingResponse slims unresolved candidates beyond the top-3 and flags candidateDetailsTruncated", () => {
+  const makeCandidate = (name: string, extras: Record<string, unknown>): Record<string, unknown> => ({
+    kind: "method",
+    owner: "net.minecraft.server.Main",
+    name,
+    descriptor: "()V",
+    matchKind: "owner-name",
+    confidence: 0.6,
+    // Heavy metadata that should NOT survive for tail entries
+    provenance: { source: "tiny-v2", file: "mappings.tiny", line: 1234 },
+    context: { owningClass: "Main", classAccessFlags: 1 },
+    ...extras
+  });
+  const candidates = [
+    makeCandidate("tick1", {}),
+    makeCandidate("tick2", {}),
+    makeCandidate("tick3", {}),
+    makeCandidate("tick4", {}),
+    makeCandidate("tick5", {})
+  ];
+  const input: Record<string, unknown> = {
+    querySymbol: { kind: "method", name: "tick" },
+    mappingContext: { version: "1.21.10" },
+    resolved: false,
+    status: "ambiguous",
+    candidates,
+    candidateCount: 5
+  };
+
+  const result = compactMappingResponse(input);
+  assert.ok(Array.isArray(result.candidates));
+  const projected = result.candidates as Array<Record<string, unknown>>;
+  assert.equal(projected.length, 5);
+  // Top 3 preserve full metadata.
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal("provenance" in projected[i], true, `candidate ${i} should retain provenance`);
+    assert.equal("context" in projected[i], true);
+  }
+  // Tail candidates are slim.
+  for (let i = 3; i < 5; i += 1) {
+    assert.equal("provenance" in projected[i], false, `candidate ${i} should have provenance stripped`);
+    assert.equal("context" in projected[i], false);
+    assert.ok("name" in projected[i]);
+    assert.ok("descriptor" in projected[i]);
+    assert.ok("confidence" in projected[i]);
+  }
+  // Tail slimming must not reuse `candidatesTruncated` (which means "more candidates exist
+  // than are returned"). It sets `candidateDetailsTruncated` instead, and leaves
+  // `candidatesTruncated` untouched so list-level truncation keeps its original meaning.
+  assert.equal(result.candidateDetailsTruncated, true);
+  assert.equal(result.candidatesTruncated, undefined);
+});
+
+test("compactMappingResponse preserves upstream candidatesTruncated when tail slimming also fires", () => {
+  // If the server truncated the list upstream (maxCandidates clipped it) AND the returned
+  // slice still exceeds the top-3 detail limit, the response must keep both signals: the
+  // caller learns that more matches exist (candidatesTruncated) and that tail entries were
+  // slimmed (candidateDetailsTruncated).
+  const makeCandidate = (name: string): Record<string, unknown> => ({
+    kind: "method",
+    owner: "net.minecraft.server.Main",
+    name,
+    descriptor: "()V",
+    matchKind: "owner-name",
+    confidence: 0.6,
+    provenance: { source: "tiny-v2" }
+  });
+  const input: Record<string, unknown> = {
+    querySymbol: { kind: "method", name: "tick" },
+    mappingContext: { version: "1.21.10" },
+    resolved: false,
+    status: "ambiguous",
+    candidates: [
+      makeCandidate("tick1"),
+      makeCandidate("tick2"),
+      makeCandidate("tick3"),
+      makeCandidate("tick4"),
+      makeCandidate("tick5")
+    ],
+    candidateCount: 20,
+    candidatesTruncated: true
+  };
+  const result = compactMappingResponse(input);
+  assert.equal(result.candidatesTruncated, true, "upstream list truncation is preserved verbatim");
+  assert.equal(result.candidateDetailsTruncated, true, "tail slimming is reported independently");
+  assert.equal(result.candidateCount, 20);
+});
+
+test("compactMappingResponse leaves small unresolved candidate arrays untouched", () => {
+  const input: Record<string, unknown> = {
+    querySymbol: { kind: "method", name: "tick" },
+    mappingContext: { version: "1.21.10" },
+    resolved: false,
+    status: "ambiguous",
+    candidates: [
+      { name: "tick1", provenance: { source: "tiny" } },
+      { name: "tick2", provenance: { source: "tiny" } }
+    ],
+    candidateCount: 2
+  };
+  const before = JSON.stringify(input);
+  const result = compactMappingResponse(input);
+  // Small lists (<=3) keep full shape and do not mark either truncation signal.
+  assert.equal(result.candidatesTruncated, undefined);
+  assert.equal(result.candidateDetailsTruncated, undefined);
+  assert.equal(JSON.stringify(result), before);
+});
+
 test("compactMappingResponse preserves empty candidates for not_found (P1 strips later)", () => {
   const result = compactMappingResponse({
     ...MAPPING_BASE,

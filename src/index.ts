@@ -148,6 +148,19 @@ const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = z.string().trim().min(1).optional();
 const optionalPositiveInt = z.number().int().positive().optional();
 
+// Optional descriptor: "" and whitespace-only strings are normalized to undefined so that
+// tools with signatureMode="name-only" can accept "caller omitted descriptor" inputs whether
+// the caller passed an empty string or omitted the field entirely. Malformed descriptors are
+// still rejected downstream by normalizeMethodDescriptor in mapping-service.
+const optionalDescriptorString = z
+  .string()
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    const trimmed = value.trim();
+    return trimmed.length === 0 ? undefined : trimmed;
+  });
+
 const sourceMappingSchema = z.enum(SOURCE_MAPPINGS);
 const mappingSourcePrioritySchema = z.enum(SOURCE_PRIORITIES);
 const targetKindSchema = z.enum(TARGET_KINDS);
@@ -346,7 +359,7 @@ const listArtifactFilesSchema = z.object(listArtifactFilesShape);
 
 const traceSymbolLifecycleShape = {
   symbol: nonEmptyString.describe("fully.qualified.Class.method"),
-  descriptor: optionalNonEmptyString.describe('optional JVM descriptor, e.g. "(I)V"'),
+  descriptor: optionalDescriptorString.describe('optional JVM descriptor, e.g. "(I)V". Empty strings are treated as omitted.'),
   fromVersion: optionalNonEmptyString,
   toVersion: optionalNonEmptyString,
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
@@ -372,10 +385,12 @@ const findMappingShape = {
   kind: workspaceSymbolKindSchema.describe("class | field | method"),
   name: nonEmptyString,
   owner: optionalNonEmptyString,
-  descriptor: optionalNonEmptyString,
+  descriptor: optionalDescriptorString.describe("JVM descriptor. Optional when signatureMode='name-only' (default). Empty strings are treated as omitted."),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  signatureMode: z.enum(["exact", "name-only"]).default("name-only")
+    .describe("exact: descriptor required for kind=method; name-only (default): match by owner+name only"),
   disambiguation: z
     .object({
       ownerHint: optionalNonEmptyString,
@@ -383,7 +398,7 @@ const findMappingShape = {
     })
     .partial()
     .optional(),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
   compact: z.boolean().default(true).describe(
     "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
     + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
@@ -442,10 +457,10 @@ const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) =>
     return;
   }
 
-  if (!value.descriptor) {
+  if (!value.descriptor && value.signatureMode !== "name-only") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "descriptor is required when kind=method.",
+      message: "descriptor is required when kind=method (use signatureMode='name-only' to match by name only).",
       path: ["descriptor"]
     });
   }
@@ -459,7 +474,7 @@ const resolveMethodMappingExactShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
   compact: z.boolean().default(true).describe(
     "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
     + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
@@ -519,10 +534,10 @@ const resolveWorkspaceSymbolShape = {
   kind: workspaceSymbolKindSchema.describe("class | field | method"),
   name: nonEmptyString,
   owner: optionalNonEmptyString,
-  descriptor: optionalNonEmptyString,
+  descriptor: optionalDescriptorString.describe("JVM descriptor. Empty strings are treated as omitted."),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates for field/method lookups (max 200)"),
+  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates for field/method lookups (default 5, max 200). Raise when you need the full candidate list."),
   compact: z.boolean().default(true).describe(
     "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
     + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
@@ -594,13 +609,13 @@ const checkSymbolExistsShape = {
   kind: workspaceSymbolKindSchema.describe("class | field | method"),
   owner: optionalNonEmptyString,
   name: nonEmptyString,
-  descriptor: optionalNonEmptyString.describe("required for kind=method unless signatureMode=name-only"),
+  descriptor: optionalDescriptorString.describe("required for kind=method unless signatureMode=name-only. Empty strings are treated as omitted."),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   nameMode: classNameModeSchema.default("fqcn").describe("fqcn | auto"),
   signatureMode: z.enum(["exact", "name-only"]).default("exact")
     .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
-  maxCandidates: optionalPositiveInt.default(200).describe("Limit returned candidates (max 200)"),
+  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
   compact: z.boolean().default(true).describe(
     "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
     + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
@@ -2250,6 +2265,7 @@ server.tool("find-mapping",
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
+      signatureMode: input.signatureMode,
       disambiguation: input.disambiguation,
       maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>

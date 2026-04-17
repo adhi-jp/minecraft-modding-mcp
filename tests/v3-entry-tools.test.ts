@@ -34,7 +34,7 @@ test("entry tool schemas expose explicit defaults on safe public parameters", as
   assert.match(validateProjectSource, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(analyzeSymbolSource, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
   assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("fqcn"\)/);
-  assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(200\)/);
+  assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(5\)/);
   assert.match(compareMinecraftSource, /maxClassResults:\s*positiveIntSchema\.default\(500\)/);
   assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(inspectMinecraftSource, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
