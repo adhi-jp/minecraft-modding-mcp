@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `find-mapping` `signatureMode` is now a first-class input: `"exact"` preserves the strict `owner + name + descriptor` match, `"name-only"` matches by `owner + name` only and ranks the top overloads by confidence. `resolve-method-mapping-exact` is unchanged for callers that need exact-triple semantics.
+- `docs/tool-reference.md` gained a "Which Tool for Which Question" decision table, and `README.md` links to it from the Documentation section.
+- Ambiguous mapping responses in `find-mapping`, `resolve-method-mapping-exact`, and `check-symbol-exists` now include recovery guidance in `warnings`:
+  - `find-mapping` method ambiguities: retry with `signatureMode="exact"` plus a JVM descriptor, pass `disambiguation.descriptorHint`, or raise `maxCandidates` up to `200`.
+  - `find-mapping` class/field ambiguities: pass `disambiguation.ownerHint`, or raise `maxCandidates` up to `200`.
+  - `resolve-method-mapping-exact` truncated candidate lists: raise `maxCandidates` up to `200`, or fall back to `find-mapping` disambiguation hints.
+  - `check-symbol-exists` name-only method ambiguities: retry with `signatureMode="exact"` plus a JVM descriptor.
+  - `check-symbol-exists` short-class ambiguities: provide a fully-qualified class name.
+  - Any truncated candidate list: raise `maxCandidates` up to `200` (the max cap).
+- `check-symbol-exists` now projects the caller's JVM descriptor to the obfuscated namespace before filtering method overloads, so `signatureMode="exact"` retries work correctly when the descriptor references remapped Minecraft classes (e.g. `(Lnet/minecraft/world/item/ItemStack;)V`). Partial projections — where some class references resolve and unmapped JDK / external classes (e.g. `Ljava/lang/String;`) pass through unchanged — are accepted, so mixed descriptors like `(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V` resolve correctly instead of falling back to the unprojected source descriptor.
+- `find-mapping` with `signatureMode="exact"` and `kind="method"` now filters resolved candidates by the (projected) requested descriptor, mirroring `resolve-method-mapping-exact`'s strict behavior. Descriptorless fallback candidates are no longer promoted to `resolved`, so a caller who supplied `foo(Z)V` cannot be told that `foo(I)V` is the exact mapping. Mixed descriptors like `(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V` that include both a remapped Minecraft class and a pass-through JDK class still resolve correctly — the strict filter uses the partial projection whenever class references are present rather than rejecting incomplete projections outright.
+- `MappingService.findMapping` service-layer default for `signatureMode` now matches the public tool schema default (`"name-only"`). Internal callers that require strict descriptor filtering pass `signatureMode: "exact"` explicitly; `source-service` callers (`resolve-workspace-symbol`, access-widener / access-transformer remap paths, and the obfuscated-name lookup helper) have been updated accordingly. The resolution cache key now encodes the resolved effective mode so cache entries do not collide across modes.
+- `source-service`'s obfuscated-name lookup helper now falls back to `findMapping(signatureMode: "exact")` when `resolveMethodMappingExact` returns `not_found` / `mapping_unavailable`. This recovers mixed MC + JDK descriptor lookups that `resolveMethodMappingExact` still rejects for incomplete class-ref projections, so access-widener remap, signature-member remap, and trace-symbol-lifecycle can resolve real methods instead of silently dropping them.
+- Compact mode slim candidate projection now retains `kind` and `symbol` alongside `owner`, `name`, `descriptor`, `confidence`, and `matchKind`. Clients that key candidates by `symbol` or branch on `kind` are no longer silently broken by the default compact response shape.
+- `normalizeMethodDescriptor` in the mapping service now enforces the JVM §4.3.2 array-dimension limit (255). Descriptors with more than 255 leading `[` are rejected as `ERR_INVALID_INPUT` instead of being accepted and pushed into cache-key construction.
+
+### Changed
+- BREAKING: `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, `check-symbol-exists`, and `analyze-symbol` now default `maxCandidates` to `5` (previously `200`; `200` remains the enforced upper bound). Callers that implicitly relied on the old default to receive every ranked candidate must now pass `maxCandidates` explicitly.
+- BREAKING: `find-mapping` now defaults `signatureMode` to `"name-only"` (previously the effective default was `"exact"`). `kind="method"` lookups without a `descriptor` no longer fail with `ERR_INVALID_INPUT`. Callers that depended on the old strict refinement must pass `signatureMode: "exact"` explicitly. Malformed descriptors still surface as `ERR_INVALID_INPUT` in both modes when a descriptor is supplied.
+- `find-mapping` and `check-symbol-exists` `descriptor` fields now accept empty strings as equivalent to omitting the field, so name-only lookups can be made with either `descriptor: ""` or no `descriptor` at all.
+- `normalizeMethodDescriptor` in the mapping service now rejects malformed JVM descriptors such as `()`, `(I)`, and `(L;)V` with `ERR_INVALID_INPUT` instead of silently accepting them.
+- Compact mode (`compact: true`) on mapping tools now keeps only the top three unresolved candidates with full metadata and slims the tail to `{owner, name, descriptor, confidence, matchKind}`. A new `candidateDetailsTruncated: true` flag signals this metadata slim. `candidatesTruncated` continues to mean "more candidates exist upstream than this response returned" (set by the service when `maxCandidates` clipped the list); the two signals are orthogonal and can both appear.
+
 ## [3.2.0] - 2026-04-12
 
 ### Added

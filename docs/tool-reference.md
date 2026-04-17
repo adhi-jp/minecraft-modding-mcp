@@ -4,6 +4,29 @@ Use [README.md](../README.md) for quick start and client setup. Use [docs/exampl
 
 Use this document when you need the exact input conventions, outputs, resource URIs, mapping rules, migration notes, operational pitfalls, or the full environment-variable matrix.
 
+## Which Tool for Which Question
+
+Start here when you are not sure which tool to reach for. In every row, the left column is the question as a user would phrase it; the right column is the tool that answers it most directly. Class lookups always take a fully-qualified class name as `name`; field and method lookups split the class into `owner` and the simple member into `name`.
+
+| Question | Tool |
+| --- | --- |
+| "Does class `X` exist on MC `1.21.10`?" | `check-symbol-exists` (`kind="class"`, `nameMode="auto"` if you only have a short name). |
+| "What is the obfuscated name of `net.minecraft.world.entity.player.Player` in MC `1.21.10`?" | `find-mapping` (`kind="class"`, `name="net.minecraft.world.entity.player.Player"`, `sourceMapping="mojang"`, `targetMapping="obfuscated"`). |
+| "What is the descriptor of `Player.addAdditionalSaveData`?" | `check-symbol-exists` (`kind="method"`, `owner="net.minecraft.world.entity.player.Player"`, `name="addAdditionalSaveData"`, `sourceMapping="mojang"`, `signatureMode="name-only"`). `find-mapping` with `signatureMode="name-only"` also works when you additionally want the target-namespace name. |
+| "Does this exact obf `owner + name + descriptor` triple resolve to one mapping?" | `resolve-method-mapping-exact` (always requires the full triple). |
+| "I know a Mojang method like `ItemStack.copy` — which workspace mapping does it use?" | Discover the descriptor first with `check-symbol-exists` (`signatureMode="name-only"`), then call `resolve-workspace-symbol` (`kind="method"`, `owner="net.minecraft.world.item.ItemStack"`, `name="copy"`, `descriptor="()Lnet/minecraft/world/item/ItemStack;"`, `projectPath`). |
+| "Summarize a symbol across mapping/existence/lifecycle in one call." | `analyze-symbol` (higher-level wrapper around `find-mapping` / `check-symbol-exists` / `trace-symbol-lifecycle`). |
+| "Give me the source of one class I already know the FQCN of." | `get-class-source` (`mode="metadata"` to skim, `mode="snippet"` for line ranges, `mode="full"` for the whole file). |
+| "Give me the fields/methods/constructors of one class without reading the source." | `get-class-members`. |
+| "Find every class or member that matches `save` in one artifact." | `search-class-source`. |
+| "I only know the simple class name `PlayerList` and want the FQCN." | `find-class`. |
+| "Does this Mixin target the right class and descriptor?" | `validate-mixin` (works standalone with `version=1.21.10`; provide inline source, a path, or a mixin config). |
+| "Validate every Mixin / Access Widener / Access Transformer in a workspace." | `validate-project` (`task="project-summary"` discovers everything; `task="mixin"|"access-widener"|"access-transformer"` validates a single subject). |
+| "Inspect the Minecraft workspace or an artifact without picking a lower-level tool." | `inspect-minecraft` — use this when you want the server to resolve the artifact and pick the right sub-tool. |
+| "Trace when a symbol was added, renamed, or removed across versions." | `trace-symbol-lifecycle` (or `analyze-symbol task="lifecycle"` for the summarized 5-version window). |
+| "Compare two MC versions or two class versions." | `compare-minecraft` (`task="class"` for a single class diff; `task="versions"` for a full summary). |
+| "Inspect or remap an existing `.jar` file." | `analyze-mod` / `analyze-mod-jar` / `remap-mod-jar`. |
+
 ## Essential Conventions
 
 - Start with the top-level workflow tools when possible. `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` cover the common workflows and return summary-first results with follow-up hints.
@@ -14,7 +37,7 @@ Use this document when you need the exact input conventions, outputs, resource U
 - When a parameter has a fixed safe default, `tools/list` exposes it through the JSON Schema `default` field so clients can rely on schema metadata instead of prose notes.
 - Retryable `suggestedCall` payloads omit parameters when the supplied value already matches the tool default, keeping recovery calls smaller without changing behavior.
 - Source-oriented tools expose `artifactContents` so callers can tell whether the backing artifact is a `source-jar` or a `decompiled-binary`. `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` also expose `returnedNamespace`.
-- `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept `compact: true` to strip empty arrays, null values, and empty objects from the response. For `resolve-artifact`, compact mode also omits `provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, and `resolvedSourceJarPath`. For mapping tools, compact mode omits the redundant `candidates` array when the result is a single full-confidence exact-match resolution.
+- `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept `compact: true` to strip empty arrays, null values, and empty objects from the response. For `resolve-artifact`, compact mode also omits `provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, and `resolvedSourceJarPath`. For mapping tools, compact mode has two projections: (1) the redundant `candidates` array is omitted entirely when the result is a single full-confidence exact-match resolution; (2) when the result is unresolved with more than three candidates, the top three keep full metadata while the tail is slimmed to `{owner, name, descriptor, confidence, matchKind}` and the response surfaces `candidateDetailsTruncated: true`. `candidatesTruncated` retains its pre-compact meaning ("more candidates exist upstream than this response returned") and is set independently by the service when `maxCandidates` clipped the list — the two signals can both appear.
 - Windows and WSL path forms are normalized for `jarPath`, `projectPath`, and environment-variable path overrides.
 - Heavy analysis tools are serialized in-process to protect stdio stability. Queue overflow returns `ERR_LIMIT_EXCEEDED`.
 - All tools and JSON resources use the standard `{ result?, error?, meta }` envelope. `class-source` and `artifact-file` resources return raw text on success and structured JSON on failure.

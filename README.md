@@ -232,7 +232,7 @@ Workspace summaries still default to discovering mixins and access wideners. Add
 ## Documentation
 
 - [Detailed example requests](docs/examples.md) for copyable payloads and common workflows
-- [Tool and configuration reference](docs/tool-reference.md) for exact inputs, outputs, resource behavior, environment variables, and migration notes
+- [Tool and configuration reference](docs/tool-reference.md) for exact inputs, outputs, resource behavior, environment variables, and migration notes — start with the [Which Tool for Which Question](docs/tool-reference.md#which-tool-for-which-question) decision table when you are not sure which tool to call
 - [日本語 README](docs/README-ja.md) for a Japanese onboarding overview
 
 ## Tool Surface
@@ -298,7 +298,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `true`). When enabled, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead. Set `compact: false` for full diagnostic output. For `resolve-artifact`, compact mode additionally omits diagnostic fields (`provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, `resolvedSourceJarPath`), returning only the essential fields needed for downstream tool calls. For mapping tools, compact mode omits the redundant `candidates` array when the result is a single full-confidence exact-match resolution (`resolved=true`, `resolvedSymbol` present, `candidates.length=1`, `candidateCount=1`, `!candidatesTruncated`, `matchKind="exact"`, `confidence` missing or `1`).
+`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `true`). When enabled, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead. Set `compact: false` for full diagnostic output. For `resolve-artifact`, compact mode additionally omits diagnostic fields (`provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, `resolvedSourceJarPath`), returning only the essential fields needed for downstream tool calls. For mapping tools, compact mode has two projections: (1) when the result is a single full-confidence exact-match resolution (`resolved=true`, `resolvedSymbol` present, `candidates.length=1`, `candidateCount=1`, `!candidatesTruncated`, `matchKind="exact"`, `confidence` missing or `1`) the redundant `candidates` array is omitted entirely; (2) when the result is unresolved with more than three candidates, the top three keep their full metadata while the tail is slimmed to `{owner, name, descriptor, confidence, matchKind}` and the response surfaces `candidateDetailsTruncated: true` to signal the metadata slim. `candidatesTruncated` continues to mean "more candidates exist than this response returned" (upstream list truncation); the two flags are orthogonal and can both be present when the upstream list was clipped and the returned slice still exceeded the top-3 detail limit.
 
 ### NBT Utilities
 
