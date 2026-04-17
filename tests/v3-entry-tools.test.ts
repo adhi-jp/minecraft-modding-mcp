@@ -2994,3 +2994,168 @@ test("ManageCacheService preview delete includes summary.subject and apply follo
     }
   ]);
 });
+
+test("ValidateProjectService task=mixin without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("should not be called");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        task: "mixin",
+        detail: "summary",
+        subject: {
+          kind: "mixin",
+          input: { mode: "inline", source: "public class Example {}" }
+        }
+      } as Parameters<typeof service.execute>[0]),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) {
+        return false;
+      }
+      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
+        return false;
+      }
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.failedStage === "input-validation" &&
+        typeof details.nextAction === "string" &&
+        typeof details.suggestedCall === "object" &&
+        details.suggestedCall !== null
+      );
+    }
+  );
+});
+
+test("ValidateProjectService task=mixin rejects preferProjectVersion without explicit version", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("should not be called");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        task: "mixin",
+        detail: "summary",
+        preferProjectVersion: true,
+        subject: {
+          kind: "mixin",
+          input: { mode: "inline", source: "public class Example {}" }
+        }
+      } as Parameters<typeof service.execute>[0]),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) {
+        return false;
+      }
+      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
+        return false;
+      }
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.failedStage === "input-validation" &&
+        typeof details.nextAction === "string" &&
+        typeof details.suggestedCall === "object" &&
+        details.suggestedCall !== null
+      );
+    }
+  );
+});
+
+test("ValidateProjectService task=access-widener without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("should not be called");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        task: "access-widener",
+        detail: "summary",
+        subject: {
+          kind: "access-widener",
+          input: { mode: "inline", content: "accessWidener v2 named" }
+        }
+      } as Parameters<typeof service.execute>[0]),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) {
+        return false;
+      }
+      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
+        return false;
+      }
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.failedStage === "input-validation" &&
+        typeof details.nextAction === "string" &&
+        typeof details.suggestedCall === "object" &&
+        details.suggestedCall !== null
+      );
+    }
+  );
+});
+
+test("ValidateProjectService task=access-transformer without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    validateAccessTransformer: async () => {
+      throw new Error("should not be called");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => []
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        task: "access-transformer",
+        detail: "summary",
+        subject: {
+          kind: "access-transformer",
+          input: { mode: "inline", content: "public net.minecraft.server.MinecraftServer" }
+        }
+      } as Parameters<typeof service.execute>[0]),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) {
+        return false;
+      }
+      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
+        return false;
+      }
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      return (
+        details.failedStage === "input-validation" &&
+        typeof details.nextAction === "string" &&
+        typeof details.suggestedCall === "object" &&
+        details.suggestedCall !== null
+      );
+    }
+  );
+});

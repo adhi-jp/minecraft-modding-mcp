@@ -192,6 +192,8 @@ export type SearchClassSourceInput = {
   queryMode?: QueryMode;
   limit?: number;
   cursor?: string;
+  queryNamespace?: SourceMapping;
+  sourcePriority?: MappingSourcePriority;
 };
 
 export type SearchClassSourceOutput = {
@@ -200,6 +202,13 @@ export type SearchClassSourceOutput = {
   mappingApplied: SourceMapping;
   returnedNamespace: SourceMapping;
   artifactContents: ArtifactContentsSummary;
+  translatedQuery?: {
+    original: string;
+    translated: string;
+    fromNamespace: SourceMapping;
+    toNamespace: SourceMapping;
+  };
+  warnings?: string[];
 };
 
 export type GetArtifactFileInput = {
@@ -478,6 +487,19 @@ export type GetClassMembersInput = {
   strictVersion?: boolean;
 };
 
+export type DecompiledMember = {
+  name: string;
+  line: number;
+  kind: "constructor" | "field" | "method";
+};
+
+export type DecompiledFallback = {
+  constructors: DecompiledMember[];
+  fields: DecompiledMember[];
+  methods: DecompiledMember[];
+  origin: "source-extracted";
+};
+
 export type GetClassMembersOutput = {
   className: string;
   members: {
@@ -501,6 +523,13 @@ export type GetClassMembersOutput = {
   provenance: ArtifactProvenance;
   qualityFlags: string[];
   artifactContents: ArtifactContentsSummary;
+  decompiledFallback?: DecompiledFallback;
+  decompiledMemberCounts?: {
+    constructors: number;
+    fields: number;
+    methods: number;
+    total: number;
+  };
   warnings: string[];
 };
 
@@ -2544,8 +2573,8 @@ export class SourceService {
     const startedAt = Date.now();
     try {
       const artifact = this.getArtifact(input.artifactId);
-      const query = input.query.trim();
-      if (!query) {
+      const originalQuery = input.query.trim();
+      if (!originalQuery) {
         return {
           hits: [],
           mappingApplied: artifact.mappingApplied ?? "obfuscated",
@@ -2561,6 +2590,94 @@ export class SourceService {
 
       const intent = normalizeIntent(input.intent);
       const match = normalizeMatch(input.match);
+
+      const artifactMapping = artifact.mappingApplied ?? "obfuscated";
+      const searchWarnings: string[] = [];
+      let translatedInfo: SearchClassSourceOutput["translatedQuery"];
+      let query = originalQuery;
+      let translationPackagePrefix: string | undefined;
+
+      if (
+        input.queryNamespace
+        && input.queryNamespace !== artifactMapping
+        && !artifact.version
+      ) {
+        searchWarnings.push(
+          `queryNamespace=${input.queryNamespace} could not be applied because the artifact has no version recorded; namespace translation requires a version. Running literal search in ${artifactMapping} instead.`
+        );
+      }
+
+      if (
+        input.queryNamespace
+        && input.queryNamespace !== artifactMapping
+        && artifact.version
+      ) {
+        if (intent === "symbol" && originalQuery.includes(".") && /^[\w.$]+$/.test(originalQuery)) {
+          try {
+            const translated = await this.mappingService.findMapping({
+              version: artifact.version,
+              kind: "class",
+              name: originalQuery,
+              sourceMapping: input.queryNamespace,
+              targetMapping: artifactMapping,
+              sourcePriority: input.sourcePriority,
+              signatureMode: "name-only",
+              maxCandidates: 5
+            });
+            if (translated.resolved === true && translated.resolvedSymbol) {
+              const resolvedName = translated.resolvedSymbol.symbol
+                ?? translated.resolvedSymbol.name;
+              if (resolvedName && resolvedName !== originalQuery) {
+                translatedInfo = {
+                  original: originalQuery,
+                  translated: resolvedName,
+                  fromNamespace: input.queryNamespace,
+                  toNamespace: artifactMapping
+                };
+                // Downstream symbol search matches on simpleName only, so split
+                // the translated FQCN into simpleName + derived packagePrefix
+                // scope. Preserve a caller-supplied packagePrefix if present.
+                if (resolvedName.includes(".")) {
+                  const lastDot = resolvedName.lastIndexOf(".");
+                  const simpleName = resolvedName.slice(lastDot + 1);
+                  const packagePart = resolvedName.slice(0, lastDot);
+                  query = simpleName;
+                  if (!input.scope?.packagePrefix) {
+                    translationPackagePrefix = packagePart;
+                  }
+                } else {
+                  query = resolvedName;
+                }
+              }
+            } else if (translated.status === "ambiguous") {
+              const candidateCount = translated.candidateCount ?? translated.candidates?.length ?? 0;
+              searchWarnings.push(
+                `queryNamespace=${input.queryNamespace}: translation for "${originalQuery}" was ambiguous (${candidateCount} candidates); running literal search instead. Narrow the query with a more specific FQCN or call find-mapping directly.`
+              );
+            } else if (translated.status === "not_found") {
+              searchWarnings.push(
+                `queryNamespace=${input.queryNamespace}: no ${artifactMapping} mapping found for "${originalQuery}"; running literal search instead.`
+              );
+            } else if (translated.status === "mapping_unavailable") {
+              searchWarnings.push(
+                `queryNamespace=${input.queryNamespace}: mapping data unavailable for version ${artifact.version}; running literal search instead.`
+              );
+            } else {
+              searchWarnings.push(
+                `queryNamespace=${input.queryNamespace}: could not translate "${originalQuery}" to ${artifactMapping}; running literal search instead.`
+              );
+            }
+          } catch (caughtError) {
+            searchWarnings.push(
+              `queryNamespace=${input.queryNamespace}: translation failed (${caughtError instanceof Error ? caughtError.message : String(caughtError)}); running literal search instead.`
+            );
+          }
+        } else if (intent === "text" || intent === "path") {
+          searchWarnings.push(
+            `queryNamespace=${input.queryNamespace} has no effect when intent="${intent}" — ${intent} search is a literal match against the artifact's ${artifactMapping} index. Use intent="symbol" for namespace translation.`
+          );
+        }
+      }
       if (match === "regex" && query.length > MAX_REGEX_QUERY_LENGTH) {
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
@@ -2575,7 +2692,9 @@ export class SourceService {
         match === "regex"
           ? Math.max(1, Math.min(this.config.maxSearchHits, MAX_REGEX_RESULT_LIMIT))
           : this.config.maxSearchHits;
-      const scope = input.scope;
+      const scope: SearchScope | undefined = translationPackagePrefix
+        ? { ...(input.scope ?? {}), packagePrefix: translationPackagePrefix }
+        : input.scope;
       if (scope?.symbolKind && intent !== "symbol") {
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
@@ -2681,7 +2800,9 @@ export class SourceService {
           sourceJarPath: artifact.sourceJarPath,
           isDecompiled: artifact.isDecompiled,
           qualityFlags: artifact.qualityFlags
-        })
+        }),
+        ...(translatedInfo ? { translatedQuery: translatedInfo } : {}),
+        ...(searchWarnings.length > 0 ? { warnings: searchWarnings } : {})
       };
     } finally {
       this.metrics.recordDuration("search_duration_ms", Date.now() - startedAt);
@@ -4402,6 +4523,47 @@ export class SourceService {
         mappingApplied
       });
 
+    let decompiledFallback: DecompiledFallback | undefined;
+    let decompiledMemberCounts: GetClassMembersOutput["decompiledMemberCounts"];
+    let fallbackQualityFlags = qualityFlags;
+
+    if (counts.total === 0) {
+      // When the request namespace differs from the artifact namespace, the
+      // caller's memberPattern is authored against requested-namespace names
+      // (e.g. a Mojang pattern). The fallback extracts artifact-namespace
+      // names (e.g. obfuscated), so filtering by the raw pattern would
+      // silently drop every entry. Skip the filter in that case and warn.
+      const namespaceMismatch = requestedMapping !== mappingApplied;
+      const fallbackPattern = namespaceMismatch ? undefined : memberPattern;
+      const sourceFallback = this.buildDecompiledFallback(
+        artifactId,
+        lookupClassName,
+        fallbackPattern,
+        maxMembers
+      );
+      if (sourceFallback) {
+        decompiledFallback = sourceFallback.fallback;
+        decompiledMemberCounts = sourceFallback.counts;
+        fallbackQualityFlags = dedupeQualityFlags([
+          ...qualityFlags,
+          "members-from-decompiled-source"
+        ]);
+        const namespaceNote = namespaceMismatch
+          ? ` Member names are in ${mappingApplied} (artifact namespace); the request asked for ${requestedMapping}.`
+          : "";
+        warnings.push(
+          "Bytecode member enumeration returned zero; populated decompiledFallback from decompiled source. "
+          + "Descriptors and access modifiers are unavailable — use get-class-source for full details."
+          + namespaceNote
+        );
+        if (namespaceMismatch && memberPattern) {
+          warnings.push(
+            `memberPattern="${memberPattern}" was not applied to decompiledFallback because the artifact namespace (${mappingApplied}) differs from the requested namespace (${requestedMapping}); filter the response client-side after mapping.`
+          );
+        }
+      }
+    }
+
     return {
       className,
       members: {
@@ -4418,14 +4580,73 @@ export class SourceService {
       mappingApplied,
       returnedNamespace: requestedMapping,
       provenance: normalizedProvenance,
-      qualityFlags,
+      qualityFlags: fallbackQualityFlags,
       artifactContents: this.buildArtifactContentsSummary({
         origin,
         sourceJarPath,
         isDecompiled: origin === "decompiled",
-        qualityFlags
+        qualityFlags: fallbackQualityFlags
       }),
+      ...(decompiledFallback ? { decompiledFallback } : {}),
+      ...(decompiledMemberCounts ? { decompiledMemberCounts } : {}),
       warnings
+    };
+  }
+
+  private buildDecompiledFallback(
+    artifactId: string,
+    lookupClassName: string,
+    memberPattern: string | undefined,
+    maxMembers: number
+  ): { fallback: DecompiledFallback; counts: NonNullable<GetClassMembersOutput["decompiledMemberCounts"]> } | undefined {
+    const filePath = this.resolveClassFilePath(artifactId, lookupClassName);
+    if (!filePath) {
+      return undefined;
+    }
+    const row = this.filesRepo.getFileContent(artifactId, filePath);
+    if (!row) {
+      return undefined;
+    }
+    const extracted = this.extractDecompiledMembers(lookupClassName, filePath, row.content);
+    const filterByPattern = (list: DecompiledMember[]): DecompiledMember[] => {
+      if (!memberPattern) {
+        return list;
+      }
+      const lower = memberPattern.toLowerCase();
+      return list.filter((entry) => entry.name.toLowerCase().includes(lower));
+    };
+    let constructors = filterByPattern(extracted.constructors);
+    let fields = filterByPattern(extracted.fields);
+    let methods = filterByPattern(extracted.methods);
+    const totalBefore = constructors.length + fields.length + methods.length;
+    if (totalBefore === 0) {
+      return undefined;
+    }
+    let remaining = maxMembers;
+    const takeWithinLimit = <T,>(list: T[]): T[] => {
+      if (remaining <= 0) {
+        return [];
+      }
+      const slice = list.slice(0, remaining);
+      remaining -= slice.length;
+      return slice;
+    };
+    constructors = takeWithinLimit(constructors);
+    fields = takeWithinLimit(fields);
+    methods = takeWithinLimit(methods);
+    return {
+      fallback: {
+        constructors,
+        fields,
+        methods,
+        origin: "source-extracted"
+      },
+      counts: {
+        constructors: constructors.length,
+        fields: fields.length,
+        methods: methods.length,
+        total: constructors.length + fields.length + methods.length
+      }
     };
   }
 
@@ -6122,6 +6343,135 @@ export class SourceService {
     }
 
     return outputParts.join("\n");
+  }
+
+  private extractDecompiledMembers(
+    className: string,
+    filePath: string,
+    content: string
+  ): { constructors: DecompiledMember[]; fields: DecompiledMember[]; methods: DecompiledMember[] } {
+    const symbols = extractSymbolsFromSource(filePath, content);
+    const simpleName = className.split(/[.$]/).at(-1) ?? className;
+    const lines = content.split(/\r?\n/);
+    const body = this.computeBraceRange(lines, symbols, simpleName);
+    if (!body) {
+      return { constructors: [], fields: [], methods: [] };
+    }
+    const depths = this.computeLineBraceDepths(lines);
+    const baseDepth = depths[body.declarationLine - 1] ?? 0;
+    const nestedRanges = this.computeNestedTypeRanges(lines, symbols, body);
+    const constructors: DecompiledMember[] = [];
+    const fields: DecompiledMember[] = [];
+    const methods: DecompiledMember[] = [];
+    for (const symbol of symbols) {
+      if (symbol.line <= body.declarationLine || symbol.line > body.endLine) {
+        continue;
+      }
+      if (nestedRanges.some((range) => symbol.line >= range.declarationLine && symbol.line <= range.endLine)) {
+        continue;
+      }
+      const lineDepth = depths[symbol.line - 1] ?? baseDepth;
+      // Declarations directly inside the class body sit at baseDepth+1; anything
+      // deeper is a method/constructor body, an initializer block, etc.
+      if (lineDepth !== baseDepth + 1) {
+        continue;
+      }
+      if (symbol.symbolKind === "method") {
+        if (symbol.symbolName === simpleName) {
+          constructors.push({ name: "<init>", line: symbol.line, kind: "constructor" });
+        } else {
+          methods.push({ name: symbol.symbolName, line: symbol.line, kind: "method" });
+        }
+      } else if (symbol.symbolKind === "field") {
+        fields.push({ name: symbol.symbolName, line: symbol.line, kind: "field" });
+      }
+    }
+    return { constructors, fields, methods };
+  }
+
+  private computeLineBraceDepths(lines: string[]): number[] {
+    const depths: number[] = new Array(lines.length).fill(0);
+    let depth = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      // Entry depth for this line = depth observed before any brace on it.
+      depths[i] = depth;
+      const stripped = (lines[i] ?? "")
+        .replace(/\/\/.*/g, "")
+        .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
+        .replace(/'(?:\\.|[^'\\])*'/g, "''");
+      for (const char of stripped) {
+        if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth -= 1;
+        }
+      }
+    }
+    return depths;
+  }
+
+  private computeBraceRange(
+    lines: string[],
+    symbols: Array<{ symbolKind: string; symbolName: string; line: number }>,
+    simpleName: string
+  ): { declarationLine: number; endLine: number } | undefined {
+    const classSymbol = symbols.find((symbol) =>
+      (symbol.symbolKind === "class" || symbol.symbolKind === "interface"
+        || symbol.symbolKind === "enum" || symbol.symbolKind === "record")
+      && symbol.symbolName === simpleName
+    );
+    if (!classSymbol) {
+      return undefined;
+    }
+    return this.scanBraceRange(lines, classSymbol.line);
+  }
+
+  private scanBraceRange(
+    lines: string[],
+    declarationLine: number
+  ): { declarationLine: number; endLine: number } {
+    let depth = 0;
+    let started = false;
+    for (let i = declarationLine - 1; i < lines.length; i += 1) {
+      const stripped = (lines[i] ?? "")
+        .replace(/\/\/.*/g, "")
+        .replace(/"(?:\\.|[^"\\])*"/g, "\"\"");
+      for (const char of stripped) {
+        if (char === "{") {
+          depth += 1;
+          started = true;
+        } else if (char === "}") {
+          depth -= 1;
+          if (started && depth === 0) {
+            return { declarationLine, endLine: i + 1 };
+          }
+        }
+      }
+    }
+    return { declarationLine, endLine: lines.length };
+  }
+
+  private computeNestedTypeRanges(
+    lines: string[],
+    symbols: Array<{ symbolKind: string; line: number }>,
+    outerBody: { declarationLine: number; endLine: number }
+  ): Array<{ declarationLine: number; endLine: number }> {
+    const ranges: Array<{ declarationLine: number; endLine: number }> = [];
+    for (const candidate of symbols) {
+      if (candidate.symbolKind !== "class" && candidate.symbolKind !== "interface"
+        && candidate.symbolKind !== "enum" && candidate.symbolKind !== "record") {
+        continue;
+      }
+      if (candidate.line <= outerBody.declarationLine || candidate.line > outerBody.endLine) {
+        continue;
+      }
+      if (ranges.some((range) => candidate.line >= range.declarationLine && candidate.line <= range.endLine)) {
+        continue;
+      }
+      const nestedRange = this.scanBraceRange(lines, candidate.line);
+      ranges.push(nestedRange);
+    }
+    return ranges;
   }
 
   private resolveClassFilePath(artifactId: string, className: string): string | undefined {

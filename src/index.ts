@@ -330,7 +330,11 @@ const searchClassSourceShape = {
   symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
   queryMode: z.enum(["auto", "token", "literal"]).default("auto").describe("auto: indexed search, including separator queries like foo.bar; token: indexed-only; literal: explicit substring scan only"),
   limit: optionalPositiveInt.default(20),
-  cursor: optionalNonEmptyString
+  cursor: optionalNonEmptyString,
+  queryNamespace: sourceMappingSchema.optional().describe(
+    "Namespace of the query. When set and intent='symbol' with a fully-qualified class name, the query is translated through find-mapping before searching the artifact namespace. Ignored for text/path intents (warning surfaced)."
+  ),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first. Used only when queryNamespace triggers translation.")
 };
 const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
   if (value.symbolKind && value.intent && value.intent !== "symbol") {
@@ -2189,7 +2193,9 @@ server.tool("search-class-source",
           | undefined,
         queryMode: input.queryMode,
         limit: input.limit,
-        cursor: input.cursor
+        cursor: input.cursor,
+        queryNamespace: input.queryNamespace,
+        sourcePriority: input.sourcePriority
       }) as Promise<Record<string, unknown>>;
     })
 );

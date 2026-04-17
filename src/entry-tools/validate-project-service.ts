@@ -346,7 +346,33 @@ export class ValidateProjectService {
         if (input.subject.kind !== "mixin") {
           throw createError({
             code: ERROR_CODES.INVALID_INPUT,
-            message: "task=mixin requires subject.kind=mixin."
+            message: "task=mixin requires subject.kind=mixin.",
+            details: {
+              task: input.task,
+              subjectKind: input.subject.kind,
+              failedStage: "input-validation",
+              nextAction: "Set subject.kind to \"mixin\" for task=\"mixin\"."
+            }
+          });
+        }
+        if (!input.version) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: "task=mixin requires version.",
+            details: {
+              task: "mixin",
+              failedStage: "input-validation",
+              nextAction:
+                "Pass version explicitly (e.g. \"1.21.10\"). task=\"project-summary\" supports preferProjectVersion for auto-detection from gradle.properties, but direct task=\"mixin\" requires an explicit version.",
+              suggestedCall: {
+                tool: "validate-project",
+                params: {
+                  task: "mixin",
+                  subject: input.subject,
+                  version: "1.21.10"
+                }
+              }
+            }
           });
         }
         const output = await this.deps.validateMixin({
@@ -412,7 +438,33 @@ export class ValidateProjectService {
         if (input.subject.kind !== "access-widener") {
           throw createError({
             code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-widener requires subject.kind=access-widener."
+            message: "task=access-widener requires subject.kind=access-widener.",
+            details: {
+              task: input.task,
+              subjectKind: input.subject.kind,
+              failedStage: "input-validation",
+              nextAction: "Set subject.kind to \"access-widener\" for task=\"access-widener\"."
+            }
+          });
+        }
+        if (!input.version) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: "task=access-widener requires version.",
+            details: {
+              task: "access-widener",
+              failedStage: "input-validation",
+              nextAction:
+                "Pass version explicitly (e.g. \"1.21.10\"). Access Widener validation resolves class names against a specific Minecraft version.",
+              suggestedCall: {
+                tool: "validate-project",
+                params: {
+                  task: "access-widener",
+                  subject: input.subject,
+                  version: "1.21.10"
+                }
+              }
+            }
           });
         }
         const content = input.subject.input.mode === "inline"
@@ -420,7 +472,7 @@ export class ValidateProjectService {
           : await readFile(input.subject.input.path, "utf8");
         const output = await this.deps.validateAccessWidener({
           content,
-          version: input.version!,
+          version: input.version,
           mapping: input.mapping,
           sourcePriority: input.sourcePriority,
           scope: input.scope,
@@ -468,7 +520,34 @@ export class ValidateProjectService {
         if (input.subject.kind !== "access-transformer") {
           throw createError({
             code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-transformer requires subject.kind=access-transformer."
+            message: "task=access-transformer requires subject.kind=access-transformer.",
+            details: {
+              task: input.task,
+              subjectKind: input.subject.kind,
+              failedStage: "input-validation",
+              nextAction:
+                "Set subject.kind to \"access-transformer\" for task=\"access-transformer\"."
+            }
+          });
+        }
+        if (!input.version) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: "task=access-transformer requires version.",
+            details: {
+              task: "access-transformer",
+              failedStage: "input-validation",
+              nextAction:
+                "Pass version explicitly (e.g. \"1.21.10\"). Access Transformer validation resolves class names against a specific Minecraft version.",
+              suggestedCall: {
+                tool: "validate-project",
+                params: {
+                  task: "access-transformer",
+                  subject: input.subject,
+                  version: "1.21.10"
+                }
+              }
+            }
           });
         }
         const content = input.subject.input.mode === "inline"
@@ -477,12 +556,18 @@ export class ValidateProjectService {
         if (!this.deps.validateAccessTransformer) {
           throw createError({
             code: ERROR_CODES.CONTEXT_UNRESOLVED,
-            message: "Access Transformer validation is not configured."
+            message: "Access Transformer validation is not configured.",
+            details: {
+              task: "access-transformer",
+              failedStage: "dependency-resolution",
+              nextAction:
+                "The current runtime was built without an Access Transformer validator. Rebuild the MCP server with validateAccessTransformer configured, or use task=\"access-widener\" if the workspace uses Fabric AccessWideners."
+            }
           });
         }
         const output = await this.deps.validateAccessTransformer({
           content,
-          version: input.version!,
+          version: input.version,
           atNamespace: input.atNamespace,
           sourcePriority: input.sourcePriority,
           scope: input.scope,

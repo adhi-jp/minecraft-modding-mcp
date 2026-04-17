@@ -1163,9 +1163,14 @@ export class InspectMinecraftService {
             }
           },
           members: include.includes("members") || detail !== "summary"
-            ? members.members
+            ? {
+                ...members.members,
+                ...(members.decompiledFallback ? { decompiledFallback: members.decompiledFallback } : {}),
+                ...(members.decompiledMemberCounts ? { decompiledMemberCounts: members.decompiledMemberCounts } : {})
+              }
             : {
-                counts: members.counts
+                counts: members.counts,
+                ...(members.decompiledMemberCounts ? { decompiledMemberCounts: members.decompiledMemberCounts } : {})
               }
         },
         alwaysBlocks: ["subject"]
