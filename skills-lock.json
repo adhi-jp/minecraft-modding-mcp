@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "5cafa1558b0b6bd4d4c71f23d5567b7fcbbcdb4b0a50b0c5f69a80a3cebaf9b8"
     },
+    "codex-review-cycle": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "computedHash": "e53ea276f43545334e143944f567160fc6526ba8e8c55ffe90d5594b6ee85ee9"
+    },
     "commit-work": {
       "source": "softaworks/agent-toolkit",
       "sourceType": "github",
@@ -30,6 +35,11 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "computedHash": "2760c85d4f4117b0006e7ba755f4bbd61f8f4c185f347999763c97f507274e30"
+    },
+    "review-scope-guard": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "computedHash": "6ce69f0e28fb42148910333a245dd33261ef66dce8fae3592ae2808335f81e4c"
     },
     "systematic-debugging": {
       "source": "obra/superpowers",
