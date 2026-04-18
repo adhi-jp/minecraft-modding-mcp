@@ -1,6 +1,8 @@
 # Validity Checklist
 
-Claude evaluates every finding codex returns against these six items before the summary table is rendered. The checklist is the filter that prevents Claude from surfacing misread, out-of-scope, or target-mismatched findings to the user. **Every item requires Claude to read the cited file with the `Read` tool** — do not judge validity from codex's `body` alone.
+Claude evaluates every finding codex returns against these six items before the summary table is rendered. The checklist is the filter that prevents Claude from surfacing misread, out-of-scope, or target-mismatched findings to the user.
+
+**Items 1, 2, 4, 5, 6 are mechanical checks from git metadata and the finding text — no file Read required. Item 3 (premise) is the only item that requires Claude to Read the cited file, and it is mandatory for every finding that could become selectable.** Severity-based Read tiering was considered (skip item 3 on medium/low) and rejected: self-consistency between title and recommendation does not prove the artifact actually has the claimed behavior, so skipping item 3 would let invalid findings through. The Read cost (1 per unique cited file, shared via the union rule in SKILL.md step 10) is accepted.
 
 ## The Six Items
 
@@ -9,7 +11,7 @@ Claude evaluates every finding codex returns against these six items before the 
 `finding.file` must be present in the output of `review_target.diff_command` (plus `git ls-files --others --exclude-standard` when `review_target.scope == working-tree`). Concretely:
 
 - `working-tree`: `git diff HEAD --name-only` or `git ls-files --others --exclude-standard`.
-- `branch` / `base-ref`: `git diff --name-only <base_ref>...HEAD`.
+- `branch` / `base-ref`: `git diff --name-only <base_sha>...HEAD` (use the frozen SHA from Phase 0 step 2; NOT the mutable `base_ref`).
 
 If codex cites a file that is not part of the current diff:
 
@@ -32,12 +34,14 @@ The finding's `body` typically asserts that the code or plan "does X" or "fails 
 
 **Note on design-intent reversals**: a finding whose premise is "the artifact should have X" while the artifact explicitly states "we deliberately do not have X" is NOT `invalid` at item 3 — the premise matches what the artifact says, modulo an "ought" vs. "is". Route design-intent reversals through scope triage: `review-scope-guard` will classify them as `reject-out-of-scope` when DoD agrees with the exclusion, or as `must-fix` when DoD required features ask for the excluded capability (indicating the DoD and the Overview disagree, which the user must adjudicate). Classifying them `invalid` at validity would silently remove a scope-decision finding from the user-selection UI.
 
+**External-source rule (warning-only)**: external reads (dependency sources, standard library docs, upstream README) are allowed as background evidence during Claude's internal reasoning, but they MUST NOT flip the validity verdict. The verdict always derives from the review diff + finding text. Record external reads as `Claude's note: background — <source>: <finding>` — the user can audit what Claude consulted, without the verdict hinging on an unpinnable external state. Reads inside the review diff remain silent (no annotation). This replaces an earlier "External-source verification" mechanism that allowed verdict-flipping under a version-pinning rule; in practice Claude cannot reliably pin dependency versions, so the safe simplification is to forbid verdict-flipping on external sources entirely.
+
 ### 4. Scope — finding touches changed lines
 
 Even when `finding.file` is in the diff, the specific `line_start..line_end` range must overlap with a changed hunk. Confirm with the scope-appropriate diff command:
 
 - `working-tree`: `git diff HEAD -- <file>` (staged + unstaged). Untracked files are entirely "changed" — any line range inside them overlaps by definition.
-- `branch` / `base-ref`: `git diff <base_ref>...HEAD -- <file>`.
+- `branch` / `base-ref`: `git diff <base_sha>...HEAD -- <file>` (frozen SHA; NOT `base_ref`).
 
 A finding about unchanged code elsewhere in a modified file is:
 

@@ -47,7 +47,11 @@ Expected form: a bulleted list. For feature work on an existing surface, include
 
 **Question**: `Which features, flags, or behaviors are explicitly out of scope? List the tempting extensions you want to rule out.`
 
-Expected form: a bulleted list of named items. The explicit out-of-scope list is the single most important item for the triage step. It is the list against which `reject-out-of-scope` decisions are made. Example:
+Expected form: a bulleted list of named items.
+
+**Strong requirement**: list at least 3 items, and for each item, name a *sibling* feature that sits next to it in the code path but is **in scope**. A vague out-of-scope list is the single most common reason `reject-out-of-scope` decisions collapse to `minimal-hygiene` fall-through. If you cannot name 3 tempting extensions, the change is either too small to need this skill (use the codex plugin directly) or the scope has not been thought through yet. Examples of sibling-framing: "cookie_store crate migration (out) — sits next to reqwest::cookie::Jar basic use (in)"; "env/session-scoped Jar partitioning (out) — sits next to single-process Jar sharing (in)".
+
+The explicit out-of-scope list is the single most important item for the triage step. It is the list against which `reject-out-of-scope` decisions are made. Example:
 
 - cURL 7.80+ new features (`--json`, `--url-query`, `--aws-sigv4`) — semantic implementation
 - WebDAV methods (`PROPFIND`, etc.) — priority resolution
@@ -79,6 +83,30 @@ Expected form: a bulleted list of acceptable losses. Example:
 - WebDAV methods — "warn + ignore", fall back to GET/POST
 
 These items tell the triage step to dismiss findings that complain about already-accepted approximations.
+
+## Collection Modes
+
+The skill supports four ways to collect the six items — all must produce the same structured DoD:
+
+1. **Interview** — one `AskUserQuestion` per item. Safest when the diff is large or the user's intent is ambiguous.
+2. **Proposal** — Claude drafts all six items from available context (diff, commit messages, the ongoing conversation) and posts them as one markdown block. The user confirms with `ok` or pastes inline edits. Allowed for ≤ ~100 LOC diffs that also pass the evidence gate (see Detailed mode rules below). Proposal mode must never auto-fill item 4 without sibling-framed examples; when evidence is thin, fall back to Interview mode for item 4.
+3. **Free-text** — the user pastes a pre-written DoD. Claude splits it into the six items, then runs a single `AskUserQuestion` confirming item 4 meets the sibling-framing rule in §4.
+4. **Quick** — one `AskUserQuestion` covering only item 4 (Explicit Out-of-Scope). Items 1/2/3/5/6 default to `(not specified)`. Use when the user explicitly requests "quick DoD" on a trivial change (≤ ~30 LOC). Item-4 completeness gate still applies; <3 sibling-framed items enters degraded mode as usual.
+
+Regardless of mode, echo the final DoD back as a numbered list so the user can audit before triage runs.
+
+### Detailed mode rules
+
+1. **Interview** — default when diff characteristics are unknown or DoD clarity is ambiguous. Always produces a complete DoD.
+2. **Proposal** — allowed only when the caller passed `review_target` AND the evidence gate passes:
+   - Working-tree: non-empty `diff_patch_excerpts` (filename+numstat alone insufficient).
+   - Branch/base-ref: at least one commit with ≥20-char subject AND non-empty body, OR `diff_patch_excerpts` populated from the target commit range.
+   - LOC threshold: `diff_numstat` totals ≤ ~100.
+   Fall back to interview when the evidence gate fails. Input contract: proposal mode MUST source its diff/commit-message facts from `review_target` only; it MUST NOT infer from ambient git state (that would make the scope classifier circular — the DoD would be derived from the same diff it is supposed to judge).
+3. **Free-text** — triggered when the user pastes a DoD block in the conversation. Split into six items by heading/numbering, run one confirmation `AskUserQuestion` for item 4.
+4. **Quick** — triggered when user explicitly says "quick DoD" / "minimal DoD" / similar AND diff is ≤ ~30 LOC. Single `AskUserQuestion` collecting item 4 only, with label `Out-of-scope (≥3 sibling-framed items) — this is the minimum that keeps the scope guard active.` Other items default to `(not specified)`; the ≥2-blank warning is expected and suppressed.
+
+Regardless of mode, the item-4 completeness gate in `review-scope-guard/SKILL.md` Phase 0 step 2b runs and may enter degraded mode if item 4 has <3 sibling-framed entries (with user override available).
 
 ## After Collection
 

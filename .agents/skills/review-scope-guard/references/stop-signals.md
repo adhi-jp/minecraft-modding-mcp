@@ -77,7 +77,33 @@ After Phase 4 evaluation, emit a table of active signals only. Silent signals (n
 _Not evaluated (metrics missing): reactive-testing_
 ```
 
+### Per-cycle suppression for `not evaluated` rows
+
+When invoked across multiple cycles (e.g. from `codex-review-cycle`), the caller can suppress the `not evaluated` footnote on cycle 2+ only when the set is **exactly identical to the immediately previous cycle (N-1)**. Comparing against cycle 1 alone would hide flapping (cycle 1: `{A}` → cycle 2: `{A,B}` → cycle 3: `{A}` prints "unchanged from cycle 1" while silently masking the cycle-2 divergence). To make this comparison deterministic, the skill emits `not_evaluated_signal_names` as part of its per-cycle return value (populated in Phase 4 step 11 below).
+
+**Return-value schema addition (Phase 4 step 11)**: alongside the signal table, return `not_evaluated_signal_names: string[]` — the ordered list of signal names currently in `not evaluated: metrics missing` status, filtered through the 5-signal canonical order (`hygiene-only-stretch`, `repeat-finding`, `out-of-scope-streak`, `file-bloat`, `reactive-testing`). Order is NEVER reshuffled: the canonical order is the sort key.
+
+**Comparison semantics (caller side)**: the caller stores each cycle's `not_evaluated_signal_names` on its own `cycle_history[N]`. Cycle N's list equals cycle N-1's list iff (a) same length, AND (b) element-wise equal under `===` string comparison in index order. Any difference — element added, removed, or reordered (reordering should never happen given the canonical order, but guard against it anyway) — counts as "changed" and re-renders the full footnote.
+
+**Caller rendering rule**: on cycle 1, render the full footnote (or the standalone-compact one-liner when applicable). On cycle N ≥ 2, if the cycle N-1 comparison above holds, replace the footnote with:
+
+```
+_Not evaluated: unchanged from cycle N-1 — see cycle N-1 summary for signal list._
+```
+
+If the set differs from cycle N-1, re-render the full footnote AND include a one-line delta note: `_Not evaluated delta vs cycle N-1: added=<names>, removed=<names>._`. Callers that invoke this skill standalone (single-shot) always see the full footnote because there is no prior cycle.
+
 `ACTIVE` means the threshold is met. `ADVISORY` means the lower threshold is met but the hard warning threshold is not. `WARNING` means the hard threshold is met. Include an explicit `ACTIVE` / `ADVISORY` / `WARNING` label on every row so the user can scan severity.
+
+### Structurally-unevaluable signals
+
+When invoked from `codex-review-cycle`, two of the five signals (`file-bloat`, `reactive-testing`) and part of a third (`out-of-scope-streak` without DoD-anchor attribution) are **structurally unevaluable** — the caller does not collect the required metrics by design. These signals SHOULD be hidden from the per-cycle footer entirely (not even listed as "not evaluated") because their presence is deterministic and adds no actionable information. The caller instead renders a single note in the run's first cycle footer:
+
+```
+_Stop signals unavailable in codex-review-cycle integration: file-bloat, reactive-testing (standalone invocation required for full 5-signal surface)._
+```
+
+From cycle 2 onwards the note is omitted. Standalone callers that pass `metrics` and `history` explicitly still see the full footnote.
 
 ## Recommendation Phrasing
 

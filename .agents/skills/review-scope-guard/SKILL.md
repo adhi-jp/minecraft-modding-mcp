@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 name: review-scope-guard
 description: Triage code/plan review findings against an explicit Definition of Done so must-fix bugs are separated from scope creep, out-of-scope semantic implementations, and noise. Collects the six-item Definition of Done interactively on first invocation, classifies every finding into one of four categories (`must-fix`, `minimal-hygiene`, `reject-out-of-scope`, `reject-noise`), maintains a rejected-findings ledger so repeated complaints are not re-litigated across cycles, and evaluates five stop signals for scope drift. Output is a triage verdict table plus an updated ledger usable by `codex-review-cycle`. Use when a codex review returned findings that may drift beyond the stated scope, when the user explicitly asks to triage or scope-check review findings, or when invoked by `codex-review-cycle` between its validity check and summary render. Do NOT trigger for single-shot lint reviews, unrelated code changes, or when the user has not yet run a review.
 ---
@@ -11,6 +11,29 @@ description: Triage code/plan review findings against an explicit Definition of 
 A scope-aware triage skill that sits between a review tool and a user-facing summary. It takes a list of review findings and a Definition of Done (DoD), classifies each finding into one of four action categories, and maintains a rejected-findings ledger so the same complaint is never re-litigated across cycles. The skill never applies fixes itself — it only decides which findings are worth escalating and which should be suppressed.
 
 This skill exists because adversarial review tools (including codex's `adversarial-review`) are calibrated for "correctness gaps from a theoretical ideal", not "impact on the stated scope". Without a scope filter the implementer chases edge cases and semantic implementations that were never in scope, then reverts them. A 19-cycle curl-import session that reverted ~50% of its Phase 2-3 additions is the empirical baseline this skill is designed to prevent.
+
+## Language
+
+All user-facing output is rendered in the user's language (the language the user has been using in the conversation, or as configured in the Claude Code system-level language setting). This section is the **authoritative translation contract** — any per-language sample reference (e.g. `references/output-samples.ja.md`) is illustrative only and MUST NOT contradict these rules.
+
+**Translate into the user's language:**
+
+- Section headings and column labels (`カテゴリ` / `判定理由` / `アクション` equivalents in the target language)
+- Free-text fields Claude authors: `rationale` body, `recommended_action` values, stop-signal evidence prose, next-action hints, degraded-mode warnings
+- `AskUserQuestion` `question`, `header`, and option `label` / `description` fields (e.g. during DoD interview)
+
+**Keep verbatim (do NOT translate), regardless of user language:**
+
+- Codex `title` field (surfaced in the `Title (verbatim)` column)
+- Codex `recommendation` field (quoted per-finding below the triage table)
+- Severity values (`high` / `medium` / `low`) — codex output
+- Category names (`must-fix` / `minimal-hygiene` / `reject-out-of-scope` / `reject-noise`)
+- Stop-signal names (`hygiene-only-stretch` / `repeat-finding` / `out-of-scope-streak` / `file-bloat` / `reactive-testing`) and `Status` keywords (`ACTIVE` / `ADVISORY` / `WARNING` / `silent`)
+- DoD anchor fixed labels (`Required features` / `Out-of-scope` / `Quality bars` / `Supported inputs` / `Accepted divergences` / `none`)
+- Technical identifiers: file paths, `fingerprint`, `cluster_id`, field names like `first_seen_cycle`, `last_seen_cycle`, `count`, `not_evaluated_signal_names`
+- Cycle indices (`cycle N`)
+
+For a Japanese rendering example that applies these rules, see `references/output-samples.ja.md`. For German, Korean, or other languages, apply the same rules directly — the Japanese sample is an illustration, not a template to translate.
 
 ## When to Use
 
@@ -26,6 +49,8 @@ Do NOT use this skill when:
 - No review has been run yet — there are no findings to triage. Run the review first.
 - The change is so small the DoD is obvious from the diff itself.
 
+If `review-scope-guard` is not registered with the harness (Skill() invocation fails), run its workflow manually by reading this SKILL.md.
+
 ## Inputs
 
 - **`findings[]`** (required) — the list of review findings to triage. Each entry must have at least `id`, `title`, `recommendation`. Preferred shape (from codex `adversarial-review --json`): `{id, severity, file, line_start, title, recommendation, body}`.
@@ -33,27 +58,44 @@ Do NOT use this skill when:
 - **`rejected_ledger`** (optional) — a prior ledger from earlier cycles. If absent, starts from empty.
 - **`metrics`** (optional, used by stop signals) — per-target `size_initial` / `size_now` line counts, `tests_total`, `required_features_count`. Missing metrics mean the corresponding stop signals report `not evaluated`.
 - **`history`** (optional) — per-cycle list of applied finding IDs with their triage categories. Needed for `hygiene-only-stretch` and `out-of-scope-streak`.
+- **`review_target`** (optional overall, **required when DoD is collected in `proposal` mode**) — the caller's resolved review target, shaped as `{scope, base_ref, base_sha, diff_command, diff_files, diff_numstat, commit_range, commit_messages[], diff_patch_excerpts}`. `scope` ∈ `working-tree|branch|base-ref`; `base_sha` is the frozen SHA (`base_ref` is display-only); `diff_files` is `git diff --name-only` output; `commit_messages[]` is the subject+body list of commits in the range (empty for working-tree); `diff_patch_excerpts` is bounded content-bearing evidence (first ~200 lines of tracked-modified diff + first ~50 lines of each untracked file for working-tree; **also populated for branch/base-ref when commit messages are templated/vague** — see proposal-mode evidence gate below). Without `review_target`, `proposal` mode is disabled and the skill falls back to `interview` mode for all six DoD items — proposal mode MUST NOT draft from ambient git state, because drafting from the wrong scope would make the scope classifier circular (DoD derived from the diff then used to judge the diff). **Proposal-mode evidence gate**: proposal mode requires content-bearing evidence regardless of scope:
+  - **Working-tree**: requires non-empty `diff_patch_excerpts`; filename+numstat alone is insufficient. If commit_messages is empty AND diff_patch_excerpts is empty/blank, fall back to interview.
+  - **Branch / base-ref**: commit messages alone are not automatically sufficient. At least one commit must have a subject of ≥20 characters AND a non-empty body, OR `diff_patch_excerpts` must be populated (same budget-based heuristic as working-tree). If all commits are short/templated (e.g. `"fix review comments"`, `"wip"`, `"update tests"`) AND no patch excerpts are supplied, fall back to interview. A DoD drafted from a vague squash commit subject would anchor `must-fix` and `reject-out-of-scope` decisions for the whole run against a weak inferred scope — that is the failure mode this gate blocks.
 
 ## Outputs
 
 - **Triage verdict table** — one row per input finding with category, rationale, DoD anchor, and recommended action. Every finding is represented, including `reject-*` ones (for audit trail).
 - **Updated rejected ledger** — YAML-style structure carrying fingerprint, title, file, category, reason, first/last cycle seen, and count.
 - **Active stop signals** — only the signals that tripped this cycle, with evidence.
+- **`not_evaluated_signal_names`** — ordered `string[]` of stop-signal names whose status is `not evaluated: metrics missing`, in the 5-signal canonical order (see `references/stop-signals.md` §Per-cycle suppression). Callers persist this per cycle to decide whether to suppress repeated `not evaluated` footnotes in later cycles; standalone callers may ignore it.
+- **`structurally_unevaluable_signal_names`** — ordered `string[]` of signals that are deterministically `not evaluated` for the current caller shape (e.g. `codex-review-cycle` always lacks `file-bloat` and `reactive-testing` metrics). Separate from `not_evaluated_signal_names` so callers can compact the footer: structurally-unevaluable signals are mentioned once per run (cycle 1), not per cycle. Standalone callers that supply metrics receive an empty list.
 - **Next-action hint** — one-line recommendation when any stop signal is `ACTIVE` or `WARNING`.
 
 ## Workflow
 
 ### Phase 0 — DoD Resolution
 
-1. **Check for pre-loaded DoD.** If the caller passed a DoD object or file path, read it and skip to step 3. Otherwise run step 2.
-2. **Interview the user.** Collect the six DoD items in order via `AskUserQuestion`, one question per item. See `references/dod-template.md` for the question wording and expected answer shapes:
-   1. Intent (one sentence)
-   2. Supported inputs
-   3. Required features
-   4. **Explicit out-of-scope** (most important for triage)
-   5. Quality bars
-   6. Accepted divergences
-   If the user declines an item, record `(not specified)` and continue. Warn once if ≥2 items are blank.
+1. **Check for pre-loaded DoD.** If the caller passed a DoD object or file path, read it and skip to step 2b (the item-4 completeness gate below) — **not** step 3. The gate MUST run for every DoD source (interactive interview, proposal mode, free-text paste, AND preloaded/cached DoD from a previous cycle). Otherwise caching across cycles would skip the gate on cycle 2+ and `reject-out-of-scope` classifications would run against an unvalidated item 4. Persist the gate result on the returned DoD object (e.g. `dod.item4_gate: "pass" | "degraded"`) so the caller can re-apply the degraded-mode footer every cycle without re-running the check when evidence is stable.
+2. **Collect the six DoD items.** Four collection modes are available; see `references/dod-template.md` §Collection Modes for full descriptions and selection criteria. Brief summary:
+
+   - **`interview`** — default. One `AskUserQuestion` per item. Safest for unfamiliar or large diffs.
+   - **`proposal`** — Claude drafts all six from `review_target` evidence; user confirms. Gated on LOC threshold + evidence quality.
+   - **`free-text`** — user pastes a pre-written DoD; Claude splits and confirms item 4.
+   - **`quick`** — single `AskUserQuestion` for item 4 only; other items default to `(not specified)`. Trivial changes.
+
+   If the user declines an item, record `(not specified)` and continue. Warn once if ≥2 items are blank. Regardless of mode, the step 2b item-4 completeness gate below runs against the final DoD. Proposal mode MUST NOT silently fill item 4 — if Claude cannot derive 3+ sibling-framed out-of-scope items from the diff alone, fall back to `interview` mode for item 4 only.
+
+2b. **Item-4 completeness pre-triage gate (runs for every DoD source — interview/proposal/free-text/preloaded).** Because `reject-out-of-scope` decisions anchor directly on DoD item 4, an incomplete item 4 silently converts would-be rejections into `minimal-hygiene` fall-through. Count item 4's sibling-framed entries regardless of how the DoD was sourced:
+   - If item 4 has **≥3 items AND each item names an `in-scope` sibling feature** (per `references/dod-template.md` §4 Strong requirement), the full triage pipeline runs normally.
+   - Otherwise — item 4 is `(not specified)`, has <3 items, or any item lacks sibling framing — enter **reject-out-of-scope degraded mode** for this session: Phase 2 step 7 step-3 (out-of-scope check) is **disabled**; any finding that would have been `reject-out-of-scope` instead falls to the step-4 noise check (and then to `minimal-hygiene` if still unmatched). The summary footer MUST render `⚠️ DoD item 4 incomplete (<N> items, sibling-framing: <yes/no>) — reject-out-of-scope classifications are suppressed this session. Complete item 4 per dod-template.md §4 to restore the full scope guard.` on every cycle until item 4 is completed.
+   - The degraded mode is deliberately loud rather than silent: the failure mode this skill exists to prevent is exactly "scope creep slipping through when the author did not think hard enough about out-of-scope boundaries". The footer text makes the gap visible to the user on every cycle.
+   - **Override (intentional <3 items)**: if the user genuinely has <3 out-of-scope items and item 4's brevity is not an oversight (e.g. a tightly-scoped one-line bugfix), offer an explicit override. When the gate would fire degraded mode, first issue a single `AskUserQuestion` before enabling it:
+     - `question`: "DoD item 4 has <N> sibling-framed items (<3 is the strong requirement). Is this intentional for a narrowly-scoped change, or would you like to add more?"
+     - options:
+       - `Intentional — accept <N> items, keep reject-out-of-scope active` — bypass degraded mode for this session. Store `dod.item4_gate: "override"` so later cycles do NOT re-prompt and the footer is suppressed. Record the user's rationale (free-text follow-up) in `dod.item4_override_reason`.
+       - `Add more items now` — re-open interview mode for item 4 only; append the new items and re-run the gate.
+       - `Enter degraded mode anyway` — proceed as previously specified (reject-out-of-scope disabled, footer warning every cycle). `dod.item4_gate: "degraded"`.
+     The override path exists because "scope creep prevention" and "trivially-scoped change" are both legitimate states; the gate should distinguish them via user input, not silently punish the second case.
 3. **Echo the DoD.** Print the collected DoD back as a numbered markdown list so the user can confirm it before triage runs. Do not persist to disk unless the user explicitly asks.
 
 ### Phase 1 — Findings Normalization
@@ -80,18 +122,22 @@ Do NOT use this skill when:
    - New fingerprint → append a new entry with `first_seen_cycle = current`, `last_seen_cycle = current`, `count = 1`.
    - Existing fingerprint → increment `count`, set `last_seen_cycle = current`, leave `first_seen_cycle` unchanged. Preserve the original `reason`; do not overwrite with the new cycle's rationale unless the user explicitly asks (this keeps the history stable).
    - Findings classified `must-fix` or `minimal-hygiene` do NOT enter the ledger — they are about to be applied, not rejected.
+
+   **Cluster assignment**: when writing or incrementing a ledger entry, inspect the finding's `rationale` text for explicit phrases like "same root cause as L<n>", "same <concept> boundary", "same <subsystem> invariant". When such a phrase refers to an existing ledger entry, copy that entry's `cluster_id` to the new entry (creating the `cluster_id` on the referenced entry first if absent — use a kebab-case summary of the shared concept). Do not auto-cluster findings without an explicit rationale phrase: false clustering silently hides distinct concerns under a shared label.
 10. **Emit the updated ledger** in the format described in §Rejected Ledger Format.
 
 ### Phase 4 — Stop Signal Evaluation
 
 11. **Evaluate the five stop signals** using `references/stop-signals.md`. Each signal returns `ACTIVE`, `ADVISORY`, `WARNING`, `silent`, or `not evaluated: metrics missing`.
-12. **Render the signal table.** Print only tripped signals. Print `not evaluated` signals under a separate footnote so the user knows they were considered.
+
+    After evaluating all five signals, construct `not_evaluated_signal_names: string[]` — the filtered list of signals whose status is `not evaluated: metrics missing`, in the canonical 5-signal order (`hygiene-only-stretch`, `repeat-finding`, `out-of-scope-streak`, `file-bloat`, `reactive-testing`). Attach this field to the skill's return value so the caller can suppress repeated footnotes on later cycles (see `references/stop-signals.md` §Per-cycle suppression).
+12. **Render the signal table.** Print only tripped signals. Print `not evaluated` signals under a separate footnote so the user knows they were considered. When invoked across multiple cycles with an unchanged `not evaluated` set — compared by the comparison semantics in `references/stop-signals.md` §Per-cycle suppression — the caller replaces the footnote with the suppression line. This skill never renders the suppression line itself; it always produces the full footnote so standalone callers see complete output. The caller owns the decision.
 13. **Emit the next-action hint.** If any signal is `ACTIVE` or `WARNING`, print `Recommended: stop the review loop and ship / audit scope before the next cycle.` No hint for `ADVISORY`-only runs.
 
 ### Phase 5 — Output
 
 14. **Render the triage verdict table** in the format in §Output Template. Every input finding appears in the table. Titles and recommendations are verbatim from codex.
-15. **Hand control back to the caller.** If invoked by `codex-review-cycle`, return the triage verdict table, updated ledger, and active signals. If invoked standalone, print everything to the user and stop.
+15. **Hand control back to the caller.** If invoked by `codex-review-cycle`, return the triage verdict table, updated ledger, active signals, and `not_evaluated_signal_names` (see §Outputs). If invoked standalone, print everything to the user and stop.
 
 ## 4 Triage Categories (summary)
 
@@ -125,6 +171,7 @@ DoD lives in-session only. The skill does not write it to disk.
 rejected_findings_ledger:
   - id: L1
     fingerprint: "<severity>|<normalized_title>|<file>"
+    cluster_id: "reqwest-jar-isolation"   # optional; shared across findings touching the same root cause
     title: "<finding title verbatim>"
     file: "<path or null>"
     category: "reject-out-of-scope"
@@ -134,6 +181,7 @@ rejected_findings_ledger:
     count: 3
   - id: L2
     fingerprint: "<severity>|<normalized_title>|<file>"
+    cluster_id: "reqwest-jar-isolation"
     title: "<another title verbatim>"
     file: "<path or null>"
     category: "reject-noise"
@@ -144,6 +192,7 @@ rejected_findings_ledger:
 ```
 
 - `fingerprint` — `<severity>|<normalized_title>|<file>`. Used for O(1) re-detection.
+- `cluster_id` — optional short kebab-case string grouping findings that share a root cause even when titles, files, or severities differ. Populated by Claude at Phase 2 classification time when the rationale explicitly names a shared concept (e.g. "same jar-isolation boundary as L1"). Leave unset when no shared cause is evident; never auto-generate to avoid false clustering. `cluster_id` never suppresses findings — it only groups them for the termination-time assessment in `codex-review-cycle` step 19.
 - `title` — codex verbatim. Never paraphrase.
 - `reason` — the rationale assigned at first triage. Stable across re-occurrences so history stays coherent.
 - Projecting into `codex-review-cycle`'s `<rejected_findings>` block:
@@ -214,7 +263,8 @@ The skill is equally callable standalone: the user runs `review-scope-guard` aft
 
 ## Failure Modes
 
-- **User declines all DoD questions** — warn once, proceed with `(not specified)` values. Triage still runs; `reject-out-of-scope` decisions degrade to best-effort because there is no explicit out-of-scope list to match. The verdict table notes `DoD anchor: none (DoD not collected)` on every row.
+- **User declines all DoD questions** — warn once, proceed with `(not specified)` values. Triage still runs; `reject-out-of-scope` decisions degrade to best-effort because there is no explicit out-of-scope list to match. The verdict table notes `DoD anchor: none (DoD not collected)` on every row. **Additionally**, the Phase 0 step 2 item-4 completeness gate fires: `reject-out-of-scope` classification is disabled this session and the summary footer renders the degraded-mode warning described there.
+- **DoD item 4 has <3 items or lacks sibling framing** — same degraded mode as "user declines all DoD questions" above, but scoped to item 4 only (other DoD items may still anchor `must-fix` / quality-bar decisions). The footer warning explicitly names the item-4 shortfall so the user can fix it mid-session.
 - **Empty `findings[]`** — emit an empty verdict table and `No findings to triage.`, preserve any prior ledger unchanged, and exit.
 - **Malformed finding (missing `title`)** — skip the finding, log `F<n>: dropped (missing title)` in the output, and continue with the remainder.
 - **Ledger fingerprint collision (two different titles normalized to the same key)** — treat the second occurrence as a distinct entry with a disambiguating suffix appended to the fingerprint. Do not merge silently.
@@ -225,3 +275,4 @@ The skill is equally callable standalone: the user runs `review-scope-guard` aft
 - `references/dod-template.md` — the six-item Definition of Done interview.
 - `references/triage-categories.md` — full definitions of the four categories with curl-retrospective examples.
 - `references/stop-signals.md` — the five stop signals, thresholds, required inputs, and output format.
+- `references/output-samples.ja.md` — 日本語で render する場合の triage table / ledger / stop signal footer 例。
