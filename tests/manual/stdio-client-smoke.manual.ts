@@ -691,7 +691,10 @@ async function main(): Promise<void> {
     });
 
     const mapped = requireToolOk<Record<string, unknown>>("find-mapping", mappingResult as never);
-    assert.ok(Array.isArray(mapped.candidates), "Expected mapping candidates array.");
+    assert.equal(typeof mapped.candidateCount, "number", "Expected find-mapping result to carry candidateCount.");
+    assert.equal(typeof mapped.resolved, "boolean", "Expected find-mapping result to carry resolved flag.");
+    const mappingContext = mapped.mappingContext as { version?: unknown } | undefined;
+    assert.equal(mappingContext?.version, "1.21.10", "Expected find-mapping mappingContext.version to echo the request.");
 
     const indexResult = await client.callTool({
       name: "index-artifact",
