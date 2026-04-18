@@ -12,7 +12,8 @@ export const PUBLIC_CACHE_KINDS = [
   "mapping",
   "registry",
   "decompiled-source",
-  "mod-remap"
+  "mod-remap",
+  "binary-remap"
 ] as const;
 
 export type PublicCacheKind = (typeof PUBLIC_CACHE_KINDS)[number];
@@ -98,6 +99,8 @@ function kindRoot(config: CacheRegistryConfig, cacheKind: PublicCacheKind): stri
       return join(config.cacheDir, "decompiled");
     case "mod-remap":
       return join(config.cacheDir, "remapped-mods");
+    case "binary-remap":
+      return join(config.cacheDir, "remapped");
   }
 }
 
@@ -538,7 +541,12 @@ async function fileBackedEntries(
           filePath.endsWith(".lock") ||
           filePath.endsWith(".wal") ||
           filePath.endsWith(".journal"),
-        ...(cacheKind === "downloads" || cacheKind === "mod-remap" ? { jarPath: filePath } : {})
+        ...(cacheKind === "downloads" || cacheKind === "mod-remap" || cacheKind === "binary-remap"
+          ? { jarPath: filePath }
+          : {}),
+        ...(cacheKind === "binary-remap"
+          ? { artifactId: normalizedEntryId.replace(/\.jar$/i, "") }
+          : {})
       }
     });
   }

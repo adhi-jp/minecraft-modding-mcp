@@ -925,6 +925,218 @@ test("SourceService evicts oldest artifacts when maxArtifacts is exceeded", asyn
   );
 });
 
+test("SourceService LRU eviction unlinks the artifact's `<cacheDir>/remapped/<id>.jar`", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const { existsSync } = await import("node:fs");
+  const root = await mkdtemp(join(tmpdir(), "service-evict-remapped-"));
+  const config = buildTestConfig(root, { maxArtifacts: 1, maxCacheBytes: 2_147_483_648 });
+  const service = new SourceService(config);
+
+  const jar1 = join(root, "one.jar");
+  const src1 = join(root, "one-sources.jar");
+  const jar2 = join(root, "two.jar");
+  const src2 = join(root, "two-sources.jar");
+  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
+  await createJar(src1, { "a/A.java": "package a;\npublic class A {}" });
+  await createJar(jar2, { "b/B.class": Buffer.from([4, 5, 6]) });
+  await createJar(src2, { "b/B.java": "package b;\npublic class B {}" });
+
+  const first = await service.resolveArtifact({ target: { kind: "jar", value: jar1 } });
+
+  const remappedDir = join(config.cacheDir, "remapped");
+  await mkdir(remappedDir, { recursive: true });
+  const orphanedRemapped = join(remappedDir, `${first.artifactId}.jar`);
+  await writeFile(orphanedRemapped, "remapped-bytes");
+  assert.equal(existsSync(orphanedRemapped), true);
+
+  await service.resolveArtifact({ target: { kind: "jar", value: jar2 } });
+
+  assert.equal(
+    existsSync(orphanedRemapped),
+    false,
+    "expected LRU eviction to unlink the remapped jar paired with the evicted artifact"
+  );
+});
+
+test("SourceService init scans `<cacheDir>/remapped/` and includes only live-artifact bytes in `cache_total_content_bytes`", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-remapped-init-"));
+
+  const config = buildTestConfig(root, { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 });
+  const jar1 = join(root, "one.jar");
+  const src1 = join(root, "one-sources.jar");
+  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
+  await createJar(src1, { "a/A.java": "package a;\npublic class A {}" });
+
+  const bootstrapService = new SourceService(config);
+  const live = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar1 } });
+
+  const remappedDir = join(config.cacheDir, "remapped");
+  await mkdir(remappedDir, { recursive: true });
+  const liveRemappedSize = 64 * 1024;
+  const orphanedRemappedSize = 16 * 1024;
+  await writeFile(join(remappedDir, `${live.artifactId}.jar`), Buffer.alloc(liveRemappedSize));
+  await writeFile(join(remappedDir, "orphan-with-no-artifact.jar"), Buffer.alloc(orphanedRemappedSize));
+
+  const service = new SourceService(config);
+
+  const metrics = readCacheAccountingMetrics(service);
+  assert.ok(
+    metrics.totalContentBytes >= liveRemappedSize,
+    `expected the live artifact's remapped jar bytes to be counted (got ${metrics.totalContentBytes})`
+  );
+  assert.ok(
+    metrics.totalContentBytes < liveRemappedSize + orphanedRemappedSize,
+    `expected orphaned remapped jar bytes (${orphanedRemappedSize}) to be excluded from accounting (got ${metrics.totalContentBytes})`
+  );
+});
+
+test("SourceService maxCacheBytes does not chase orphaned remapped jars by evicting unrelated live artifacts", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-orphan-no-overshoot-"));
+
+  const jar1 = join(root, "one.jar");
+  const src1 = join(root, "one-sources.jar");
+  const jar2 = join(root, "two.jar");
+  const src2 = join(root, "two-sources.jar");
+  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
+  await createJar(src1, { "a/A.java": "package a;\npublic class A {}" });
+  await createJar(jar2, { "b/B.class": Buffer.from([4, 5, 6]) });
+  await createJar(src2, { "b/B.java": "package b;\npublic class B {}" });
+
+  const bootstrapConfig = buildTestConfig(root, { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 });
+  const bootstrapService = new SourceService(bootstrapConfig);
+  const live1 = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar1 } });
+  const live2 = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar2 } });
+  assert.notEqual(live1.artifactId, live2.artifactId);
+
+  const remappedDir = join(bootstrapConfig.cacheDir, "remapped");
+  await mkdir(remappedDir, { recursive: true });
+  const orphanJar = Buffer.alloc(64 * 1024);
+  await writeFile(join(remappedDir, "orphan-no-artifact-row.jar"), orphanJar);
+
+  const tightConfig = buildTestConfig(root, {
+    maxArtifacts: 10,
+    maxCacheBytes: orphanJar.byteLength - 1
+  });
+  const tightService = new SourceService(tightConfig);
+
+  // No new resolves: the ctor's enforceCacheLimits pass alone must not chase orphan bytes.
+  const metrics = readCacheAccountingMetrics(tightService);
+  const remainingIds = metrics.lru.map((entry) => entry.artifactId);
+  assert.ok(
+    remainingIds.includes(live1.artifactId),
+    `expected live1 to remain after init (got [${remainingIds.join(", ")}])`
+  );
+  assert.ok(
+    remainingIds.includes(live2.artifactId),
+    `expected live2 to remain after init (got [${remainingIds.join(", ")}])`
+  );
+});
+
+test("SourceService maxCacheBytes does not over-evict unrelated artifacts after a remapped-jar eviction", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const { existsSync } = await import("node:fs");
+  const root = await mkdtemp(join(tmpdir(), "service-evict-no-overshoot-"));
+
+  const jar1 = join(root, "one.jar");
+  const src1 = join(root, "one-sources.jar");
+  const jar2 = join(root, "two.jar");
+  const src2 = join(root, "two-sources.jar");
+  const jar3 = join(root, "three.jar");
+  const src3 = join(root, "three-sources.jar");
+  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
+  await createJar(src1, { "a/A.java": "package a;\npublic class A {}" });
+  await createJar(jar2, { "b/B.class": Buffer.from([4, 5, 6]) });
+  await createJar(src2, { "b/B.java": "package b;\npublic class B {}" });
+  await createJar(jar3, { "c/C.class": Buffer.from([7, 8, 9]) });
+  await createJar(src3, { "c/C.java": "package c;\npublic class C {}" });
+
+  const config = buildTestConfig(root, { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 });
+  const bootstrapService = new SourceService(config);
+  const first = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar1 } });
+  const second = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar2 } });
+  assert.notEqual(first.artifactId, second.artifactId);
+
+  const remappedDir = join(config.cacheDir, "remapped");
+  await mkdir(remappedDir, { recursive: true });
+  const remappedFirst = join(remappedDir, `${first.artifactId}.jar`);
+  const oversizedJar = Buffer.alloc(64 * 1024);
+  await writeFile(remappedFirst, oversizedJar);
+
+  const tightConfig = buildTestConfig(root, {
+    maxArtifacts: 10,
+    maxCacheBytes: oversizedJar.byteLength - 1
+  });
+  const tightService = new SourceService(tightConfig);
+
+  await tightService.resolveArtifact({ target: { kind: "jar", value: jar3 } });
+
+  assert.equal(
+    existsSync(remappedFirst),
+    false,
+    "expected the oversized remapped jar paired with `first` to be evicted"
+  );
+  const metrics = readCacheAccountingMetrics(tightService);
+  const remainingIds = metrics.lru.map((entry) => entry.artifactId);
+  assert.ok(
+    remainingIds.includes(second.artifactId),
+    `expected the unrelated artifact \`second\` (${second.artifactId}) to remain cached after the remapped-jar eviction (got [${remainingIds.join(", ")}])`
+  );
+});
+
+test("SourceService maxCacheBytes evicts when remapped jar bytes alone push over the limit", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const { existsSync } = await import("node:fs");
+  const root = await mkdtemp(join(tmpdir(), "service-evict-remapped-bytes-"));
+
+  const jar1 = join(root, "one.jar");
+  const src1 = join(root, "one-sources.jar");
+  const jar2 = join(root, "two.jar");
+  const src2 = join(root, "two-sources.jar");
+  await createJar(jar1, { "a/A.class": Buffer.from([1, 2, 3]) });
+  await createJar(src1, { "a/A.java": "package a;\npublic class A {}" });
+  await createJar(jar2, { "b/B.class": Buffer.from([4, 5, 6]) });
+  await createJar(src2, { "b/B.java": "package b;\npublic class B {}" });
+
+  const config = buildTestConfig(root, { maxArtifacts: 10, maxCacheBytes: 2_147_483_648 });
+  const bootstrapService = new SourceService(config);
+  const first = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar1 } });
+  const second = await bootstrapService.resolveArtifact({ target: { kind: "jar", value: jar2 } });
+  assert.notEqual(first.artifactId, second.artifactId);
+
+  const remappedDir = join(config.cacheDir, "remapped");
+  await mkdir(remappedDir, { recursive: true });
+  const remappedFirst = join(remappedDir, `${first.artifactId}.jar`);
+  const oversizedJar = Buffer.alloc(64 * 1024);
+  await writeFile(remappedFirst, oversizedJar);
+
+  const jar3 = join(root, "three.jar");
+  const src3 = join(root, "three-sources.jar");
+  await createJar(jar3, { "c/C.class": Buffer.from([7, 8, 9]) });
+  await createJar(src3, { "c/C.java": "package c;\npublic class C {}" });
+
+  const tightConfig = buildTestConfig(root, {
+    maxArtifacts: 10,
+    maxCacheBytes: oversizedJar.byteLength - 1
+  });
+  const tightService = new SourceService(tightConfig);
+
+  const initMetrics = readCacheAccountingMetrics(tightService);
+  assert.ok(
+    initMetrics.totalContentBytes >= oversizedJar.byteLength,
+    `expected refreshCacheMetrics to count the remapped jar bytes (got ${initMetrics.totalContentBytes})`
+  );
+
+  await tightService.resolveArtifact({ target: { kind: "jar", value: jar3 } });
+
+  assert.equal(
+    existsSync(remappedFirst),
+    false,
+    "expected the oversized remapped jar to push the byte total over `maxCacheBytes` and trigger eviction"
+  );
+});
+
 test("SourceService reports representative cache byte-accounting states", async (t) => {
   const cacheOneSource = "package a;\npublic class CacheOne { String token = \"one\"; }\n";
   const cacheTwoSource = "package b;\npublic class CacheTwo { String token = \"two\"; }\n";

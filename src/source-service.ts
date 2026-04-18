@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { access, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
@@ -1664,6 +1664,7 @@ export class SourceService {
   private readonly modSearchService: ModSearchService;
   private readonly lru = new LruList<{ totalContentBytes: number; updatedAt: string }>();
   private cacheTotalContentBytes = 0;
+  private readonly remappedJarBytes = new Map<string, number>();
   /** In-flight binary-remap jobs keyed by remapped jar path so concurrent
    * resolveArtifact calls for the same artifactId share a single tiny-remapper run. */
   private readonly inflightRemaps = new Map<string, Promise<string>>();
@@ -7721,6 +7722,7 @@ export class SourceService {
       // or the cache file was hand-edited, drop it and re-remap rather than
       // silently feeding a corrupt jar into Vineflower.
       if (await this.isUsableJarFile(remappedJarPath)) {
+        await this.recordRemappedJarBytesFromDisk(resolved.artifactId, remappedJarPath);
         return remappedJarPath;
       }
       log("warn", "binary-remap.cache.evict-corrupt", {
@@ -7732,6 +7734,7 @@ export class SourceService {
       } catch {
         // ignore: race with another process or already-deleted file.
       }
+      this.releaseRemappedJarBytes(resolved.artifactId);
     }
 
     const inflight = this.inflightRemaps.get(remappedJarPath);
@@ -7747,9 +7750,20 @@ export class SourceService {
     });
     this.inflightRemaps.set(remappedJarPath, remapPromise);
     try {
-      return await remapPromise;
+      const path = await remapPromise;
+      await this.recordRemappedJarBytesFromDisk(resolved.artifactId, path);
+      return path;
     } finally {
       this.inflightRemaps.delete(remappedJarPath);
+    }
+  }
+
+  private async recordRemappedJarBytesFromDisk(artifactId: string, path: string): Promise<void> {
+    try {
+      const fileStat = await stat(path);
+      this.recordRemappedJarBytes(artifactId, fileStat.size);
+    } catch {
+      // best-effort: accounting will be rebuilt on the next refreshCacheMetrics.
     }
   }
 
@@ -7848,6 +7862,53 @@ export class SourceService {
     return this.filesRepo.listFiles(artifactId, { limit: 1 }).items.length > 0;
   }
 
+  /**
+   * Best-effort cleanup of `<cacheDir>/remapped/<artifactId>.jar` written by
+   * `maybeRemapBinaryForMojang`. Called from cache-eviction paths so the
+   * Mojang-remapped binary jar does not outlive the artifact row that owns it.
+   * Also releases the jar's bytes from `cacheTotalContentBytes`. Errors are
+   * swallowed: orphaned jars remain visible to `manage-cache` under the
+   * `binary-remap` cache kind and can be reclaimed there.
+   */
+  private unlinkRemappedJarForArtifact(artifactId: string): void {
+    this.releaseRemappedJarBytes(artifactId);
+    const remappedJarPath = join(this.config.cacheDir, "remapped", `${artifactId}.jar`);
+    try {
+      if (existsSync(remappedJarPath)) {
+        unlinkSync(remappedJarPath);
+      }
+    } catch {
+      // ignore: orphaned jar is still reclaimable via manage-cache binary-remap kind.
+    }
+  }
+
+  /**
+   * Add the remapped jar's on-disk size to `cacheTotalContentBytes` so the
+   * `enforceCacheLimits` byte gate sees the jar before deciding to evict.
+   * Without this, a Mojang-remapped client jar (tens of MB) can accumulate
+   * silently while the indexed-source byte total stays below `maxCacheBytes`.
+   */
+  private recordRemappedJarBytes(artifactId: string, sizeBytes: number): void {
+    const normalized = Math.max(0, Math.trunc(sizeBytes));
+    const existing = this.remappedJarBytes.get(artifactId) ?? 0;
+    this.cacheTotalContentBytes = Math.max(
+      0,
+      this.cacheTotalContentBytes - existing + normalized
+    );
+    this.remappedJarBytes.set(artifactId, normalized);
+    this.publishCacheMetrics();
+  }
+
+  private releaseRemappedJarBytes(artifactId: string): void {
+    const existing = this.remappedJarBytes.get(artifactId);
+    if (!existing) {
+      return;
+    }
+    this.cacheTotalContentBytes = Math.max(0, this.cacheTotalContentBytes - existing);
+    this.remappedJarBytes.delete(artifactId);
+    this.publishCacheMetrics();
+  }
+
   private enforceCacheLimits(): void {
     let artifactCount = this.lru.size;
     let totalBytes = this.cacheTotalContentBytes;
@@ -7864,17 +7925,22 @@ export class SourceService {
 
       const artifactCountBefore = artifactCount;
       const totalBytesBefore = totalBytes;
+      const remappedBytesForCandidate = this.remappedJarBytes.get(candidate.key) ?? 0;
       this.filesRepo.deleteFilesForArtifact(candidate.key);
       this.artifactsRepo.deleteArtifact(candidate.key);
+      this.unlinkRemappedJarForArtifact(candidate.key);
       this.removeCacheMetrics(candidate.key, false);
       artifactCount = Math.max(0, artifactCount - 1);
-      totalBytes = Math.max(0, totalBytes - candidate.value.totalContentBytes);
+      totalBytes = Math.max(
+        0,
+        totalBytes - candidate.value.totalContentBytes - remappedBytesForCandidate
+      );
       this.metrics.recordCacheEviction();
       log("warn", "cache.evict", {
         artifactId: candidate.key,
         artifactCountBefore,
         totalBytesBefore,
-        artifactBytes: candidate.value.totalContentBytes
+        artifactBytes: candidate.value.totalContentBytes + remappedBytesForCandidate
       });
     }
 
@@ -7893,7 +7959,40 @@ export class SourceService {
         updatedAt: row.updatedAt
       });
     }
-    this.cacheTotalContentBytes = totalContentBytes;
+    this.remappedJarBytes.clear();
+    let remappedTotal = 0;
+    const remappedDir = join(this.config.cacheDir, "remapped");
+    if (existsSync(remappedDir)) {
+      // Only count remapped jars whose owning artifact is still in the LRU set.
+      // Orphaned jars (artifact deleted, prior unlink lost a race, externally
+      // placed) stay visible to manage-cache under the `binary-remap` kind
+      // for prune, but must not be folded into `cacheTotalContentBytes` here:
+      // enforceCacheLimits cannot evict them, so counting their bytes would
+      // force unrelated live artifacts to be evicted to chase orphan bytes.
+      const liveArtifactIds = new Set(this.lru.toArray().map((entry) => entry.key));
+      try {
+        for (const entry of readdirSync(remappedDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.endsWith(".jar")) {
+            continue;
+          }
+          const artifactId = entry.name.slice(0, -".jar".length);
+          if (!liveArtifactIds.has(artifactId)) {
+            continue;
+          }
+          try {
+            const fileStat = statSync(join(remappedDir, entry.name));
+            const size = Math.max(0, Math.trunc(fileStat.size));
+            this.remappedJarBytes.set(artifactId, size);
+            remappedTotal += size;
+          } catch {
+            // ignore stat failure on a single jar; total stays best-effort.
+          }
+        }
+      } catch {
+        // ignore listing failure; remapped accounting stays empty until next remap.
+      }
+    }
+    this.cacheTotalContentBytes = totalContentBytes + remappedTotal;
     this.publishCacheMetrics();
   }
 

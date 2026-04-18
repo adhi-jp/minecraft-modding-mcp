@@ -323,6 +323,7 @@ test("compactMappingResponse preserves candidates when candidateCount is absent"
 test("compactMappingResponse slims unresolved candidates beyond the top-3 and flags candidateDetailsTruncated", () => {
   const makeCandidate = (name: string, extras: Record<string, unknown>): Record<string, unknown> => ({
     kind: "method",
+    symbol: `net.minecraft.server.Main#${name}`,
     owner: "net.minecraft.server.Main",
     name,
     descriptor: "()V",
@@ -358,13 +359,15 @@ test("compactMappingResponse slims unresolved candidates beyond the top-3 and fl
     assert.equal("provenance" in projected[i], true, `candidate ${i} should retain provenance`);
     assert.equal("context" in projected[i], true);
   }
-  // Tail candidates are slim.
+  // Tail candidates are slim. The retained shape MUST stay aligned with the
+  // `{kind, symbol, owner, name, descriptor, confidence, matchKind}` contract
+  // documented in CHANGELOG.md, README.md, and docs/tool-reference.md.
   for (let i = 3; i < 5; i += 1) {
     assert.equal("provenance" in projected[i], false, `candidate ${i} should have provenance stripped`);
     assert.equal("context" in projected[i], false);
-    assert.ok("name" in projected[i]);
-    assert.ok("descriptor" in projected[i]);
-    assert.ok("confidence" in projected[i]);
+    for (const key of ["kind", "symbol", "owner", "name", "descriptor", "confidence", "matchKind"]) {
+      assert.ok(key in projected[i], `tail candidate ${i} should retain \`${key}\``);
+    }
   }
   // Tail slimming must not reuse `candidatesTruncated` (which means "more candidates exist
   // than are returned"). It sets `candidateDetailsTruncated` instead, and leaves

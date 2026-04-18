@@ -109,6 +109,40 @@ test("cache registry filters stale filesystem entries via olderThan and status s
   assert.deepEqual(result.entries.map((entry) => entry.entryId), ["stale.jar"]);
 });
 
+test("cache registry inventories `<cacheDir>/remapped/<artifactId>.jar` as the binary-remap kind", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-binremap-"));
+  await mkdir(join(root, "remapped"), { recursive: true });
+  await writeFile(join(root, "remapped", "alpha.jar"), "remapped-jar");
+  await writeFile(join(root, "remapped", "beta.jar"), "remapped-jar-2");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const summary = await registry.summarize({ cacheKinds: ["binary-remap"] });
+  assert.equal(summary.kinds["binary-remap"]?.entryCount, 2);
+  assert.equal(summary.kinds["binary-remap"]?.totalBytes, "remapped-jar".length + "remapped-jar-2".length);
+
+  const filteredByArtifactId = await registry.listEntries({
+    cacheKinds: ["binary-remap"],
+    selector: { artifactId: "alpha" },
+    limit: 10
+  });
+  assert.deepEqual(filteredByArtifactId.entries.map((entry) => entry.entryId), ["alpha.jar"]);
+
+  const deletion = await registry.deleteEntries({
+    cacheKinds: ["binary-remap"],
+    selector: { artifactId: "alpha" },
+    executionMode: "apply"
+  });
+  assert.equal(deletion.deletedEntries, 1);
+  assert.equal(deletion.deletedBytes, "remapped-jar".length);
+
+  const remaining = await registry.listEntries({ cacheKinds: ["binary-remap"], limit: 10 });
+  assert.deepEqual(remaining.entries.map((entry) => entry.entryId), ["beta.jar"]);
+});
+
 test("cache registry matches artifact-index entries by mapping, scope, and projectPath selectors", async () => {
   const root = await mkdtemp(join(tmpdir(), "cache-registry-artifacts-"));
   const workspace = join(root, "workspace");

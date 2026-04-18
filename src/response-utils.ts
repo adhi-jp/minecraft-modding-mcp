@@ -220,8 +220,9 @@ function slimCandidate(candidate: unknown): Record<string, unknown> | unknown {
  *           confidence missing or 1.
  *
  * Unresolved/ambiguous path: keep top {@link UNRESOLVED_FULL_DETAIL_LIMIT} candidates with full
- *   metadata, slim the tail to {owner,name,descriptor,confidence,matchKind}, and surface
- *   `candidatesTruncated:true` + `totalCandidateCount` so the caller knows what it's seeing.
+ *   metadata, slim the tail to {kind,symbol,owner,name,descriptor,confidence,matchKind}, and
+ *   surface `candidatesTruncated:true` + `totalCandidateCount` so the caller knows what it's
+ *   seeing.
  */
 export function compactMappingResponse(
   obj: Record<string, unknown>
