@@ -65,6 +65,8 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - `search-mod-source` enforces `query.length <= 200` and `limit <= 200`.
 - `get-registry-data` can return names and counts only with `includeData=false`, or clip detailed payloads with `maxEntriesPerRegistry`.
 - `validate-mixin` summary-first workflows should combine `includeIssues=false`, `reportMode="compact"`, and `warningMode="aggregated"`.
+- `validate-mixin` top-level failures expose `failedStage` as a first-class field on the serialized `error` envelope (alongside `code`, `hints`, `suggestedCall`) — one of `"input-validation" | "resolve" | "mapping-health" | "parse" | "target-lookup"`. Branch on that before inspecting `message` to recover automatically (e.g. retry `resolve` failures with `scope="vanilla"`, retry `target-lookup` failures with a different `mapping`). Nested errors that already carry a `failedStage` are preserved so upstream tags (e.g. from `resolve-artifact`) surface unchanged.
+- `validate-mixin` per-result `quickSummary` appends `Scope fell back from "<requested>" to "<applied>" (<reason>).` when `provenance.scopeFallback` is set and `Mapping health degraded: <degradations>.` when `toolHealth.overallHealthy === false`. Clean validations keep the original one-line summary; the extra notes only attach when the pipeline actually fell back or detected a degraded mapping.
 - Empty Mixin configs are treated as warning-only discovery results with `summary.total=0` instead of invalid input; malformed JSON still returns `ERR_INVALID_INPUT`.
 
 ## Migration Notes

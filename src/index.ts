@@ -99,6 +99,7 @@ type ProblemDetails = {
   fieldErrors?: ProblemFieldError[];
   hints?: string[];
   suggestedCall?: SuggestedCall;
+  failedStage?: string;
 };
 
 type ToolMeta = {
@@ -1136,6 +1137,17 @@ function statusForErrorCode(code: string): number {
   return 500;
 }
 
+function extractFailedStageFromDetails(details: unknown): string | undefined {
+  if (typeof details !== "object" || details == null) {
+    return undefined;
+  }
+  const maybeStage = (details as Record<string, unknown>).failedStage;
+  if (typeof maybeStage === "string" && maybeStage.trim().length > 0) {
+    return maybeStage;
+  }
+  return undefined;
+}
+
 function extractFieldErrorsFromDetails(details: unknown): ProblemFieldError[] | undefined {
   if (typeof details !== "object" || details == null) {
     return undefined;
@@ -1810,6 +1822,7 @@ function mapErrorToProblem(
 
   if (isAppError(caughtError)) {
     const suggestedCall = toSuggestedCall(caughtError.details);
+    const failedStage = extractFailedStageFromDetails(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -1819,7 +1832,8 @@ function mapErrorToProblem(
       instance: requestId,
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: toHints(caughtError.details),
-      ...(suggestedCall ? { suggestedCall } : {})
+      ...(suggestedCall ? { suggestedCall } : {}),
+      ...(failedStage ? { failedStage } : {})
     };
   }
 

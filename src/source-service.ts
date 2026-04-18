@@ -770,6 +770,42 @@ type ResolvedValidateMixinConfigSources = {
   warnings: string[];
 };
 
+/**
+ * Diagnostic tag attached to every AppError thrown out of validate-mixin.
+ * - "input-validation": required field missing or sourcePath unreadable
+ * - "resolve": jar / artifact resolution (versionService, resolveArtifact, workspace detection)
+ * - "mapping-health": mapping infrastructure probe (checkMappingHealth)
+ * - "parse": parseMixinSource failure
+ * - "target-lookup": per-target symbol/signature/remap loop
+ */
+type ValidateMixinStage =
+  | "input-validation"
+  | "resolve"
+  | "mapping-health"
+  | "parse"
+  | "target-lookup";
+
+function annotateValidateMixinError(err: unknown, stage: ValidateMixinStage): AppError {
+  if (isAppError(err)) {
+    const existing = (err.details ?? {}) as Record<string, unknown>;
+    if (typeof existing.failedStage === "string") {
+      // A nested call already tagged this error (e.g. input-validation). Preserve it.
+      return err;
+    }
+    return createError({
+      code: err.code,
+      message: err.message,
+      details: { ...existing, failedStage: stage }
+    });
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return createError({
+    code: ERROR_CODES.INTERNAL,
+    message: `validate-mixin failed during stage "${stage}": ${message}`,
+    details: { failedStage: stage }
+  });
+}
+
 export type ValidateAccessWidenerInput = {
   content: string;
   version: string;
@@ -4651,6 +4687,19 @@ export class SourceService {
   }
 
   async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
+    // Wrap the dispatcher so any untagged AppError coming out of path
+    // normalization, preflight discovery, or config resolution surfaces with a
+    // meaningful failedStage. annotateValidateMixinError preserves any
+    // inner-pipeline tag (resolve/mapping-health/parse/target-lookup) so only
+    // the dispatcher-level errors default to input-validation.
+    try {
+      return await this.runValidateMixinDispatcher(input);
+    } catch (err) {
+      throw annotateValidateMixinError(err, "input-validation");
+    }
+  }
+
+  private async runValidateMixinDispatcher(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
     const { input: sourceInput, ...sharedInput } = input;
     const mode = sourceInput.mode;
 
@@ -4750,6 +4799,7 @@ export class SourceService {
         code: ERROR_CODES.INVALID_INPUT,
         message: `No mixin config JSON files were found under project path "${input.input.path}".`,
         details: {
+          failedStage: "input-validation",
           nextAction: "Use input.mode='config' with explicit configPaths[], or point input.path at the workspace root that contains *.mixins.json files."
         }
       });
@@ -4838,38 +4888,80 @@ export class SourceService {
   }
 
   private async validateMixinSingle(input: ValidateMixinSingleInput): Promise<MixinValidationResult> {
-    let version = input.version.trim();
-    const requestedScope = normalizeRequestedArtifactScope(input.scope);
-    const currentSourcePriority = input.sourcePriority ?? this.config.mappingSourcePriority;
-    const initialSourcePriority = input.retryState?.initialSourcePriority ?? currentSourcePriority;
-    if (!version) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
-    }
-
-    // Resolve source from source or sourcePath
-    let source: string;
-    if (input.sourcePath) {
-      const normalizedSourcePath = normalizePathForHost(input.sourcePath, undefined, "sourcePath");
-      const resolvedSourcePath = isAbsolute(normalizedSourcePath)
-        ? normalizedSourcePath
-        : resolvePath(process.cwd(), normalizedSourcePath);
-      try {
-        source = await readFile(resolvedSourcePath, "utf-8");
-      } catch (err) {
+    // Start at input-validation so path normalization, file reads, and the
+    // simple guard checks all land under that stage. The pipeline callback
+    // shifts the stage tracker before the first non-input-validation action,
+    // and annotateValidateMixinError() preserves any nested-call stage
+    // (e.g. a deeper resolver that set failedStage="version-manifest").
+    let currentStage: ValidateMixinStage = "input-validation";
+    try {
+      let version = input.version.trim();
+      const requestedScope = normalizeRequestedArtifactScope(input.scope);
+      const currentSourcePriority = input.sourcePriority ?? this.config.mappingSourcePriority;
+      const initialSourcePriority = input.retryState?.initialSourcePriority ?? currentSourcePriority;
+      if (!version) {
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
-          message:
-            `Could not read sourcePath "${input.sourcePath}" (resolved to "${resolvedSourcePath}"):` +
-            ` ${err instanceof Error ? err.message : String(err)}`
+          message: "version must be non-empty.",
+          details: { failedStage: "input-validation" }
         });
       }
-    } else {
-      source = input.source ?? "";
-    }
-    if (!source.trim()) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "source must be non-empty." });
-    }
 
+      // Resolve source from source or sourcePath
+      let source: string;
+      if (input.sourcePath) {
+        const normalizedSourcePath = normalizePathForHost(input.sourcePath, undefined, "sourcePath");
+        const resolvedSourcePath = isAbsolute(normalizedSourcePath)
+          ? normalizedSourcePath
+          : resolvePath(process.cwd(), normalizedSourcePath);
+        try {
+          source = await readFile(resolvedSourcePath, "utf-8");
+        } catch (err) {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message:
+              `Could not read sourcePath "${input.sourcePath}" (resolved to "${resolvedSourcePath}"):` +
+              ` ${err instanceof Error ? err.message : String(err)}`,
+            details: { failedStage: "input-validation" }
+          });
+        }
+      } else {
+        source = input.source ?? "";
+      }
+      if (!source.trim()) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: "source must be non-empty.",
+          details: { failedStage: "input-validation" }
+        });
+      }
+
+      return await this.runValidateMixinPipeline({
+        input,
+        version,
+        source,
+        requestedScope,
+        currentSourcePriority,
+        initialSourcePriority,
+        onStage: (stage) => { currentStage = stage; }
+      });
+    } catch (err) {
+      throw annotateValidateMixinError(err, currentStage);
+    }
+  }
+
+  private async runValidateMixinPipeline(ctx: {
+    input: ValidateMixinSingleInput;
+    version: string;
+    source: string;
+    requestedScope: ArtifactScope;
+    currentSourcePriority: MappingSourcePriority;
+    initialSourcePriority: MappingSourcePriority;
+    onStage: (stage: ValidateMixinStage) => void;
+  }): Promise<MixinValidationResult> {
+    const { input, source, requestedScope, currentSourcePriority, initialSourcePriority, onStage } = ctx;
+    let { version } = ctx;
+    onStage("resolve");
     const warnings: string[] = [];
     let mappingAutoDetected = false;
 
@@ -4952,6 +5044,7 @@ export class SourceService {
     }
 
     // Health check: probe mapping infrastructure
+    onStage("mapping-health");
     let healthReport: MappingHealthReport | undefined;
     try {
       const health = await this.mappingService.checkMappingHealth({
@@ -4972,12 +5065,26 @@ export class SourceService {
           ...health.degradations
         ]
       };
-    } catch {
-      // Health check failed — proceed without it
+    } catch (err) {
+      // Probe itself failed — surface the degradation instead of swallowing it
+      // silently, so quickSummary and toolHealth reflect the unknown-health
+      // state rather than looking clean.
+      const reason = err instanceof Error ? err.message : String(err);
+      healthReport = {
+        jarAvailable: existsSync(jarPath),
+        jarPath,
+        mojangMappingsAvailable: false,
+        tinyMappingsAvailable: false,
+        memberRemapAvailable: false,
+        overallHealthy: false,
+        degradations: [`Mapping health probe failed: ${reason}`]
+      };
     }
 
+    onStage("parse");
     const parsed = parseMixinSource(source);
 
+    onStage("target-lookup");
     const targetMembers = new Map<string, ResolvedTargetMembers>();
     const mappingFailedTargets = new Set<string>();
     const remapFailedMembers = new Map<string, Set<string>>();
@@ -5295,8 +5402,12 @@ export class SourceService {
       if (result.structuredWarnings.length === 0) result.structuredWarnings = undefined;
     }
 
-    // Apply compact report mode
+    // Apply compact report mode. refreshMixinValidationOutcome reads
+    // result.toolHealth / result.provenance when it rebuilds quickSummary, so
+    // refresh BEFORE stripping those fields; otherwise compact mode would
+    // silently drop the mapping-health-degraded and scope-fallback notes.
     if (input.reportMode === "compact") {
+      refreshMixinValidationOutcome(result);
       result.resolvedMembers = undefined;
       result.structuredWarnings = undefined;
       result.aggregatedWarnings = undefined;
@@ -5305,8 +5416,9 @@ export class SourceService {
       if (result.provenance) {
         result.provenance.resolutionTrace = undefined;
       }
+    } else {
+      refreshMixinValidationOutcome(result);
     }
-    refreshMixinValidationOutcome(result);
 
     if (this.shouldRetryValidateMixinWithMavenFirst(input, result)) {
       const retryWarning =
@@ -5331,7 +5443,14 @@ export class SourceService {
             `Validation retried with sourcePriority "maven-first" after partial result from "${currentSourcePriority}".`
           ];
         }
-        return refreshMixinValidationOutcome(retried);
+        // The recursive validateMixinSingle call already produced final summary /
+        // status / quickSummary. The only mutations above are warnings and
+        // provenance.resolutionNotes, which quickSummary does not read. Calling
+        // refreshMixinValidationOutcome(retried) here would rebuild quickSummary
+        // against the already-compacted `retried.toolHealth === undefined`, which
+        // silently strips the mapping-health-degraded note we just preserved in
+        // the compact branch above.
+        return retried;
       } catch (retryErr) {
         result.warnings.unshift(
           `${retryWarning} Retry failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
@@ -5370,7 +5489,8 @@ export class SourceService {
       } catch (err) {
         throw createError({
           code: ERROR_CODES.INVALID_INPUT,
-          message: `Could not read/parse mixin config "${rawConfigPath}": ${err instanceof Error ? err.message : String(err)}`
+          message: `Could not read/parse mixin config "${rawConfigPath}": ${err instanceof Error ? err.message : String(err)}`,
+          details: { failedStage: "input-validation" }
         });
       }
 

@@ -248,6 +248,25 @@ test("validate-mixin invalid JSON-like input string preserves structured input i
   });
 });
 
+test("validate-mixin error envelope surfaces details.failedStage for caller recovery", async () => {
+  const result = await callTool("validate-mixin", {
+    input: { mode: "path", path: "/nonexistent/__validate_mixin_stage_test__/Missing.java" },
+    version: "1.21.10"
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        failedStage?: string;
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.failedStage, "input-validation");
+});
+
 test("validate-project invalid legacy workspace payload returns a structured suggestedCall", async () => {
   const result = await callTool("validate-project", {
     task: "project-summary",

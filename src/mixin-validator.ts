@@ -457,12 +457,32 @@ function computeValidationStatus(
 
 function buildQuickSummary(
   status: ValidationStatus,
-  summary: ValidationSummary
-): string {
-  if (status === "full") {
-    return `${summary.membersValidated} member(s) validated successfully.`;
+  summary: ValidationSummary,
+  context?: {
+    provenance?: MixinValidationProvenance;
+    healthReport?: MappingHealthReport;
   }
-  return `${summary.definiteErrors} error(s), ${summary.uncertainErrors} uncertain, ${summary.warnings} warning(s). ${summary.membersValidated} validated, ${summary.membersSkipped} member(s) skipped, ${summary.membersMissing} member(s) missing.`;
+): string {
+  const base = status === "full"
+    ? `${summary.membersValidated} member(s) validated successfully.`
+    : `${summary.definiteErrors} error(s), ${summary.uncertainErrors} uncertain, ${summary.warnings} warning(s). ${summary.membersValidated} validated, ${summary.membersSkipped} member(s) skipped, ${summary.membersMissing} member(s) missing.`;
+
+  const notes: string[] = [];
+  const scopeFallback = context?.provenance?.scopeFallback;
+  if (scopeFallback) {
+    notes.push(
+      `Scope fell back from "${scopeFallback.requested}" to "${scopeFallback.applied}" (${scopeFallback.reason}).`
+    );
+  }
+  const healthReport = context?.healthReport;
+  if (healthReport && !healthReport.overallHealthy) {
+    const degradations = healthReport.degradations.length > 0
+      ? healthReport.degradations.join("; ")
+      : "mapping infrastructure degraded";
+    notes.push(`Mapping health degraded: ${degradations}.`);
+  }
+
+  return notes.length > 0 ? `${base} ${notes.join(" ")}` : base;
 }
 
 function addSkippedMembers(parsed: ParsedMixin, resolvedMembers: ResolvedMember[]): void {
@@ -508,7 +528,10 @@ export function refreshMixinValidationOutcome(result: MixinValidationResult): Mi
   };
   result.validationStatus = computeValidationStatus(result.summary);
   result.valid = result.summary.definiteErrors === 0;
-  result.quickSummary = buildQuickSummary(result.validationStatus, result.summary);
+  result.quickSummary = buildQuickSummary(result.validationStatus, result.summary, {
+    provenance: result.provenance,
+    healthReport: result.toolHealth
+  });
   return result;
 }
 
@@ -1021,7 +1044,7 @@ export function validateParsedMixin(
     parseWarnings: parseWarningCount
   };
   const validationStatus = computeValidationStatus(summary);
-  const quickSummary = buildQuickSummary(validationStatus, summary);
+  const quickSummary = buildQuickSummary(validationStatus, summary, { provenance, healthReport });
 
   return {
     className: parsed.className,

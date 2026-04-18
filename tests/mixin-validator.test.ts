@@ -2248,6 +2248,77 @@ test("quickSummary reports representative success and failure summaries", () => 
   }
 });
 
+test("quickSummary surfaces scopeFallback when provenance records a fallback", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.10",
+    jarPath: "/fake/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    scopeFallback: {
+      requested: "merged",
+      applied: "vanilla",
+      reason: "Loom cache unavailable"
+    }
+  };
+
+  const result = validateParsedMixin(parsed, targetMembers, [], provenance);
+  assert.ok(result.quickSummary);
+  assert.match(result.quickSummary!, /Scope fell back from "merged" to "vanilla"/);
+  assert.match(result.quickSummary!, /Loom cache unavailable/);
+});
+
+test("quickSummary surfaces mapping-health degradation when healthReport is unhealthy", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const health = makeHealthReport({
+    overallHealthy: false,
+    jarAvailable: false,
+    degradations: ["Game jar not found.", "Mojang mappings unavailable"]
+  });
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, [], undefined, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+  assert.ok(result.quickSummary);
+  assert.match(result.quickSummary!, /Mapping health degraded/);
+  assert.match(result.quickSummary!, /Game jar not found/);
+});
+
+test("quickSummary stays concise when provenance is clean and healthReport is healthy", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick", line: 5 }]
+  });
+  const targetMembers = new Map([
+    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: ["tick"] })]
+  ]);
+  const provenance: MixinValidationProvenance = {
+    version: "1.21.10",
+    jarPath: "/fake/client.jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang"
+  };
+  const health = makeHealthReport();
+
+  const result = validateParsedMixin(
+    parsed, targetMembers, [], provenance, undefined, undefined, false,
+    undefined, undefined, undefined, undefined, health
+  );
+  assert.ok(result.quickSummary);
+  assert.doesNotMatch(result.quickSummary!, /Scope fell back/);
+  assert.doesNotMatch(result.quickSummary!, /Mapping health degraded/);
+});
+
 test("P6: confidenceBreakdown captures base score and applied penalties", () => {
   const parsed = makeParsedMixin({
     injections: [{ annotation: "Inject", method: "tick", line: 10 }]
