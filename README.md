@@ -5,13 +5,13 @@
 [![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
 [![CI](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml)
 
-**[日本語](docs/README-ja.md)** | English
+**English** | [日本語](docs/README-ja.md)
+
+> **Note**: This project is entirely vibe-coded — built with AI-assisted development without formal specs.
 
 ---
 
-`@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants structured access to Minecraft source code, mappings, mod JARs, registry data, and validation workflows.
-
-[MCP](https://modelcontextprotocol.io/) is an open protocol that lets AI assistants call external tools through a structured interface. This server works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
+`@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants structured access to Minecraft source code, mappings, mod JARs, registry data, and validation workflows. It works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
 **35 tools** (6 entry + 29 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
@@ -47,8 +47,17 @@ If automatic JAR downloads are blocked in your environment, set `MCP_VINEFLOWER_
 
 CLI clients:
 
-- `Claude Code`: `claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp`
-- `OpenAI Codex CLI`: `codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp`
+Claude Code:
+
+```bash
+claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+```
+
+OpenAI Codex CLI:
+
+```bash
+codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+```
 
 Run `claude mcp list` or `codex mcp list` after registration to verify the server is available.
 
@@ -146,11 +155,9 @@ Keep only the high-frequency notes here. For the full pitfall list, exact contra
 - `search-class-source` defaults to `queryMode="auto"` and keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path. Use `queryMode="literal"` for an explicit full substring scan.
 - If you do not already have an artifact, prefer `subject.kind="workspace"` for `inspect-minecraft` instead of guessing artifact details. When artifact context is the only missing input, a retryable `suggestedCall` preserves the requested task.
 - `trace-symbol-lifecycle` expects `Class.method` in `symbol`. Keep exact overload matching in the separate `descriptor` field.
-- Workspace inspection can still confirm vanilla classes when source coverage is partial, and `inspect-minecraft task="list-files"` reports a partial result with follow-up guidance when that happens.
-- `check-symbol-exists` and `analyze-symbol task="exists"` now validate `mojang` lookups on unobfuscated releases such as `26.1+` against runtime bytecode when no mapping graph exists, preserve the original `mapping_unavailable` result if the runtime JAR itself cannot be resolved, and return a targeted warning when callers provide only a short class name.
-- `analyze-mod` and `validate-project` still require structured `subject` objects and canonical `include` groups, but stale string-subject or domain-include payloads now return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
-- `validate-project task="project-summary"` now pre-resolves `preferProjectVersion=true` consistently across discovered Access Widener, Access Transformer, and Mixin checks, and blocks with version-agnostic recovery guidance when discovered validators need a version but neither the request nor `gradle.properties` can supply one.
-- Local source-jar probing, decompiled mod source reads, and workspace discovery now avoid synchronous hot-path ZIP/file scans and use bounded concurrent reads where safe, so cold `resolve-artifact`, `analyze-mod`, and `validate-project` workflows stay more responsive on larger jars and multi-module workspaces.
+- For unobfuscated releases such as `26.1+`, `check-symbol-exists` and `analyze-symbol task="exists"` validate `mojang` lookups against runtime bytecode when no mapping graph exists, and return `mapping_unavailable` when the runtime JAR itself is unreachable.
+- `analyze-mod` and `validate-project` require structured `subject` objects and canonical `include` groups; stale string-subject or domain-include payloads return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
+- `validate-project task="project-summary"` propagates `preferProjectVersion=true` across discovered Mixin, Access Widener, and Access Transformer checks. When no version can be resolved from the request or `gradle.properties`, the summary blocks with version-agnostic recovery guidance.
 
 ### Inspect Minecraft source from a version
 
@@ -270,7 +277,7 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 | `index-artifact` | Rebuild indexed metadata for an existing artifact |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
-For unobfuscated releases such as `26.1+`, `mapping="mojang"` now uses the runtime/decompile path directly for version and versioned-coordinate targets and skips Loom source-jar discovery entirely, while `intermediary` and `yarn` still fall back to `obfuscated` with a warning.
+For unobfuscated releases such as `26.1+`, `mapping="mojang"` uses the runtime/decompile path directly and skips Loom source-jar discovery, while `intermediary` and `yarn` fall back to `obfuscated` with a warning.
 
 ### Version Comparison & Symbol Tracking
 
@@ -298,9 +305,9 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` accept an optional `compact` parameter (default `true`). When enabled, empty arrays, null values, and empty objects are stripped from the top-level response to reduce token overhead. Set `compact: false` for full diagnostic output. For `resolve-artifact`, compact mode additionally omits diagnostic fields (`provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, `resolvedSourceJarPath`), returning only the essential fields needed for downstream tool calls. For mapping tools, compact mode has two projections: (1) when the result is a single full-confidence exact-match resolution (`resolved=true`, `resolvedSymbol` present, `candidates.length=1`, `candidateCount=1`, `!candidatesTruncated`, `matchKind="exact"`, `confidence` missing or `1`) the redundant `candidates` array is omitted entirely; (2) when the result is unresolved with more than three candidates, the top three keep their full metadata while the tail is slimmed to `{kind, symbol, owner, name, descriptor, confidence, matchKind}` and the response surfaces `candidateDetailsTruncated: true` to signal the metadata slim. `candidatesTruncated` continues to mean "more candidates exist than this response returned" (upstream list truncation); the two flags are orthogonal and can both be present when the upstream list was clipped and the returned slice still exceeded the top-3 detail limit.
+`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` default `compact` to `true`: empty fields are stripped, `resolve-artifact` omits diagnostic fields (`provenance`, `artifactContents`, etc.), and mapping tools omit the redundant `candidates` array on full-confidence exact matches and slim the tail to `{kind, symbol, owner, name, descriptor, confidence, matchKind}` (signalled by `candidateDetailsTruncated`) for unresolved results with more than three candidates. Pass `compact: false` for the full diagnostic shape.
 
-`get-class-source`, `get-class-members`, `search-class-source`, and `list-artifact-files` also accept an optional `compact` parameter, but the default is `false` (opt-in) because these tools produce the largest responses and existing callers may depend on the full diagnostic fields. When enabled, `get-class-source` omits `provenance`, `artifactContents`, and `qualityFlags`; `get-class-members` omits `provenance`, `artifactContents`, `qualityFlags`, and `context` while preserving `decompiledFallback` and `decompiledMemberCounts`; `search-class-source` and `list-artifact-files` omit `artifactContents` only. The primary payload (`sourceText`, `members`/`counts`, `hits`, `items`) is always preserved — even when `hits` or `items` is an empty array for a successful zero-result response.
+`get-class-source`, `get-class-members`, `search-class-source`, and `list-artifact-files` accept the same `compact` parameter as opt-in (default `false`). When enabled it strips `provenance`, `artifactContents`, `qualityFlags`, and (for `get-class-members`) `context`, while preserving primary payloads (`sourceText`, `members`/`counts`, `hits`, `items`). See [docs/tool-reference.md](docs/tool-reference.md) for the full per-tool field list.
 
 ### NBT Utilities
 
@@ -330,9 +337,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 
 ### Validation
 
-Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version.
-`validate-access-widener` keeps vanilla bytecode validation by default, and now also supports runtime-aware validation through `projectPath`, `scope`, and `preferProjectVersion`, returning runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence when that mode is used. Runtime-aware method validation now preserves remapped JVM descriptors across namespace changes, searches Loom tiny mappings from workspace and Gradle user-home caches, and prefers explicit `*merged-intermediary*` / `*merged-mojang*` jars over ambiguous `minecraft-merged.jar` candidates.
-`validate-access-transformer` infers `atNamespace` from Forge or NeoForge workspace context when `projectPath` is provided, validates packaged or inline AT content, and uses loader/runtime artifacts for `scope="loader"` instead of treating loader as a merged-only alias.
+Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version. `validate-access-widener` defaults to vanilla bytecode validation; pass `projectPath`, `scope`, and `preferProjectVersion` for runtime-aware mode, which returns runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence. `validate-access-transformer` infers `atNamespace` from Forge/NeoForge workspace context when `projectPath` is provided and uses loader runtime artifacts for `scope="loader"`.
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose |

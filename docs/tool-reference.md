@@ -120,6 +120,8 @@ All tools return exactly one of:
 - Success: `{ result: { ... }, meta: { requestId, tool, durationMs, warnings[] } }`
 - Failure: `{ error: { type, title, detail, status, code, instance, fieldErrors?, hints? }, meta: { requestId, tool, durationMs, warnings[] } }`
 
+Tools may publish execution counters on `meta` alongside the fields above. The NBT tools use this: `nbt-apply-json-patch` surfaces `appliedOps`, `testOps`, and `changed`; `json-to-nbt` surfaces `outputBytes` and `compressionApplied`; `nbt-to-json` surfaces `inputBytes` and `compressionDetected`.
+
 JSON resources follow the same `result/error/meta` pattern. Text resources return plain text on success.
 
 The same JSON envelope is mirrored in MCP `structuredContent` for SDK-aware clients, and failures also set `isError=true`.

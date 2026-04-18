@@ -7,11 +7,11 @@
 
 **[English](../README.md)** | 日本語
 
+> **注記**: このプロジェクトはすべてバイブコーディング（AI 支援開発、正式仕様書なし）で作成されています。
+
 ---
 
-`@adhisang/minecraft-modding-mcp` は、AI アシスタントに Minecraft のソースコード、マッピング、Mod JAR、レジストリデータ、バリデーションワークフローへの構造化アクセスを提供する [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) サーバーです。
-
-[MCP](https://modelcontextprotocol.io/) は、AI アシスタントが構造化インターフェースを通じて外部ツールを呼び出せるようにするオープンプロトコルです。このサーバーは Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントで利用できます。
+`@adhisang/minecraft-modding-mcp` は、AI アシスタントに Minecraft のソースコード、マッピング、Mod JAR、レジストリデータ、バリデーションワークフローへの構造化アクセスを提供する [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) サーバーです。Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントで利用できます。
 
 **35 ツール**（6 エントリー + 29 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
 
@@ -47,8 +47,17 @@ npx -y @adhisang/minecraft-modding-mcp
 
 CLI クライアント:
 
-- `Claude Code`: `claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp`
-- `OpenAI Codex CLI`: `codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp`
+Claude Code:
+
+```bash
+claude mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+```
+
+OpenAI Codex CLI:
+
+```bash
+codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
+```
 
 登録後に `claude mcp list` または `codex mcp list` を実行し、サーバーが利用可能になっていることを確認します。
 
