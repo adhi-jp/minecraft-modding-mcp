@@ -166,6 +166,11 @@ export const SCHEMA_V2_STATEMENTS: string[] = [
   `DELETE FROM artifacts`
 ];
 
+export const SCHEMA_V4_STATEMENTS: string[] = [
+  `ALTER TABLE artifacts ADD COLUMN alias TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_alias ON artifacts(alias) WHERE alias IS NOT NULL`
+];
+
 export const SCHEMA_V3_STATEMENTS: string[] = [
   `DROP TABLE IF EXISTS files_fts`,
   `CREATE VIRTUAL TABLE files_fts USING fts5(

@@ -782,6 +782,7 @@ export class InspectMinecraftService {
           artifact: resolved.artifact
             ? {
                 artifactId: resolved.artifact.artifactId,
+                artifactAlias: resolved.artifact.artifactAlias,
                 origin: resolved.artifact.origin,
                 mappingApplied: resolved.artifact.mappingApplied,
                 version: resolved.artifact.version,

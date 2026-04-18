@@ -369,6 +369,27 @@ test("SourceService resolves/searches/reads class source through artifactId flow
   assert.equal(resolved.mappingApplied, "obfuscated");
   assert.equal(resolved.provenance.target.kind, "jar");
   assert.equal(resolved.provenance.target.value, binaryJarPath);
+  // The resolver picks the sibling sources jar as canonical when present, so
+  // the readable token reflects the resolver-canonical path (server-1.0.0-sources)
+  // rather than the caller's request value (server-1.0.0.jar). This is the
+  // canonical-alias contract from cycle 3 F1: alias derives from the artifact
+  // row, not from the user's request spelling.
+  assert.match(
+    resolved.artifactAlias,
+    /^jar-server-1-0-0-sources-[0-9a-f]{12}$/,
+    "artifactAlias must be canonical (no mapping/scope tokens) and 1:1 with artifactId"
+  );
+  assert.equal(resolved.artifactAlias.endsWith(resolved.artifactId.slice(0, 12)), true);
+
+  // The repo lookup must accept the alias just like the artifactId.
+  const lookedUpByAlias = await service.searchClassSource({
+    artifactId: resolved.artifactAlias,
+    query: "tickServer",
+    intent: "symbol",
+    match: "exact",
+    limit: 5
+  });
+  assert.ok(lookedUpByAlias.hits.length >= 1);
 
   const searched = await service.searchClassSource({
     artifactId: resolved.artifactId,
@@ -722,6 +743,121 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
   );
 });
 
+
+test("SourceService accepts artifactAlias on findClass and getClassSource (cycle 2 F1 regression)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-alias-canonical-"));
+  const binaryJarPath = join(root, "alias-canonical.jar");
+  const sourcesJarPath = join(root, "alias-canonical-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "pkg/Greeter.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "pkg/Greeter.java": [
+      "package pkg;",
+      "public class Greeter {",
+      "  public String hello() { return \"hi\"; }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({ target: { kind: "jar", value: binaryJarPath } });
+  const alias = resolved.artifactAlias;
+  assert.notEqual(alias, resolved.artifactId);
+
+  // findClass: symbolsRepo is keyed by canonical artifact_id only; alias must
+  // be normalized in the entry method or the lookup silently returns nothing.
+  const findResult = service.findClass({ artifactId: alias, className: "Greeter" });
+  assert.equal(findResult.total, 1);
+  assert.equal(findResult.matches[0]?.qualifiedName, "pkg.Greeter");
+
+  // getClassSource: filesRepo is keyed by canonical id too. mode=full so we
+  // exercise the source-fetch path, not the metadata short-circuit.
+  const sourceResult = await service.getClassSource({
+    artifactId: alias,
+    className: "pkg.Greeter",
+    mode: "full"
+  });
+  assert.match(sourceResult.sourceText, /class Greeter/);
+  assert.equal(sourceResult.artifactId, resolved.artifactId);
+});
+
+test("SourceService produces identical alias when the same jar is resolved through a symlink (cycle 3 F1 regression)", async () => {
+  const { symlink } = await import("node:fs/promises");
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-alias-symlink-"));
+  const realJarPath = join(root, "real.jar");
+  const realSourcesJarPath = join(root, "real-sources.jar");
+  const linkJarPath = join(root, "link-to-real.jar");
+
+  await createJar(realJarPath, {
+    "pkg/Marker.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(realSourcesJarPath, {
+    "pkg/Marker.java": "package pkg;\npublic class Marker {}"
+  });
+  await symlink(realJarPath, linkJarPath);
+
+  const service = new SourceService(buildTestConfig(root));
+  const viaReal = await service.resolveArtifact({ target: { kind: "jar", value: realJarPath } });
+  const viaLink = await service.resolveArtifact({ target: { kind: "jar", value: linkJarPath } });
+
+  // Same canonical artifact row; alias must NOT rotate because it derives
+  // from the resolver-canonical path, not the caller's raw input string.
+  assert.equal(viaReal.artifactId, viaLink.artifactId);
+  assert.equal(viaReal.artifactAlias, viaLink.artifactAlias);
+
+  // The original alias must still resolve after the second call (no rotation).
+  const file = await service.getArtifactFile({
+    artifactId: viaReal.artifactAlias,
+    filePath: "pkg/Marker.java"
+  });
+  assert.match(file.content, /class Marker/);
+});
+
+test("SourceService backfills alias on warm-cache resolveArtifact (cycle 1 F1 regression)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-alias-backfill-"));
+  const binaryJarPath = join(root, "warm-cache.jar");
+  const sourcesJarPath = join(root, "warm-cache-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "pkg/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "pkg/Main.java": "package pkg;\npublic class Main {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const first = await service.resolveArtifact({ target: { kind: "jar", value: binaryJarPath } });
+
+  // Simulate a schema-v4 migrated row whose alias was never written.
+  const repo = (service as unknown as {
+    artifactsRepo: {
+      getArtifact: (id: string) => { alias?: string } | undefined;
+      setAlias: (id: string, alias: string) => void;
+    };
+    db: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown } };
+  });
+  repo.db.prepare(`UPDATE artifacts SET alias = NULL WHERE artifact_id = ?`).run([first.artifactId]);
+  assert.equal(repo.artifactsRepo.getArtifact(first.artifactId)?.alias, undefined);
+
+  // The warm-cache resolveArtifact must rewrite the alias so the returned
+  // artifactAlias resolves back via getArtifact(alias).
+  const second = await service.resolveArtifact({ target: { kind: "jar", value: binaryJarPath } });
+  assert.equal(second.artifactId, first.artifactId);
+  assert.equal(second.artifactAlias, first.artifactAlias);
+  assert.equal(repo.artifactsRepo.getArtifact(first.artifactId)?.alias, second.artifactAlias);
+
+  // Caller can use the alias for follow-up lookups even after a migration.
+  const file = await service.getArtifactFile({
+    artifactId: second.artifactAlias,
+    filePath: "pkg/Main.java"
+  });
+  assert.match(file.content, /class Main/);
+});
 
 test("SourceService changes artifactId when source jar signature changes", async () => {
   const { SourceService } = await import("../src/source-service.ts");

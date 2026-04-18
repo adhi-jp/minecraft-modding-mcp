@@ -7,7 +7,7 @@ import fastGlob from "fast-glob";
 
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js";
-import { loadConfig } from "./config.js";
+import { buildArtifactAlias, loadConfig } from "./config.js";
 import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { remapJar } from "./tiny-remapper-service.js";
@@ -139,6 +139,7 @@ export type ResolveArtifactInput = {
 
 export type ResolveArtifactOutput = {
   artifactId: string;
+  artifactAlias: string;
   origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
   isDecompiled: boolean;
   resolvedSourceJarPath?: string;
@@ -2689,6 +2690,27 @@ export class SourceService {
         }
       }
       resolved.qualityFlags = dedupeQualityFlags(resolved.qualityFlags);
+      // Use the resolver's canonical path (already normalizeJarPath-applied)
+      // for the readable jar token. Without this, two requests for the same
+      // artifact via a symlink path and the real path would share artifactId
+      // but produce different alias readable tokens, and setAlias rotation
+      // on the warm-cache hit would invalidate the alias returned to the
+      // earlier caller. Coordinate / version paths are already canonical:
+      // resolved.coordinate is normalized inside the resolver and
+      // resolvedVersion comes from versionService.resolveVersionJar().
+      const aliasValue =
+        kind === "jar"
+          ? (resolved.sourceJarPath ?? resolved.binaryJarPath ?? value)
+          : value;
+      const artifactAlias = buildArtifactAlias({
+        artifactId: resolved.artifactId,
+        kind,
+        value: aliasValue,
+        mappingVariant: binaryRemapGate.mappingVariant,
+        resolvedVersion: resolvedVersion ?? resolved.version,
+        coordinate: resolved.coordinate
+      });
+      resolved.artifactAlias = artifactAlias;
       await this.ingestIfNeeded(resolved);
 
       let sampleEntries: string[] | undefined;
@@ -2707,6 +2729,7 @@ export class SourceService {
 
       return {
         artifactId: resolved.artifactId,
+        artifactAlias,
         origin: resolved.origin,
         isDecompiled: resolved.isDecompiled,
         resolvedSourceJarPath: resolved.sourceJarPath,
@@ -4050,15 +4073,18 @@ export class SourceService {
         message: "className must be non-empty."
       });
     }
-    const artifactId = input.artifactId.trim();
-    if (!artifactId) {
+    const inputArtifactId = input.artifactId.trim();
+    if (!inputArtifactId) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
         message: "artifactId must be non-empty."
       });
     }
-    // Verify artifact exists
-    const artifact = this.getArtifact(artifactId);
+    // Verify artifact exists. The input may be either a 64-char artifactId or
+    // an alias; normalize to the canonical row id so downstream symbolsRepo
+    // calls (keyed by artifact_id only) do not silently miss for alias input.
+    const artifact = this.getArtifact(inputArtifactId);
+    const artifactId = artifact.artifactId;
 
     const limit = Math.max(1, Math.min(input.limit ?? 20, 200));
     const warnings: string[] = [];
@@ -4234,6 +4260,11 @@ export class SourceService {
       coordinate = resolved.coordinate;
     } else {
       const artifact = this.getArtifact(artifactId);
+      // Normalize alias input to the canonical row id so downstream
+      // resolveClassFilePath / filesRepo lookups (keyed by 64-char
+      // artifact_id only) do not silently miss when the caller passed an
+      // alias from a previous resolveArtifact response.
+      artifactId = artifact.artifactId;
       origin = artifact.origin;
       requestedMapping = artifact.requestedMapping ?? requestedMapping;
       mappingApplied = artifact.mappingApplied ?? requestedMapping;
@@ -4546,6 +4577,9 @@ export class SourceService {
       coordinate = resolved.coordinate;
     } else {
       const artifact = this.getArtifact(artifactId);
+      // Normalize alias input to canonical row id; downstream files/symbols
+      // lookups use this id directly.
+      artifactId = artifact.artifactId;
       origin = artifact.origin;
       mappingApplied = artifact.mappingApplied ?? requestedMapping;
       provenance = artifact.provenance;
@@ -7393,6 +7427,7 @@ export class SourceService {
   private toResolvedArtifact(artifact: ArtifactRow): ResolvedSourceArtifact {
     return {
       artifactId: artifact.artifactId,
+      artifactAlias: artifact.alias,
       artifactSignature: artifact.artifactSignature ?? this.fallbackArtifactSignature(artifact.artifactId),
       origin: artifact.origin,
       binaryJarPath: artifact.binaryJarPath,
@@ -7420,6 +7455,7 @@ export class SourceService {
     const tx = this.db.transaction(() => {
       this.artifactsRepo.upsertArtifact({
         artifactId: resolved.artifactId,
+        alias: resolved.artifactAlias,
         origin: resolved.origin,
         coordinate: resolved.coordinate,
         version: resolved.version,
@@ -7610,6 +7646,15 @@ export class SourceService {
         if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
           resolved.binaryJarPath = reconciledBinaryJarPath;
         }
+      }
+      // Backfill / rotate alias on the warm-cache path. Without this, schema-v4
+      // migrated rows (alias=NULL) and rows whose alias parameters changed since
+      // the last upsert would return an artifactAlias from resolveArtifact that
+      // does not resolve back via getArtifact(alias), breaking the 3.1b lookup
+      // contract. UNIQUE conflicts here are caller bugs (two distinct artifactIds
+      // colliding on alias) and surface as DB errors rather than silent drift.
+      if (resolved.artifactAlias && existing.alias !== resolved.artifactAlias) {
+        this.artifactsRepo.setAlias(resolved.artifactId, resolved.artifactAlias);
       }
       this.metrics.recordArtifactCacheHit();
       const touchedAt = new Date().toISOString();

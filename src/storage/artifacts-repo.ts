@@ -6,6 +6,7 @@ type SqliteDatabase = InstanceType<typeof Database>;
 
 interface ArtifactRepoRecord {
   artifact_id: string;
+  alias: string | null;
   origin: SourceOrigin;
   coordinate: string | null;
   version: string | null;
@@ -24,6 +25,7 @@ interface ArtifactRepoRecord {
 
 interface UpsertArtifactInput {
   artifactId: string;
+  alias?: string;
   origin: SourceOrigin;
   coordinate?: string;
   version?: string;
@@ -81,6 +83,7 @@ function parseQualityFlags(value: string | null): string[] {
 function toArtifactRow(record: ArtifactRepoRecord): ArtifactRow {
   return {
     artifactId: record.artifact_id,
+    alias: record.alias ?? undefined,
     origin: record.origin,
     coordinate: record.coordinate ?? undefined,
     version: record.version ?? undefined,
@@ -106,6 +109,7 @@ export class ArtifactsRepo {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly touchStmt;
+  private readonly setAliasStmt;
   private readonly deleteStmt;
   private readonly listStmt;
   private readonly countStmt;
@@ -115,11 +119,12 @@ export class ArtifactsRepo {
   constructor(private readonly db: SqliteDatabase) {
     this.upsertStmt = this.db.prepare(`
       INSERT INTO artifacts (
-        artifact_id, origin, coordinate, version, binary_jar_path, source_jar_path, repo_url, requested_mapping, mapping_applied, provenance_json, quality_flags_json, artifact_signature, is_decompiled, created_at, updated_at
+        artifact_id, alias, origin, coordinate, version, binary_jar_path, source_jar_path, repo_url, requested_mapping, mapping_applied, provenance_json, quality_flags_json, artifact_signature, is_decompiled, created_at, updated_at
       ) VALUES (
-        @artifact_id, @origin, @coordinate, @version, @binary_jar_path, @source_jar_path, @repo_url, @requested_mapping, @mapping_applied, @provenance_json, @quality_flags_json, @artifact_signature, @is_decompiled, @created_at, @updated_at
+        @artifact_id, @alias, @origin, @coordinate, @version, @binary_jar_path, @source_jar_path, @repo_url, @requested_mapping, @mapping_applied, @provenance_json, @quality_flags_json, @artifact_signature, @is_decompiled, @created_at, @updated_at
       )
       ON CONFLICT(artifact_id) DO UPDATE SET
+        alias = excluded.alias,
         origin = excluded.origin,
         coordinate = excluded.coordinate,
         version = excluded.version,
@@ -135,9 +140,12 @@ export class ArtifactsRepo {
         updated_at = excluded.updated_at
     `);
 
+    // artifact_id is a 64-char SHA hex; alias is `<type>-<...>-<6charhex>` containing
+    // dashes/letters. The two namespaces cannot collide, so OR-matching is unambiguous.
     this.getStmt = this.db.prepare<ArtifactRepoRecord>(`
       SELECT
         artifact_id,
+        alias,
         origin,
         coordinate,
         version,
@@ -153,7 +161,8 @@ export class ArtifactsRepo {
         created_at,
         updated_at
       FROM artifacts
-      WHERE artifact_id = ?
+      WHERE artifact_id = ? OR alias = ?
+      LIMIT 1
     `);
 
     this.touchStmt = this.db.prepare(`
@@ -162,11 +171,22 @@ export class ArtifactsRepo {
       WHERE artifact_id = ?
     `);
 
+    // Persists alias on cache-hit / migrated-row paths where upsertArtifact would
+    // otherwise be skipped. Conditional WHERE keeps it idempotent and avoids a
+    // pointless write when alias is already correct.
+    this.setAliasStmt = this.db.prepare(`
+      UPDATE artifacts
+      SET alias = ?
+      WHERE artifact_id = ?
+        AND (alias IS NULL OR alias <> ?)
+    `);
+
     this.deleteStmt = this.db.prepare(`DELETE FROM artifacts WHERE artifact_id = ?`);
 
     this.listStmt = this.db.prepare<ArtifactRepoRecord>(`
       SELECT
         artifact_id,
+        alias,
         origin,
         coordinate,
         version,
@@ -216,6 +236,7 @@ export class ArtifactsRepo {
   upsertArtifact(input: UpsertArtifactInput): void {
     this.upsertStmt.run({
       artifact_id: input.artifactId,
+      alias: input.alias ?? null,
       origin: input.origin,
       coordinate: input.coordinate ?? null,
       version: input.version ?? null,
@@ -233,8 +254,11 @@ export class ArtifactsRepo {
     });
   }
 
-  getArtifact(artifactId: string): ArtifactRow | undefined {
-    const row = this.getStmt.get([artifactId]);
+  // Accepts either an artifact_id (64-char SHA hex) or a human-readable alias
+  // (e.g. `mc-1.21.10-mojang-merged-5ad2e7`). The two key namespaces cannot
+  // collide because aliases always contain `-` and a non-hex prefix.
+  getArtifact(artifactIdOrAlias: string): ArtifactRow | undefined {
+    const row = this.getStmt.get([artifactIdOrAlias, artifactIdOrAlias]);
     if (!row) {
       return undefined;
     }
@@ -244,6 +268,14 @@ export class ArtifactsRepo {
 
   touchArtifact(artifactId: string, timestamp: string): void {
     this.touchStmt.run([timestamp, artifactId]);
+  }
+
+  // Backfills or rotates the alias for an existing row. Used by warm-cache
+  // resolveArtifact paths where upsertArtifact is skipped, so a freshly
+  // computed alias still reaches the DB and stays in sync with the value the
+  // caller just received in the response.
+  setAlias(artifactId: string, alias: string): void {
+    this.setAliasStmt.run([alias, artifactId, alias]);
   }
 
   deleteArtifact(artifactId: string): void {

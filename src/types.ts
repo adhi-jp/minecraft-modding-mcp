@@ -6,6 +6,7 @@ export type MappingSourcePriority = "loom-first" | "maven-first";
 
 export type ArtifactTargetKind = "version" | "jar" | "coordinate";
 export type ArtifactScope = "vanilla" | "merged" | "loader";
+export type MappingVariant = "pass" | "mojang-remapped";
 
 export interface SourceTargetInput {
   kind: ArtifactTargetKind;
@@ -14,6 +15,7 @@ export interface SourceTargetInput {
 
 export interface ResolvedSourceArtifact {
   artifactId: string;
+  artifactAlias?: string;
   artifactSignature: string;
   origin: SourceOrigin;
   binaryJarPath?: string;
@@ -110,6 +112,7 @@ export interface SourceSearchHit {
 
 export interface ArtifactRow {
   artifactId: string;
+  alias: string | undefined;
   origin: SourceOrigin;
   coordinate: string | undefined;
   version: string | undefined;

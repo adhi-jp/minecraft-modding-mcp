@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { DEFAULTS, loadConfig } from "../src/config.ts";
+import { buildArtifactAlias, DEFAULTS, loadConfig, stableArtifactId } from "../src/config.ts";
 import { ERROR_CODES } from "../src/errors.ts";
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>) {
@@ -242,6 +242,92 @@ test("loadConfig parses indexed search flag values", async () => {
       assert.equal(config.indexedSearchEnabled, true);
     }
   );
+});
+
+test("buildArtifactAlias produces a deterministic, canonical alias for version targets", () => {
+  const artifactId = stableArtifactId(["version-marker", "1.21.10", "client"]);
+  const alias = buildArtifactAlias({
+    artifactId,
+    kind: "version",
+    value: "1.21.10",
+    resolvedVersion: "1.21.10"
+  });
+
+  // mapping/scope are intentionally absent from the readable tokens so the
+  // alias stays canonical for the artifact row.
+  assert.match(alias, /^mc-1-21-10-[0-9a-f]{12}$/);
+  const repeat = buildArtifactAlias({
+    artifactId,
+    kind: "version",
+    value: "1.21.10",
+    resolvedVersion: "1.21.10"
+  });
+  assert.equal(alias, repeat);
+});
+
+test("buildArtifactAlias hash suffix differs for distinct artifactIds with identical readable tokens (cycle 1 F2 regression)", () => {
+  const aliasA = buildArtifactAlias({
+    artifactId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    kind: "version",
+    value: "1.21.10",
+    resolvedVersion: "1.21.10"
+  });
+  const aliasB = buildArtifactAlias({
+    artifactId: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    kind: "version",
+    value: "1.21.10",
+    resolvedVersion: "1.21.10"
+  });
+
+  // Readable tokens are identical; uniqueness comes solely from the trailing
+  // 12-hex-char suffix. A 6-char prefix would have left the alias collision
+  // domain at ~16M values; 12 chars (48 bits) makes collisions astronomical.
+  assert.notEqual(aliasA, aliasB);
+  assert.equal(aliasA.endsWith("0123456789ab"), true);
+  assert.equal(aliasB.endsWith("fedcba987654"), true);
+});
+
+test("buildArtifactAlias is canonical: different mapping/scope inputs produce the same alias when the artifactId is the same (cycle 2 F2 regression)", () => {
+  const artifactId = stableArtifactId(["jar-canonical", "/tmp/foo.jar", "sigZ"]);
+  const aliasA = buildArtifactAlias({
+    artifactId,
+    kind: "jar",
+    value: "/tmp/foo.jar"
+  });
+  // A second resolveArtifact on the same row with a different mapping must NOT
+  // rotate the alias — the artifactId identifies the row, so a 1:1 alias has
+  // to depend only on the row identity.
+  const aliasB = buildArtifactAlias({
+    artifactId,
+    kind: "jar",
+    value: "/tmp/foo.jar"
+  });
+  assert.equal(aliasA, aliasB);
+});
+
+test("buildArtifactAlias differentiates mojang-remapped variant and other kinds", () => {
+  const aliasPass = buildArtifactAlias({
+    artifactId: stableArtifactId(["jar-marker", "/tmp/server.jar", "abcdef"]),
+    kind: "jar",
+    value: "/tmp/server.jar"
+  });
+  const aliasRemapped = buildArtifactAlias({
+    artifactId: stableArtifactId(["jar-marker", "/tmp/server.jar", "abcdef", "mojang-remapped"]),
+    kind: "jar",
+    value: "/tmp/server.jar",
+    mappingVariant: "mojang-remapped"
+  });
+  const aliasCoord = buildArtifactAlias({
+    artifactId: stableArtifactId(["coord", "net.fabricmc:fabric-loader:0.16.10", "release", "abcdef"]),
+    kind: "coordinate",
+    value: "net.fabricmc:fabric-loader:0.16.10",
+    coordinate: "net.fabricmc:fabric-loader:0.16.10"
+  });
+
+  assert.match(aliasPass, /^jar-server-[0-9a-f]{12}$/);
+  assert.match(aliasRemapped, /^jar-server-remapped-[0-9a-f]{12}$/);
+  assert.match(aliasCoord, /^coord-net-fabricmc-fabric-loader-0-16-10-[0-9a-f]{12}$/);
+  assert.notEqual(aliasPass, aliasRemapped);
 });
 
 test("loadConfig parses mapping source priority with fallback", async () => {

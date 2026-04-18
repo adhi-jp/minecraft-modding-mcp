@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
-import type { Config } from "./types.js";
+import { basename, isAbsolute, resolve } from "node:path";
+import type {
+  ArtifactTargetKind,
+  Config,
+  MappingVariant
+} from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
 
 const DEFAULTS = {
@@ -305,6 +309,73 @@ export function stableArtifactId(parts: string[]): string {
     .filter(Boolean)
     .join("|");
   return createHash("sha256").update(normalizer).digest("hex");
+}
+
+export interface ArtifactAliasInput {
+  artifactId: string;
+  kind: ArtifactTargetKind;
+  value: string;
+  // mappingVariant is the only request-derived field that appears in the
+  // alias — and only because it is also baked into `artifactId` itself, so
+  // the same artifactId always reproduces the same alias. `mapping` and
+  // `scope` are intentionally NOT part of this contract: see the canonical-
+  // alias rationale on `buildArtifactAlias`.
+  mappingVariant?: MappingVariant;
+  resolvedVersion?: string;
+  coordinate?: string;
+}
+
+// 12 hex chars (48 bits) of artifactId entropy keeps alias collisions astronomically
+// unlikely while staying short enough to copy/paste. A shorter prefix would let two
+// distinct artifacts whose readable tokens (kind, version, mapping, scope, variant)
+// happen to match share an alias and trip the schema-v4 UNIQUE constraint.
+const ARTIFACT_ALIAS_HASH_LEN = 12;
+
+function slugifyAliasPart(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function aliasJarBase(jarPath: string): string {
+  const base = basename(jarPath);
+  return base.toLowerCase().endsWith(".jar") ? base.slice(0, -4) : base;
+}
+
+// Generates a deterministic, human-readable alias canonical to the artifact row.
+// The alias is 1:1 with `artifactId`: only dimensions baked into `artifactId`
+// itself (kind, value/version/coordinate, mappingVariant) appear in the alias,
+// plus a 12-hex-char (48-bit) suffix taken from `artifactId`. Request-level
+// dimensions like `mapping` and `scope` are intentionally excluded — including
+// them would make resolveArtifact rotate the alias for the same row whenever
+// a caller passed a different mapping/scope, breaking aliases already returned
+// to earlier callers. Two distinct artifactIds whose readable tokens collide and
+// whose first 48 hash bits also collide would trip the schema-v4 alias UNIQUE
+// constraint at upsert time — a hard error, not silent drift.
+// Phase 3.1a: display-only. Phase 3.1b stores it for lookup.
+export function buildArtifactAlias(input: ArtifactAliasInput): string {
+  const tokens: string[] = [];
+  if (input.kind === "version") {
+    tokens.push("mc", input.resolvedVersion ?? input.value);
+  } else if (input.kind === "coordinate") {
+    tokens.push("coord", input.coordinate ?? input.value);
+  } else {
+    tokens.push("jar", aliasJarBase(input.value));
+  }
+  // mappingVariant is canonical — `artifactIdForJar` / `artifactIdForCoordinate`
+  // bake "mojang-remapped" into the artifactId, so the same artifactId always
+  // produces the same alias regardless of how many times resolveArtifact is
+  // called. The token here is purely a human-readable hint; the 12-char hash
+  // suffix would already separate remapped artifacts from pass-through ones.
+  if (input.mappingVariant === "mojang-remapped") {
+    tokens.push("remapped");
+  }
+  tokens.push(input.artifactId.slice(0, ARTIFACT_ALIAS_HASH_LEN));
+  return tokens
+    .map(slugifyAliasPart)
+    .filter(Boolean)
+    .join("-");
 }
 
 export { DEFAULTS };

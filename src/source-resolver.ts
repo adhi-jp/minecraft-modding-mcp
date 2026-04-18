@@ -5,7 +5,12 @@ import { homedir } from "node:os";
 import fastGlob from "fast-glob";
 
 import { createError, ERROR_CODES } from "./errors.js";
-import type { Config, ResolvedSourceArtifact, SourceTargetInput } from "./types.js";
+import type {
+  Config,
+  MappingVariant,
+  ResolvedSourceArtifact,
+  SourceTargetInput
+} from "./types.js";
 import {
   buildRemoteBinaryUrls,
   buildRemoteSourceUrls,
@@ -170,7 +175,7 @@ function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): stri
   return buildRemoteBinaryUrls(repos, coordinate);
 }
 
-export type MappingVariant = "pass" | "mojang-remapped";
+export type { MappingVariant } from "./types.js";
 
 function artifactIdForJar(
   inputKind: string,

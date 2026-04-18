@@ -10,7 +10,7 @@ import Database from "../src/storage/sqlite.ts";
 import { withTempDir } from "./helpers/temp-dir.ts";
 import { buildTestConfig } from "./helpers/test-config.ts";
 
-const LATEST_SCHEMA_VERSION = 3;
+const LATEST_SCHEMA_VERSION = 4;
 
 function readTrackedContentBytes(db: Database, artifactId: string): number {
   const row = db
