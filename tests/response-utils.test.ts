@@ -6,9 +6,16 @@ import {
   compactResponse,
   compactArtifactResponse,
   compactMappingResponse,
+  compactSourceResponse,
+  compactMembersResponse,
+  compactLightResponse,
   isCompactEnabled,
   COMPACT_ENABLED_TOOL_NAMES,
-  COMPACT_MAPPING_TOOL_NAMES
+  COMPACT_MAPPING_TOOL_NAMES,
+  COMPACT_SOURCE_TOOL_NAMES,
+  COMPACT_MEMBERS_TOOL_NAMES,
+  COMPACT_LIGHT_TOOL_NAMES,
+  TOOL_PRESERVE_PAYLOAD_KEYS
 } from "../src/response-utils.ts";
 
 // ---------------------------------------------------------------------------
@@ -100,9 +107,9 @@ test("isCompactEnabled respects allowlist and compact flag", () => {
   // Allowlisted tool with no compact field → false
   assert.equal(isCompactEnabled("resolve-artifact", { version: "1.20.1" }), false);
   // Non-allowlisted tool even with compact:true → false
-  assert.equal(isCompactEnabled("get-class-source", { compact: true }), false);
   assert.equal(isCompactEnabled("list-versions", { compact: true }), false);
   assert.equal(isCompactEnabled("get-runtime-metrics", { compact: true }), false);
+  assert.equal(isCompactEnabled("get-artifact-file", { compact: true }), false);
 });
 
 test("isCompactEnabled handles null/undefined/array parsedInput safely", () => {
@@ -508,9 +515,282 @@ test("COMPACT_MAPPING_TOOL_NAMES is a subset of COMPACT_ENABLED_TOOL_NAMES", () 
   }
 });
 
+test("COMPACT_SOURCE / MEMBERS / LIGHT tool name sets are subsets of COMPACT_ENABLED", () => {
+  for (const tool of COMPACT_SOURCE_TOOL_NAMES) {
+    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
+  }
+  for (const tool of COMPACT_MEMBERS_TOOL_NAMES) {
+    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
+  }
+  for (const tool of COMPACT_LIGHT_TOOL_NAMES) {
+    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
+  }
+});
+
+test("projection tool name sets are pairwise disjoint", () => {
+  const groups = [
+    ["mapping", COMPACT_MAPPING_TOOL_NAMES],
+    ["source", COMPACT_SOURCE_TOOL_NAMES],
+    ["members", COMPACT_MEMBERS_TOOL_NAMES],
+    ["light", COMPACT_LIGHT_TOOL_NAMES]
+  ] as const;
+  for (let i = 0; i < groups.length; i += 1) {
+    for (let j = i + 1; j < groups.length; j += 1) {
+      for (const tool of groups[i][1]) {
+        assert.equal(
+          groups[j][1].has(tool),
+          false,
+          `${tool} must not appear in both ${groups[i][0]} and ${groups[j][0]}`
+        );
+      }
+    }
+  }
+});
+
 test("resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING", () => {
   assert.equal(COMPACT_ENABLED_TOOL_NAMES.has("resolve-artifact"), true);
   assert.equal(COMPACT_MAPPING_TOOL_NAMES.has("resolve-artifact"), false);
+});
+
+// ---------------------------------------------------------------------------
+// compactSourceResponse (get-class-source)
+// ---------------------------------------------------------------------------
+
+const SOURCE_FIXTURE: Record<string, unknown> = {
+  className: "net.minecraft.world.entity.player.Player",
+  mode: "snippet",
+  sourceText: "public class Player {}",
+  totalLines: 10,
+  returnedRange: { start: 1, end: 10 },
+  truncated: false,
+  origin: "remote-repo",
+  artifactId: "artifact-1.21.10-mojang",
+  requestedMapping: "mojang",
+  mappingApplied: "mojang",
+  returnedNamespace: "mojang",
+  provenance: { target: { kind: "version", value: "1.21.10" }, resolvedAt: "2026-04-18T00:00:00Z", resolvedFrom: { origin: "remote-repo" }, transformChain: ["mapping:mojang-source-backed"] },
+  qualityFlags: ["source-jar"],
+  artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" }
+};
+
+test("compactSourceResponse omits provenance / artifactContents / qualityFlags and preserves payload", () => {
+  const result = compactSourceResponse(SOURCE_FIXTURE);
+  for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
+    assert.equal(key in result, false, `${key} should be omitted`);
+  }
+  for (const key of [
+    "className", "mode", "sourceText", "totalLines", "returnedRange", "truncated",
+    "origin", "artifactId", "requestedMapping", "mappingApplied", "returnedNamespace"
+  ]) {
+    assert.ok(key in result, `${key} should survive compact`);
+  }
+  assert.equal(result.sourceText, SOURCE_FIXTURE.sourceText);
+});
+
+test("compactSourceResponse is idempotent and passes through unknown keys", () => {
+  const input = { ...SOURCE_FIXTURE, customField: "extra" };
+  const once = compactSourceResponse(input);
+  assert.deepEqual(once, compactSourceResponse(once));
+  assert.equal(once.customField, "extra");
+});
+
+// ---------------------------------------------------------------------------
+// compactMembersResponse (get-class-members)
+// ---------------------------------------------------------------------------
+
+const MEMBERS_FIXTURE: Record<string, unknown> = {
+  className: "net.minecraft.world.entity.player.Player",
+  members: { constructors: [], fields: [], methods: [{ name: "tick", javaSignature: "tick()V" }] },
+  counts: { constructors: 0, fields: 0, methods: 1, total: 1 },
+  truncated: false,
+  context: { minecraftVersion: "1.21.10", mappingType: "mojang", mappingNamespace: "mojang", jarHash: "deadbeef", generatedAt: "2026-04-18T00:00:00Z" },
+  origin: "remote-repo",
+  artifactId: "artifact-1.21.10-mojang",
+  requestedMapping: "mojang",
+  mappingApplied: "mojang",
+  returnedNamespace: "mojang",
+  provenance: { target: { kind: "version", value: "1.21.10" }, resolvedAt: "2026-04-18T00:00:00Z", resolvedFrom: { origin: "remote-repo" }, transformChain: ["mapping:mojang-source-backed"] },
+  qualityFlags: ["source-jar"],
+  artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" }
+};
+
+test("compactMembersResponse omits context + metadata and preserves members/counts", () => {
+  const result = compactMembersResponse(MEMBERS_FIXTURE);
+  for (const key of ["provenance", "artifactContents", "qualityFlags", "context"]) {
+    assert.equal(key in result, false, `${key} should be omitted`);
+  }
+  for (const key of [
+    "className", "members", "counts", "truncated",
+    "origin", "artifactId", "requestedMapping", "mappingApplied", "returnedNamespace"
+  ]) {
+    assert.ok(key in result, `${key} should survive compact`);
+  }
+  assert.deepEqual(result.counts, MEMBERS_FIXTURE.counts);
+});
+
+test("compactMembersResponse preserves decompiledFallback and decompiledMemberCounts", () => {
+  const withFallback = {
+    ...MEMBERS_FIXTURE,
+    decompiledFallback: { constructors: [], fields: [], methods: [{ name: "tick", line: 10, kind: "method" }], origin: "source-extracted" },
+    decompiledMemberCounts: { constructors: 0, fields: 0, methods: 1, total: 1 }
+  };
+  const result = compactMembersResponse(withFallback);
+  assert.ok("decompiledFallback" in result);
+  assert.ok("decompiledMemberCounts" in result);
+});
+
+// ---------------------------------------------------------------------------
+// compactLightResponse (search-class-source / list-artifact-files)
+// ---------------------------------------------------------------------------
+
+test("compactLightResponse drops artifactContents only", () => {
+  const input: Record<string, unknown> = {
+    hits: [{ filePath: "a.java", score: 1, matchedIn: "symbol", reasonCodes: [] }],
+    nextCursor: "cursor-1",
+    mappingApplied: "mojang",
+    returnedNamespace: "mojang",
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const result = compactLightResponse(input);
+  assert.equal("artifactContents" in result, false);
+  for (const key of ["hits", "nextCursor", "mappingApplied", "returnedNamespace", "warnings"]) {
+    assert.ok(key in result, `${key} should survive compact`);
+  }
+});
+
+test("compactLightResponse on list-artifact-files shape", () => {
+  const input: Record<string, unknown> = {
+    items: ["net/minecraft/Example.java"],
+    mappingApplied: "mojang",
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const result = compactLightResponse(input);
+  assert.equal("artifactContents" in result, false);
+  assert.deepEqual(result.items, ["net/minecraft/Example.java"]);
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline: projection + compactResponse drops empty warnings / nextCursor
+// ---------------------------------------------------------------------------
+
+test("compactSourceResponse + compactResponse pipeline strips empty warnings", () => {
+  const input: Record<string, unknown> = {
+    ...SOURCE_FIXTURE,
+    warnings: []
+  };
+  const projected = compactSourceResponse(input);
+  const compacted = compactResponse(projected);
+  assert.equal("warnings" in compacted, false, "empty warnings should be stripped by compactResponse");
+  assert.equal("provenance" in compacted, false);
+  assert.equal("sourceText" in compacted, true);
+});
+
+test("compactLightResponse + compactResponse pipeline strips absent nextCursor and empty warnings", () => {
+  const input: Record<string, unknown> = {
+    hits: [{ filePath: "a.java", score: 1, matchedIn: "symbol", reasonCodes: [] }],
+    nextCursor: undefined,
+    mappingApplied: "mojang",
+    returnedNamespace: "mojang",
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const compacted = compactResponse(compactLightResponse(input));
+  assert.equal("artifactContents" in compacted, false);
+  assert.equal("warnings" in compacted, false);
+  assert.equal("nextCursor" in compacted, false);
+  assert.ok("hits" in compacted);
+});
+
+// ---------------------------------------------------------------------------
+// preserveKeys regression — empty primary payload must not be stripped
+// ---------------------------------------------------------------------------
+
+test("compactResponse preserveKeys keeps empty arrays/objects listed in the set", () => {
+  const result = compactResponse(
+    { hits: [], warnings: [], mappingApplied: "mojang" },
+    new Set(["hits"])
+  );
+  assert.ok("hits" in result, "hits must survive even when empty");
+  assert.deepEqual(result.hits, []);
+  assert.equal("warnings" in result, false, "warnings still stripped");
+  assert.equal(result.mappingApplied, "mojang");
+});
+
+test("compactResponse preserveKeys still drops null/undefined values", () => {
+  // Optional payload fields that are absent must not leak through as explicit null.
+  const result = compactResponse(
+    { hits: null, items: undefined, warnings: [] },
+    new Set(["hits", "items"])
+  );
+  assert.equal("hits" in result, false, "null preserved-key still stripped");
+  assert.equal("items" in result, false, "undefined preserved-key still stripped");
+});
+
+test("TOOL_PRESERVE_PAYLOAD_KEYS covers zero-result primary-payload tools", () => {
+  assert.ok(TOOL_PRESERVE_PAYLOAD_KEYS["search-class-source"]?.has("hits"));
+  assert.ok(TOOL_PRESERVE_PAYLOAD_KEYS["list-artifact-files"]?.has("items"));
+  assert.ok(TOOL_PRESERVE_PAYLOAD_KEYS["get-class-members"]?.has("members"));
+  assert.ok(TOOL_PRESERVE_PAYLOAD_KEYS["get-class-members"]?.has("counts"));
+});
+
+test("compactLightResponse + compactResponse preserves empty hits for search-class-source", () => {
+  const input: Record<string, unknown> = {
+    hits: [],
+    mappingApplied: "mojang",
+    returnedNamespace: "mojang",
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: [], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const projected = compactLightResponse(input);
+  const compacted = compactResponse(projected, TOOL_PRESERVE_PAYLOAD_KEYS["search-class-source"]);
+  assert.ok("hits" in compacted, "empty hits must survive full pipeline");
+  assert.deepEqual(compacted.hits, []);
+  assert.equal("artifactContents" in compacted, false);
+  assert.equal("warnings" in compacted, false);
+});
+
+test("compactLightResponse + compactResponse preserves empty items for list-artifact-files", () => {
+  const input: Record<string, unknown> = {
+    items: [],
+    mappingApplied: "mojang",
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: [], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const projected = compactLightResponse(input);
+  const compacted = compactResponse(projected, TOOL_PRESERVE_PAYLOAD_KEYS["list-artifact-files"]);
+  assert.ok("items" in compacted);
+  assert.deepEqual(compacted.items, []);
+});
+
+test("compactMembersResponse + compactResponse preserves empty member buckets", () => {
+  // Defensive coverage: service currently returns { constructors, fields, methods }
+  // (non-empty object, not subject to compact stripping), but if a future refactor
+  // returned `members: {}` for a class with zero members, the preserveKeys guard
+  // keeps the field in place.
+  const input: Record<string, unknown> = {
+    className: "net.minecraft.Empty",
+    members: {},
+    counts: { constructors: 0, fields: 0, methods: 0, total: 0 },
+    artifactContents: { sourceKind: "source-jar", indexedContentKinds: [], resourcesIncluded: false, sourceCoverage: "full" },
+    warnings: []
+  };
+  const projected = compactMembersResponse(input);
+  const compacted = compactResponse(projected, TOOL_PRESERVE_PAYLOAD_KEYS["get-class-members"]);
+  assert.ok("members" in compacted, "empty members object must survive");
+  assert.ok("counts" in compacted);
+  assert.equal("artifactContents" in compacted, false);
+});
+
+test("compactSourceResponse reduces serialized size vs full response", () => {
+  const compact = compactSourceResponse(SOURCE_FIXTURE);
+  const fullBytes = Buffer.byteLength(JSON.stringify(SOURCE_FIXTURE), "utf8");
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact), "utf8");
+  assert.ok(
+    compactBytes < fullBytes,
+    `compact (${compactBytes}B) should be smaller than full (${fullBytes}B)`
+  );
 });
 
 // ---------------------------------------------------------------------------

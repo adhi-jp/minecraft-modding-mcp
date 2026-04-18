@@ -1373,6 +1373,100 @@ test("resolve-artifact compact:true omits diagnostic fields from local-jar resul
   assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
 });
 
+test("list-artifact-files compact:true drops artifactContents and preserves items", async () => {
+  const root = await mkdtemp(join(tmpdir(), "compact-listfiles-"));
+  const jarPath = join(root, "example-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/Example.java": "package net.minecraft;\npublic class Example {}\n",
+    "net/minecraft/Other.java": "package net.minecraft;\npublic class Other {}\n"
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath }
+  }) as {
+    isError?: boolean;
+    structuredContent?: { result?: { artifactId?: string } };
+  };
+  assert.notEqual(resolveResult.isError, true);
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId);
+
+  type ToolResult = {
+    isError?: boolean;
+    structuredContent?: {
+      result?: Record<string, unknown>;
+      meta?: { warnings?: string[] };
+    };
+  };
+
+  const [withCompact, withoutCompact] = await Promise.all([
+    callTool("list-artifact-files", { artifactId, compact: true }) as Promise<ToolResult>,
+    callTool("list-artifact-files", { artifactId, compact: false }) as Promise<ToolResult>
+  ]);
+
+  assert.notEqual(withCompact.isError, true);
+  assert.notEqual(withoutCompact.isError, true);
+
+  const compactResult = withCompact.structuredContent?.result;
+  const normalResult = withoutCompact.structuredContent?.result;
+  assert.ok(compactResult);
+  assert.ok(normalResult);
+
+  assert.equal("artifactContents" in compactResult, false, "artifactContents should be omitted in compact");
+  assert.ok("artifactContents" in normalResult, "normal result should have artifactContents");
+  assert.deepEqual(compactResult.items, normalResult.items, "items payload should match");
+});
+
+test("search-class-source compact:true preserves hits and drops empty arrays", async () => {
+  const root = await mkdtemp(join(tmpdir(), "compact-searchsrc-"));
+  const jarPath = join(root, "example-sources.jar");
+  await createJar(jarPath, {
+    "net/minecraft/Example.java": "package net.minecraft;\npublic class Example {}\n"
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath }
+  }) as {
+    isError?: boolean;
+    structuredContent?: { result?: { artifactId?: string } };
+  };
+  assert.notEqual(resolveResult.isError, true);
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId);
+
+  type ToolResult = {
+    isError?: boolean;
+    structuredContent?: { result?: Record<string, unknown> };
+  };
+
+  const [withCompact, withoutCompact] = await Promise.all([
+    callTool("search-class-source", {
+      artifactId,
+      query: "Example",
+      intent: "symbol",
+      compact: true
+    }) as Promise<ToolResult>,
+    callTool("search-class-source", {
+      artifactId,
+      query: "Example",
+      intent: "symbol",
+      compact: false
+    }) as Promise<ToolResult>
+  ]);
+
+  assert.notEqual(withCompact.isError, true);
+  assert.notEqual(withoutCompact.isError, true);
+
+  const compactResult = withCompact.structuredContent?.result;
+  const normalResult = withoutCompact.structuredContent?.result;
+  assert.ok(compactResult);
+  assert.ok(normalResult);
+
+  assert.equal("artifactContents" in compactResult, false);
+  assert.ok("artifactContents" in normalResult);
+  assert.deepEqual(compactResult.hits, normalResult.hits);
+});
+
 test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)", async () => {
   const withCompact = await callTool("get-runtime-metrics", {
     compact: true

@@ -10,9 +10,16 @@ import { prepareToolInput } from "./tool-input.js";
 import {
   isCompactEnabled,
   COMPACT_MAPPING_TOOL_NAMES,
+  COMPACT_SOURCE_TOOL_NAMES,
+  COMPACT_MEMBERS_TOOL_NAMES,
+  COMPACT_LIGHT_TOOL_NAMES,
+  TOOL_PRESERVE_PAYLOAD_KEYS,
   compactResponse,
   compactArtifactResponse,
-  compactMappingResponse
+  compactMappingResponse,
+  compactSourceResponse,
+  compactMembersResponse,
+  compactLightResponse
 } from "./response-utils.js";
 
 import { loadConfig } from "./config.js";
@@ -285,7 +292,10 @@ const getClassSourceShape = {
   endLine: optionalPositiveInt,
   maxLines: optionalPositiveInt,
   maxChars: optionalPositiveInt.describe("Hard character limit on sourceText; truncates if exceeded"),
-  outputFile: optionalNonEmptyString.describe("Write source to this file path and return metadata-only response")
+  outputFile: optionalNonEmptyString.describe("Write source to this file path and return metadata-only response"),
+  compact: z.boolean().default(false).describe(
+    "When true, strip debug metadata (provenance, artifactContents, qualityFlags) and empty fields from the response. Default false."
+  )
 };
 const getClassSourceSchema = z
   .object(getClassSourceShape)
@@ -317,7 +327,10 @@ const getClassMembersShape = {
   projectPath: optionalNonEmptyString,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
+  compact: z.boolean().default(false).describe(
+    "When true, strip debug metadata (provenance, artifactContents, qualityFlags, context) and empty fields from the response. Default false."
+  )
 };
 const getClassMembersSchema = z.object(getClassMembersShape);
 
@@ -335,7 +348,10 @@ const searchClassSourceShape = {
   queryNamespace: sourceMappingSchema.optional().describe(
     "Namespace of the query. When set and intent='symbol' with a fully-qualified class name, the query is translated through find-mapping before searching the artifact namespace. Ignored for text/path intents (warning surfaced)."
   ),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first. Used only when queryNamespace triggers translation.")
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first. Used only when queryNamespace triggers translation."),
+  compact: z.boolean().default(false).describe(
+    "When true, strip the artifactContents summary and empty fields from the response. Default false."
+  )
 };
 const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
   if (value.symbolKind && value.intent && value.intent !== "symbol") {
@@ -358,7 +374,10 @@ const listArtifactFilesShape = {
   artifactId: nonEmptyString,
   prefix: optionalNonEmptyString,
   limit: optionalPositiveInt,
-  cursor: optionalNonEmptyString
+  cursor: optionalNonEmptyString,
+  compact: z.boolean().default(false).describe(
+    "When true, strip the artifactContents summary and empty fields from the response. Default false."
+  )
 };
 const listArtifactFilesSchema = z.object(listArtifactFilesShape);
 
@@ -1932,7 +1951,19 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       if (COMPACT_MAPPING_TOOL_NAMES.has(tool)) {
         projectedResult = compactMappingResponse(projectedResult);
       }
-      projectedResult = compactResponse(projectedResult);
+      if (COMPACT_SOURCE_TOOL_NAMES.has(tool)) {
+        projectedResult = compactSourceResponse(projectedResult);
+      }
+      if (COMPACT_MEMBERS_TOOL_NAMES.has(tool)) {
+        projectedResult = compactMembersResponse(projectedResult);
+      }
+      if (COMPACT_LIGHT_TOOL_NAMES.has(tool)) {
+        projectedResult = compactLightResponse(projectedResult);
+      }
+      projectedResult = compactResponse(
+        projectedResult,
+        TOOL_PRESERVE_PAYLOAD_KEYS[tool]
+      );
     }
 
     const entryMeta = ENTRY_TOOL_NAMES.has(tool)
@@ -2232,7 +2263,12 @@ server.tool("list-artifact-files",
   listArtifactFilesShape,
   { readOnlyHint: true },
   async (args) => runTool("list-artifact-files", args, listArtifactFilesSchema, async (input) =>
-    sourceService.listArtifactFiles(input) as Promise<Record<string, unknown>>
+    sourceService.listArtifactFiles({
+      artifactId: input.artifactId,
+      prefix: input.prefix,
+      limit: input.limit,
+      cursor: input.cursor
+    }) as Promise<Record<string, unknown>>
   )
 );
 

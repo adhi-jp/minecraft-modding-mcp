@@ -10,7 +10,11 @@ export const COMPACT_ENABLED_TOOL_NAMES = new Set([
   "find-mapping",
   "resolve-method-mapping-exact",
   "resolve-workspace-symbol",
-  "check-symbol-exists"
+  "check-symbol-exists",
+  "get-class-source",
+  "get-class-members",
+  "search-class-source",
+  "list-artifact-files"
 ]);
 
 /** Mapping-oriented tools that get additional field projection via compactMappingResponse. */
@@ -19,6 +23,26 @@ export const COMPACT_MAPPING_TOOL_NAMES = new Set([
   "resolve-method-mapping-exact",
   "resolve-workspace-symbol",
   "check-symbol-exists"
+]);
+
+/** Source-oriented tools (get-class-source) that get compactSourceResponse projection. */
+export const COMPACT_SOURCE_TOOL_NAMES = new Set([
+  "get-class-source"
+]);
+
+/** Member-listing tools (get-class-members) that get compactMembersResponse projection. */
+export const COMPACT_MEMBERS_TOOL_NAMES = new Set([
+  "get-class-members"
+]);
+
+/**
+ * Tools that only need the light artifactContents projection (search hits,
+ * file listing). The primary payload is already small; the projection just
+ * drops the artifact-level summary that callers rarely consume.
+ */
+export const COMPACT_LIGHT_TOOL_NAMES = new Set([
+  "search-class-source",
+  "list-artifact-files"
 ]);
 
 /**
@@ -48,22 +72,62 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * Primary-payload keys that compact mode must preserve per tool, even when
+ * the value is an empty array (no hits, no files, no members). Without this
+ * the generic {@link compactResponse} path would strip `hits: []` / `items: []`
+ * from successful zero-result responses and callers could not distinguish
+ * "empty success" from "field missing".
+ *
+ * Only tools whose primary payload can legitimately be an empty array need
+ * an entry here. `get-class-source` returns `sourceText: string` which is
+ * never stripped by compactResponse.
+ */
+export const TOOL_PRESERVE_PAYLOAD_KEYS: Record<string, ReadonlySet<string>> = {
+  "search-class-source": new Set(["hits"]),
+  "list-artifact-files": new Set(["items"]),
+  "get-class-members": new Set(["members", "counts", "decompiledFallback", "decompiledMemberCounts"])
+};
+
+/**
  * Shallow-strip empty values from a response object.
  * Only operates on the top level — nested structures are preserved as-is.
  * Non-plain objects (Date, Map, class instances) are never treated as empty.
+ *
+ * `preserveKeys` names keys whose values MUST survive the strip even if
+ * empty (used by tools whose primary payload is an array that can legitimately
+ * be empty — e.g. zero-hit search, empty file listing). `null` / `undefined`
+ * values are still dropped even for preserved keys, so absent optional
+ * payload fields do not leak through as explicit nulls.
  */
 export function compactResponse(
-  obj: Record<string, unknown>
+  obj: Record<string, unknown>,
+  preserveKeys?: ReadonlySet<string>
 ): Record<string, unknown> {
   if (!isPlainObject(obj)) return {};
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     if (value === null || value === undefined) continue;
+    if (preserveKeys?.has(key)) {
+      result[key] = value;
+      continue;
+    }
     if (Array.isArray(value) && value.length === 0) continue;
     if (isPlainObject(value) && Object.keys(value).length === 0) continue;
     result[key] = value;
   }
   return result;
+}
+
+function projectOmitKeys(
+  obj: Record<string, unknown>,
+  omit: ReadonlySet<string>
+): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (omit.has(key)) continue;
+    projected[key] = value;
+  }
+  return projected;
 }
 
 /** Fields to omit from resolve-artifact in compact mode. */
@@ -82,12 +146,48 @@ const ARTIFACT_COMPACT_OMIT_KEYS = new Set([
 export function compactArtifactResponse(
   obj: Record<string, unknown>
 ): Record<string, unknown> {
-  const projected: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (ARTIFACT_COMPACT_OMIT_KEYS.has(key)) continue;
-    projected[key] = value;
-  }
-  return projected;
+  return projectOmitKeys(obj, ARTIFACT_COMPACT_OMIT_KEYS);
+}
+
+/** Fields to omit from get-class-source in compact mode. */
+const SOURCE_COMPACT_OMIT_KEYS = new Set([
+  "provenance",
+  "artifactContents",
+  "qualityFlags"
+]);
+
+/** get-class-source compact: drop provenance, artifactContents, qualityFlags. */
+export function compactSourceResponse(
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
+}
+
+/** Fields to omit from get-class-members in compact mode. */
+const MEMBERS_COMPACT_OMIT_KEYS = new Set([
+  "provenance",
+  "artifactContents",
+  "qualityFlags",
+  "context"
+]);
+
+/** get-class-members compact: drop provenance, artifactContents, qualityFlags, context. */
+export function compactMembersResponse(
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  return projectOmitKeys(obj, MEMBERS_COMPACT_OMIT_KEYS);
+}
+
+/** Fields to omit from search-class-source / list-artifact-files in compact mode. */
+const LIGHT_COMPACT_OMIT_KEYS = new Set([
+  "artifactContents"
+]);
+
+/** Light compact projection: drop the artifactContents summary only. */
+export function compactLightResponse(
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  return projectOmitKeys(obj, LIGHT_COMPACT_OMIT_KEYS);
 }
 
 /** Max number of unresolved candidates that get full metadata in compact mode. */
