@@ -6,6 +6,14 @@ export interface MappingPipelineInput {
   target: SourceTargetInput;
   resolved: ResolvedSourceArtifact;
   runtimeNamesUnobfuscated?: boolean;
+  /**
+   * When true and the mojang request lands on a binary-only artifact, the pipeline
+   * authorizes a downstream tiny-remap (obfuscated -> mojang) followed by decompile
+   * instead of throwing MAPPING_NOT_APPLIED. The caller is responsible for
+   * pre-resolving tiny-remapper jar, mojang tiny mappings, and verifying mapping
+   * health before setting this flag.
+   */
+  allowBinaryRemap?: boolean;
 }
 
 export interface MappingPipelineResult {
@@ -19,7 +27,8 @@ export interface MappingPipelineResult {
  * Current implementation enforces explicit guarantees:
  * - obfuscated: always pass-through
  * - mojang: requires source-backed artifacts on legacy obfuscated versions,
- *   but unobfuscated runtime jars can pass through directly
+ *   but unobfuscated runtime jars can pass through directly,
+ *   or binary-only artifacts may be remapped + decompiled when allowBinaryRemap=true
  */
 export function applyMappingPipeline(input: MappingPipelineInput): MappingPipelineResult {
   const transformChain: string[] = [];
@@ -70,6 +79,19 @@ export function applyMappingPipeline(input: MappingPipelineInput): MappingPipeli
 
   const hasSource = Boolean(input.resolved.sourceJarPath);
   if (!hasSource) {
+    if (
+      input.requestedMapping === "mojang" &&
+      input.allowBinaryRemap === true &&
+      Boolean(input.resolved.binaryJarPath)
+    ) {
+      transformChain.push("binary-remap:obf->mojang", "decompile:vineflower");
+      qualityFlags.push("binary-remapped", "decompiled");
+      return {
+        mappingApplied: "mojang",
+        qualityFlags,
+        transformChain
+      };
+    }
     throw createError({
       code: ERROR_CODES.MAPPING_NOT_APPLIED,
       message:

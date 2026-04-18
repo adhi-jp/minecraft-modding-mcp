@@ -25,6 +25,7 @@ export interface RuntimeMetricSnapshot {
   get_file_duration_ms: MetricTimingSnapshot;
   list_files_duration_ms: MetricTimingSnapshot;
   decompile_duration_ms: MetricTimingSnapshot;
+  binary_remap_duration_ms: MetricTimingSnapshot;
   search_intent_symbol_duration_ms: MetricTimingSnapshot;
   search_intent_text_duration_ms: MetricTimingSnapshot;
   search_intent_path_duration_ms: MetricTimingSnapshot;
@@ -64,6 +65,7 @@ type DurationMetricName = keyof Pick<
   | "get_file_duration_ms"
   | "list_files_duration_ms"
   | "decompile_duration_ms"
+  | "binary_remap_duration_ms"
   | "search_intent_symbol_duration_ms"
   | "search_intent_text_duration_ms"
   | "search_intent_path_duration_ms"
@@ -125,6 +127,7 @@ export class RuntimeMetrics {
       "get_file_duration_ms",
       "list_files_duration_ms",
       "decompile_duration_ms",
+      "binary_remap_duration_ms",
       "search_intent_symbol_duration_ms",
       "search_intent_text_duration_ms",
       "search_intent_path_duration_ms"
@@ -282,6 +285,7 @@ export class RuntimeMetrics {
       get_file_duration_ms: this.toSnapshot("get_file_duration_ms"),
       list_files_duration_ms: this.toSnapshot("list_files_duration_ms"),
       decompile_duration_ms: this.toSnapshot("decompile_duration_ms"),
+      binary_remap_duration_ms: this.toSnapshot("binary_remap_duration_ms"),
       search_intent_symbol_duration_ms: this.toSnapshot("search_intent_symbol_duration_ms"),
       search_intent_text_duration_ms: this.toSnapshot("search_intent_text_duration_ms"),
       search_intent_path_duration_ms: this.toSnapshot("search_intent_path_duration_ms"),

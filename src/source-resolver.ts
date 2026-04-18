@@ -170,16 +170,33 @@ function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): stri
   return buildRemoteBinaryUrls(repos, coordinate);
 }
 
-function artifactIdForJar(inputKind: string, artifactPath: string, signature: string, suffix?: string): string {
-  return stableArtifactId([inputKind, artifactPath, signature, suffix ?? "source"]);
+export type MappingVariant = "pass" | "mojang-remapped";
+
+function artifactIdForJar(
+  inputKind: string,
+  artifactPath: string,
+  signature: string,
+  suffix?: string,
+  mappingVariant: MappingVariant = "pass"
+): string {
+  const parts = [inputKind, artifactPath, signature, suffix ?? "source"];
+  if (mappingVariant === "mojang-remapped") {
+    parts.push("mojang-remapped");
+  }
+  return stableArtifactId(parts);
 }
 
 function artifactIdForCoordinate(
   coordinate: string,
   source: string,
-  signature: string
+  signature: string,
+  mappingVariant: MappingVariant = "pass"
 ): string {
-  return stableArtifactId(["coord", coordinate, source, signature]);
+  const parts = ["coord", coordinate, source, signature];
+  if (mappingVariant === "mojang-remapped") {
+    parts.push("mojang-remapped");
+  }
+  return stableArtifactId(parts);
 }
 
 function resolvedAtNow(): string {
@@ -190,6 +207,13 @@ export interface ResolveSourceTargetOptions {
   allowDecompile: boolean;
   preferBinaryOnly?: boolean;
   preferredRepos?: string[];
+  /**
+   * When set to "mojang-remapped", the artifactId hash gets a dedicated
+   * suffix so the mojang-remapped variant of an otherwise binary-only artifact
+   * occupies its own cache slot. Defaults to "pass" which preserves the
+   * legacy hash for obfuscated and source-backed artifacts.
+   */
+  mappingVariant?: MappingVariant;
   onRepoFailover?: (event: {
     stage: "source" | "binary";
     repoUrl: string;
@@ -260,7 +284,13 @@ export async function resolveSourceTarget(
     }
 
     return {
-      artifactId: artifactIdForJar("jar", resolvedJarPath, `${binarySignature}:decompile`),
+      artifactId: artifactIdForJar(
+        "jar",
+        resolvedJarPath,
+        `${binarySignature}:decompile`,
+        undefined,
+        options.mappingVariant ?? "pass"
+      ),
       artifactSignature: `${binarySignature}:decompile`,
       origin: "decompiled",
       binaryJarPath: resolvedJarPath,
@@ -406,7 +436,12 @@ export async function resolveSourceTarget(
 
       const signature = readStatsSignature(downloaded.path);
       return {
-        artifactId: artifactIdForCoordinate(coordinate, "decompiled", signature),
+        artifactId: artifactIdForCoordinate(
+          coordinate,
+          "decompiled",
+          signature,
+          options.mappingVariant ?? "pass"
+        ),
         artifactSignature: signature,
         origin: "decompiled",
         binaryJarPath: downloaded.path,

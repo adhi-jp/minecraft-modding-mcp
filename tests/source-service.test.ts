@@ -2299,6 +2299,21 @@ test("SourceService resolveArtifact does not treat version-matching mod source j
       };
     }
   };
+  // Disable the mojang binary-remap gate so the test still exercises the
+  // candidate-artifact MAPPING_NOT_APPLIED path. Without this stub the gate
+  // would proceed to tiny-remap the fake version jar and fail with REMAP_FAILED.
+  const existingMappingService = (service as unknown as { mappingService: Record<string, unknown> }).mappingService;
+  (service as unknown as { mappingService: Record<string, unknown> }).mappingService = {
+    ...existingMappingService,
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: false,
+        tinyMappingsAvailable: false,
+        memberRemapAvailable: false,
+        degradations: ["test stub: mojang mappings disabled"]
+      };
+    }
+  };
 
   await withGradleUserHome(gradleUserHome, () =>
     assert.rejects(
@@ -2350,6 +2365,55 @@ test("SourceService fails mojang mapping when only decompiled source is availabl
         },
         mapping: "mojang",
         allowDecompile: false
+      }),
+    (error: unknown) => {
+      return (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
+      );
+    }
+  );
+});
+
+test("SourceService rejects mojang binary-remap on jar inputs because the gate is restricted to target.kind=\"version\"", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-jar-mojang-gate-"));
+  // A bare binary-only jar at an arbitrary path — the resolver cannot prove this
+  // is the vanilla Minecraft client jar. Phase 1.5 must refuse to apply Minecraft
+  // mappings to non-version artifacts even when the requested mapping is mojang.
+  const localBinaryJarPath = join(root, "somelib-1.21.10.jar");
+  await createJar(localBinaryJarPath, {
+    "com/example/Lib.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  // Force checkMappingHealth to report mojang available so the gate failure is
+  // proven to come from the target.kind restriction, not from an unrelated
+  // mapping-health probe.
+  const existingMappingService = (service as unknown as { mappingService: Record<string, unknown> }).mappingService;
+  (service as unknown as { mappingService: Record<string, unknown> }).mappingService = {
+    ...existingMappingService,
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  await assert.rejects(
+    () =>
+      service.resolveArtifact({
+        target: {
+          kind: "jar",
+          value: localBinaryJarPath
+        },
+        mapping: "mojang",
+        allowDecompile: true
       }),
     (error: unknown) => {
       return (

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
@@ -10,6 +10,9 @@ import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js
 import { loadConfig } from "./config.js";
 import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
+import { remapJar } from "./tiny-remapper-service.js";
+import { resolveTinyRemapperJar } from "./tiny-remapper-resolver.js";
+import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { parseCoordinate } from "./maven-resolver.js";
 import {
   MinecraftExplorerService,
@@ -35,7 +38,10 @@ import {
   type AccessWidenerValidationResult,
   type AccessTransformerValidationResult
 } from "./mixin-validator.js";
-import { resolveSourceTarget as resolveSourceTargetInternal } from "./source-resolver.js";
+import {
+  resolveSourceTarget as resolveSourceTargetInternal,
+  type MappingVariant
+} from "./source-resolver.js";
 import { applyMappingPipeline } from "./mapping-pipeline-service.js";
 import {
   MappingService,
@@ -80,6 +86,7 @@ import type {
   ArtifactProvenance,
   ArtifactRow,
   ArtifactScope,
+  ArtifactTargetKind,
   Config,
   FileRow,
   MappingSourcePriority,
@@ -1656,6 +1663,9 @@ export class SourceService {
   private readonly modSearchService: ModSearchService;
   private readonly lru = new LruList<{ totalContentBytes: number; updatedAt: string }>();
   private cacheTotalContentBytes = 0;
+  /** In-flight binary-remap jobs keyed by remapped jar path so concurrent
+   * resolveArtifact calls for the same artifactId share a single tiny-remapper run. */
+  private readonly inflightRemaps = new Map<string, Promise<string>>();
 
   constructor(explicitConfig?: Config, metrics = new RuntimeMetrics()) {
     this.config = explicitConfig ?? loadConfig();
@@ -2207,6 +2217,116 @@ export class SourceService {
     return `${prefix}./gradlew genSources --no-daemon`;
   }
 
+  /**
+   * Decide whether the upcoming resolveArtifact call may transparently remap a
+   * binary-only artifact (obfuscated -> mojang) and decompile it. The gate
+   * succeeds only when:
+   *   - the requested mapping is "mojang" on a still-obfuscated runtime
+   *   - tiny-remapper jar is downloadable / available locally
+   *   - the version's Mojang tiny mapping file can be produced
+   *   - checkMappingHealth reports mojang mappings are usable
+   * On any failure the variant defaults to "pass" so the legacy
+   * MAPPING_NOT_APPLIED fallback (or the existing source-backed flow) keeps
+   * its existing artifactId hash.
+   */
+  private async computeBinaryRemapGate(input: {
+    requestedMapping: SourceMapping;
+    runtimeNamesUnobfuscated: boolean;
+    version: string | undefined;
+    targetKind: ArtifactTargetKind;
+    sourcePriority?: MappingSourcePriority;
+  }): Promise<{
+    allowBinaryRemap: boolean;
+    mappingVariant: MappingVariant;
+    tinyRemapperJarPath?: string;
+    mojangTinyFilePath?: string;
+    warnings: string[];
+  }> {
+    const baseline: {
+      allowBinaryRemap: boolean;
+      mappingVariant: MappingVariant;
+      warnings: string[];
+    } = {
+      allowBinaryRemap: false,
+      mappingVariant: "pass",
+      warnings: []
+    };
+
+    if (
+      input.requestedMapping !== "mojang" ||
+      input.runtimeNamesUnobfuscated ||
+      !input.version
+    ) {
+      return baseline;
+    }
+    // The Mojang tiny mapping file is only valid for vanilla Minecraft client/server jars.
+    // For coordinate / jar inputs the resolver cannot prove the artifact identity, so
+    // applying Minecraft mappings to an unrelated library/mod jar would produce a
+    // "successful" but corrupted artifact instead of the safe MAPPING_NOT_APPLIED reject.
+    // Only target.kind="version" goes through versionService.resolveVersionJar with a
+    // verified Minecraft download URL, so we restrict the gate to that input shape.
+    if (input.targetKind !== "version") {
+      return baseline;
+    }
+
+    let tinyRemapperJarPath: string;
+    try {
+      tinyRemapperJarPath = await resolveTinyRemapperJar(
+        this.config.cacheDir,
+        this.config.tinyRemapperJarPath
+      );
+    } catch (caughtError) {
+      log("warn", "binary-remap.gate.tiny-remapper-unavailable", {
+        version: input.version,
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError)
+      });
+      return baseline;
+    }
+
+    let mojangTinyFilePath: string;
+    try {
+      const mojangTiny = await resolveMojangTinyFile(input.version, this.config);
+      mojangTinyFilePath = mojangTiny.path;
+      if (mojangTiny.warnings.length > 0) {
+        baseline.warnings.push(...mojangTiny.warnings);
+      }
+    } catch (caughtError) {
+      log("warn", "binary-remap.gate.mojang-tiny-unavailable", {
+        version: input.version,
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError)
+      });
+      return baseline;
+    }
+
+    let mojangAvailable = false;
+    try {
+      const health = await this.mappingService.checkMappingHealth({
+        version: input.version,
+        requestedMapping: "mojang",
+        sourcePriority: input.sourcePriority
+      });
+      mojangAvailable = health.mojangMappingsAvailable;
+    } catch (caughtError) {
+      log("warn", "binary-remap.gate.health-check-failed", {
+        version: input.version,
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError)
+      });
+      return baseline;
+    }
+
+    if (!mojangAvailable) {
+      return baseline;
+    }
+
+    return {
+      allowBinaryRemap: true,
+      mappingVariant: "mojang-remapped",
+      tinyRemapperJarPath,
+      mojangTinyFilePath,
+      warnings: baseline.warnings
+    };
+  }
+
   private buildArtifactContentsSummary(input: {
     origin: ResolvedSourceArtifact["origin"];
     sourceJarPath?: string;
@@ -2386,12 +2506,32 @@ export class SourceService {
         }
       }
 
+      // The mojang binary-remap gate is only relevant when no source jar has been pre-selected.
+      // If discoverVersionSourceJar already chose a source jar, the resolver will return a
+      // source-backed artifact and applyMappingPipeline will take the source-backed branch,
+      // which never consults allowBinaryRemap. Skipping the gate avoids paying for tiny-remapper
+      // download / mojang tiny generation / mapping-health probe on healthy source-backed paths.
+      const sourceJarPreSelected = Boolean(versionSourceDiscovery?.selectedSourceJarPath);
+      const binaryRemapGate = sourceJarPreSelected
+        ? { allowBinaryRemap: false, mappingVariant: "pass" as MappingVariant, warnings: [] }
+        : await this.computeBinaryRemapGate({
+            requestedMapping: effectiveMapping,
+            runtimeNamesUnobfuscated,
+            version: resolvedVersion,
+            targetKind: kind,
+            sourcePriority: input.sourcePriority
+          });
+      if (binaryRemapGate.warnings.length > 0) {
+        warnings.push(...binaryRemapGate.warnings);
+      }
+
       const resolved = await resolveSourceTargetInternal(
         resolvedTarget,
         {
           // mojang requires source-backed artifact guarantee; force resolution to consider decompile candidate
           // and reject later if mapping cannot be applied.
           allowDecompile: effectiveMapping === "mojang" ? true : input.allowDecompile ?? true,
+          mappingVariant: binaryRemapGate.mappingVariant,
           onRepoFailover: (event) => {
             this.metrics.recordRepoFailover();
             log("warn", "repo.failover", {
@@ -2414,7 +2554,8 @@ export class SourceService {
           requestedMapping: effectiveMapping,
           target: { kind, value },
           resolved,
-          runtimeNamesUnobfuscated
+          runtimeNamesUnobfuscated,
+          allowBinaryRemap: binaryRemapGate.allowBinaryRemap
         });
       } catch (caughtError) {
         if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
@@ -7332,13 +7473,23 @@ export class SourceService {
     if (resolved.sourceJarPath) {
       files = await this.loadFromSourceJar(resolved.sourceJarPath);
     } else if (resolved.binaryJarPath) {
+      const decompileInputJarPath = await this.maybeRemapBinaryForMojang(resolved);
+      // When the binary jar was remapped from obfuscated to mojang, swap the resolved
+      // artifact's binaryJarPath to the remapped jar so downstream bytecode consumers
+      // (getClassMembers, validateMixin) look up mojang names in the mojang jar — not
+      // the original obfuscated jar. Persistence in upsertArtifact happens after this
+      // function returns, so the swap reaches both the database row and the
+      // resolveArtifact response.
+      if (decompileInputJarPath !== resolved.binaryJarPath) {
+        resolved.binaryJarPath = decompileInputJarPath;
+      }
       const vineflowerPath = await resolveVineflowerJar(
         this.config.cacheDir,
         this.config.vineflowerJarPath
       );
       const decompileStartedAt = Date.now();
       try {
-        const decompileResult = await decompileBinaryJar(resolved.binaryJarPath, this.config.cacheDir, {
+        const decompileResult = await decompileBinaryJar(decompileInputJarPath, this.config.cacheDir, {
           vineflowerJarPath: vineflowerPath,
           artifactIdCandidate: resolved.artifactId,
           timeoutMs: 120_000,
@@ -7445,6 +7596,21 @@ export class SourceService {
     });
 
     if (existing && reason === "already_current") {
+      // Mojang binary-remap reconciliation on the warm cache hit path:
+      // resolveSourceTargetInternal always returns the original binary jar
+      // (resolver does not know about prior remap output), so without this
+      // step a warm-cache resolve would return mappingApplied="mojang"
+      // alongside binaryJarPath pointing at the obfuscated client jar.
+      // maybeRemapBinaryForMojang short-circuits on a healthy cache hit
+      // (existsSync + ZIP magic) and re-remaps when the cache is missing
+      // or corrupted, so this also recovers from out-of-band cache loss.
+      const transformChain = resolved.provenance?.transformChain ?? [];
+      if (transformChain.includes("binary-remap:obf->mojang") && resolved.binaryJarPath) {
+        const reconciledBinaryJarPath = await this.maybeRemapBinaryForMojang(resolved);
+        if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
+          resolved.binaryJarPath = reconciledBinaryJarPath;
+        }
+      }
       this.metrics.recordArtifactCacheHit();
       const touchedAt = new Date().toISOString();
       this.artifactsRepo.touchArtifact(resolved.artifactId, touchedAt);
@@ -7464,6 +7630,159 @@ export class SourceService {
       reason === "already_current" ? "missing_meta" : reason
     );
     this.enforceCacheLimits();
+  }
+
+  /**
+   * If the resolved artifact's transformChain promised an "obf -> mojang"
+   * binary remap, run tiny-remapper now and return the remapped jar path.
+   * Otherwise return the original binaryJarPath unchanged.
+   *
+   * Cache safety: writes to a per-attempt temp file then atomic-renames into
+   * <cacheDir>/remapped/<artifactId>.jar. A per-target inflight Promise map
+   * collapses concurrent calls so two simultaneous resolveArtifact calls for
+   * the same artifactId share one tiny-remapper run instead of racing on the
+   * same output path.
+   */
+  private async maybeRemapBinaryForMojang(resolved: ResolvedSourceArtifact): Promise<string> {
+    const binaryJarPath = resolved.binaryJarPath;
+    if (!binaryJarPath) {
+      throw createError({
+        code: ERROR_CODES.SOURCE_NOT_FOUND,
+        message: "Cannot run binary remap: resolved artifact has no binary jar path.",
+        details: { artifactId: resolved.artifactId }
+      });
+    }
+    const transformChain = resolved.provenance?.transformChain ?? [];
+    if (!transformChain.includes("binary-remap:obf->mojang")) {
+      return binaryJarPath;
+    }
+    if (!resolved.version) {
+      throw createError({
+        code: ERROR_CODES.MAPPING_NOT_APPLIED,
+        message: "Binary remap promised but artifact has no resolved Minecraft version.",
+        details: {
+          artifactId: resolved.artifactId,
+          binaryJarPath,
+          nextAction: "Use target.kind=\"version\" so the remap pipeline can locate Mojang mappings."
+        }
+      });
+    }
+
+    const remappedDir = join(this.config.cacheDir, "remapped");
+    const remappedJarPath = join(remappedDir, `${resolved.artifactId}.jar`);
+    if (existsSync(remappedJarPath)) {
+      // Validate the cached jar is at least structurally a ZIP (`PK\x03\x04`) and
+      // non-empty before reusing. If a prior atomic-rename window was interrupted
+      // or the cache file was hand-edited, drop it and re-remap rather than
+      // silently feeding a corrupt jar into Vineflower.
+      if (await this.isUsableJarFile(remappedJarPath)) {
+        return remappedJarPath;
+      }
+      log("warn", "binary-remap.cache.evict-corrupt", {
+        artifactId: resolved.artifactId,
+        remappedJarPath
+      });
+      try {
+        await unlink(remappedJarPath);
+      } catch {
+        // ignore: race with another process or already-deleted file.
+      }
+    }
+
+    const inflight = this.inflightRemaps.get(remappedJarPath);
+    if (inflight) {
+      return inflight;
+    }
+
+    const remapPromise = this.runBinaryRemap({
+      version: resolved.version,
+      inputJar: binaryJarPath,
+      remappedDir,
+      remappedJarPath
+    });
+    this.inflightRemaps.set(remappedJarPath, remapPromise);
+    try {
+      return await remapPromise;
+    } finally {
+      this.inflightRemaps.delete(remappedJarPath);
+    }
+  }
+
+  /**
+   * Best-effort structural check that `path` is a non-empty file beginning with
+   * the ZIP local-file-header magic (`50 4B 03 04`). Used to drop partial /
+   * corrupt remap-cache entries before they reach Vineflower. False positives
+   * are acceptable (Vineflower will surface a clearer error); false negatives
+   * are not (a corrupt cache hit must be evicted).
+   */
+  private async isUsableJarFile(path: string): Promise<boolean> {
+    try {
+      const stats = await stat(path);
+      if (!stats.isFile() || stats.size < 4) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      handle = await open(path, "r");
+      const header = Buffer.alloc(4);
+      const { bytesRead } = await handle.read(header, 0, 4, 0);
+      return bytesRead === 4 && header[0] === 0x50 && header[1] === 0x4b && header[2] === 0x03 && header[3] === 0x04;
+    } catch {
+      return false;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+  }
+
+  private async runBinaryRemap(input: {
+    version: string;
+    inputJar: string;
+    remappedDir: string;
+    remappedJarPath: string;
+  }): Promise<string> {
+    const tinyRemapperJarPath = await resolveTinyRemapperJar(
+      this.config.cacheDir,
+      this.config.tinyRemapperJarPath
+    );
+    const mojangTiny = await resolveMojangTinyFile(input.version, this.config);
+
+    await mkdir(input.remappedDir, { recursive: true });
+
+    const tempPath = `${input.remappedJarPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    const remapStartedAt = Date.now();
+    try {
+      await remapJar(tinyRemapperJarPath, {
+        inputJar: input.inputJar,
+        outputJar: tempPath,
+        mappingsFile: mojangTiny.path,
+        fromNamespace: "obfuscated",
+        toNamespace: "mojang",
+        timeoutMs: this.config.remapTimeoutMs,
+        maxMemoryMb: this.config.remapMaxMemoryMb
+      });
+      const tempStats = await stat(tempPath);
+      if (tempStats.size === 0) {
+        throw createError({
+          code: ERROR_CODES.REMAP_FAILED,
+          message: "tiny-remapper produced an empty output jar.",
+          details: { inputJar: input.inputJar, tempPath }
+        });
+      }
+      await rename(tempPath, input.remappedJarPath);
+      return input.remappedJarPath;
+    } catch (caughtError) {
+      try {
+        await unlink(tempPath);
+      } catch {
+        // tempPath may not exist if remapJar failed before writing anything; ignore.
+      }
+      throw caughtError;
+    } finally {
+      this.metrics.recordDuration("binary_remap_duration_ms", Date.now() - remapStartedAt);
+    }
   }
 
   private async loadFromSourceJar(sourceJarPath: string): Promise<IndexedFileRecord[]> {

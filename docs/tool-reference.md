@@ -46,7 +46,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
 
 ## Common Pitfalls
 
-- `mapping="mojang"` requires source-backed artifacts on legacy obfuscated versions. For unobfuscated releases such as `26.1+`, the runtime/decompile path is accepted directly for version and versioned-coordinate targets.
+- `mapping="mojang"` requires source-backed artifacts on legacy obfuscated versions. For unobfuscated releases such as `26.1+`, the runtime/decompile path is accepted directly for version and versioned-coordinate targets. When source jars are not available but the version's Mojang tiny mappings, the tiny-remapper jar, and `MappingService.checkMappingHealth` are all healthy, `resolve-artifact` will transparently tiny-remap the binary jar (`obfuscated -> mojang`) and decompile the result; the response carries `qualityFlags` `"binary-remapped"` and `"decompiled"` plus `provenance.transformChain` `"binary-remap:obf->mojang"` and `"decompile:vineflower"`. Source-backed and obfuscated artifacts keep their existing `artifactId` hashes — only the new mojang-remapped variant lives in a separate cache slot.
 - `list-artifact-files` indexes Java source paths only. Probing `assets/` or `data/` prefixes will not return non-Java resources.
 - `search-class-source` defaults to `queryMode="auto"`. Use `queryMode="literal"` for explicit substring scans. `match="regex"` enforces `query.length <= 200` and caps results at `100`.
 - `search-class-source` returns compact hits only. Use `get-artifact-file` or `get-class-source` to inspect returned files.
