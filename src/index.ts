@@ -1835,13 +1835,21 @@ function mapErrorToProblem(
       instance: requestId,
       fieldErrors: toFieldErrorsFromZod(caughtError),
       hints: guidance?.hints ?? ["Check fieldErrors and submit a valid tool argument payload."],
-      ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {})
+      ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
+      ...(context?.tool === "validate-mixin" ? { failedStage: "input-validation" } : {})
     };
   }
 
   if (isAppError(caughtError)) {
     const suggestedCall = toSuggestedCall(caughtError.details);
-    const failedStage = extractFailedStageFromDetails(caughtError.details);
+    let failedStage = extractFailedStageFromDetails(caughtError.details);
+    if (
+      !failedStage
+      && context?.tool === "validate-mixin"
+      && caughtError.code === ERROR_CODES.INVALID_INPUT
+    ) {
+      failedStage = "input-validation";
+    }
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",

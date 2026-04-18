@@ -13,7 +13,7 @@
 
 `@adhisang/minecraft-modding-mcp` は、AI アシスタントに Minecraft のソースコード、マッピング、Mod JAR、レジストリデータ、バリデーションワークフローへの構造化アクセスを提供する [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) サーバーです。Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントで利用できます。
 
-**35 ツール**（6 エントリー + 29 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
+**36 ツール**（6 エントリー + 30 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
 
 ## 特長
 

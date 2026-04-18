@@ -13,7 +13,7 @@
 
 `@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants structured access to Minecraft source code, mappings, mod JARs, registry data, and validation workflows. It works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
-**35 tools** (6 entry + 29 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+**36 tools** (6 entry + 30 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 

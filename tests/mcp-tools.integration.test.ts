@@ -189,6 +189,7 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
     structuredContent?: {
       error?: {
         code?: string;
+        failedStage?: string;
         fieldErrors?: Array<{ path?: string }>;
         hints?: string[];
         suggestedCall?: {
@@ -204,6 +205,7 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
 
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.failedStage, "input-validation");
   assert.equal(result.structuredContent?.error?.fieldErrors?.[0]?.path, "input");
   assert.ok(result.structuredContent?.error?.hints?.some((hint) => hint.includes("input.mode")));
   assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "validate-mixin");
@@ -252,6 +254,26 @@ test("validate-mixin error envelope surfaces details.failedStage for caller reco
   const result = await callTool("validate-mixin", {
     input: { mode: "path", path: "/nonexistent/__validate_mixin_stage_test__/Missing.java" },
     version: "1.21.10"
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        failedStage?: string;
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(result.structuredContent?.error?.failedStage, "input-validation");
+});
+
+test("validate-mixin removed-namespace mapping=\"official\" carries failedStage=input-validation", async () => {
+  const result = await callTool("validate-mixin", {
+    input: { mode: "inline", source: "@Mixin(Player.class) class ExampleMixin {}" },
+    version: "1.21.10",
+    mapping: "official"
   }) as {
     isError?: boolean;
     structuredContent?: {
