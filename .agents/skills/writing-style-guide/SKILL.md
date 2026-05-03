@@ -1,135 +1,138 @@
 ---
-version: 1.0.0
+version: 1.1.0
 name: writing-style-guide
-description: Apply disciplined writing principles whenever generating or editing user-facing text — source-code documentation, README, CHANGELOG, commit messages, PR descriptions, and chat replies the user reads. Use for any artifact where words persist beyond the immediate turn. Emphasizes concision, audience fit, and elimination of AI-adjacent filler (marketing vocabulary, hollow superlatives, unrequested caveats, acknowledgment preambles). Trigger whenever producing prose, even when the user did not explicitly ask to apply a style guide — text quality is part of delivery.
+description: Use when generating or editing user-facing prose, including docs, comments, READMEs, changelogs, commit messages, PR descriptions, and chat replies.
 ---
 
 # Writing Style Guide
 
 ## Overview
 
-Words that ship — documentation, commits, chat replies — are part of the deliverable. The prose affects whether readers trust, use, and maintain the work.
-
-This skill supplies principles, not a procedure. The agent applies judgment; the skill sets direction.
+Words that ship — documentation, commits, PRs, changelogs, and chat replies — are part of the deliverable. This skill sets writing principles, not a procedure: apply judgment, preserve contracts, and make every word earn its place.
 
 ## Scope
 
-Apply when producing:
+Apply when producing or editing:
 
-- Source-code documentation (comments, docstrings)
-- README, CHANGELOG, and other narrative docs
-- Commit messages and PR descriptions
-- Replies the user reads in chat
+- Comments, docstrings, README, CHANGELOG, and narrative docs
+- Commit messages, PR descriptions, release notes, and chat replies
 
-Skip when:
+Skip when text is internal, verbatim tool/log output, transient progress text, or a bare acknowledgment is the whole reply.
 
-- Text is internal (tool arguments, intermediate search strings, private reasoning)
-- Output is machine-readable or must match an exact format (JSON responses, structured protocol payloads, code templates a downstream tool will parse byte-for-byte). Human-readable source code and its comments/docstrings remain in scope — this guide applies to what you write *about* the code, even when the code itself is freshly generated.
-- Text is a verbatim relay (command output, log excerpts, stack traces, other tool output quoted back to the user)
-- Text is a transient status line ("building…", "running test 3/12") whose only job is to show progress
-- A bare acknowledgment (`done`, `merged`) is genuinely the complete reply
-
-When in doubt between applying the guide and preserving an exact format contract, the format contract wins — readability of prose is not worth breaking a consumer that expects a specific shape.
+If output must match an exact format, that format wins. JSON, protocol payloads, parser-sensitive templates, and other machine-readable shapes must keep their required structure and receive no extra prose or Markdown fences. Human-readable comments/docstrings remain in scope.
 
 ## Core Principles
 
-### Concision over ornament
+### Be concise
 
-Write the shortest version that still transmits the idea. A decorative sentence is a cost every future reader pays. Elegance comes from what is left out.
+Write the shortest version that still carries the idea. Remove ornament, hollow transitions, and decorative structure. Concision is not a license to drop facts, warnings, or user-requested depth.
 
-### Language follows the artifact, then English
+### Preserve meaning
 
-Decide artifact language by this precedence, high to low:
+Editing changes wording, not the contract. Unless the user asks for a semantic change, preserve:
 
-1. **Explicit user instruction** — if the user asked to translate, localize, or write in a specific language, use it. Translation and localization requests override every rule below.
-2. **Existing artifact language** — when editing a file and the user has not specified a target language, preserve the language already used. Switching a Japanese README to English mid-file produces mixed-language output that serves no one.
-3. **Filename locale marker** — e.g. `README.ja.md`, `docs/de_de/guide.md`. Honor it for new files.
-4. **Project convention** — surrounding docs, CONTRIBUTING, or a style guide in the repo.
-5. **Default to English** — when none of the above give a signal.
+- Facts, scope, audience, terminology, and order that matters
+- Conditions, exceptions, warnings, limitations, and required actions
+- Modality: `must`, `should`, `may`, `can`, `required`, `optional`, and `recommended` are different obligations
 
-Chat replies follow the user's active conversational language, not the file defaults.
+A cleaner sentence that changes who must do what, when a rule applies, what is allowed, or what happens on failure is wrong.
 
-### No meta-acknowledgments
+Explicit absence is information. Preserve supplied statuses such as "tests not run", "not measured", "no rollout plan supplied", or "not provided". In Testing sections, write the supplied status (`Not run`, `Not measured`) instead of `Not provided`. Use placeholders like `Not provided` only when the source truly gives no status.
 
-Drop preambles like `Sure!`, `Absolutely.`, `Great question.`. The action itself shows agreement. A reply that opens with the substance respects the reader's time more than one that opens with a performance.
+Risk and evidence sections often combine bounded evidence with missing proof: "parser change only", "no production incidents supplied", "no benchmarks", "no rollout plan". Render the evidence available. `Not provided` does not mean "no detailed assessment" or "no positive proof".
 
-### Artifacts stand alone
+### Do not invent context
 
-The text must make sense without the prompt that produced it. Do not embed references to ephemeral input — `per plan1.md step 1.2`, `this variable is the foo from the spec`, `as discussed above`. Readers of the artifact will not have that conversation, and those references rot the moment the input file is renamed or removed.
+Do not add unsupported reasons, goals, outcomes, roadmap claims, audience assumptions, business value, implementation rationale, causality, tests, risk reduction, or user impact. Avoid marketing claims like "designed to", "helps teams", "future-ready", "seamlessly", and "makes it easy to scale" unless the artifact proves them.
 
-Durable traceability is different: issue IDs, RFC numbers, incident tickets, commit SHAs, ADR slugs, and other stable pointers belong in the artifact when they are requested, required by the project, or needed for audit and rollback. The test is whether the reference survives a rename of local working files — if it does, it is a citation, not a prompt leak.
+Obvious-sounding explanations still need support. Do not add safety/security rationales such as "so your account stays safe", "to protect your data", or "to prevent unauthorized access" unless the source says that is the reason.
+
+When asked to make policy, support, or README copy warmer, create warmth by making the existing facts easier to read. Do not add reassurance claims, service-volume promises, availability hints, new support-channel instructions, or causal bridges. "We read every ticket", "our team is here for you", and "so please keep urgent issues in a ticket" are new facts unless the source says them.
+
+If the source is incomplete, leave the gap visible or ask when the missing input blocks the task. Do not smooth uncertainty into a confident story.
+
+### Choose language by artifact
+
+Use this precedence:
+
+1. Explicit user instruction, including translation/localization requests
+2. Existing artifact language
+3. Filename locale marker such as `README.ja.md` or `docs/de_de/guide.md`
+4. Project convention
+5. English
+
+Artifact-level translation or localization contracts override chat language. Preserve file paths, commands, identifiers, and canonical strings unless the user explicitly asks to translate them. Chat replies follow the user's active conversational language.
+
+### Open with substance
+
+Drop preambles like `Sure!`, `Absolutely.`, and `Great question.`. The action or answer shows agreement.
+
+### Make artifacts stand alone
+
+Do not leak prompt scaffolding into artifacts: `per plan1.md`, `the provided text`, `above`, `as discussed`, or similar references rot outside the conversation.
+
+Durable traceability is different. Issue IDs, RFCs, incident tickets, commit SHAs, ADR slugs, and audit references belong when requested, required, or useful for rollback/audit. If the reference survives a local file rename, it is a citation, not a prompt leak.
 
 ### Match the reader
 
-Identify who will read this and what they need. Omit everything else.
+Write for the actual reader and omit the rest.
 
-- An end-user README is for installing and using. Internal build steps usually belong elsewhere.
-- Contributor docs are for setup and submission. Product vision usually belongs elsewhere.
-- A code comment is for the future maintainer. Names and types already carry the *what*; the comment's job is the *why* that is not visible from the signature.
+- End-user README: what it is and how to start using it
+- Contributor docs: setup and submission
+- Code comments: why the signature, names, and types do not already explain the code
 
-"Usually" is deliberate — a library whose users build from source does need build steps in its README. Judge the actual audience, not a generic one.
+House style and real project needs win over generic rules. A library whose users build from source may need build steps in its README.
 
 ## Anti-Patterns
 
-These degrade any piece of writing. Remove them on sight.
+Remove these on sight:
 
-- **Name-echoing comments** — `// parse the user` on `fn parse_user()`. The reader sees the same thing twice.
-- **Marketing vocabulary** — `seamlessly`, `effortlessly`, `powerful`, `leverage`, `robust`, `enterprise-grade`. These signal sales copy, not engineering.
-- **Groundless future claims** — `this will enable future extensibility`, `making it easy to scale later`. Write to present behavior; readers can assess the future themselves.
-- **Unrequested additions** — disclaimers, alternative-approach write-ups, roadmap sections, or "things to consider" the user did not ask for. Scope discipline is part of quality. Required warnings are the exception: safety, security, data-loss, compliance, and irreversible-action notices are not "unrequested additions" even when the user never prompted for them. Concision never justifies dropping a warning the reader needs to avoid harm.
-- **Hollow transitions** — `It's worth noting that…`, `In conclusion,`, `Ultimately,`. If a point is worth making, make it; do not announce it.
-- **Forced symmetry** — rule-of-three lists padded with a filler item, parallel structures built from nothing. Three real points beat three forced ones.
-- **Em-dash abundance** — one or two per paragraph is fine; a third in the same paragraph becomes a tell.
+- Name-echoing comments: `// parse the user` on `fn parse_user()`
+- Marketing vocabulary: `seamlessly`, `effortlessly`, `powerful`, `leverage`, `robust`, `enterprise-grade`
+- Groundless future claims: `future extensibility`, `easy to scale later`
+- Meaning drift: cleaner wording that changes obligations or failure behavior
+- Invented context: unsupported motivation, intent, rationale, impact, or benefit
+- Template-shaped answers: automatic `Summary / Testing / Notes`, padded three-part structures, broad comparison sections
+- Over-normalization: replacing useful local terms, order, tone, or examples with generic textbook wording
+- Safety theater: generic warnings that do not change what the reader should do; real safety/security/data-loss/compliance warnings stay
+- Unrequested additions: disclaimers, alternatives, roadmap notes, caveats, or "things to consider" outside the ask
+- Hollow transitions: `It's worth noting that`, `In conclusion`, `Ultimately`
+- Excess punctuation habits, including repeated em dashes in the same paragraph
 
-## Applied to Common Artifact Types
-
-Illustrations of how the core principles land on familiar artifacts — not workflow rules, and not defaults to override project conventions. Where a project has its own house style, commit template, or release process, that convention wins. These bullets only fill in when no project rule is active.
+## Artifact Notes
 
 ### Source-code documentation
 
-- Public libraries: document intent, contracts, invariants, and non-obvious usage in full.
-- Internal code: write the minimum needed to orient the next maintainer.
-- Unconventional code (workarounds, perf tricks, subtle contracts): explain the reason. Removing the comment would confuse a future reader.
-- Never write a doc comment that only paraphrases the signature.
+Public APIs need intent, contracts, invariants, and non-obvious usage. Internal code needs only what orients the next maintainer. Explain workarounds, performance tricks, and subtle contracts. Do not write doc comments that only paraphrase the signature.
 
 ### README
 
-- Decide the primary reader before writing anything else.
-- Lead with what it is and how to start using it. Details that do not serve the first thirty seconds go below or out.
-- Cut sections the intended reader does not need. An end-user README should not double as an architecture doc.
+Lead with what it is and how to start. Keep the existing audience, prerequisites, terminology, and setup order unless wrong or explicitly changed. Cut sections the intended reader does not need.
 
 ### CHANGELOG
 
-- Follow the project's existing style.
-- Each entry answers "what changed for me, the reader". Internal refactors without user-visible impact usually belong in commit history, not here.
+Follow the project's style. Each entry answers "what changed for me, the reader". Internal refactors without user-visible impact usually belong in commit history. Do not inflate an internal crash path into a broad reliability claim.
 
 ### Commit messages
 
-- Match the repository's existing convention in prefix scheme, tone, and length.
-- The subject line states what the commit achieves, not what the author did.
-- The body explains the *why*, the tradeoffs, and anything a reviewer cannot see from the diff alone.
+Match the repo convention. The subject says what the commit achieves, not what the author did. The body explains only the why, tradeoffs, and review context supported by the diff, issue, or supplied material. Do not claim tests, impact, or risk reduction without evidence.
 
 ### Chat replies
 
-- Lead with the answer.
-- Keep in-progress updates to a sentence or two.
-- End-of-turn summaries, when needed, are one or two sentences. Stay silent when nothing is worth saying.
-- When the user asks for depth — a rationale, verification results, limitations, a recovery plan, a comparison — give them that depth. Concision is a default, not a ceiling; it never justifies omitting information the reader explicitly asked for or needs to act safely.
+Lead with the answer. Keep progress updates to a sentence or two. End summaries should be brief when needed and absent when not. Give depth when the user asks for rationale, verification, limitations, recovery, or comparison. Do not add ritual closing offers or generic next steps when a short answer resolves the request.
 
 ## Coexistence
 
-This guide is principles, not procedure. When other active instructions or workflows in the same session provide concrete steps for a specific artifact (staging procedure, PR template, release-note format), defer to them for the procedure and apply these principles to the words they produce.
+This guide is for prose quality, not workflow control. When active instructions or project conventions define a specific template, release process, staging rule, or PR format, follow that procedure and apply this guide to the words inside it.
 
-When a project convention conflicts with a principle here, the project wins. This guide is for judgment, not for overriding established house style.
+## Self-Check
 
-## Self-check before returning prose
+Before returning prose, check:
 
-A short pass over the draft, looking for:
-
-- Words deletable without loss of meaning — delete them.
-- Sentences that announce what the next sentence will do — drop the announcement.
-- Superlatives without evidence — cut or replace with specifics.
-- Sections the reader did not ask for — remove them.
-- References to the prompt, input file, or the conversation that produced the text — rewrite so the artifact stands on its own.
+- Can any word, heading, list, caveat, or wrap-up sentence disappear without loss?
+- Did facts, scope, modality, conditions, exceptions, warnings, and required actions survive?
+- Did unsupported reasons, outcomes, roadmap claims, audience assumptions, benefits, or safety rationales sneak in?
+- Did the artifact leak prompt context instead of standing alone?
+- Did exact-format output remain exact?
 
 The goal is not austerity. The goal is that every word earns its place.

@@ -7,12 +7,16 @@ The four categories every finding is classified into. These categories are delib
 Evaluate each finding in this order. The first match wins.
 
 1. **must-fix / security check** → `must-fix` if the finding names a violation of a DoD required feature, quality bar, or security property. This check runs **first** so a later cycle's clearer DoD, changed context, or security interpretation can rescue a finding whose fingerprint already sits in the rejected ledger. A security-relevant or required-feature-violating finding is NEVER suppressed by a prior ledger entry.
-2. **Ledger lookup** → `reject-noise: already-rejected` if the fingerprint is in the rejected ledger AND the finding did not fire `must-fix` in step 1. Reuse the ledger's prior reason verbatim.
-3. **out-of-scope check** → `reject-out-of-scope` if the finding targets a DoD explicit out-of-scope item or proposes new functionality not in DoD
-4. **noise check** → `reject-noise` if the finding is a vague suggestion, a niche edge case, or implementation detail on a plan target
+2. **Ledger lookup** → `reject-noise: already-rejected` if the fingerprint is in the rejected ledger AND the finding did not fire `must-fix` in step 1. Reuse the ledger's prior redacted reason without paraphrasing.
+3. **out-of-scope check** → `reject-out-of-scope` if the finding targets a DoD explicit out-of-scope item, proposes new functionality not in DoD, or asks for production-grade hardening outside `resolved_project_context`
+4. **noise check** → `reject-noise` if the finding is a vague suggestion, a niche edge case, implementation detail on a plan target, or self-induced refinement identifiable from prior applied-fix surfaces
 5. **fall-through** → `minimal-hygiene` (the default for leaked findings that are neither bugs in DoD scope nor safe to ignore). When `dod` is `null`, the fall-through still lands here — the skill preserves the 4-category invariant. The caller surfaces a degraded-mode warning in the summary footer so the user knows scope triage was weakened, but no new bucket is created.
 
 Yo-yo prevention matters, but not at the cost of silently dropping must-fix bugs. By running must-fix/security before ledger lookup, the skill preserves the "security always wins over scope" rule stated later in this document. A ledger entry that re-fires as must-fix surfaces normally in the user-selection UI (classified `must-fix`, not `reject-noise: already-rejected`), so the user gets to apply or decline it like any other must-fix finding — no "override path" needed.
+
+**Validity is not scope.** A finding can have a true premise and still be `reject-out-of-scope` or `reject-noise`. The validity check answers "is codex describing the artifact accurately?" This triage answers "should this run adopt the recommendation?" Do not shortcut `valid` or `partially-valid` to `must-fix`; every valid finding still passes through the four-category decision order above.
+
+**Project context is a scope input, not an inference.** Use `resolved_project_context` to interpret production-grade findings. The value may be supplied by the caller or resolved before triage from explicit user language, the confirmed DoD, or a confirmed plan. A finding asking for release runbooks, CI gates, dashboards, recovery procedures, or rollout controls can be correct for a production service and still be out of scope for a personal mod, hobby project, or small one-file documentation plan. Do not infer `production service` from codex severity alone.
 
 ## The Four Categories
 
@@ -52,8 +56,10 @@ Canonical sub-types:
 - **Semantic implementation proposal** — codex recommends implementing the full semantics of an out-of-scope feature. Example: "Implement `--digest --basic` last-wins ordering."
 - **New-feature proposal** — codex suggests adding a feature that was never in scope. Example: "Add Multipart file reading in cURL import."
 - **Priority-resolution proposal on tangential methods** — codex suggests logic for methods the change was not supposed to handle. Example: "Route WebDAV `PROPFIND` correctly."
+- **Out-of-context production hardening** — codex recommends release runbooks, CI gates, operational recovery procedures, density dashboards, or production-grade rollout controls that the user did not ask for and the DoD does not require. These can be true in a larger production setting and still exceed the current user's context (for example a personal mod or small documentation plan).
+- **Heavy test infrastructure for an optional proof** — codex recommends adding dynamic fixtures, integration harnesses, or cross-platform registrations when a smaller acceptance proof already satisfies the DoD. Treat the finding as out of scope unless the DoD names that harness as a required feature or quality bar.
 
-**Action**: reject. Add to the rejected ledger with the reason verbatim. Do NOT apply any code change for this finding. The next cycle's `<review_context>` (when called from codex-review-cycle) will forward this rejection so codex is asked not to re-report it.
+**Action**: reject. Add to the rejected ledger with the post-overlay redacted reason. Do NOT apply any code change for this finding. The next cycle's `<review_context>` (when called from codex-review-cycle) will forward this rejection so codex is asked not to re-report it.
 
 ### 4. `reject-noise`
 
@@ -65,6 +71,8 @@ Canonical sub-types:
 - **Niche edge case** — a failure mode real users almost never hit. Example: "Mixed `--data-urlencode 'a%26b=x'` plus a trailing `=`"
 - **Already rejected** — fingerprint matches an entry in the rejected ledger. Re-using the prior rationale prevents yo-yo re-litigation.
 - **Plan target detailed-design** — on a plan target, a finding about pseudo-code, field mutability, method signatures, or wording.
+- **Self-induced refinement** — a later-cycle finding that only polishes or elaborates text, tests, fixtures, runbooks, or policy introduced by the previous cycle's accepted fix, without exposing a new DoD violation. Use the caller's prior-cycle `applied_fixes[]` surfaces (`touched_files[]` and `phase_6_note`) when available; if history is too thin, do not guess. Treat it as noise or as evidence that the previous cycle's fix should be rolled back, not as automatic justification for another expansion.
+- **Redundant specification split** — a true observation already represented by an existing success criterion, equivalence dimension, or accepted divergence. Prefer a one-line clarification only when needed; otherwise reject the duplicate.
 
 **Action**: reject. Add to ledger (or increment count if already present). The user may override a specific reject-noise if they disagree, but the default is dismissal.
 

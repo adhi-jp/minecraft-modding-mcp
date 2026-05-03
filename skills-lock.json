@@ -4,67 +4,86 @@
     "brainstorming": {
       "source": "obra/superpowers",
       "sourceType": "github",
+      "skillPath": "skills/brainstorming/SKILL.md",
       "computedHash": "8df9b47092524833138b58682d03f2e153a242e550d1693657afdbee0cc9cdb0"
     },
     "codex-review-cycle": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
-      "computedHash": "38f8637fd254189b63e6e344309d30e8bfb4cb0e1148417cd2132c2203871ab7"
+      "skillPath": "skills/codex-review-cycle/SKILL.md",
+      "computedHash": "aac7a490dbdda4681e1714ac9ae9cf8bad0ab57ba4994861e233086cc97e7306"
     },
-    "crafting-effective-readmes": {
-      "source": "softaworks/agent-toolkit",
+    "create-readme": {
+      "source": "github/awesome-copilot",
       "sourceType": "github",
-      "computedHash": "c931a8c22160e8925400778fcb2266b5d1df762f3052edba65f72479f79f2d6c"
+      "skillPath": "skills/create-readme/SKILL.md",
+      "computedHash": "d0ece1b2164ce1376e4ab6e98d6ac079df3a2a94f5f02224362b6a1ce2516ae9"
     },
     "git-commit": {
       "source": "github/awesome-copilot",
       "sourceType": "github",
+      "skillPath": "skills/git-commit/SKILL.md",
       "computedHash": "2607fc60629b82b257136dd2a7a373f0a4466c0b49df7746d845d59313c99b21"
     },
     "javascript-testing-patterns": {
       "source": "wshobson/agents",
       "sourceType": "github",
+      "skillPath": "plugins/javascript-typescript/skills/javascript-testing-patterns/SKILL.md",
       "computedHash": "8d0a8d7615ff343770af0218720691d56c55ae258793565936c8b3a97e188f51"
     },
     "mcp-builder": {
       "source": "anthropics/skills",
       "sourceType": "github",
-      "computedHash": "fc68038c900eb801f73ff96130c9f9dba533cc94212ed8435833242f196dedcf"
+      "skillPath": "skills/mcp-builder/SKILL.md",
+      "computedHash": "826e46adf81e1372282e205c34e1a2ee876e72148007726e4a2512599d2fef7b"
     },
     "receiving-code-review": {
       "source": "obra/superpowers",
       "sourceType": "github",
+      "skillPath": "skills/receiving-code-review/SKILL.md",
       "computedHash": "2760c85d4f4117b0006e7ba755f4bbd61f8f4c185f347999763c97f507274e30"
+    },
+    "review-fix-cascade-guard": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/review-fix-cascade-guard/SKILL.md",
+      "computedHash": "2471236a693f514384e344a97d8a2d626110d3c64e3637929c191cc88677511b"
     },
     "review-scope-guard": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
-      "computedHash": "b68607bed631c2e015940f8c0d9028a1b1164a4210aa0157280636b18d34b5f2"
+      "skillPath": "skills/review-scope-guard/SKILL.md",
+      "computedHash": "2ff797a42410500f64bc8ec7900887744a40def67adda577414fe1c55368b9da"
     },
     "systematic-debugging": {
       "source": "obra/superpowers",
       "sourceType": "github",
+      "skillPath": "skills/systematic-debugging/SKILL.md",
       "computedHash": "72e9ab72627e4fd8ed26a582e82309a98ecdc4f6e1c99418430ac05682c9e91d"
     },
     "test-driven-development": {
       "source": "obra/superpowers",
       "sourceType": "github",
+      "skillPath": "skills/test-driven-development/SKILL.md",
       "computedHash": "126f1ebf6ccd414f42544f6e83d8cc5adb089e1108eaffb7c400701e37eecd9f"
     },
     "typescript-advanced-types": {
       "source": "wshobson/agents",
       "sourceType": "github",
+      "skillPath": "plugins/javascript-typescript/skills/typescript-advanced-types/SKILL.md",
       "computedHash": "3a3be8c925f96ac4e1280db28a01677e7ca5197f3792de2bbf35ab3bb324b6dd"
     },
     "verification-before-completion": {
       "source": "obra/superpowers",
       "sourceType": "github",
+      "skillPath": "skills/verification-before-completion/SKILL.md",
       "computedHash": "9b446f0c7fe1cfb560b1d34439523b1a76d5f177290007b2c053a1c749a4a8ba"
     },
     "writing-style-guide": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
-      "computedHash": "25411580d631376112132bf1a51cea1de4f5e6c7a97a0a34de7d2cfbc669fab5"
+      "skillPath": "skills/writing-style-guide/SKILL.md",
+      "computedHash": "5ea60c0f3c1ab7ca1327bc3dce756d0e5349462290981076a3d8ccf41cc9a5cd"
     }
   }
 }

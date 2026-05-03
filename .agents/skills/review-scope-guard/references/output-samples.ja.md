@@ -15,19 +15,19 @@
 | F4 | medium   | src/curl.rs:120      | Implement --json shorthand body | reject-out-of-scope  | Out-of-scope      | cURL 7.82+ 意味論は明示的に除外             | 却下（ledger 送り）         |
 | F5 | medium   | src/curl.rs:130      | --url-query value leaks into URL| minimal-hygiene      | Quality bars      | value consume + warn；意味論は追加しない   | 1 行 hygiene を適用         |
 
-### 推奨事項（各 finding、codex recommendation を verbatim 引用）
+### 推奨事項（各 finding、codex recommendation を redacted-verbatim 引用）
 
-- **F1**: <codex recommendation verbatim — 原文のまま、日本語化しない>
+- **F1**: <codex recommendation redacted-verbatim — §Secret Hygiene 適用後の形を日本語化しない>
 - **F2**: <同上>
 - **F3**: <同上>
 - **F4**: <同上>
 - **F5**: <同上>
 
-triage table の下にこの verbatim 引用ブロックを必ず付与する（SKILL.md §Output Template 末尾の `Long recommendations quoted from codex go under the table in a per-finding verbatim block` 契約に準拠）。長さに関わらず省略・要約・翻訳してはならない。
+triage table の下にこの redacted-verbatim 引用ブロックを必ず付与する。非 secret 部分は省略・要約・翻訳せず、secret match は `[REDACTED:<type>]` に置換した形だけを出力する。
 
 ### このサイクル後の rejected ledger
 
-<YAML ブロック — fingerprint / cluster_id / reason / first_seen_cycle / last_seen_cycle / count は原文維持>
+<YAML ブロック — id / cluster_id / dedupe_token / reason / first_seen_cycle / last_seen_cycle / count は原文維持。`raw_fingerprint` は internal-only のため user-facing YAML には出さない。`dedupe_token` (8-char hex) は v1.3.1 で追加された caller-facing フィールドで、 §Secret Hygiene overlay 対象外 (構成要素が non-secret のため)>
 
 ### Active stop signals (cycle N)
 
@@ -37,6 +37,8 @@ triage table の下にこの verbatim 引用ブロックを必ず付与する（
 
 _Not evaluated (metrics missing): <リスト>_
 
+⚠️ <N> 件の secret redaction を verbatim 出力に適用しました (種別: <comma-list of <type> values>).
+
 **次のアクション**: <ACTIVE/WARNING 時のみ表示。ADVISORY のみならこの行は省略>
 ```
 
@@ -44,5 +46,5 @@ _Not evaluated (metrics missing): <リスト>_
 
 翻訳規則の完全版は SKILL.md §Language を参照。以下は日本語で render する際の該当対応:
 
-- **verbatim に保つ**: `Title (verbatim)` 列本文、**推奨事項（各 finding）本文の `<codex recommendation verbatim>`**、カテゴリ名、`Severity`、`File:Line`、`fingerprint`、`cluster_id`、stop-signal 名と `Status` keyword、DoD anchor 固定語、cycle インデックス。
-- **日本語化する**: 見出し（「推奨事項（各 finding）」等、**ただし本文の `<codex recommendation verbatim>` は verbatim 保持**）、列ヘッダー (`カテゴリ` / `判定理由` / `アクション` 等)、判定理由本文、アクション値、次のアクション推奨テキスト、degraded-mode warning。
+- **redacted-verbatim に保つ**: `Title (verbatim)` 列本文、**推奨事項（各 finding）本文の `<codex recommendation redacted-verbatim>`**、カテゴリ名、`Severity`、`File:Line`、`cluster_id`、ledger `id` (`L1` / `L2` …)、stop-signal 名と `Status` keyword、DoD anchor 固定語、cycle インデックス、**`[REDACTED:<type>]` リテラル全体**（`<type>` 値 `apikey` / `jwt` / `private-key` / `url-auth` / `secret-context` / `env-secret` も英文字のまま保持）。
+- **日本語化する**: 見出し（「推奨事項（各 finding）」等、**ただし本文の `<codex recommendation redacted-verbatim>` は redacted-verbatim 保持**）、列ヘッダー (`カテゴリ` / `判定理由` / `アクション` 等)、判定理由本文、アクション値、次のアクション推奨テキスト、degraded-mode warning、redaction summary 行の散文部 (`<N> 件の secret redaction を verbatim 出力に適用しました (種別: …)` の和文部分。`[REDACTED:<type>]` リテラルおよび `<type>` 列挙値は和訳しない)。

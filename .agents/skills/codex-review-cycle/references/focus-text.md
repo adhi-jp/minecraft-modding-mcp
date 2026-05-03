@@ -35,8 +35,8 @@ Two-layer defense: the focus text tells codex what not to produce upstream; the 
 The codex CLI flags are computed once in Phase 0 from `review_target.scope` and reused across all cycles:
 
 - `working-tree` → `--scope working-tree` (no `--base`)
-- `branch` → `--base <review_target.base_ref>` (auto-detected default branch)
-- `base-ref` → `--base <review_target.base_ref>` (user-supplied ref: any commit SHA, tag, or branch name)
+- `branch` → `--base <review_target.base_sha>` (frozen SHA resolved at Phase 0 from the auto-detected default branch; NOT `base_ref`, which is mutable)
+- `base-ref` → `--base <review_target.base_sha>` (frozen SHA resolved at Phase 0 from the user-supplied ref: any commit SHA, tag, or branch name)
 
 Never use `--scope auto` — the skill requires deterministic targeting so the same diff is reviewed across cycles.
 
