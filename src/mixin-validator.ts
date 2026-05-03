@@ -76,7 +76,68 @@ export type ValidationSummary = {
   uncertainErrors: number;
   resolutionErrors: number;
   parseWarnings: number;
+  /** Number of targets deferred because target-lookup stage budget was exhausted mid-loop. */
+  targetsDeferredBudget?: number;
+  /** Reason this run produced a partial result. Only set when budget caused degradation. */
+  degradedReason?: "stage-budget" | "stage-budget-pre-target";
 };
+
+export type TargetOutcome = {
+  targetClass: string;
+  status: "ok" | "deferred-budget" | "tool-issue";
+  reason?: string;
+  budgetMs?: number;
+  elapsedMs?: number;
+  /** Per-target soft cap exceeded but the target still completed. */
+  slowTarget?: boolean;
+};
+
+/**
+ * Per-stage soft-deadline budgets (ms) for validate-mixin. Each stage uses
+ * an independent timer; budgets do not accumulate across stages. `perTarget`
+ * is an observability cap — it flags `slowTarget: true` on completed targets
+ * but never aborts an in-flight one.
+ */
+export type MixinStageBudgets = {
+  inputValidation: number;
+  resolve: number;
+  mappingHealth: number;
+  parse: number;
+  targetLookup: number;
+  perTarget: number;
+};
+
+const DEFAULT_MIXIN_STAGE_BUDGETS: MixinStageBudgets = {
+  inputValidation: 5_000,
+  resolve: 15_000,
+  mappingHealth: 10_000,
+  parse: 10_000,
+  targetLookup: 60_000,
+  perTarget: 8_000
+};
+
+const INFINITE_MIXIN_STAGE_BUDGETS: MixinStageBudgets = {
+  inputValidation: Number.POSITIVE_INFINITY,
+  resolve: Number.POSITIVE_INFINITY,
+  mappingHealth: Number.POSITIVE_INFINITY,
+  parse: Number.POSITIVE_INFINITY,
+  targetLookup: Number.POSITIVE_INFINITY,
+  perTarget: Number.POSITIVE_INFINITY
+};
+
+/**
+ * Load the stage-budget table. `MIXIN_STAGE_BUDGETS_OFF=1` overrides
+ * everything to `Number.POSITIVE_INFINITY`; otherwise `override` patches
+ * specific stages on top of the defaults.
+ */
+export function loadMixinStageBudgets(
+  override?: Partial<MixinStageBudgets>
+): MixinStageBudgets {
+  if (process.env.MIXIN_STAGE_BUDGETS_OFF === "1") {
+    return { ...INFINITE_MIXIN_STAGE_BUDGETS };
+  }
+  return { ...DEFAULT_MIXIN_STAGE_BUDGETS, ...(override ?? {}) };
+}
 
 export type MixinValidationProvenance = {
   version: string;
@@ -156,6 +217,7 @@ export type MixinValidationResult = {
   confidenceScore?: number;
   confidenceBreakdown?: ConfidenceBreakdown;
   quickSummary?: string;
+  targetOutcomes?: TargetOutcome[];
 };
 
 export type ResolvedTargetMembers = {
@@ -449,7 +511,12 @@ function computeValidationStatus(
   if (summary.errors > 0 || summary.definiteErrors > 0) {
     return "invalid";
   }
-  if (summary.warnings > 0 || summary.membersSkipped > 0) {
+  if (
+    summary.warnings > 0 ||
+    summary.membersSkipped > 0 ||
+    (summary.targetsDeferredBudget ?? 0) > 0 ||
+    summary.degradedReason !== undefined
+  ) {
     return "partial";
   }
   return "full";
@@ -480,6 +547,13 @@ function buildQuickSummary(
       ? healthReport.degradations.join("; ")
       : "mapping infrastructure degraded";
     notes.push(`Mapping health degraded: ${degradations}.`);
+  }
+  if (summary.degradedReason === "stage-budget-pre-target") {
+    notes.push("Budget exhausted before any target processed — increase budget or split mixinConfigPath.");
+  } else if ((summary.targetsDeferredBudget ?? 0) > 0) {
+    notes.push(
+      `${summary.targetsDeferredBudget} target(s) deferred by stage budget — narrow mixinConfigPath or split the run.`
+    );
   }
 
   return notes.length > 0 ? `${base} ${notes.join(" ")}` : base;
@@ -522,9 +596,21 @@ export function refreshMixinValidationOutcome(result: MixinValidationResult): Mi
         membersSkipped: result.summary.membersSkipped,
         membersMissing: result.summary.membersMissing
       };
+  // Preserve budget signals across refresh; otherwise pre-target partial
+  // paths regress to "full" on a second recompute.
+  const preservedBudget = {
+    targetsDeferredBudget: result.summary.targetsDeferredBudget,
+    degradedReason: result.summary.degradedReason
+  };
   result.summary = {
     ...result.summary,
-    ...memberSummary
+    ...memberSummary,
+    ...(preservedBudget.targetsDeferredBudget !== undefined
+      ? { targetsDeferredBudget: preservedBudget.targetsDeferredBudget }
+      : {}),
+    ...(preservedBudget.degradedReason !== undefined
+      ? { degradedReason: preservedBudget.degradedReason }
+      : {})
   };
   result.validationStatus = computeValidationStatus(result.summary);
   result.valid = result.summary.definiteErrors === 0;
@@ -744,7 +830,8 @@ export function validateParsedMixin(
   suggestedCallContext?: { scope?: string; sourcePriority?: string; projectPath?: string; mapping?: string },
   warningMode?: "full" | "aggregated",
   healthReport?: MappingHealthReport,
-  symbolExistsButSignatureFailed?: Set<string>
+  symbolExistsButSignatureFailed?: Set<string>,
+  deferredBudgetTargets?: Set<string>
 ): MixinValidationResult {
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
@@ -789,6 +876,10 @@ export function validateParsedMixin(
           issueOrigin: "tool_issue",
           falsePositiveRisk: "high"
         });
+        addSkippedMembers(parsed, resolvedMembers);
+      } else if (deferredBudgetTargets?.has(target.className)) {
+        // Deferred by stage budget; the targetOutcomes entry already records
+        // this, so skip member validation rather than emit a not-found error.
         addSkippedMembers(parsed, resolvedMembers);
       } else if (signatureFailedTargets?.has(target.className)) {
         issues.push({

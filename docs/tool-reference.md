@@ -68,7 +68,33 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - `validate-mixin` summary-first workflows should combine `includeIssues=false`, `reportMode="compact"`, and `warningMode="aggregated"`.
 - `validate-mixin` top-level failures expose `failedStage` as a first-class field on the serialized `error` envelope (alongside `code`, `hints`, `suggestedCall`) — one of `"input-validation" | "resolve" | "mapping-health" | "parse" | "target-lookup"`. Branch on that before inspecting `message` to recover automatically (e.g. retry `resolve` failures with `scope="vanilla"`, retry `target-lookup` failures with a different `mapping`). Nested errors that already carry a `failedStage` are preserved so upstream tags (e.g. from `resolve-artifact`) surface unchanged.
 - `validate-mixin` per-result `quickSummary` appends `Scope fell back from "<requested>" to "<applied>" (<reason>).` when `provenance.scopeFallback` is set and `Mapping health degraded: <degradations>.` when `toolHealth.overallHealthy === false`. Clean validations keep the original one-line summary; the extra notes only attach when the pipeline actually fell back or detected a degraded mapping.
+- `validate-mixin` runs each stage (`resolve` / `mapping-health` / `parse` / `target-lookup`) against an independent soft-deadline. When the `target-lookup` stage exhausts its budget mid-loop, completed targets stay in `targetOutcomes` with `status: "ok"` (and `slowTarget: true` plus `elapsedMs` when the per-target soft cap was exceeded) while remaining targets land as `status: "deferred-budget"`. The summary then carries `targetsDeferredBudget` and `degradedReason: "stage-budget"`, and `validationStatus` is promoted to `"partial"`. If the budget is exhausted before the first iteration, `targetOutcomes` stays empty, `targetsDeferredBudget` is omitted, and `degradedReason: "stage-budget-pre-target"`.
 - Empty Mixin configs are treated as warning-only discovery results with `summary.total=0` instead of invalid input; malformed JSON still returns `ERR_INVALID_INPUT`.
+
+## Errors
+
+`ProblemDetails.code` may carry the codes below in addition to the existing tool-specific values.
+
+- `ERR_WORKER_RESTART` — Synthetic envelope produced by the supervisor when the worker process exits while handling `tools/call`. The response is a `CallToolResult` with `isError: true` and `structuredContent.error.code === "ERR_WORKER_RESTART"`. `structuredContent.meta.synthetic === true` and `meta.restart` records `tool` / `durationMs` / `lastStage` / `lastStageElapsedMs` / `lastStageMeta` / `exit` / `retryRecommendation` so the caller can decide whether to retry, narrow the input, clear caches, or report a bug. Non-`tools/call` requests (`initialize`, `tools/list`, etc.) still receive the legacy raw JSON-RPC `-32603` envelope.
+- `ERR_MIXIN_PARSE_FAILED` — Reserved code for `validate-mixin` parse-stage failures in single / inline mode. Today the runtime parser is permissive (no hard parse failure path), but emitting this code keeps the contract stable for future strict-parse modes.
+- `ERR_STAGE_BUDGET_PRE_PARSE` — Raised when a pre-parse stage (`resolve`, `mapping-health`, or `parse` itself) exhausts its independent soft-deadline before validation can proceed. The error carries `failedStage: <stage name>`, `meta.stageBudgetExhausted: true`, and the `budgetMs` / `elapsedMs` for the offending stage. Recovery: shrink `mixinConfigPath` (e.g. validate one config file at a time) or set `MIXIN_STAGE_BUDGETS_OFF=1` to disable budgets for diagnostic reruns.
+
+## Meta fields
+
+- `meta.restart` (synthetic worker-restart responses only) — emitted exclusively when the supervisor returns an `ERR_WORKER_RESTART` envelope. Shape: `{ tool, durationMs, lastStage, lastStageElapsedMs, lastStageMeta, exit: { code, signal }, retryRecommendation }`. `retryRecommendation` is one of `"narrow-query" | "clear-cache" | "report-bug" | "same-request"`, decided by the supervisor from `lastStage`, `exit.signal`, and the recent restart cadence (3 restarts within 60 s of the same tool → `"report-bug"`).
+- `meta.stageBudgetExhausted` (`ERR_STAGE_BUDGET_PRE_PARSE` errors only) — set to `true` to flag that the failure is budget-driven rather than a genuine resolve / mapping-health / parse error. Pair with `failedStage` and `error.detail` (`"Stage <name> exhausted budget before parse completed."`) for diagnostics. The companion fields `meta.budgetMs` (the stage budget that was exceeded) and `meta.elapsedMs` (the actual stage elapsed time) are emitted alongside it on the same envelope so callers can decide between retry, input-shrink (`mixinConfigPath`), or `MIXIN_STAGE_BUDGETS_OFF=1` rollback without parsing message text.
+- `validate-mixin` batch-mode entries (`results[i]`, when invoked with `input.mode = "paths" | "config" | "project"`) preserve typed error metadata when an entry fails: optional `errorCode` (e.g. `"ERR_STAGE_BUDGET_PRE_PARSE"`) and `errorDetails` (the `failedStage` / `stageBudgetExhausted` / `budgetMs` / `elapsedMs` shape from the underlying AppError) sit alongside the legacy `error` string. The shape is additive — callers that only read `error` continue to see the same human-readable message.
+
+## Operational toggles
+
+These environment variables are read once at worker startup and provide rollback paths to legacy behaviour. Switching them requires reconnecting the MCP server (no per-request override).
+
+| Env | Effect | Acceptance test |
+|---|---|---|
+| `MIXIN_STAGE_BUDGETS_OFF=1` | Sets every `validate-mixin` stage budget (including the per-target soft cap) to `Number.POSITIVE_INFINITY`. Restores the pre-budget run-to-completion behaviour. | `tests/source-service-validate-mixin-budget.test.ts` (`MIXIN_STAGE_BUDGETS_OFF=1 disables all budgets`) |
+| `SUPERVISOR_STRUCTURED_RESTART_OFF=1` | Suppresses synthetic `CallToolResult` envelopes; `tools/call` requests killed by a worker exit fall back to the legacy raw JSON-RPC `-32603` error. | `tests/stdio-supervisor.test.ts` (`buildWorkerRestartReply returns raw -32603 when structuredRestartDisabled`) |
+| `MIXIN_STAGE_PROGRESS_OFF=1` | Replaces the worker stage emitter with a no-op so `$/stageUpdate` notifications are never sent. Use as a fallback when the active SDK build does not surface `extra.requestId`. | `tests/stage-emitter.test.ts` (`makeStageEmitter is a no-op when disabled option is true`) |
+
 
 ## Migration Notes
 

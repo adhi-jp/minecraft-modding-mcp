@@ -342,7 +342,7 @@ Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Acce
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose |
 | --- | --- |
-| `validate-mixin` | Validate Mixin source against a target Minecraft version |
+| `validate-mixin` | Validate Mixin source against a target Minecraft version (returns `validationStatus: "partial"` with `targetOutcomes` when a stage budget defers work) |
 | `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |
 | `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |
 <!-- END GENERATED TOOL TABLE: validation -->

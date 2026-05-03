@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { makeStageEmitter, type StageEmitterExtra } from "./stage-emitter.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError, z } from "zod";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
@@ -118,6 +119,12 @@ type ToolMeta = {
   includeApplied?: string[];
   truncated?: Record<string, unknown>;
   pagination?: Record<string, unknown>;
+  /** Set to `true` on ERR_STAGE_BUDGET_PRE_PARSE error envelopes to signal a budget-driven failure. */
+  stageBudgetExhausted?: boolean;
+  /** Stage budget (ms) that was exceeded; populated alongside `stageBudgetExhausted`. */
+  budgetMs?: number;
+  /** Actual stage elapsed time (ms); populated alongside `stageBudgetExhausted`. */
+  elapsedMs?: number;
 };
 
 const SOURCE_MAPPINGS = ["obfuscated", "mojang", "intermediary", "yarn"] as const;
@@ -2044,15 +2051,38 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
 
     const errorDurationMs = Date.now() - startedAt;
     sourceService.recordToolCall(tool, errorDurationMs);
+    const errorMeta: ToolMeta = {
+      requestId,
+      tool,
+      durationMs: errorDurationMs,
+      warnings: []
+    };
+    applyErrorMetaExtensions(errorMeta, caughtError);
     return objectResult({
       error: problem,
-      meta: {
-        requestId,
-        tool,
-        durationMs: errorDurationMs,
-        warnings: []
-      } satisfies ToolMeta
+      meta: errorMeta
     }, { isError: true });
+  }
+}
+
+/**
+ * Copy documented error-only meta fields from AppError.details into the
+ * public envelope. Scoped to `ERR_STAGE_BUDGET_PRE_PARSE` per
+ * docs/tool-reference.md §Meta fields.
+ */
+export function applyErrorMetaExtensions(meta: ToolMeta, error: unknown): void {
+  if (!isAppError(error)) return;
+  if (error.code !== ERROR_CODES.STAGE_BUDGET_PRE_PARSE) return;
+  const details = error.details as Record<string, unknown> | undefined;
+  if (!details) return;
+  if (details.stageBudgetExhausted === true) {
+    meta.stageBudgetExhausted = true;
+  }
+  if (typeof details.budgetMs === "number") {
+    meta.budgetMs = details.budgetMs;
+  }
+  if (typeof details.elapsedMs === "number") {
+    meta.elapsedMs = details.elapsedMs;
   }
 }
 
@@ -2474,7 +2504,7 @@ server.tool("validate-mixin",
   "Validate Mixin source against Minecraft bytecode signatures for a given version.",
   validateMixinShape,
   { readOnlyHint: true },
-  async (args) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
+  async (args, extra) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
     sourceService.validateMixin({
       input: input.input,
       sourceRoots: input.sourceRoots,
@@ -2493,6 +2523,8 @@ server.tool("validate-mixin",
       warningCategoryFilter: input.warningCategoryFilter,
       treatInfoAsWarning: input.treatInfoAsWarning,
       includeIssues: input.includeIssues
+    }, {
+      stageEmitter: makeStageEmitter(extra as unknown as StageEmitterExtra)
     }) as Promise<Record<string, unknown>>
   )
 );

@@ -11,12 +11,16 @@ import {
   extractMethodDescriptor,
   validateParsedMixin,
   validateParsedAccessWidener,
+  refreshMixinValidationOutcome,
+  loadMixinStageBudgets,
+  type MixinValidationResult,
   type ResolvedTargetMembers,
   type MixinValidationProvenance,
   type MappingHealthReport,
   type ResolvedMember,
   type IssueCategory,
-  type ResolutionPath
+  type ResolutionPath,
+  type ValidationSummary
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
 
@@ -2424,4 +2428,115 @@ test("@Accessor error includes inference hint with prefix removal", () => {
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.ok(result.issues[0].message.includes("inferred"));
   assert.ok(result.issues[0].message.includes("prefix removal"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Phase 5: partial-success status derivation                         */
+/* ------------------------------------------------------------------ */
+
+function makeBaseSummary(overrides: Partial<ValidationSummary> = {}): ValidationSummary {
+  return {
+    injections: 0,
+    shadows: 0,
+    accessors: 0,
+    total: 0,
+    membersValidated: 0,
+    membersSkipped: 0,
+    membersMissing: 0,
+    errors: 0,
+    warnings: 0,
+    definiteErrors: 0,
+    uncertainErrors: 0,
+    resolutionErrors: 0,
+    parseWarnings: 0,
+    ...overrides
+  };
+}
+
+function makeBaseResult(summaryOverrides: Partial<ValidationSummary> = {}): MixinValidationResult {
+  return {
+    className: "TestMixin",
+    targets: ["PlayerEntity"],
+    valid: true,
+    validationStatus: "full",
+    issues: [],
+    summary: makeBaseSummary(summaryOverrides),
+    warnings: []
+  };
+}
+
+test("computeValidationStatus: targetsDeferredBudget alone promotes to partial", () => {
+  const result = makeBaseResult({ targetsDeferredBudget: 1 });
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.validationStatus, "partial");
+});
+
+test("refreshMixinValidationOutcome preserves targetsDeferredBudget across recompute", () => {
+  const result = makeBaseResult({ targetsDeferredBudget: 3 });
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.summary.targetsDeferredBudget, 3);
+  // Run refresh a second time — must not silently drop budget signal.
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.summary.targetsDeferredBudget, 3);
+  assert.equal(result.validationStatus, "partial");
+});
+
+test("computeValidationStatus: degradedReason='stage-budget-pre-target' alone is partial", () => {
+  const result = makeBaseResult({ degradedReason: "stage-budget-pre-target" });
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.validationStatus, "partial");
+});
+
+test("refresh keeps degradedReason='stage-budget-pre-target' (regression: refresh dropping it would yield 'full')", () => {
+  const result = makeBaseResult({ degradedReason: "stage-budget-pre-target" });
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.summary.degradedReason, "stage-budget-pre-target");
+  assert.equal(result.validationStatus, "partial");
+  refreshMixinValidationOutcome(result);
+  assert.equal(result.summary.degradedReason, "stage-budget-pre-target");
+  assert.equal(result.validationStatus, "partial");
+});
+
+test("buildQuickSummary surfaces 'deferred by stage budget' when targetsDeferredBudget > 0", () => {
+  const result = makeBaseResult({ targetsDeferredBudget: 4, degradedReason: "stage-budget" });
+  refreshMixinValidationOutcome(result);
+  assert.ok(result.quickSummary);
+  assert.ok(result.quickSummary!.includes("4 target(s) deferred by stage budget"));
+});
+
+test("buildQuickSummary surfaces 'Budget exhausted before any target processed' for pre-target", () => {
+  const result = makeBaseResult({ degradedReason: "stage-budget-pre-target" });
+  refreshMixinValidationOutcome(result);
+  assert.ok(result.quickSummary);
+  assert.ok(
+    result.quickSummary!.includes("Budget exhausted before any target processed"),
+    `quickSummary was: ${result.quickSummary}`
+  );
+});
+
+test("loadMixinStageBudgets returns defaults when env not set", () => {
+  delete process.env.MIXIN_STAGE_BUDGETS_OFF;
+  const budgets = loadMixinStageBudgets();
+  assert.equal(budgets.targetLookup, 60_000);
+  assert.equal(budgets.perTarget, 8_000);
+});
+
+test("loadMixinStageBudgets honors MIXIN_STAGE_BUDGETS_OFF=1 → infinity", () => {
+  process.env.MIXIN_STAGE_BUDGETS_OFF = "1";
+  try {
+    const budgets = loadMixinStageBudgets({ targetLookup: 1 });
+    assert.equal(budgets.targetLookup, Number.POSITIVE_INFINITY);
+    assert.equal(budgets.perTarget, Number.POSITIVE_INFINITY);
+  } finally {
+    delete process.env.MIXIN_STAGE_BUDGETS_OFF;
+  }
+});
+
+test("loadMixinStageBudgets allows test-only override of individual stages", () => {
+  delete process.env.MIXIN_STAGE_BUDGETS_OFF;
+  const budgets = loadMixinStageBudgets({ targetLookup: 1, perTarget: 0 });
+  assert.equal(budgets.targetLookup, 1);
+  assert.equal(budgets.perTarget, 0);
+  // unspecified stages keep defaults
+  assert.equal(budgets.resolve, 15_000);
 });

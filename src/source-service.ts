@@ -30,13 +30,16 @@ import {
   refreshMixinValidationOutcome,
   validateParsedAccessWidener,
   validateParsedAccessTransformer,
+  loadMixinStageBudgets,
   type IssueConfidence,
   type ResolvedTargetMembers,
   type MixinValidationResult,
   type MixinValidationProvenance,
   type MappingHealthReport,
   type AccessWidenerValidationResult,
-  type AccessTransformerValidationResult
+  type AccessTransformerValidationResult,
+  type MixinStageBudgets,
+  type TargetOutcome as MixinTargetOutcome
 } from "./mixin-validator.js";
 import {
   resolveSourceTarget as resolveSourceTargetInternal,
@@ -65,6 +68,7 @@ import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
 import { LruList } from "./lru-list.js";
 import { log } from "./logger.js";
+import { NOOP_STAGE_EMITTER, type StageEmitter } from "./stage-emitter.js";
 import { normalizePathForHost } from "./path-converter.js";
 import {
   buildLoaderRuntimeSearchRoots,
@@ -715,6 +719,20 @@ export type ValidateMixinInput = {
   includeIssues?: boolean;
 };
 
+export type ValidateMixinOptions = {
+  stageEmitter?: StageEmitter;
+  /** Test-only override for stage budgets. Production code uses defaults. */
+  __stageBudgets?: Partial<MixinStageBudgets>;
+  /** Test-only hooks injected at stage boundaries to simulate slow work. */
+  __testHooks?: {
+    afterResolve?: () => Promise<void>;
+    afterMappingHealth?: () => Promise<void>;
+    afterParse?: () => Promise<void>;
+    beforeTargetLoop?: () => Promise<void>;
+    beforeTargetIter?: (targetIndex: number) => Promise<void>;
+  };
+};
+
 export type ValidateMixinResultSource = {
   kind: "inline" | "path" | "config";
   label: string;
@@ -726,6 +744,10 @@ export type ValidateMixinBatchResult = {
   source: ValidateMixinResultSource;
   result?: MixinValidationResult;
   error?: string;
+  /** Stable error code from AppError when the entry failed with a typed error (e.g. ERR_STAGE_BUDGET_PRE_PARSE). */
+  errorCode?: string;
+  /** AppError details (failedStage, stageBudgetExhausted, budgetMs, elapsedMs, …) preserved across batch aggregation. */
+  errorDetails?: Record<string, unknown>;
 };
 
 export type ValidateMixinBatchIssueSummaryItem = {
@@ -766,6 +788,9 @@ type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
     attempted: boolean;
     initialSourcePriority: MappingSourcePriority;
   };
+  stageEmitter?: StageEmitter;
+  __stageBudgets?: Partial<MixinStageBudgets>;
+  __testHooks?: ValidateMixinOptions["__testHooks"];
 };
 
 type ValidateMixinConfigSource = {
@@ -4862,27 +4887,40 @@ export class SourceService {
     };
   }
 
-  async validateMixin(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
+  async validateMixin(
+    input: ValidateMixinInput,
+    options: ValidateMixinOptions = {}
+  ): Promise<ValidateMixinOutput> {
     // Wrap the dispatcher so any untagged AppError coming out of path
     // normalization, preflight discovery, or config resolution surfaces with a
     // meaningful failedStage. annotateValidateMixinError preserves any
     // inner-pipeline tag (resolve/mapping-health/parse/target-lookup) so only
     // the dispatcher-level errors default to input-validation.
     try {
-      return await this.runValidateMixinDispatcher(input);
+      return await this.runValidateMixinDispatcher(input, options);
     } catch (err) {
       throw annotateValidateMixinError(err, "input-validation");
     }
   }
 
-  private async runValidateMixinDispatcher(input: ValidateMixinInput): Promise<ValidateMixinOutput> {
+  private async runValidateMixinDispatcher(
+    input: ValidateMixinInput,
+    options: ValidateMixinOptions = {}
+  ): Promise<ValidateMixinOutput> {
     const { input: sourceInput, ...sharedInput } = input;
     const mode = sourceInput.mode;
+    const stageEmitter = options.stageEmitter ?? NOOP_STAGE_EMITTER;
+    const sharedSingleOptions = {
+      stageEmitter,
+      __stageBudgets: options.__stageBudgets,
+      __testHooks: options.__testHooks
+    };
 
     if (mode === "inline") {
       const singleResult = await this.validateMixinSingle({
         ...sharedInput,
-        source: sourceInput.source
+        source: sourceInput.source,
+        ...sharedSingleOptions
       });
       return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, [
         {
@@ -4899,7 +4937,8 @@ export class SourceService {
       const resolvedPath = this.resolveMixinInputPath(sourceInput.path, "path");
       const singleResult = await this.validateMixinSingle({
         ...sharedInput,
-        sourcePath: sourceInput.path
+        sourcePath: sourceInput.path,
+        ...sharedSingleOptions
       });
       return this.applyValidateMixinOutputCompaction(this.buildValidateMixinOutput(mode, [
         {
@@ -4925,7 +4964,8 @@ export class SourceService {
           sourcePath: path
         })),
         input,
-        []
+        [],
+        sharedSingleOptions
       );
     }
 
@@ -4953,7 +4993,8 @@ export class SourceService {
         sourcePath: entry.sourcePath
       })),
       resolvedInput,
-      configWarnings
+      configWarnings,
+      sharedSingleOptions
     );
   }
 
@@ -5000,6 +5041,15 @@ export class SourceService {
       return false;
     }
     if (result.validationStatus !== "partial") {
+      return false;
+    }
+    // Budget-driven partials are the soft-deadline's final output; retrying
+    // under maven-first would re-run the same expensive pipeline. The retry
+    // path targets mapping-infrastructure failures, not stage-budget cuts.
+    if (
+      result.summary.degradedReason !== undefined ||
+      (result.summary.targetsDeferredBudget ?? 0) > 0
+    ) {
       return false;
     }
     if (result.summary.membersSkipped > 0) {
@@ -5070,6 +5120,10 @@ export class SourceService {
     // and annotateValidateMixinError() preserves any nested-call stage
     // (e.g. a deeper resolver that set failedStage="version-manifest").
     let currentStage: ValidateMixinStage = "input-validation";
+    // Loaded here so the input-validation budget covers the sourcePath read
+    // and version normalization that happen before the pipeline starts.
+    const stageBudgets = loadMixinStageBudgets(input.__stageBudgets);
+    const inputValidationStartedAt = performance.now();
     try {
       let version = input.version.trim();
       const requestedScope = normalizeRequestedArtifactScope(input.scope);
@@ -5112,6 +5166,22 @@ export class SourceService {
         });
       }
 
+      // Check after the stage's I/O so a slow path read surfaces as
+      // ERR_STAGE_BUDGET_PRE_PARSE rather than hanging the call.
+      const inputElapsed = performance.now() - inputValidationStartedAt;
+      if (inputElapsed > stageBudgets.inputValidation) {
+        throw createError({
+          code: ERROR_CODES.STAGE_BUDGET_PRE_PARSE,
+          message: "Stage input-validation exhausted budget before parse completed.",
+          details: {
+            failedStage: "input-validation",
+            stageBudgetExhausted: true,
+            budgetMs: stageBudgets.inputValidation,
+            elapsedMs: inputElapsed
+          }
+        });
+      }
+
       return await this.runValidateMixinPipeline({
         input,
         version,
@@ -5119,6 +5189,9 @@ export class SourceService {
         requestedScope,
         currentSourcePriority,
         initialSourcePriority,
+        stageEmitter: input.stageEmitter ?? NOOP_STAGE_EMITTER,
+        stageBudgets,
+        testHooks: input.__testHooks,
         onStage: (stage) => { currentStage = stage; }
       });
     } catch (err) {
@@ -5133,11 +5206,49 @@ export class SourceService {
     requestedScope: ArtifactScope;
     currentSourcePriority: MappingSourcePriority;
     initialSourcePriority: MappingSourcePriority;
+    stageEmitter: StageEmitter;
+    stageBudgets: MixinStageBudgets;
+    testHooks: ValidateMixinOptions["__testHooks"];
     onStage: (stage: ValidateMixinStage) => void;
   }): Promise<MixinValidationResult> {
-    const { input, source, requestedScope, currentSourcePriority, initialSourcePriority, onStage } = ctx;
+    const {
+      input,
+      source,
+      requestedScope,
+      currentSourcePriority,
+      initialSourcePriority,
+      stageEmitter,
+      stageBudgets,
+      testHooks,
+      onStage
+    } = ctx;
     let { version } = ctx;
-    onStage("resolve");
+    const enterStage = async (stage: ValidateMixinStage): Promise<number> => {
+      onStage(stage);
+      const startedAt = performance.now();
+      await stageEmitter(stage);
+      return startedAt;
+    };
+    const checkPreParseBudget = (
+      stage: ValidateMixinStage,
+      stageStartedAt: number,
+      budgetMs: number
+    ): void => {
+      const elapsed = performance.now() - stageStartedAt;
+      if (elapsed > budgetMs) {
+        throw createError({
+          code: ERROR_CODES.STAGE_BUDGET_PRE_PARSE,
+          message: `Stage ${stage} exhausted budget before parse completed.`,
+          details: {
+            failedStage: stage,
+            stageBudgetExhausted: true,
+            budgetMs,
+            elapsedMs: elapsed
+          }
+        });
+      }
+    };
+    const resolveStartedAt = await enterStage("resolve");
     const warnings: string[] = [];
     let mappingAutoDetected = false;
 
@@ -5219,8 +5330,13 @@ export class SourceService {
       };
     }
 
+    if (testHooks?.afterResolve) {
+      await testHooks.afterResolve();
+    }
+    checkPreParseBudget("resolve", resolveStartedAt, stageBudgets.resolve);
+
     // Health check: probe mapping infrastructure
-    onStage("mapping-health");
+    const mappingHealthStartedAt = await enterStage("mapping-health");
     let healthReport: MappingHealthReport | undefined;
     try {
       const health = await this.mappingService.checkMappingHealth({
@@ -5257,18 +5373,61 @@ export class SourceService {
       };
     }
 
-    onStage("parse");
+    if (testHooks?.afterMappingHealth) {
+      await testHooks.afterMappingHealth();
+    }
+    checkPreParseBudget("mapping-health", mappingHealthStartedAt, stageBudgets.mappingHealth);
+
+    const parseStartedAt = await enterStage("parse");
     const parsed = parseMixinSource(source);
 
-    onStage("target-lookup");
+    if (testHooks?.afterParse) {
+      await testHooks.afterParse();
+    }
+    checkPreParseBudget("parse", parseStartedAt, stageBudgets.parse);
+
+    const targetLookupStartedAt = await enterStage("target-lookup");
+    if (testHooks?.beforeTargetLoop) {
+      await testHooks.beforeTargetLoop();
+    }
+    let degradedReason: "stage-budget" | "stage-budget-pre-target" | undefined;
+    const targetOutcomes: MixinTargetOutcome[] = [];
+    const deferredTargetClasses = new Set<string>();
     const targetMembers = new Map<string, ResolvedTargetMembers>();
     const mappingFailedTargets = new Set<string>();
     const remapFailedMembers = new Map<string, Set<string>>();
+    // Distinct from per-member entries in `remapFailedMembers`: when the
+    // whole remap batch throws, no per-member key matches and the target
+    // would otherwise be reported as `status: "ok"` despite the fallback.
+    const wholeRemapFailedTargets = new Set<string>();
     const signatureFailedTargets = new Set<string>();
     const symbolExistsButSignatureFailed = new Set<string>();
     const resolutionTrace: MixinValidationProvenance["resolutionTrace"] = input.explain ? [] : undefined;
 
-    for (const target of parsed.targets) {
+    const totalTargets = parsed.targets.length;
+    let processedTargetCount = 0;
+    let stageBudgetExhausted = false;
+    let nextTargetIndex = 0;
+    for (let targetIndex = 0; targetIndex < totalTargets; targetIndex++) {
+      // Stage-total budget check (BEFORE starting next target).
+      const stageElapsed = performance.now() - targetLookupStartedAt;
+      if (stageElapsed > stageBudgets.targetLookup) {
+        stageBudgetExhausted = true;
+        nextTargetIndex = targetIndex;
+        break;
+      }
+      const target = parsed.targets[targetIndex];
+      await stageEmitter("target-lookup", {
+        targetIndex,
+        targetTotal: totalTargets,
+        targetClass: target.className,
+        memberCount:
+          parsed.injections.length + parsed.shadows.length + parsed.accessors.length
+      });
+      const targetStartedAt = performance.now();
+      if (testHooks?.beforeTargetIter) {
+        await testHooks.beforeTargetIter(targetIndex);
+      }
       // Bug 1 fix: resolve simple names via imports
       let resolvedClassName = target.className;
       if (!resolvedClassName.includes(".")) {
@@ -5390,6 +5549,7 @@ export class SourceService {
               `Member names shown may be in the ${signatureLookupMapping} runtime namespace.`
             );
             mappingApplied = signatureLookupMapping;
+            wholeRemapFailedTargets.add(target.className);
             resolutionTrace?.push({
               target: target.className,
               step: "remap",
@@ -5427,6 +5587,70 @@ export class SourceService {
           // Fallback check failed — treat as tool-limited partial validation.
           signatureFailedTargets.add(target.className);
           resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "check failed", success: false });
+        }
+      }
+
+      const targetElapsed = performance.now() - targetStartedAt;
+      // A target with a mapping / signature / remap failure consumed budget
+      // but produced unreliable members; emit `tool-issue` so callers using
+      // `includeIssues: false` still see the per-target failure signal.
+      const hadToolIssue =
+        mappingFailedTargets.has(target.className) ||
+        signatureFailedTargets.has(target.className) ||
+        symbolExistsButSignatureFailed.has(target.className) ||
+        remapFailedMembers.has(target.className) ||
+        wholeRemapFailedTargets.has(target.className);
+      const completedOutcome: MixinTargetOutcome = hadToolIssue
+        ? {
+            targetClass: target.className,
+            status: "tool-issue",
+            elapsedMs: targetElapsed,
+            reason: signatureFailedTargets.has(target.className)
+              ? "signature-load-failed"
+              : symbolExistsButSignatureFailed.has(target.className)
+                ? "signature-load-failed-symbol-exists"
+                : mappingFailedTargets.has(target.className)
+                  ? "mapping-failed"
+                  : wholeRemapFailedTargets.has(target.className)
+                    ? "member-remap-failed-whole"
+                    : "member-remap-failed"
+          }
+        : {
+            targetClass: target.className,
+            status: "ok",
+            elapsedMs: targetElapsed
+          };
+      if (targetElapsed > stageBudgets.perTarget) {
+        completedOutcome.slowTarget = true;
+        completedOutcome.budgetMs = stageBudgets.perTarget;
+      }
+      targetOutcomes.push(completedOutcome);
+      processedTargetCount += 1;
+    }
+
+    // Targets the validator must skip so it emits "skipped" members instead
+    // of target-not-found errors. Pre-target boundary keeps the public
+    // `targetOutcomes` empty (per spec); mid-loop boundary records each
+    // deferred target with `status: "deferred-budget"`.
+    const skippedForValidator = new Set<string>();
+    if (stageBudgetExhausted) {
+      if (processedTargetCount === 0) {
+        degradedReason = "stage-budget-pre-target";
+        for (const remaining of parsed.targets) {
+          skippedForValidator.add(remaining.className);
+        }
+      } else {
+        degradedReason = "stage-budget";
+        for (let j = nextTargetIndex; j < totalTargets; j++) {
+          const remaining = parsed.targets[j];
+          deferredTargetClasses.add(remaining.className);
+          skippedForValidator.add(remaining.className);
+          targetOutcomes.push({
+            targetClass: remaining.className,
+            status: "deferred-budget",
+            reason: "stage-budget",
+            budgetMs: stageBudgets.targetLookup
+          });
         }
       }
     }
@@ -5502,14 +5726,28 @@ export class SourceService {
       resolutionTrace: resolutionTrace && resolutionTrace.length > 0 ? resolutionTrace : undefined
     };
 
-    const result = refreshMixinValidationOutcome(validateParsedMixin(
+    const baseResult = validateParsedMixin(
       parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain,
       remapFailedMembers, signatureFailedTargets,
       input.explain ? { scope: requestedScope, sourcePriority: currentSourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
       input.warningMode,
       healthReport,
-      symbolExistsButSignatureFailed.size > 0 ? symbolExistsButSignatureFailed : undefined
-    ));
+      symbolExistsButSignatureFailed.size > 0 ? symbolExistsButSignatureFailed : undefined,
+      skippedForValidator.size > 0 ? skippedForValidator : undefined
+    );
+    if (targetOutcomes.length > 0) {
+      baseResult.targetOutcomes = targetOutcomes;
+    }
+    if (degradedReason !== undefined) {
+      baseResult.summary = { ...baseResult.summary, degradedReason };
+    }
+    if (deferredTargetClasses.size > 0) {
+      baseResult.summary = {
+        ...baseResult.summary,
+        targetsDeferredBudget: deferredTargetClasses.size
+      };
+    }
+    const result = refreshMixinValidationOutcome(baseResult);
 
     // Apply minSeverity / hideUncertain filters
     const minSeverity = input.minSeverity ?? "all";
@@ -5735,7 +5973,12 @@ export class SourceService {
     mode: "paths" | "config" | "project",
     entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
     input: ValidateMixinInput,
-    additionalWarnings: string[]
+    additionalWarnings: string[],
+    extras: {
+      stageEmitter?: StageEmitter;
+      __stageBudgets?: Partial<MixinStageBudgets>;
+      __testHooks?: ValidateMixinOptions["__testHooks"];
+    } = {}
   ): Promise<ValidateMixinOutput> {
     const results: ValidateMixinBatchResult[] = [];
     const batchWarningMode = input.warningMode ?? "aggregated";
@@ -5743,6 +5986,7 @@ export class SourceService {
     const batchCaches = {
       classMappings: new Map<string, Promise<MappingFindMappingOutput>>()
     };
+    const stageEmitter = extras.stageEmitter ?? NOOP_STAGE_EMITTER;
 
     for (const entry of entries) {
       try {
@@ -5750,17 +5994,28 @@ export class SourceService {
           ...sharedInput,
           sourcePath: entry.sourcePath,
           warningMode: batchWarningMode,
-          batchCaches
+          batchCaches,
+          stageEmitter,
+          __stageBudgets: extras.__stageBudgets,
+          __testHooks: extras.__testHooks
         });
         results.push({
           source: entry.source,
           result: singleResult
         });
       } catch (err) {
-        results.push({
+        const message = err instanceof Error ? err.message : String(err);
+        const entryResult: ValidateMixinBatchResult = {
           source: entry.source,
-          error: err instanceof Error ? err.message : String(err)
-        });
+          error: message
+        };
+        if (isAppError(err)) {
+          entryResult.errorCode = err.code;
+          if (err.details) {
+            entryResult.errorDetails = { ...err.details };
+          }
+        }
+        results.push(entryResult);
       }
     }
 

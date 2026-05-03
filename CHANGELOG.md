@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `ProblemDetails.code` may now be `ERR_WORKER_RESTART`, `ERR_MIXIN_PARSE_FAILED`, or `ERR_STAGE_BUDGET_PRE_PARSE`. Restart envelopes are produced by the supervisor when a worker exits while handling `tools/call`; the budget code is raised by `validate-mixin` when a pre-parse stage exhausts its soft-deadline.
+- `validate-mixin` now reports `result.targetOutcomes[]` (per-target `status: "ok" | "deferred-budget" | "tool-issue"` plus optional `slowTarget` / `elapsedMs` / `budgetMs`) and `summary.targetsDeferredBudget` / `summary.degradedReason: "stage-budget" | "stage-budget-pre-target"` so callers can distinguish completed work from work skipped by the soft-deadline.
+- `meta.restart` (synthetic worker-restart responses only) carries `tool` / `durationMs` / `lastStage` / `lastStageElapsedMs` / `lastStageMeta` / `exit` / `retryRecommendation` for caller diagnostics. `meta.stageBudgetExhausted` / `meta.budgetMs` / `meta.elapsedMs` accompany `ERR_STAGE_BUDGET_PRE_PARSE` error envelopes so callers can detect budget-driven failures from the public envelope without parsing the message string.
+- `validate-mixin` batch-mode results (`paths` / `config` / `project`) now preserve typed AppError metadata on per-entry errors: each `results[i]` carries optional `errorCode` and `errorDetails` (`failedStage`, `stageBudgetExhausted`, `budgetMs`, `elapsedMs`, …) so callers can distinguish budget-driven failures from generic per-file processing errors.
+
+### Changed
+- When the worker process exits while handling `tools/call`, the supervisor returns a structured `{ error, meta }` envelope (synthetic `CallToolResult` with `isError: true`) instead of the previous raw JSON-RPC `-32603` error. Non-`tools/call` requests (`initialize`, `tools/list`, etc.) still receive the legacy envelope.
+- `validate-mixin` runs each stage against an independent soft-deadline. When the `target-lookup` stage exhausts its budget mid-loop, the response is `validationStatus: "partial"` with completed targets retained and remaining ones recorded as `deferred-budget`. Pre-parse stages that exhaust their budget surface as `ERR_STAGE_BUDGET_PRE_PARSE` errors.
+- `validate-mixin` budget-driven partial results no longer trigger the `loom-first → maven-first` retry heuristic. The retry path targets mapping infrastructure failures, not soft-deadline cuts; without this guard a stage-budget partial would re-run the full validation under `maven-first` and defeat the cooperative-deadline contract.
+- `stdio-supervisor` records one worker-exit timestamp per `tool` per actual exit, regardless of how many concurrent `tools/call` requests were in flight. Per-pending-request recording inflated `recentRestarts` to N for a single crash and produced false `retryRecommendation: "report-bug"` under concurrent load.
+- `validate-mixin` `targetOutcomes[]` now emits the `tool-issue` status with a `reason` for completed-but-unreliable targets (mapping / signature / remap failures). Previously the per-target outcome was unconditionally `status: "ok"` even when the underlying target classified as `validation-incomplete`, hiding per-target failures from `includeIssues=false` callers. Whole member-remap exceptions (the entire batch failing) now also flag the target as `tool-issue` with `reason: "member-remap-failed-whole"`; previously only per-member remap failures triggered the classifier.
+- `stdio-supervisor` `lastStageStartedAt` is now refreshed only when the worker emits a different stage name (or on the first emit). Per-target progress notifications during `target-lookup` no longer reset the stage timer, so synthetic worker-restart envelopes report `meta.restart.lastStageElapsedMs` measured from stage entry — not from the most recent per-target update — restoring the documented diagnostic contract.
+- `validate-mixin` now enforces the `inputValidation` stage budget (default 5_000 ms): a slow `sourcePath` read, version normalization, or related input-stage I/O surfaces as `ERR_STAGE_BUDGET_PRE_PARSE` with `failedStage: "input-validation"` instead of hanging the call. Previously the budget was declared in `MixinStageBudgets` but never checked.
+- Synthetic worker-restart envelopes no longer expose `error.suggestedCall` when redaction modified the captured tool arguments (truncated long strings, redacted secret-bearing keys, or trimmed arrays / objects). The redacted form is still emitted on the diagnostic-only `meta.restart.redactedToolArgs` field along with `meta.restart.redactedToolArgsModified` so debug surfaces can inspect the placeholder values without granting them retry semantics.
+
 ## [4.0.0] - 2026-04-18
 
 ### Changed

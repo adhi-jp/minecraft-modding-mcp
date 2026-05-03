@@ -173,6 +173,67 @@ test("validate-mixin tools/list schema exposes all mode-based inputs to clients"
   assert.match(inputSchema.properties?.input?.description ?? "", /inline.*path.*paths.*config.*project/s);
 });
 
+test("applyErrorMetaExtensions surfaces stageBudgetExhausted / budgetMs / elapsedMs on ERR_STAGE_BUDGET_PRE_PARSE", async () => {
+  const { applyErrorMetaExtensions } = await import("../src/index.ts");
+  const { createError, ERROR_CODES } = await import("../src/errors.ts");
+
+  const meta: { stageBudgetExhausted?: boolean; budgetMs?: number; elapsedMs?: number } = {};
+  applyErrorMetaExtensions(
+    meta as never,
+    createError({
+      code: ERROR_CODES.STAGE_BUDGET_PRE_PARSE,
+      message: "Stage mapping-health exhausted budget before parse completed.",
+      details: {
+        failedStage: "mapping-health",
+        stageBudgetExhausted: true,
+        budgetMs: 1,
+        elapsedMs: 12.5
+      }
+    })
+  );
+  assert.equal(meta.stageBudgetExhausted, true);
+  assert.equal(meta.budgetMs, 1);
+  assert.equal(meta.elapsedMs, 12.5);
+});
+
+test("applyErrorMetaExtensions does not touch meta for non-budget AppErrors or non-AppErrors", async () => {
+  const { applyErrorMetaExtensions } = await import("../src/index.ts");
+  const { createError, ERROR_CODES } = await import("../src/errors.ts");
+
+  const meta1: Record<string, unknown> = {};
+  applyErrorMetaExtensions(
+    meta1 as never,
+    createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "bad input",
+      details: { stageBudgetExhausted: true, budgetMs: 99 }
+    })
+  );
+  assert.deepEqual(meta1, {}, "non-budget AppErrors must not pass through budget meta");
+
+  const meta2: Record<string, unknown> = {};
+  applyErrorMetaExtensions(meta2 as never, new Error("plain"));
+  assert.deepEqual(meta2, {}, "plain Error must not pass through budget meta");
+});
+
+test("validate-mixin tools/list input schema does NOT introduce budget/test-only parameters", async () => {
+  const tool = (await listTools()).find((entry) => entry.name === "validate-mixin");
+  assert.ok(tool);
+
+  const propertyNames = Object.keys(
+    (tool!.inputSchema as { properties?: Record<string, unknown> }).properties ?? {}
+  );
+
+  // Spec §テスト Integration / smoke #1: input schema does not change.
+  // __stageBudgets / __testHooks / stageEmitter must remain internal.
+  for (const internalKey of ["__stageBudgets", "__testHooks", "stageEmitter"]) {
+    assert.ok(
+      !propertyNames.includes(internalKey),
+      `validate-mixin input schema must not expose internal key "${internalKey}"`
+    );
+  }
+});
+
 test("validate-mixin invalid input returns problem details with a retryable suggestedCall", async () => {
   const result = await callTool("validate-mixin", {
     input: "@Mixin(Player.class) class ExampleMixin {}",

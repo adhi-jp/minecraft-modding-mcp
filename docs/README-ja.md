@@ -341,7 +341,7 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | ツール | 役割 |
 | --- | --- |
-| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する |
+| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (stage budget が部分結果を返す場合は `validationStatus: "partial"` と `targetOutcomes` を含む) |
 | `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |
 | `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |
 <!-- END GENERATED TOOL TABLE: validation -->
