@@ -2458,6 +2458,131 @@ export class SourceService {
     return detected;
   }
 
+  private async buildMappingFallbackSuggestedCall(args: {
+    input: ResolveArtifactInput;
+    kind: ArtifactTargetKind;
+    value: string;
+    scope: ArtifactScope | undefined;
+    effectiveMapping: SourceMapping;
+  }): Promise<{
+    suggestedCall: { tool: string; params: Record<string, unknown> };
+    nextAction: string;
+  }> {
+    const { input, kind, value, scope, effectiveMapping } = args;
+    const isVanillaMojang = scope === "vanilla" && effectiveMapping === "mojang";
+
+    if (process.env.WORKSPACE_FALLBACK_LEGACY === "1") {
+      return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath: input.projectPath });
+    }
+
+    const projectPath = input.projectPath?.trim();
+    if (!projectPath) {
+      return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath: undefined });
+    }
+
+    const cached = this.workspaceContextCache.read(projectPath);
+    if (cached && !cached.partial && cached.compileMapping && cached.compileMapping !== "obfuscated") {
+      return {
+        suggestedCall: {
+          tool: "resolve-artifact",
+          params: {
+            target: { kind: "workspace" },
+            projectPath,
+            mapping: cached.compileMapping
+          }
+        },
+        nextAction: `Workspace at ${projectPath} maps as ${cached.compileMapping}. Retry with target.kind="workspace" to use the project's compile mapping.`
+      };
+    }
+
+    if (!cached) {
+      try {
+        const detection = await this.workspaceMappingService.detectCompileMapping({ projectPath });
+        if (detection.resolved && detection.mappingApplied && detection.mappingApplied !== "obfuscated") {
+          const partial: WorkspaceContext = {
+            projectPath,
+            compileMapping: detection.mappingApplied,
+            detectedAt: Date.now(),
+            evidence: detection.evidence.map((entry) => ({
+              source: entry.filePath,
+              field: "compileMapping",
+              value: entry.mapping
+            })),
+            dependencyVersions: new Map<string, string>(),
+            partial: true
+          };
+          this.workspaceContextCache.write(partial);
+          return {
+            suggestedCall: {
+              tool: "resolve-artifact",
+              params: {
+                target: { kind: "workspace" },
+                projectPath,
+                mapping: detection.mappingApplied
+              }
+            },
+            nextAction: `Workspace at ${projectPath} maps as ${detection.mappingApplied}. Retry with target.kind="workspace" to use the project's compile mapping.`
+          };
+        }
+      } catch {
+        // bounded detection failed; fall back to legacy
+      }
+    }
+
+    return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath });
+  }
+
+  private buildLegacyMappingFallback(args: {
+    kind: ArtifactTargetKind;
+    value: string;
+    scope: ArtifactScope | undefined;
+    isVanillaMojang: boolean;
+    projectPath: string | undefined;
+  }): {
+    suggestedCall: { tool: string; params: Record<string, unknown> };
+    nextAction: string;
+  } {
+    const { kind, value, scope, isVanillaMojang, projectPath } = args;
+    if (isVanillaMojang && projectPath) {
+      return {
+        suggestedCall: {
+          tool: "resolve-artifact",
+          params: buildResolveArtifactParams(
+            { kind, value },
+            { mapping: "mojang", scope: "merged", projectPath }
+          )
+        },
+        nextAction:
+          "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
+          "Retry with scope=merged to allow source-jar resolution from the project cache."
+      };
+    }
+    if (isVanillaMojang) {
+      return {
+        suggestedCall: {
+          tool: "resolve-artifact",
+          params: buildResolveArtifactParams(
+            { kind, value },
+            { mapping: "obfuscated", scope: "vanilla" }
+          )
+        },
+        nextAction:
+          "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
+          "Without a projectPath, use mapping=obfuscated to read vanilla runtime names directly."
+      };
+    }
+    return {
+      suggestedCall: {
+        tool: "resolve-artifact",
+        params: buildResolveArtifactParams(
+          { kind, value },
+          { mapping: "obfuscated", ...(scope ? { scope } : {}) }
+        )
+      },
+      nextAction: "Retry with mapping=obfuscated to use the runtime obfuscated namespace."
+    };
+  }
+
   private async loadOrDetectWorkspaceContext(projectPath: string): Promise<WorkspaceContext> {
     const cached = this.workspaceContextCache.read(projectPath);
     if (cached && !cached.partial) {
@@ -2974,41 +3099,15 @@ export class SourceService {
         });
       } catch (caughtError) {
         if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
-          const isVanillaMojang = scope === "vanilla" && effectiveMapping === "mojang";
-          let suggestedCall: { tool: string; params: Record<string, unknown> };
-          let nextAction: string;
-          if (isVanillaMojang && input.projectPath) {
-            suggestedCall = {
-              tool: "resolve-artifact",
-              params: buildResolveArtifactParams(
-                { kind, value },
-                { mapping: "mojang", scope: "merged", projectPath: input.projectPath }
-              )
-            };
-            nextAction =
-              "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
-              "Retry with scope=merged to allow source-jar resolution from the project cache.";
-          } else if (isVanillaMojang) {
-            suggestedCall = {
-              tool: "resolve-artifact",
-              params: buildResolveArtifactParams(
-                { kind, value },
-                { mapping: "obfuscated", scope: "vanilla" }
-              )
-            };
-            nextAction =
-              "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
-              "Without a projectPath, use mapping=obfuscated to read vanilla runtime names directly.";
-          } else {
-            suggestedCall = {
-              tool: "resolve-artifact",
-              params: buildResolveArtifactParams(
-                { kind, value },
-                { mapping: "obfuscated", ...(scope ? { scope } : {}) }
-              )
-            };
-            nextAction = "Retry with mapping=obfuscated to use the runtime obfuscated namespace.";
-          }
+          const fallback = await this.buildMappingFallbackSuggestedCall({
+            input,
+            kind,
+            value,
+            scope,
+            effectiveMapping
+          });
+          const suggestedCall = fallback.suggestedCall;
+          const nextAction = fallback.nextAction;
           throw createError({
             code: ERROR_CODES.MAPPING_NOT_APPLIED,
             message: caughtError.message,
