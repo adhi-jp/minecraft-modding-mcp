@@ -34,9 +34,23 @@ test("tool-reference.md documents the new error codes", async () => {
   for (const code of [
     "ERR_WORKER_RESTART",
     "ERR_MIXIN_PARSE_FAILED",
-    "ERR_STAGE_BUDGET_PRE_PARSE"
+    "ERR_STAGE_BUDGET_PRE_PARSE",
+    "ERR_WORKSPACE_VERSION_UNRESOLVED",
+    "ERR_DEPENDENCY_VERSION_UNRESOLVED"
   ]) {
     assert.ok(doc.includes(code), `tool-reference.md must mention error code "${code}"`);
+  }
+});
+
+test("tool-reference.md documents the workspace and dependency target shapes", async () => {
+  const doc = await loadDoc();
+  for (const token of [
+    'kind: "workspace"',
+    'kind: "dependency"',
+    "provenance.workspaceResolution",
+    "provenance.dependencyResolution"
+  ]) {
+    assert.ok(doc.includes(token), `tool-reference.md must mention "${token}"`);
   }
 });
 
@@ -54,7 +68,10 @@ test("tool-reference.md documents the operational env toggles", async () => {
   for (const toggle of [
     "MIXIN_STAGE_BUDGETS_OFF",
     "SUPERVISOR_STRUCTURED_RESTART_OFF",
-    "MIXIN_STAGE_PROGRESS_OFF"
+    "MIXIN_STAGE_PROGRESS_OFF",
+    "WORKSPACE_TARGET_OFF",
+    "DEPENDENCY_TARGET_OFF",
+    "WORKSPACE_FALLBACK_LEGACY"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
   }

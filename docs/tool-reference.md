@@ -30,8 +30,9 @@ Start here when you are not sure which tool to reach for. In every row, the left
 ## Essential Conventions
 
 - Start with the top-level workflow tools when possible. `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` cover the common workflows and return summary-first results with follow-up hints.
-- `resolve-artifact` uses `target: { kind, value }`.
-- `get-class-source` and `get-class-members` use `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
+- `resolve-artifact` uses `target: { kind, value }`. `kind` is one of `"version"`, `"jar"`, `"coordinate"`, `"workspace"`, or `"dependency"` (see "Workspace and dependency target shapes" below).
+- `get-class-source` and `get-class-members` use `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }` (the same `kind` set as `resolve-artifact`).
+- `find-class`, `search-class-source`, `list-artifact-files`, and `find-mapping` keep their existing input shapes (an `artifactId` or a `version`); they do not currently accept `target.kind="workspace"` or `target.kind="dependency"`.
 - `validate-mixin` and `validate-project task="mixin"` use `input.mode="inline" | "path" | "paths" | "config" | "project"`.
 - Positive integer tool arguments accept numeric strings such as `"10"` for documented top-level parameters.
 - When a parameter has a fixed safe default, `tools/list` exposes it through the JSON Schema `default` field so clients can rely on schema metadata instead of prose notes.
@@ -44,6 +45,19 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - Windows and WSL path forms are normalized for `jarPath`, `projectPath`, and environment-variable path overrides.
 - Heavy analysis tools are serialized in-process to protect stdio stability. Queue overflow returns `ERR_LIMIT_EXCEEDED`.
 - All tools and JSON resources use the standard `{ result?, error?, meta }` envelope. `class-source` and `artifact-file` resources return raw text on success and structured JSON on failure.
+
+## Workspace and dependency target shapes
+
+`resolve-artifact`, `get-class-source`, and `get-class-members` accept two synthesizing `target.kind` values in addition to the canonical `"version"` / `"jar"` / `"coordinate"` shapes. The synthesizer rewrites the call into one of those canonical shapes before downstream resolution, so behaviour from the resolver onward is unchanged.
+
+| target shape | When to use | Required input | Result |
+|---|---|---|---|
+| `{ kind: "workspace", scope?, strict? }` | When the caller already passes a `projectPath` and wants the tool to detect Minecraft version, compile mapping, and loader from `gradle.properties` and `build.gradle(.kts)`. | `projectPath` | Synthesised to `{ kind: "version", value: <detected> }` with `scope` defaulting to `"merged"` when a loader is detected and `"vanilla"` otherwise. Detected facts surface on `provenance.workspaceResolution`. |
+| `{ kind: "dependency", group, name, version?, versionFromProject? }` | When the caller wants to resolve a Maven-coordinate dependency (e.g. `dev.architectury:architectury`) without computing the exact version themselves. | `projectPath` (unless `version` is given) | Synthesised to `{ kind: "coordinate", value: "<group>:<name>:<version>" }`. The dependency JAR is treated as non-vanilla: binary remap is suppressed, and a mapping mismatch between the caller's `mapping` and the artifact namespace surfaces as a warning instead of an error. Resolution metadata appears on `provenance.dependencyResolution`. |
+
+Workspace detection is memoised in a process-resident `WorkspaceContextCache` (16-entry LRU, 5-minute TTL). The cache is observable through `manage-cache` with `cacheKinds: ["workspace"]`, and individual entries can be invalidated via `selector.projectPath`.
+
+`target.kind="dependency"` resolution probes four de-duplicated `gradle.properties` keys in order — `name_version`, `camelCaseVersion`, `lastSegment(group)_name_version`, and `camelCase(lastSegment(group)_name)Version` — before falling back to the modules-2 cache layout `~/.gradle/caches/modules-2/files-2.1/<group>/<name>/`. Snapshot and dev versions are excluded by default; ties are broken by semver comparison.
 
 ## Common Pitfalls
 
@@ -78,6 +92,8 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - `ERR_WORKER_RESTART` — Synthetic envelope produced by the supervisor when the worker process exits while handling `tools/call`. The response is a `CallToolResult` with `isError: true` and `structuredContent.error.code === "ERR_WORKER_RESTART"`. `structuredContent.meta.synthetic === true` and `meta.restart` records `tool` / `durationMs` / `lastStage` / `lastStageElapsedMs` / `lastStageMeta` / `exit` / `retryRecommendation` so the caller can decide whether to retry, narrow the input, clear caches, or report a bug. Non-`tools/call` requests (`initialize`, `tools/list`, etc.) still receive the legacy raw JSON-RPC `-32603` envelope.
 - `ERR_MIXIN_PARSE_FAILED` — Reserved code for `validate-mixin` parse-stage failures in single / inline mode. Today the runtime parser is permissive (no hard parse failure path), but emitting this code keeps the contract stable for future strict-parse modes.
 - `ERR_STAGE_BUDGET_PRE_PARSE` — Raised when a pre-parse stage (`resolve`, `mapping-health`, or `parse` itself) exhausts its independent soft-deadline before validation can proceed. The error carries `failedStage: <stage name>`, `meta.stageBudgetExhausted: true`, and the `budgetMs` / `elapsedMs` for the offending stage. Recovery: shrink `mixinConfigPath` (e.g. validate one config file at a time) or set `MIXIN_STAGE_BUDGETS_OFF=1` to disable budgets for diagnostic reruns.
+- `ERR_WORKSPACE_VERSION_UNRESOLVED` — Raised by `resolve-artifact`, `get-class-source`, and `get-class-members` when `target.kind="workspace"` is used with `strict: true` and no Minecraft version can be detected from `gradle.properties`. The error carries `details.projectPath` and a `suggestedCall` with `target: { kind: "version", value: "<your-mc-version>" }` so the caller can fall back to an explicit version target.
+- `ERR_DEPENDENCY_VERSION_UNRESOLVED` — Raised by the same three tools when `target.kind="dependency"` cannot infer a version from `gradle.properties` or `~/.gradle/caches/modules-2/files-2.1/<group>/<name>/`. The error carries `details.attempts` (the gradle.properties keys that were probed) and `details.candidatesSeen`, plus a `suggestedCall` with `target: { kind: "dependency", group, name, version: "<your-version>" }`.
 
 ## Meta fields
 
@@ -94,6 +110,9 @@ These environment variables are read once at worker startup and provide rollback
 | `MIXIN_STAGE_BUDGETS_OFF=1` | Sets every `validate-mixin` stage budget (including the per-target soft cap) to `Number.POSITIVE_INFINITY`. Restores the pre-budget run-to-completion behaviour. | `tests/source-service-validate-mixin-budget.test.ts` (`MIXIN_STAGE_BUDGETS_OFF=1 disables all budgets`) |
 | `SUPERVISOR_STRUCTURED_RESTART_OFF=1` | Suppresses synthetic `CallToolResult` envelopes; `tools/call` requests killed by a worker exit fall back to the legacy raw JSON-RPC `-32603` error. | `tests/stdio-supervisor.test.ts` (`buildWorkerRestartReply returns raw -32603 when structuredRestartDisabled`) |
 | `MIXIN_STAGE_PROGRESS_OFF=1` | Replaces the worker stage emitter with a no-op so `$/stageUpdate` notifications are never sent. Use as a fallback when the active SDK build does not surface `extra.requestId`. | `tests/stage-emitter.test.ts` (`makeStageEmitter is a no-op when disabled option is true`) |
+| `WORKSPACE_TARGET_OFF=1` | Rejects `target.kind="workspace"` on `resolve-artifact`, `get-class-source`, and `get-class-members` with `ERR_INVALID_INPUT`. Restores the pre-workspace-target behaviour where callers must always supply `target.kind="version"`/`"jar"`/`"coordinate"`. | `tests/source-service-workspace-target.test.ts` (`synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set`) |
+| `DEPENDENCY_TARGET_OFF=1` | Rejects `target.kind="dependency"` on the same three tools with `ERR_INVALID_INPUT`. | `tests/source-service-dependency-target.test.ts` (`synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set`) |
+| `WORKSPACE_FALLBACK_LEGACY=1` | Forces the `ERR_MAPPING_NOT_APPLIED` `suggestedCall` back to the pre-workspace shape (`{ target, mapping: "obfuscated" }` with the legacy scope flip on `vanilla`+`mojang`). Use when an integration relies on the legacy retry payload. | `tests/source-service-mapping-not-applied-fallback.test.ts` (`buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set`) |
 
 
 ## Migration Notes
