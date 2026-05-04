@@ -201,3 +201,68 @@ test("cache registry matches artifact-index entries by mapping, scope, and proje
 
   assert.deepEqual(result.entries.map((entry) => entry.entryId), ["artifact-merged"]);
 });
+
+
+test("cache registry summarizes and lists workspace context cache entries", async () => {
+  const { createWorkspaceContextCache } = await import("../src/workspace-context-cache.ts");
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-workspace-"));
+  const sqlitePath = join(root, "source-cache.db");
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: "/tmp/project-a",
+    minecraftVersion: "1.21.10",
+    compileMapping: "mojang",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath,
+    workspaceContextCache: cache
+  });
+
+  const summary = await registry.summarize({ cacheKinds: ["workspace"] });
+  assert.equal(summary.kinds.workspace.entryCount, 1);
+  assert.equal(summary.kinds.workspace.status, "healthy");
+
+  const list = await registry.listEntries({ cacheKinds: ["workspace"] });
+  assert.equal(list.entries.length, 1);
+  assert.equal(list.entries[0]?.entryId, "/tmp/project-a");
+});
+
+test("cache registry deletes a single workspace entry by projectPath selector", async () => {
+  const { createWorkspaceContextCache } = await import("../src/workspace-context-cache.ts");
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-workspace-del-"));
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: "/tmp/project-a",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+  cache.write({
+    projectPath: "/tmp/project-b",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db"),
+    workspaceContextCache: cache
+  });
+
+  const result = await registry.deleteEntries({
+    cacheKinds: ["workspace"],
+    selector: { projectPath: "/tmp/project-a" },
+    executionMode: "apply"
+  });
+
+  assert.equal(result.deletedEntries, 1);
+  assert.equal(cache.read("/tmp/project-a"), undefined);
+  assert.ok(cache.read("/tmp/project-b"));
+});
+

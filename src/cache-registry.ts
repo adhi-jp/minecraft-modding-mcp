@@ -5,6 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { createError, ERROR_CODES } from "./errors.js";
 import { normalizeOptionalPathForHost, type PathRuntimeInfo } from "./path-converter.js";
 import Database from "./storage/sqlite.js";
+import {
+  getProcessWorkspaceContextCache,
+  type WorkspaceContextCache
+} from "./workspace-context-cache.js";
 
 export const PUBLIC_CACHE_KINDS = [
   "artifact-index",
@@ -13,7 +17,8 @@ export const PUBLIC_CACHE_KINDS = [
   "registry",
   "decompiled-source",
   "mod-remap",
-  "binary-remap"
+  "binary-remap",
+  "workspace"
 ] as const;
 
 export type PublicCacheKind = (typeof PUBLIC_CACHE_KINDS)[number];
@@ -101,6 +106,8 @@ function kindRoot(config: CacheRegistryConfig, cacheKind: PublicCacheKind): stri
       return join(config.cacheDir, "remapped-mods");
     case "binary-remap":
       return join(config.cacheDir, "remapped");
+    case "workspace":
+      return "<in-memory:workspace-context-cache>";
   }
 }
 
@@ -512,9 +519,30 @@ async function artifactIndexEntries(config: CacheRegistryConfig): Promise<CacheE
   }
 }
 
+function workspaceCacheEntries(workspaceCache: WorkspaceContextCache): CacheEntry[] {
+  const contexts = workspaceCache.list();
+  return contexts.map((ctx) => ({
+    cacheKind: "workspace" as const,
+    entryId: ctx.projectPath,
+    path: ctx.projectPath,
+    sizeBytes: 0,
+    status: "healthy" as const,
+    meta: {
+      projectPath: ctx.projectPath,
+      minecraftVersion: ctx.minecraftVersion,
+      compileMapping: ctx.compileMapping,
+      loader: ctx.loader,
+      detectedAt: new Date(ctx.detectedAt).toISOString(),
+      updatedAt: new Date(ctx.detectedAt).toISOString(),
+      partial: ctx.partial === true,
+      dependencyVersionCount: ctx.dependencyVersions.size
+    }
+  }));
+}
+
 async function fileBackedEntries(
   config: CacheRegistryConfig,
-  cacheKind: Exclude<PublicCacheKind, "artifact-index">
+  cacheKind: Exclude<PublicCacheKind, "artifact-index" | "workspace">
 ): Promise<CacheEntry[]> {
   const root = kindRoot(config, cacheKind);
   const files = await listFilesRecursive(root);
@@ -557,6 +585,7 @@ export type CacheRegistryConfig = {
   cacheDir: string;
   sqlitePath: string;
   pathRuntimeInfo?: PathRuntimeInfo;
+  workspaceContextCache?: WorkspaceContextCache;
 };
 
 export interface CacheRegistry {
@@ -596,6 +625,8 @@ export interface CacheRegistry {
 }
 
 export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry {
+  const workspaceCache = config.workspaceContextCache ?? getProcessWorkspaceContextCache();
+
   async function collectEntries(
     cacheKinds: PublicCacheKind[] | undefined,
     selector: CacheSelector | undefined
@@ -604,18 +635,22 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
     const preparedSelector = prepareSelector(selector, config.pathRuntimeInfo);
     const now = Date.now();
     const entries = await Promise.all(
-      selectedKinds.map((cacheKind) =>
-        cacheKind === "artifact-index"
-          ? artifactIndexEntries(config)
-          : fileBackedEntries(config, cacheKind)
-      )
+      selectedKinds.map((cacheKind) => {
+        if (cacheKind === "artifact-index") {
+          return artifactIndexEntries(config);
+        }
+        if (cacheKind === "workspace") {
+          return Promise.resolve(workspaceCacheEntries(workspaceCache));
+        }
+        return fileBackedEntries(config, cacheKind);
+      })
     );
 
     const enriched = entries
       .flat()
       .map((entry) => ({
         ...entry,
-        status: deriveEntryStatus(entry, config, now)
+        status: entry.cacheKind === "workspace" ? entry.status : deriveEntryStatus(entry, config, now)
       }));
 
     return sortEntries(enriched.filter((entry) => matchesSelector(entry, preparedSelector, config.pathRuntimeInfo)));
@@ -628,8 +663,17 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
       const kinds: Partial<Record<PublicCacheKind, CacheKindSummary>> = {};
 
       for (const cacheKind of selectedKinds) {
-        const root = kindRoot(config, cacheKind);
         const rows = entries.filter((entry) => entry.cacheKind === cacheKind);
+        if (cacheKind === "workspace") {
+          kinds[cacheKind] = {
+            cacheKind,
+            entryCount: rows.length,
+            totalBytes: 0,
+            status: "healthy"
+          };
+          continue;
+        }
+        const root = kindRoot(config, cacheKind);
         kinds[cacheKind] = {
           cacheKind,
           entryCount: rows.length,
@@ -676,6 +720,10 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
           for (const entry of entries) {
             if (entry.cacheKind === "artifact-index") {
               db?.prepare("DELETE FROM artifacts WHERE artifact_id = ?").run([entry.entryId]);
+              continue;
+            }
+            if (entry.cacheKind === "workspace") {
+              workspaceCache.invalidate(entry.entryId);
               continue;
             }
             if (existsSync(entry.path)) {
