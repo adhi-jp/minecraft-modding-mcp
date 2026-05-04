@@ -82,6 +82,7 @@ import {
 } from "./search-hit-accumulator.js";
 import {
   WorkspaceMappingService,
+  isSafeMavenVersionToken,
   type WorkspaceCompileMappingOutput,
   type WorkspaceProjectLoader
 } from "./workspace-mapping-service.js";
@@ -2480,8 +2481,18 @@ export class SourceService {
       return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath: undefined });
     }
 
+    if (kind !== "version") {
+      return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath });
+    }
+
     const cached = this.workspaceContextCache.read(projectPath);
-    if (cached && !cached.partial && cached.compileMapping && cached.compileMapping !== "obfuscated") {
+    if (
+      cached &&
+      !cached.partial &&
+      cached.compileMapping &&
+      cached.compileMapping !== "obfuscated" &&
+      cached.minecraftVersion === value
+    ) {
       return {
         suggestedCall: {
           tool: "resolve-artifact",
@@ -2497,10 +2508,15 @@ export class SourceService {
 
     if (!cached) {
       try {
+        const detectedVersion = await this.workspaceMappingService.detectProjectMinecraftVersion(projectPath);
+        if (!detectedVersion || detectedVersion !== value) {
+          return this.buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath });
+        }
         const detection = await this.workspaceMappingService.detectCompileMapping({ projectPath });
         if (detection.resolved && detection.mappingApplied && detection.mappingApplied !== "obfuscated") {
           const partial: WorkspaceContext = {
             projectPath,
+            minecraftVersion: detectedVersion,
             compileMapping: detection.mappingApplied,
             detectedAt: Date.now(),
             evidence: detection.evidence.map((entry) => ({
@@ -2668,39 +2684,25 @@ export class SourceService {
     const ctx = cacheHit ? cachedBefore! : await this.loadOrDetectWorkspaceContext(projectPath);
 
     const warnings: string[] = [];
-    let resolvedVersion = ctx.minecraftVersion;
+    const resolvedVersion = ctx.minecraftVersion;
     if (!resolvedVersion) {
-      if (workspace.strict === true) {
-        throw createError({
-          code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
-          message: `Could not detect a Minecraft version for projectPath "${projectPath}".`,
-          details: {
-            projectPath,
-            nextAction:
-              "Set minecraft_version in gradle.properties or pass target.kind=\"version\" with an explicit Minecraft version.",
-            suggestedCall: {
-              tool: "resolve-artifact",
-              params: {
-                target: { kind: "version", value: "<your-mc-version>" },
-                projectPath
-              }
+      throw createError({
+        code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+        message: `Could not detect a Minecraft version for projectPath "${projectPath}".`,
+        details: {
+          projectPath,
+          strict: workspace.strict === true,
+          nextAction:
+            "Set minecraft_version in gradle.properties or pass target.kind=\"version\" with an explicit Minecraft version.",
+          suggestedCall: {
+            tool: "resolve-artifact",
+            params: {
+              target: { kind: "version", value: "<your-mc-version>" },
+              projectPath
             }
           }
-        });
-      }
-      const fallback = await this.versionService.listVersions({ includeSnapshots: false, limit: 1 });
-      const latestVersion = fallback.latest.release ?? fallback.releases[0]?.id;
-      if (!latestVersion) {
-        throw createError({
-          code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
-          message: `Could not detect a Minecraft version for projectPath "${projectPath}" and no fallback Minecraft version is available.`,
-          details: { projectPath }
-        });
-      }
-      resolvedVersion = latestVersion;
-      warnings.push(
-        `No Minecraft version detected in workspace; falling back to latest stable Minecraft version "${latestVersion}".`
-      );
+        }
+      });
     }
 
     const requestedMapping = normalizeMapping(input.mapping);
@@ -2716,7 +2718,7 @@ export class SourceService {
       effectiveMapping = ctx.compileMapping ?? "obfuscated";
     }
 
-    const effectiveScope: ArtifactScope = workspace.scope ?? (ctx.loader ? "merged" : "vanilla");
+    const effectiveScope: ArtifactScope = workspace.scope ?? input.scope ?? (ctx.loader ? "merged" : "vanilla");
 
     const provenance: WorkspaceResolutionProvenance = {
       projectPath,
@@ -2794,6 +2796,21 @@ export class SourceService {
     }
 
     if (dep.version) {
+      if (!isSafeMavenVersionToken(dep.version)) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: 'target.kind="dependency" version must be a safe Maven coordinate segment.',
+          details: {
+            fieldErrors: [
+              {
+                path: "target.version",
+                message:
+                  "version must contain only [A-Za-z0-9._+-] characters, must not start with '.', and must not include '..'."
+              }
+            ]
+          }
+        });
+      }
       const coordinate = `${group}:${name}:${dep.version}`;
       return {
         target: { kind: "coordinate", value: coordinate },
@@ -2854,16 +2871,23 @@ export class SourceService {
 
     const result = await this.workspaceMappingService.detectDependencyVersion(projectPath, group, name);
     if (!result.resolved) {
+      const ambiguous = result.candidatesSeen.length > 1;
+      const message = ambiguous
+        ? `Multiple cached versions for ${group}:${name} in ~/.gradle/caches/modules-2 (${result.candidatesSeen.join(", ")}); refusing to pick without project-specific evidence.`
+        : `Could not resolve a version for dependency ${group}:${name} from gradle.properties or modules-2 cache.`;
+      const nextAction = ambiguous
+        ? `Set ${name}_version (or another supported gradle.properties key) so the project's intended version is unambiguous, or pass an explicit version on the dependency target.`
+        : "Provide an explicit version on the dependency target, or add a property to gradle.properties so detectDependencyVersion can find it.";
       throw createError({
         code: ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED,
-        message: `Could not resolve a version for dependency ${group}:${name} from gradle.properties or modules-2 cache.`,
+        message,
         details: {
           group,
           name,
           attempts: result.attempts,
           candidatesSeen: result.candidatesSeen,
-          nextAction:
-            "Provide an explicit version on the dependency target, or add a property to gradle.properties so detectDependencyVersion can find it.",
+          ambiguous,
+          nextAction,
           suggestedCall: {
             tool: "resolve-artifact",
             params: {
@@ -2895,12 +2919,6 @@ export class SourceService {
         dependencyVersions: updatedDeps,
         partial: true
       });
-    }
-
-    if (result.candidatesSeen.length > 1) {
-      warningsBucket.push(
-        `multiple cached versions: [${result.candidatesSeen.join(", ")}]; using ${result.version}`
-      );
     }
 
     const coordinate = `${group}:${name}:${result.version}`;
@@ -3098,7 +3116,20 @@ export class SourceService {
           allowBinaryRemap: binaryRemapGate.allowBinaryRemap
         });
       } catch (caughtError) {
-        if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
+        if (
+          dependencyOrigin &&
+          isAppError(caughtError) &&
+          caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED
+        ) {
+          mappingDecision = {
+            mappingApplied: "obfuscated",
+            transformChain: [],
+            qualityFlags: [
+              ...(resolved.qualityFlags ?? []),
+              "dependency-mapping-unverified"
+            ]
+          };
+        } else if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
           const fallback = await this.buildMappingFallbackSuggestedCall({
             input,
             kind,
@@ -3126,7 +3157,7 @@ export class SourceService {
         throw caughtError;
       }
       const additionalTransformChain: string[] = [];
-      if (effectiveMapping === "intermediary" || effectiveMapping === "yarn") {
+      if (!dependencyOrigin && (effectiveMapping === "intermediary" || effectiveMapping === "yarn")) {
         if (!resolved.version) {
           throw createError({
             code: ERROR_CODES.MAPPING_NOT_APPLIED,
@@ -3171,10 +3202,10 @@ export class SourceService {
       }
 
       let finalMappingApplied = mappingDecision.mappingApplied;
-      if (dependencyOrigin && dependencyRequestedMapping && dependencyRequestedMapping !== finalMappingApplied) {
+      if (dependencyOrigin && dependencyRequestedMapping && dependencyRequestedMapping !== "obfuscated") {
         const coord = resolved.coordinate ?? value;
         warnings.push(
-          `Dependency artifact ${coord} is in ${finalMappingApplied} namespace; requested mapping "${dependencyRequestedMapping}" cannot be applied to dependency JARs (binary remap is disabled for non-vanilla artifacts).`
+          `Dependency artifact ${coord} mapping "${dependencyRequestedMapping}" is not enforced (binary remap is disabled for non-vanilla artifacts); the JAR is returned in its native namespace and mappingApplied is reported as "obfuscated" with qualityFlag "dependency-mapping-unverified". Caller must validate symbol availability.`
         );
       }
 
@@ -5044,7 +5075,7 @@ export class SourceService {
       });
     }
 
-    const requestedMapping = normalizeMapping(input.mapping);
+    let requestedMapping: SourceMapping = normalizeMapping(input.mapping);
 
     const access = normalizeMemberAccess(input.access);
     const includeSynthetic = input.includeSynthetic ?? false;
@@ -5091,7 +5122,7 @@ export class SourceService {
 
       const resolved = await this.resolveArtifact({
         target: input.target,
-        mapping: requestedMapping,
+        mapping: input.mapping,
         sourcePriority: input.sourcePriority,
         allowDecompile: input.allowDecompile,
         projectPath: input.projectPath,
@@ -5102,6 +5133,7 @@ export class SourceService {
       artifactId = resolved.artifactId;
       origin = resolved.origin;
       warnings.push(...resolved.warnings);
+      requestedMapping = resolved.requestedMapping;
       mappingApplied = resolved.mappingApplied;
       provenance = resolved.provenance;
       qualityFlags = [...resolved.qualityFlags];

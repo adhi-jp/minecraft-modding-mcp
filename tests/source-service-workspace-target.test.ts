@@ -87,7 +87,7 @@ test("synthesizeWorkspaceTarget detects MC version + compile mapping + loader fr
   assert.equal(synthesized.provenance.cacheHit, false);
 });
 
-test("synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when strict and version is missing", async () => {
+test("synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when version is undetected, regardless of strict flag", async () => {
   const projectPath = await makeProject({}, "");
   const root = await mkdtemp(join(tmpdir(), "ws-target-host-strict-"));
   await mkdir(join(root, "cache"), { recursive: true });
@@ -97,14 +97,20 @@ test("synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when str
     { workspaceContextCache: createWorkspaceContextCache() }
   ) as unknown as AnySourceService;
 
-  await assert.rejects(
-    () =>
-      service.synthesizeWorkspaceTarget(
-        { target: { kind: "workspace", strict: true }, projectPath },
-        { kind: "workspace", strict: true }
-      ),
-    (err: Error & { code?: string }) => err.code === ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED
-  );
+  for (const strict of [true, false]) {
+    await assert.rejects(
+      () =>
+        service.synthesizeWorkspaceTarget(
+          { target: { kind: "workspace", strict }, projectPath },
+          { kind: "workspace", strict }
+        ),
+      (err: Error & { code?: string; details?: { strict?: boolean } }) => {
+        assert.equal(err.code, ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED);
+        assert.equal(err.details?.strict, strict);
+        return true;
+      }
+    );
+  }
 });
 
 test("synthesizeWorkspaceTarget warns when caller mapping mismatches workspace compile mapping", async () => {
@@ -157,7 +163,6 @@ test("synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second c
     { workspaceContextCache: cache }
   ) as unknown as AnySourceService;
 
-  // Spy on detectProjectMinecraftVersion to count calls
   const original = service.workspaceMappingService.detectProjectMinecraftVersion.bind(
     service.workspaceMappingService
   );
@@ -178,6 +183,83 @@ test("synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second c
 
   assert.equal(calls, 1);
   assert.equal(second.provenance.cacheHit, true);
+});
+
+test("getClassMembers and getClassSource pass input.mapping (raw, possibly undefined) to resolveArtifact symmetrically", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile("src/source-service.ts", "utf8");
+
+  const getClassSourceMatch = source.match(/async getClassSource\(input: GetClassSourceInput\)[\s\S]*?await this\.resolveArtifact\(\{([\s\S]*?)\}\);/);
+  const getClassMembersMatch = source.match(/async getClassMembers\(input: GetClassMembersInput\)[\s\S]*?await this\.resolveArtifact\(\{([\s\S]*?)\}\);/);
+
+  assert.ok(getClassSourceMatch, "Could not locate getClassSource resolveArtifact call");
+  assert.ok(getClassMembersMatch, "Could not locate getClassMembers resolveArtifact call");
+
+  const sourceMappingArg = getClassSourceMatch![1]!.match(/mapping:\s*([^,]+),/)?.[1]?.trim();
+  const membersMappingArg = getClassMembersMatch![1]!.match(/mapping:\s*([^,]+),/)?.[1]?.trim();
+
+  assert.equal(sourceMappingArg, "input.mapping");
+  assert.equal(
+    membersMappingArg,
+    "input.mapping",
+    "getClassMembers must pass input.mapping (raw) like getClassSource so workspace-detected mapping is preserved when caller omits mapping"
+  );
+});
+
+test("synthesizeWorkspaceTarget honors top-level input.scope over the loader-derived default", async () => {
+  const projectPath = await makeProject(
+    { minecraft_version: "1.21.10" },
+    [
+      "plugins {",
+      "  id 'fabric-loom' version '1.9-SNAPSHOT'",
+      "}",
+      "dependencies {",
+      "  mappings loom.officialMojangMappings()",
+      "}"
+    ].join("\n")
+  );
+  const root = await mkdtemp(join(tmpdir(), "ws-target-host-scope-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: createWorkspaceContextCache() }
+  ) as unknown as AnySourceService;
+
+  const synthesized = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath, scope: "loader" },
+    { kind: "workspace" }
+  )) as { scope: string };
+
+  assert.equal(synthesized.scope, "loader");
+});
+
+test("synthesizeWorkspaceTarget gives workspace.scope precedence over input.scope when both are supplied", async () => {
+  const projectPath = await makeProject(
+    { minecraft_version: "1.21.10" },
+    [
+      "plugins {",
+      "  id 'fabric-loom' version '1.9-SNAPSHOT'",
+      "}",
+      "dependencies {",
+      "  mappings loom.officialMojangMappings()",
+      "}"
+    ].join("\n")
+  );
+  const root = await mkdtemp(join(tmpdir(), "ws-target-host-scope-precedence-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: createWorkspaceContextCache() }
+  ) as unknown as AnySourceService;
+
+  const synthesized = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace", scope: "vanilla" }, projectPath, scope: "loader" },
+    { kind: "workspace", scope: "vanilla" }
+  )) as { scope: string };
+
+  assert.equal(synthesized.scope, "vanilla");
 });
 
 test("synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set", async () => {

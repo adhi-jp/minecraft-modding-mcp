@@ -167,16 +167,16 @@ test("detectDependencyVersion enumerates 4 dedup'd property keys in order", asyn
   }
 });
 
-test("detectDependencyVersion picks semver-newest from modules-2 cache and excludes snapshots", async () => {
+test("detectDependencyVersion resolves a single non-snapshot modules-2 entry", async () => {
   const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
-  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-home-"));
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-single-"));
   const cacheDir = join(fakeGradleHome, "caches", "modules-2", "files-2.1", "dev.architectury", "architectury");
   await mkdir(cacheDir, { recursive: true });
-  for (const version of ["12.4.0", "13.0.0", "13.0.0-snapshot", "13.0.1-dev"]) {
+  for (const version of ["13.0.0", "13.0.0-snapshot", "13.0.1-dev"]) {
     await mkdir(join(cacheDir, version), { recursive: true });
   }
 
-  const project = await mkdtemp(join(tmpdir(), "dep-version-modules2-"));
+  const project = await mkdtemp(join(tmpdir(), "dep-version-modules2-single-"));
   process.env.GRADLE_USER_HOME = fakeGradleHome;
   try {
     const service = new WorkspaceMappingService();
@@ -186,11 +186,34 @@ test("detectDependencyVersion picks semver-newest from modules-2 cache and exclu
     if (result.resolved) {
       assert.equal(result.version, "13.0.0");
       assert.match(result.source, /modules-2:/);
-      assert.ok(result.candidatesSeen.includes("13.0.0"));
-      assert.ok(result.candidatesSeen.includes("12.4.0"));
       assert.ok(!result.candidatesSeen.includes("13.0.0-snapshot"));
       assert.ok(!result.candidatesSeen.includes("13.0.1-dev"));
     }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion refuses to pick when modules-2 has multiple non-snapshot entries", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-multi-"));
+  const cacheDir = join(fakeGradleHome, "caches", "modules-2", "files-2.1", "dev.architectury", "architectury");
+  await mkdir(cacheDir, { recursive: true });
+  for (const version of ["12.4.0", "13.0.0", "13.0.0-snapshot", "13.0.1-dev"]) {
+    await mkdir(join(cacheDir, version), { recursive: true });
+  }
+
+  const project = await mkdtemp(join(tmpdir(), "dep-version-modules2-multi-"));
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(project, "dev.architectury", "architectury");
+
+    assert.equal(result.resolved, false);
+    assert.ok(result.candidatesSeen.includes("13.0.0"));
+    assert.ok(result.candidatesSeen.includes("12.4.0"));
+    assert.ok(!result.candidatesSeen.includes("13.0.0-snapshot"));
+    assert.ok(!result.candidatesSeen.includes("13.0.1-dev"));
   } finally {
     delete process.env.GRADLE_USER_HOME;
   }
@@ -231,6 +254,59 @@ test("detectDependencyVersion includes snapshots when opts.includeSnapshots is t
     assert.equal(result.resolved, true);
     if (result.resolved) {
       assert.equal(result.version, "1.0.0-snapshot");
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion rejects unsafe version tokens from gradle.properties (path traversal guard)", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-traversal-"));
+  const project = await mkdtemp(join(tmpdir(), "dep-version-traversal-prop-"));
+  await writeFile(
+    join(project, "gradle.properties"),
+    [
+      "architectury_version=../../../etc/passwd",
+      "fabricApiVersion=v\\0bad",
+      "architectury_architectury_version=valid_one"
+    ].join("\n"),
+    "utf8"
+  );
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(project, "dev.architectury", "architectury");
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "valid_one");
+      assert.match(result.source, /architectury_architectury_version/);
+      assert.ok(result.attempts.some((entry) => /rejected-unsafe-version/.test(entry)));
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion rejects unsafe modules-2 directory entries", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-modules-traversal-"));
+  const cacheDir = join(fakeGradleHome, "caches", "modules-2", "files-2.1", "g.example", "lib");
+  await mkdir(cacheDir, { recursive: true });
+  await mkdir(join(cacheDir, "1.0.0"), { recursive: true });
+  await mkdir(join(cacheDir, "weird name"), { recursive: true });
+
+  const project = await mkdtemp(join(tmpdir(), "dep-version-modules-traversal-"));
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(project, "g.example", "lib");
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "1.0.0");
+      assert.ok(!result.candidatesSeen.includes("weird name"));
     }
   } finally {
     delete process.env.GRADLE_USER_HOME;

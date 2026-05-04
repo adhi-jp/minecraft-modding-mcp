@@ -63,7 +63,7 @@ test("synthesizeDependencyTarget reads architectury_version from gradle.properti
   assert.match(synthesized.provenance.source, /architectury_version/);
 });
 
-test("synthesizeDependencyTarget picks semver-newest from modules-2 cache and emits warnings", async () => {
+test("synthesizeDependencyTarget refuses to pick when modules-2 has multiple cached versions", async () => {
   const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-dep-"));
   const cacheDir = join(
     fakeGradleHome,
@@ -89,18 +89,20 @@ test("synthesizeDependencyTarget picks semver-newest from modules-2 cache and em
       { workspaceContextCache: createWorkspaceContextCache() }
     ) as unknown as AnySourceService;
 
-    const synthesized = (await service.synthesizeDependencyTarget(
-      { target: { kind: "dependency" }, projectPath: project },
-      { kind: "dependency", group: "dev.architectury", name: "architectury" }
-    )) as {
-      target: { value: string };
-      provenance: { resolvedVersion: string; candidatesSeen?: string[] };
-      warnings: string[];
-    };
-
-    assert.equal(synthesized.target.value, "dev.architectury:architectury:13.0.0");
-    assert.equal(synthesized.provenance.resolvedVersion, "13.0.0");
-    assert.ok(synthesized.warnings.some((w) => /multiple cached versions/.test(w)));
+    await assert.rejects(
+      () =>
+        service.synthesizeDependencyTarget(
+          { target: { kind: "dependency" }, projectPath: project },
+          { kind: "dependency", group: "dev.architectury", name: "architectury" }
+        ),
+      (err: Error & { code?: string; details?: { ambiguous?: boolean; candidatesSeen?: string[] } }) => {
+        assert.equal(err.code, ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED);
+        assert.equal(err.details?.ambiguous, true);
+        assert.ok(err.details?.candidatesSeen?.includes("13.0.0"));
+        assert.ok(err.details?.candidatesSeen?.includes("12.4.0"));
+        return true;
+      }
+    );
   } finally {
     delete process.env.GRADLE_USER_HOME;
   }
@@ -133,6 +135,26 @@ test("synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when n
     );
   } finally {
     delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("synthesizeDependencyTarget rejects unsafe explicit version tokens", async () => {
+  const host = await makeHost();
+  const service = new SourceService(buildTestConfig(host)) as unknown as AnySourceService;
+
+  for (const badVersion of ["../1.0", "1.0/etc", "1.0\\bad", "..", "1\\0bad"]) {
+    await assert.rejects(
+      () =>
+        service.synthesizeDependencyTarget(
+          { target: { kind: "dependency" } },
+          { kind: "dependency", group: "g.example", name: "lib", version: badVersion }
+        ),
+      (err: Error & { code?: string; details?: { fieldErrors?: Array<{ path?: string }> } }) => {
+        assert.equal(err.code, ERROR_CODES.INVALID_INPUT);
+        assert.equal(err.details?.fieldErrors?.[0]?.path, "target.version");
+        return true;
+      }
+    );
   }
 });
 

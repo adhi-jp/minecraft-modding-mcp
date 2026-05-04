@@ -183,6 +183,18 @@ function isPathTraversalToken(token: string): boolean {
   return token.length === 0 || token.includes("/") || token.includes("\\") || token.includes("..") || token.includes("\0");
 }
 
+const SAFE_VERSION_TOKEN_RE = /^[A-Za-z0-9._+-]+$/;
+
+export function isSafeMavenVersionToken(token: string): boolean {
+  if (typeof token !== "string" || token.length === 0 || token.length > 200) {
+    return false;
+  }
+  if (token.startsWith(".") || token.includes("..")) {
+    return false;
+  }
+  return SAFE_VERSION_TOKEN_RE.test(token);
+}
+
 function resolveGradleUserHome(): string {
   const configured = process.env.GRADLE_USER_HOME?.trim();
   if (configured) {
@@ -358,6 +370,10 @@ export class WorkspaceMappingService {
         attempts.push(`gradle.properties:${key}`);
         const value = readPropertyValue(propsContent, key);
         if (value) {
+          if (!isSafeMavenVersionToken(value)) {
+            attempts.push(`gradle.properties:${key}:rejected-unsafe-version`);
+            continue;
+          }
           return {
             resolved: true,
             version: value,
@@ -391,7 +407,7 @@ export class WorkspaceMappingService {
     }
 
     const filtered = entries.filter((entry) => {
-      if (entry.startsWith(".")) {
+      if (!isSafeMavenVersionToken(entry)) {
         return false;
       }
       if (includeSnapshots) {
@@ -401,13 +417,17 @@ export class WorkspaceMappingService {
       return !lower.endsWith("-snapshot") && !lower.endsWith("-dev");
     });
 
-    candidatesSeen.push(...filtered);
+    const sorted = [...filtered].sort(compareSemverDescending);
+    candidatesSeen.push(...sorted);
 
-    if (filtered.length === 0) {
+    if (sorted.length === 0) {
       return { resolved: false, candidatesSeen, attempts };
     }
 
-    const sorted = [...filtered].sort(compareSemverDescending);
+    if (sorted.length > 1) {
+      return { resolved: false, candidatesSeen, attempts };
+    }
+
     const chosen = sorted[0];
     if (!chosen) {
       return { resolved: false, candidatesSeen, attempts };

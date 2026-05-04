@@ -28,12 +28,13 @@ async function makeHost(): Promise<string> {
   return root;
 }
 
-test("buildMappingFallbackSuggestedCall returns workspace retry when cache hit reports a non-obfuscated compile mapping", async () => {
+test("buildMappingFallbackSuggestedCall returns workspace retry when cache hit reports a non-obfuscated compile mapping AND matching MC version", async () => {
   const project = await mkdtemp(join(tmpdir(), "fallback-cache-hit-"));
   const host = await makeHost();
   const cache = createWorkspaceContextCache();
   const ctx: WorkspaceContext = {
     projectPath: project,
+    minecraftVersion: "1.21.10",
     compileMapping: "mojang",
     detectedAt: Date.now(),
     evidence: [],
@@ -108,6 +109,7 @@ test("buildMappingFallbackSuggestedCall returns legacy retry when the cached com
 
 test("buildMappingFallbackSuggestedCall runs cold-cache bounded detection and returns workspace retry on success", async () => {
   const project = await mkdtemp(join(tmpdir(), "fallback-cold-detect-"));
+  await writeFile(join(project, "gradle.properties"), "minecraft_version=1.21.10\n", "utf8");
   await writeFile(
     join(project, "build.gradle"),
     [
@@ -134,6 +136,98 @@ test("buildMappingFallbackSuggestedCall runs cold-cache bounded detection and re
   const params = result.suggestedCall.params as { target: { kind: string }; mapping: string };
   assert.equal(params.target.kind, "workspace");
   assert.equal(params.mapping, "mojang");
+});
+
+test("buildMappingFallbackSuggestedCall does not redirect to workspace when MC version mismatches", async () => {
+  const project = await mkdtemp(join(tmpdir(), "fallback-mismatch-"));
+  const host = await makeHost();
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: project,
+    minecraftVersion: "1.21.10",
+    compileMapping: "mojang",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+  const service = new SourceService(
+    buildTestConfig(host),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const result = await service.buildMappingFallbackSuggestedCall({
+    input: { target: { kind: "version", value: "1.20.1" }, projectPath: project, mapping: "mojang" },
+    kind: "version",
+    value: "1.20.1",
+    scope: "vanilla",
+    effectiveMapping: "mojang"
+  });
+
+  const params = result.suggestedCall.params as { target?: { kind: string; value?: string } };
+  assert.notEqual(params.target?.kind, "workspace");
+  assert.equal(params.target?.value, "1.20.1");
+});
+
+test("buildMappingFallbackSuggestedCall does not redirect coordinate failures to the workspace target", async () => {
+  const project = await mkdtemp(join(tmpdir(), "fallback-coord-"));
+  const host = await makeHost();
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: project,
+    compileMapping: "mojang",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+  const service = new SourceService(
+    buildTestConfig(host),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const result = await service.buildMappingFallbackSuggestedCall({
+    input: { target: { kind: "coordinate", value: "com.example:foo:1.0" }, projectPath: project, mapping: "mojang" },
+    kind: "coordinate",
+    value: "com.example:foo:1.0",
+    scope: undefined,
+    effectiveMapping: "mojang"
+  });
+
+  const params = result.suggestedCall.params as { target?: { kind?: string; value?: string } };
+  assert.notEqual(params.target?.kind, "workspace");
+  assert.equal(params.target?.kind, "coordinate");
+  assert.equal(params.target?.value, "com.example:foo:1.0");
+});
+
+test("buildMappingFallbackSuggestedCall does not redirect jar failures to the workspace target", async () => {
+  const project = await mkdtemp(join(tmpdir(), "fallback-jar-"));
+  const host = await makeHost();
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: project,
+    compileMapping: "mojang",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+  const service = new SourceService(
+    buildTestConfig(host),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const result = await service.buildMappingFallbackSuggestedCall({
+    input: { target: { kind: "jar", value: "/tmp/foo.jar" }, projectPath: project },
+    kind: "jar",
+    value: "/tmp/foo.jar",
+    scope: undefined,
+    effectiveMapping: "mojang"
+  });
+
+  const params = result.suggestedCall.params as { target?: { kind?: string } };
+  assert.notEqual(params.target?.kind, "workspace");
+  assert.equal(params.target?.kind, "jar");
 });
 
 test("buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set", async () => {
