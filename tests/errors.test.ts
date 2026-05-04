@@ -15,9 +15,19 @@ test("ERROR_CODES exposes ERR_STAGE_BUDGET_PRE_PARSE", () => {
   assert.equal(ERROR_CODES.STAGE_BUDGET_PRE_PARSE, "ERR_STAGE_BUDGET_PRE_PARSE");
 });
 
+test("ERROR_CODES exposes ERR_WORKSPACE_VERSION_UNRESOLVED", () => {
+  assert.equal(ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED, "ERR_WORKSPACE_VERSION_UNRESOLVED");
+});
+
+test("ERROR_CODES exposes ERR_DEPENDENCY_VERSION_UNRESOLVED", () => {
+  assert.equal(ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED, "ERR_DEPENDENCY_VERSION_UNRESOLVED");
+});
+
 test("new error codes are part of the ErrorCode union", () => {
   const values = Object.values(ERROR_CODES) as ErrorCode[];
   assert.ok(values.includes("ERR_WORKER_RESTART" as ErrorCode));
   assert.ok(values.includes("ERR_MIXIN_PARSE_FAILED" as ErrorCode));
   assert.ok(values.includes("ERR_STAGE_BUDGET_PRE_PARSE" as ErrorCode));
+  assert.ok(values.includes("ERR_WORKSPACE_VERSION_UNRESOLVED" as ErrorCode));
+  assert.ok(values.includes("ERR_DEPENDENCY_VERSION_UNRESOLVED" as ErrorCode));
 });
