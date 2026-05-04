@@ -13,6 +13,22 @@ export interface SourceTargetInput {
   value: string;
 }
 
+export type WorkspaceTargetInput = {
+  kind: "workspace";
+  scope?: ArtifactScope;
+  strict?: boolean;
+};
+
+export type DependencyTargetInput = {
+  kind: "dependency";
+  group: string;
+  name: string;
+  version?: string;
+  versionFromProject?: boolean;
+};
+
+export type ResolveArtifactTargetInput = SourceTargetInput | WorkspaceTargetInput | DependencyTargetInput;
+
 export interface ResolvedSourceArtifact {
   artifactId: string;
   artifactAlias?: string;
@@ -32,6 +48,28 @@ export interface ResolvedSourceArtifact {
   resolvedAt: string;
 }
 
+export interface WorkspaceResolutionProvenance {
+  projectPath: string;
+  detected: {
+    minecraftVersion?: string;
+    compileMapping?: SourceMapping;
+    loader?: string;
+  };
+  source: string;
+  cacheHit: boolean;
+  warnings?: string[];
+}
+
+export interface DependencyResolutionProvenance {
+  group: string;
+  name: string;
+  resolvedVersion?: string;
+  source: string;
+  candidatesSeen?: string[];
+  attempts?: string[];
+  cacheHit: boolean;
+}
+
 export interface ArtifactProvenance {
   target: SourceTargetInput;
   resolvedAt: string;
@@ -44,6 +82,9 @@ export interface ArtifactProvenance {
     repoUrl?: string;
   };
   transformChain: string[];
+  workspaceResolution?: WorkspaceResolutionProvenance;
+  dependencyResolution?: DependencyResolutionProvenance;
+  warnings?: string[];
 }
 
 export interface RuntimeValidationProvenance<

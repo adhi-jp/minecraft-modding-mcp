@@ -85,6 +85,11 @@ import {
   type WorkspaceCompileMappingOutput,
   type WorkspaceProjectLoader
 } from "./workspace-mapping-service.js";
+import {
+  getProcessWorkspaceContextCache,
+  type WorkspaceContext,
+  type WorkspaceContextCache
+} from "./workspace-context-cache.js";
 import type {
   AccessTransformerNamespace,
   ArtifactProvenance,
@@ -92,13 +97,18 @@ import type {
   ArtifactScope,
   ArtifactTargetKind,
   Config,
+  DependencyResolutionProvenance,
+  DependencyTargetInput,
   FileRow,
   MappingSourcePriority,
+  ResolveArtifactTargetInput,
   ResolvedSourceArtifact,
   RuntimeValidationProvenance,
   SourceMapping,
   SourceTargetInput,
-  SymbolRow
+  SymbolRow,
+  WorkspaceResolutionProvenance,
+  WorkspaceTargetInput
 } from "./types.js";
 import {
   VersionService,
@@ -129,8 +139,11 @@ import {
   type SearchModSourceOutput
 } from "./mod-search-service.js";
 
+const WORKSPACE_TARGET_OFF = process.env.WORKSPACE_TARGET_OFF === "1";
+const DEPENDENCY_TARGET_OFF = process.env.DEPENDENCY_TARGET_OFF === "1";
+
 export type ResolveArtifactInput = {
-  target: SourceTargetInput;
+  target: ResolveArtifactTargetInput;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
@@ -420,7 +433,7 @@ export type SourceMode = "metadata" | "snippet" | "full";
 
 export type GetClassSourceInput = {
   artifactId?: string;
-  target?: SourceTargetInput;
+  target?: ResolveArtifactTargetInput;
   className: string;
   mode?: SourceMode;
   mapping?: SourceMapping;
@@ -483,7 +496,7 @@ type MemberAccess = "public" | "all";
 
 export type GetClassMembersInput = {
   artifactId?: string;
-  target?: SourceTargetInput;
+  target?: ResolveArtifactTargetInput;
   className: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -1682,6 +1695,7 @@ export class SourceService {
   private readonly versionService: VersionService;
   private readonly mappingService: MappingService;
   private readonly workspaceMappingService: WorkspaceMappingService;
+  private readonly workspaceContextCache: WorkspaceContextCache;
   private readonly explorerService: MinecraftExplorerService;
   private readonly registryService: RegistryService;
   private readonly versionDiffService: VersionDiffService;
@@ -1694,12 +1708,17 @@ export class SourceService {
    * resolveArtifact calls for the same artifactId share a single tiny-remapper run. */
   private readonly inflightRemaps = new Map<string, Promise<string>>();
 
-  constructor(explicitConfig?: Config, metrics = new RuntimeMetrics()) {
+  constructor(
+    explicitConfig?: Config,
+    metrics = new RuntimeMetrics(),
+    deps: { workspaceContextCache?: WorkspaceContextCache } = {}
+  ) {
     this.config = explicitConfig ?? loadConfig();
     this.metrics = metrics;
     this.versionService = new VersionService(this.config);
     this.mappingService = new MappingService(this.config, this.versionService);
     this.workspaceMappingService = new WorkspaceMappingService();
+    this.workspaceContextCache = deps.workspaceContextCache ?? getProcessWorkspaceContextCache();
     this.explorerService = new MinecraftExplorerService(this.config);
     this.registryService = new RegistryService(this.config, this.versionService);
     this.versionDiffService = new VersionDiffService(this.config, this.versionService, this.registryService);
@@ -2262,6 +2281,7 @@ export class SourceService {
     version: string | undefined;
     targetKind: ArtifactTargetKind;
     sourcePriority?: MappingSourcePriority;
+    forceBinaryRemapDisabled?: boolean;
   }): Promise<{
     allowBinaryRemap: boolean;
     mappingVariant: MappingVariant;
@@ -2278,6 +2298,10 @@ export class SourceService {
       mappingVariant: "pass",
       warnings: []
     };
+
+    if (input.forceBinaryRemapDisabled === true) {
+      return baseline;
+    }
 
     if (
       input.requestedMapping !== "mojang" ||
@@ -2434,12 +2458,375 @@ export class SourceService {
     return detected;
   }
 
+  private async loadOrDetectWorkspaceContext(projectPath: string): Promise<WorkspaceContext> {
+    const cached = this.workspaceContextCache.read(projectPath);
+    if (cached && !cached.partial) {
+      return cached;
+    }
+
+    const [minecraftVersion, mappingResult, loaderResult] = await Promise.all([
+      this.workspaceMappingService.detectProjectMinecraftVersion(projectPath),
+      this.workspaceMappingService.detectCompileMapping({ projectPath }).catch(() => undefined),
+      this.workspaceMappingService.detectProjectLoader(projectPath).catch(() => undefined)
+    ]);
+
+    const evidence: WorkspaceContext["evidence"] = [];
+    if (minecraftVersion) {
+      evidence.push({
+        source: "gradle.properties",
+        field: "minecraft_version",
+        value: minecraftVersion
+      });
+    }
+    if (mappingResult?.resolved && mappingResult.evidence[0]) {
+      evidence.push({
+        source: mappingResult.evidence[0].filePath,
+        field: "compileMapping",
+        value: mappingResult.mappingApplied
+      });
+    }
+    if (loaderResult?.resolved && loaderResult.evidence[0]) {
+      evidence.push({
+        source: loaderResult.evidence[0].filePath,
+        field: "loader",
+        value: loaderResult.loader
+      });
+    }
+
+    const ctx: WorkspaceContext = {
+      projectPath,
+      minecraftVersion,
+      compileMapping: mappingResult?.resolved ? mappingResult.mappingApplied : undefined,
+      loader: loaderResult?.resolved ? loaderResult.loader : undefined,
+      detectedAt: Date.now(),
+      evidence,
+      dependencyVersions: cached?.dependencyVersions ?? new Map<string, string>(),
+      partial: false
+    };
+    this.workspaceContextCache.write(ctx);
+    return ctx;
+  }
+
+  private async synthesizeWorkspaceTarget(
+    input: ResolveArtifactInput,
+    workspace: WorkspaceTargetInput
+  ): Promise<{
+    target: SourceTargetInput;
+    scope?: ArtifactScope;
+    mapping?: SourceMapping;
+    provenance: WorkspaceResolutionProvenance;
+    warnings: string[];
+  }> {
+    if (WORKSPACE_TARGET_OFF) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="workspace" is disabled by WORKSPACE_TARGET_OFF=1.',
+        details: {
+          fieldErrors: [{ path: "target.kind", message: 'target.kind="workspace" is disabled.' }]
+        }
+      });
+    }
+
+    const projectPath = input.projectPath?.trim();
+    if (!projectPath) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'projectPath is required when target.kind="workspace".',
+        details: {
+          fieldErrors: [{ path: "projectPath", message: 'projectPath is required when target.kind="workspace".' }]
+        }
+      });
+    }
+
+    const cachedBefore = this.workspaceContextCache.read(projectPath);
+    const cacheHit = Boolean(cachedBefore && !cachedBefore.partial);
+    const ctx = cacheHit ? cachedBefore! : await this.loadOrDetectWorkspaceContext(projectPath);
+
+    const warnings: string[] = [];
+    let resolvedVersion = ctx.minecraftVersion;
+    if (!resolvedVersion) {
+      if (workspace.strict === true) {
+        throw createError({
+          code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+          message: `Could not detect a Minecraft version for projectPath "${projectPath}".`,
+          details: {
+            projectPath,
+            nextAction:
+              "Set minecraft_version in gradle.properties or pass target.kind=\"version\" with an explicit Minecraft version.",
+            suggestedCall: {
+              tool: "resolve-artifact",
+              params: {
+                target: { kind: "version", value: "<your-mc-version>" },
+                projectPath
+              }
+            }
+          }
+        });
+      }
+      const fallback = await this.versionService.listVersions({ includeSnapshots: false, limit: 1 });
+      const latestVersion = fallback.latest.release ?? fallback.releases[0]?.id;
+      if (!latestVersion) {
+        throw createError({
+          code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+          message: `Could not detect a Minecraft version for projectPath "${projectPath}" and no fallback Minecraft version is available.`,
+          details: { projectPath }
+        });
+      }
+      resolvedVersion = latestVersion;
+      warnings.push(
+        `No Minecraft version detected in workspace; falling back to latest stable Minecraft version "${latestVersion}".`
+      );
+    }
+
+    const requestedMapping = normalizeMapping(input.mapping);
+    let effectiveMapping: SourceMapping | undefined;
+    if (input.mapping) {
+      effectiveMapping = requestedMapping;
+      if (ctx.compileMapping && ctx.compileMapping !== requestedMapping) {
+        warnings.push(
+          `Compile mapping mismatch (workspace=${ctx.compileMapping}, requested=${requestedMapping}); using requested mapping.`
+        );
+      }
+    } else {
+      effectiveMapping = ctx.compileMapping ?? "obfuscated";
+    }
+
+    const effectiveScope: ArtifactScope = workspace.scope ?? (ctx.loader ? "merged" : "vanilla");
+
+    const provenance: WorkspaceResolutionProvenance = {
+      projectPath,
+      detected: {
+        minecraftVersion: ctx.minecraftVersion,
+        compileMapping: ctx.compileMapping,
+        loader: ctx.loader
+      },
+      source: ctx.evidence
+        .map((entry) => `${entry.source}:${entry.field}`)
+        .join("; ") || (cacheHit ? "workspace-context-cache" : "workspace-detection"),
+      cacheHit,
+      warnings: [...warnings]
+    };
+
+    return {
+      target: { kind: "version", value: resolvedVersion },
+      scope: effectiveScope,
+      mapping: effectiveMapping,
+      provenance,
+      warnings
+    };
+  }
+
+  private async synthesizeDependencyTarget(
+    input: ResolveArtifactInput,
+    dep: DependencyTargetInput
+  ): Promise<{
+    target: SourceTargetInput;
+    provenance: DependencyResolutionProvenance;
+    requestedMapping?: SourceMapping;
+    warnings: string[];
+  }> {
+    if (DEPENDENCY_TARGET_OFF) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="dependency" is disabled by DEPENDENCY_TARGET_OFF=1.',
+        details: {
+          fieldErrors: [{ path: "target.kind", message: 'target.kind="dependency" is disabled.' }]
+        }
+      });
+    }
+
+    const group = dep.group?.trim();
+    const name = dep.name?.trim();
+    if (!group || !name) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="dependency" requires non-empty group and name.',
+        details: {
+          fieldErrors: [
+            ...(group ? [] : [{ path: "target.group", message: "group is required" }]),
+            ...(name ? [] : [{ path: "target.name", message: "name is required" }])
+          ]
+        }
+      });
+    }
+    if (
+      group.includes("/") ||
+      group.includes("\\") ||
+      group.includes("..") ||
+      group.includes("\0") ||
+      name.includes("/") ||
+      name.includes("\\") ||
+      name.includes("..") ||
+      name.includes("\0")
+    ) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="dependency" group/name must not contain path traversal characters.',
+        details: {
+          fieldErrors: [{ path: "target", message: "group and name must not contain '/', '\\', '..', or NUL." }]
+        }
+      });
+    }
+
+    if (dep.version) {
+      const coordinate = `${group}:${name}:${dep.version}`;
+      return {
+        target: { kind: "coordinate", value: coordinate },
+        requestedMapping: input.mapping ? normalizeMapping(input.mapping) : undefined,
+        warnings: [],
+        provenance: {
+          group,
+          name,
+          resolvedVersion: dep.version,
+          source: "explicit",
+          cacheHit: false
+        }
+      };
+    }
+
+    if (dep.versionFromProject === false) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="dependency" requires version when versionFromProject=false.',
+        details: {
+          fieldErrors: [
+            { path: "target.version", message: "version is required when versionFromProject=false." }
+          ]
+        }
+      });
+    }
+
+    const projectPath = input.projectPath?.trim();
+    if (!projectPath) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'projectPath is required when target.kind="dependency" without an explicit version.',
+        details: {
+          fieldErrors: [{ path: "projectPath", message: 'projectPath is required for dependency target without version.' }]
+        }
+      });
+    }
+
+    const cacheKey = `${group}:${name}`;
+    const ctxBefore = this.workspaceContextCache.read(projectPath);
+    const cachedVersion = ctxBefore?.dependencyVersions.get(cacheKey);
+    const warningsBucket: string[] = [];
+    if (cachedVersion) {
+      const coordinate = `${group}:${name}:${cachedVersion}`;
+      return {
+        target: { kind: "coordinate", value: coordinate },
+        requestedMapping: input.mapping ? normalizeMapping(input.mapping) : undefined,
+        warnings: [],
+        provenance: {
+          group,
+          name,
+          resolvedVersion: cachedVersion,
+          source: "workspace-context-cache",
+          cacheHit: true
+        }
+      };
+    }
+
+    const result = await this.workspaceMappingService.detectDependencyVersion(projectPath, group, name);
+    if (!result.resolved) {
+      throw createError({
+        code: ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED,
+        message: `Could not resolve a version for dependency ${group}:${name} from gradle.properties or modules-2 cache.`,
+        details: {
+          group,
+          name,
+          attempts: result.attempts,
+          candidatesSeen: result.candidatesSeen,
+          nextAction:
+            "Provide an explicit version on the dependency target, or add a property to gradle.properties so detectDependencyVersion can find it.",
+          suggestedCall: {
+            tool: "resolve-artifact",
+            params: {
+              target: {
+                kind: "dependency",
+                group,
+                name,
+                version: "<your-version>"
+              },
+              projectPath
+            }
+          }
+        }
+      });
+    }
+
+    const ctxAfter = this.workspaceContextCache.read(projectPath);
+    if (ctxAfter) {
+      const updatedDeps = new Map(ctxAfter.dependencyVersions);
+      updatedDeps.set(cacheKey, result.version);
+      this.workspaceContextCache.write({ ...ctxAfter, dependencyVersions: updatedDeps });
+    } else {
+      const updatedDeps = new Map<string, string>();
+      updatedDeps.set(cacheKey, result.version);
+      this.workspaceContextCache.write({
+        projectPath,
+        detectedAt: Date.now(),
+        evidence: [],
+        dependencyVersions: updatedDeps,
+        partial: true
+      });
+    }
+
+    if (result.candidatesSeen.length > 1) {
+      warningsBucket.push(
+        `multiple cached versions: [${result.candidatesSeen.join(", ")}]; using ${result.version}`
+      );
+    }
+
+    const coordinate = `${group}:${name}:${result.version}`;
+    return {
+      target: { kind: "coordinate", value: coordinate },
+      requestedMapping: input.mapping ? normalizeMapping(input.mapping) : undefined,
+      warnings: warningsBucket,
+      provenance: {
+        group,
+        name,
+        resolvedVersion: result.version,
+        source: result.source,
+        candidatesSeen: result.candidatesSeen,
+        attempts: result.attempts,
+        cacheHit: false
+      }
+    };
+  }
+
   async resolveArtifact(input: ResolveArtifactInput): Promise<ResolveArtifactOutput> {
-    const kind = input.target.kind;
-    let value = input.target.value?.trim();
+    let workspaceProvenance: WorkspaceResolutionProvenance | undefined;
+    let dependencyProvenance: DependencyResolutionProvenance | undefined;
+    let dependencyOrigin = false;
+    let dependencyRequestedMapping: SourceMapping | undefined;
+    const synthesisWarnings: string[] = [];
+
+    if (input.target.kind === "workspace") {
+      const synthesized = await this.synthesizeWorkspaceTarget(input, input.target);
+      workspaceProvenance = synthesized.provenance;
+      synthesisWarnings.push(...synthesized.warnings);
+      input = {
+        ...input,
+        target: synthesized.target,
+        scope: synthesized.scope ?? input.scope,
+        mapping: synthesized.mapping
+      };
+    } else if (input.target.kind === "dependency") {
+      const synthesized = await this.synthesizeDependencyTarget(input, input.target);
+      dependencyProvenance = synthesized.provenance;
+      dependencyOrigin = true;
+      dependencyRequestedMapping = synthesized.requestedMapping;
+      synthesisWarnings.push(...synthesized.warnings);
+      input = { ...input, target: synthesized.target };
+    }
+
+    const target = input.target as SourceTargetInput;
+    const kind = target.kind;
+    let value = target.value?.trim();
     const mapping = normalizeMapping(input.mapping);
     const scope = input.scope;
-    const warnings: string[] = [];
+    const warnings: string[] = [...synthesisWarnings];
 
     // P5: preferProjectVersion - detect MC version from gradle.properties
     if (input.preferProjectVersion && input.projectPath && kind === "version") {
@@ -2546,7 +2933,8 @@ export class SourceService {
             runtimeNamesUnobfuscated,
             version: resolvedVersion,
             targetKind: kind,
-            sourcePriority: input.sourcePriority
+            sourcePriority: input.sourcePriority,
+            forceBinaryRemapDisabled: dependencyOrigin
           });
       if (binaryRemapGate.warnings.length > 0) {
         warnings.push(...binaryRemapGate.warnings);
@@ -2676,9 +3064,28 @@ export class SourceService {
         resolved,
         transformChain: [...mappingDecision.transformChain, ...additionalTransformChain]
       });
+      if (workspaceProvenance) {
+        provenance.workspaceResolution = workspaceProvenance;
+      }
+      if (dependencyProvenance) {
+        provenance.dependencyResolution = dependencyProvenance;
+      }
+
+      let finalMappingApplied = mappingDecision.mappingApplied;
+      if (dependencyOrigin && dependencyRequestedMapping && dependencyRequestedMapping !== finalMappingApplied) {
+        const coord = resolved.coordinate ?? value;
+        warnings.push(
+          `Dependency artifact ${coord} is in ${finalMappingApplied} namespace; requested mapping "${dependencyRequestedMapping}" cannot be applied to dependency JARs (binary remap is disabled for non-vanilla artifacts).`
+        );
+      }
+
+      const provenanceWarnings = [...synthesisWarnings];
+      if (provenanceWarnings.length > 0) {
+        provenance.warnings = [...(provenance.warnings ?? []), ...provenanceWarnings];
+      }
 
       resolved.requestedMapping = effectiveMapping;
-      resolved.mappingApplied = mappingDecision.mappingApplied;
+      resolved.mappingApplied = finalMappingApplied;
       resolved.provenance = provenance;
       resolved.qualityFlags = [...mappingDecision.qualityFlags];
       if (versionSourceDiscovery?.candidateArtifacts.length) {
@@ -4396,7 +4803,8 @@ export class SourceService {
         qualityFlags: activeQualityFlags,
         attemptedBinaryFallback,
         targetKind: input.target?.kind,
-        targetValue: input.target?.value,
+        targetValue:
+          input.target && "value" in input.target ? input.target.value : undefined,
         scope: input.scope,
         projectPath: input.projectPath,
         version
@@ -4428,7 +4836,8 @@ export class SourceService {
         attemptedBinaryFallback,
         filePath,
         targetKind: input.target?.kind,
-        targetValue: input.target?.value,
+        targetValue:
+          input.target && "value" in input.target ? input.target.value : undefined,
         scope: input.scope,
         projectPath: input.projectPath,
         version

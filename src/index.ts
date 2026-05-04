@@ -190,43 +190,83 @@ const artifactScopeSchema = z.enum(ARTIFACT_SCOPES);
 const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
 const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
 
-type ResolveArtifactTargetInput = {
-  kind: SourceTargetInput["kind"];
-  value: string;
-};
+type ResolveArtifactTargetInput =
+  | {
+      kind: SourceTargetInput["kind"];
+      value: string;
+    }
+  | {
+      kind: "workspace";
+      scope?: "vanilla" | "merged" | "loader";
+      strict?: boolean;
+    }
+  | {
+      kind: "dependency";
+      group: string;
+      name: string;
+      version?: string;
+      versionFromProject?: boolean;
+    };
 
 type SourceLookupTargetInput =
   | {
       type: "artifact";
       artifactId: string;
     }
-  | {
+  | ({
       type: "resolve";
-      kind: SourceTargetInput["kind"];
-      value: string;
-    };
+    } & ResolveArtifactTargetInput);
 
-const resolveArtifactTargetSchema = z.object({
-  kind: targetKindSchema,
-  value: nonEmptyString
+const workspaceTargetSchema = z.object({
+  kind: z.literal("workspace"),
+  scope: artifactScopeSchema.optional(),
+  strict: z.boolean().optional()
 });
 
-const sourceLookupTargetSchema = z.discriminatedUnion("type", [
+const dependencyTargetSchema = z.object({
+  kind: z.literal("dependency"),
+  group: nonEmptyString,
+  name: nonEmptyString,
+  version: z.string().trim().min(1).optional(),
+  versionFromProject: z.boolean().optional()
+});
+
+const resolveArtifactTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("version"), value: nonEmptyString }),
+  z.object({ kind: z.literal("jar"), value: nonEmptyString }),
+  z.object({ kind: z.literal("coordinate"), value: nonEmptyString }),
+  workspaceTargetSchema,
+  dependencyTargetSchema
+]);
+
+const sourceLookupTargetSchema = z.union([
   z.object({
     type: z.literal("artifact"),
     artifactId: nonEmptyString
   }),
+  z.object({ type: z.literal("resolve"), kind: z.literal("version"), value: nonEmptyString }),
+  z.object({ type: z.literal("resolve"), kind: z.literal("jar"), value: nonEmptyString }),
+  z.object({ type: z.literal("resolve"), kind: z.literal("coordinate"), value: nonEmptyString }),
   z.object({
     type: z.literal("resolve"),
-    kind: targetKindSchema,
-    value: nonEmptyString
+    kind: z.literal("workspace"),
+    scope: artifactScopeSchema.optional(),
+    strict: z.boolean().optional()
+  }),
+  z.object({
+    type: z.literal("resolve"),
+    kind: z.literal("dependency"),
+    group: nonEmptyString,
+    name: nonEmptyString,
+    version: z.string().trim().min(1).optional(),
+    versionFromProject: z.boolean().optional()
   })
 ]);
 
 const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
-  "Object with kind and value. Example: {\"kind\":\"version\",\"value\":\"1.21.10\"}. Must be an object, not a string.";
+  'Object with kind. Examples: {"kind":"version","value":"1.21.10"}, {"kind":"workspace"} (uses projectPath), or {"kind":"dependency","group":"dev.architectury","name":"architectury"}. Must be an object, not a string.';
 const SOURCE_LOOKUP_TARGET_DESCRIPTION =
-  "Object: {\"type\":\"resolve\",\"kind\":\"version\",\"value\":\"1.21.10\"} or {\"type\":\"artifact\",\"artifactId\":\"...\"}. Must be an object, not a string.";
+  'Object: {"type":"resolve","kind":"version","value":"1.21.10"} or {"type":"resolve","kind":"workspace"} or {"type":"resolve","kind":"dependency","group":"...","name":"..."} or {"type":"artifact","artifactId":"..."}. Must be an object, not a string.';
 const SOURCE_SCOPE_DESCRIPTION =
   "vanilla = Mojang client jar only; merged = source-oriented merged runtime discovery; loader = loader/runtime artifact discovery when the workspace exposes transformed runtime jars.";
 const SUGGESTED_CALL_DEFAULTS = {
@@ -265,10 +305,7 @@ const listVersionsShape = {
 const listVersionsSchema = z.object(listVersionsShape);
 
 const resolveArtifactShape = {
-  target: z.object({
-    kind: targetKindSchema,
-    value: nonEmptyString
-  }).describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   allowDecompile: z.boolean().default(true),
@@ -1025,17 +1062,13 @@ function normalizeSourceLookupTarget(
   target: SourceLookupTargetInput
 ): {
   artifactId?: string;
-  target?: SourceTargetInput;
+  target?: ResolveArtifactTargetInput;
 } {
   if (target.type === "artifact") {
     return { artifactId: target.artifactId };
   }
-  return {
-    target: {
-      kind: target.kind,
-      value: target.value
-    }
-  };
+  const { type: _type, ...rest } = target;
+  return { target: rest as ResolveArtifactTargetInput };
 }
 
 function parseClassApiKinds(value: string | undefined): WorkspaceSymbolKind[] | undefined {
