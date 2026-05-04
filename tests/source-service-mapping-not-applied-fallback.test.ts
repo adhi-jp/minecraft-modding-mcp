@@ -136,6 +136,49 @@ test("buildMappingFallbackSuggestedCall runs cold-cache bounded detection and re
   assert.equal(params.mapping, "mojang");
 });
 
+test("buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set", async () => {
+  const project = await mkdtemp(join(tmpdir(), "fallback-legacy-toggle-"));
+  await writeFile(
+    join(project, "build.gradle"),
+    [
+      "plugins { id 'fabric-loom' version '1.9-SNAPSHOT' }",
+      "dependencies { mappings loom.officialMojangMappings() }"
+    ].join("\n"),
+    "utf8"
+  );
+  const host = await makeHost();
+  const cache = createWorkspaceContextCache();
+  cache.write({
+    projectPath: project,
+    compileMapping: "mojang",
+    detectedAt: Date.now(),
+    evidence: [],
+    dependencyVersions: new Map<string, string>()
+  });
+  const service = new SourceService(
+    buildTestConfig(host),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  process.env.WORKSPACE_FALLBACK_LEGACY = "1";
+  try {
+    const result = await service.buildMappingFallbackSuggestedCall({
+      input: { target: { kind: "version", value: "1.21.10" }, projectPath: project, mapping: "mojang" },
+      kind: "version",
+      value: "1.21.10",
+      scope: "vanilla",
+      effectiveMapping: "mojang"
+    });
+
+    const params = result.suggestedCall.params as { target?: { kind: string }; mapping: string };
+    assert.notEqual(params.target?.kind, "workspace");
+    assert.equal(params.mapping, "mojang"); // legacy isVanillaMojang+projectPath path
+  } finally {
+    delete process.env.WORKSPACE_FALLBACK_LEGACY;
+  }
+});
+
 test("buildMappingFallbackSuggestedCall falls back to legacy retry when cold-cache detection finds nothing", async () => {
   const project = await mkdtemp(join(tmpdir(), "fallback-cold-empty-"));
   const host = await makeHost();

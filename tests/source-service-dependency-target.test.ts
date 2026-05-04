@@ -214,6 +214,28 @@ test("synthesizeDependencyTarget reuses WorkspaceContextCache on subsequent call
   }
 });
 
+test("synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set", async () => {
+  process.env.DEPENDENCY_TARGET_OFF = "1";
+  try {
+    const sourceServiceModule = await import(
+      `../src/source-service.ts?toggle=dep-${Date.now()}`
+    );
+    const host = await makeHost();
+    const service = new sourceServiceModule.SourceService(buildTestConfig(host)) as unknown as AnySourceService;
+
+    await assert.rejects(
+      () =>
+        service.synthesizeDependencyTarget(
+          { target: { kind: "dependency" } },
+          { kind: "dependency", group: "g", name: "n", version: "1.0.0" }
+        ),
+      (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
+    );
+  } finally {
+    delete process.env.DEPENDENCY_TARGET_OFF;
+  }
+});
+
 test("synthesizeDependencyTarget tries the four de-duplicated property keys", async () => {
   const project = await mkdtemp(join(tmpdir(), "dep-target-keys-"));
   const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-keys-"));
