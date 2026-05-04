@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import fastGlob from "fast-glob";
@@ -39,6 +40,24 @@ export type WorkspaceProjectLoaderOutput = {
   loader?: WorkspaceProjectLoader;
   evidence: WorkspaceLoaderEvidence[];
   warnings: string[];
+};
+
+export type DependencyVersionResolution =
+  | {
+      resolved: true;
+      version: string;
+      source: string;
+      candidatesSeen: string[];
+      attempts: string[];
+    }
+  | {
+      resolved: false;
+      candidatesSeen: string[];
+      attempts: string[];
+    };
+
+export type DependencyVersionOptions = {
+  includeSnapshots?: boolean;
 };
 
 type MappingDetection = {
@@ -84,6 +103,92 @@ function detectMappingsFromContent(content: string): MappingDetection[] {
     });
   }
   return detections;
+}
+
+function camelCaseDependencyName(name: string): string {
+  const parts = name.split(/[-_]/).filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return name;
+  }
+  const [first, ...rest] = parts;
+  const head = first ?? "";
+  return (
+    head +
+    rest
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join("")
+  );
+}
+
+function lastGroupSegment(group: string): string {
+  const segments = group.split(".").filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? group;
+}
+
+function buildDependencyPropertyKeys(group: string, name: string): string[] {
+  const camelName = camelCaseDependencyName(name);
+  const groupSegment = lastGroupSegment(group);
+  const camelGroupName = camelCaseDependencyName(`${groupSegment}_${name}`);
+  const keys = [
+    `${name}_version`,
+    `${camelName}Version`,
+    `${groupSegment}_${name}_version`,
+    `${camelGroupName}Version`
+  ];
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const key of keys) {
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(key);
+    }
+  }
+  return deduped;
+}
+
+function readPropertyValue(content: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^\\s*${escaped}\\s*=\\s*(.+?)\\s*$`, "m");
+  const match = content.match(pattern);
+  if (!match) {
+    return undefined;
+  }
+  const value = match[1]?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function compareSemverDescending(left: string, right: string): number {
+  const leftParts = left.split(/[.+-]/);
+  const rightParts = right.split(/[.+-]/);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] ?? "0";
+    const rightPart = rightParts[index] ?? "0";
+    const leftNum = /^\d+$/.test(leftPart) ? Number.parseInt(leftPart, 10) : Number.NaN;
+    const rightNum = /^\d+$/.test(rightPart) ? Number.parseInt(rightPart, 10) : Number.NaN;
+    if (!Number.isNaN(leftNum) && !Number.isNaN(rightNum)) {
+      if (leftNum !== rightNum) {
+        return rightNum - leftNum;
+      }
+      continue;
+    }
+    if (leftPart !== rightPart) {
+      return rightPart.localeCompare(leftPart);
+    }
+  }
+  return 0;
+}
+
+function isPathTraversalToken(token: string): boolean {
+  return token.length === 0 || token.includes("/") || token.includes("\\") || token.includes("..") || token.includes("\0");
+}
+
+function resolveGradleUserHome(): string {
+  const configured = process.env.GRADLE_USER_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  return resolve(homedir(), ".gradle");
 }
 
 function detectLoadersFromContent(content: string): LoaderDetection[] {
@@ -218,6 +323,102 @@ export class WorkspaceMappingService {
       }
     }
     return undefined;
+  }
+
+  async detectDependencyVersion(
+    projectPath: string,
+    group: string,
+    name: string,
+    opts?: DependencyVersionOptions
+  ): Promise<DependencyVersionResolution> {
+    if (isPathTraversalToken(group) || isPathTraversalToken(name)) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "Dependency group and name must not contain path traversal characters.",
+        details: { group, name }
+      });
+    }
+
+    const includeSnapshots = opts?.includeSnapshots === true;
+    const attempts: string[] = [];
+    const candidatesSeen: string[] = [];
+
+    const root = resolve(projectPath);
+    const propsPath = resolve(root, "gradle.properties");
+    let propsContent: string | undefined;
+    try {
+      propsContent = await readFile(propsPath, "utf8");
+    } catch {
+      propsContent = undefined;
+    }
+
+    const keys = buildDependencyPropertyKeys(group, name);
+    if (propsContent !== undefined) {
+      for (const key of keys) {
+        attempts.push(`gradle.properties:${key}`);
+        const value = readPropertyValue(propsContent, key);
+        if (value) {
+          return {
+            resolved: true,
+            version: value,
+            source: `gradle.properties:${key}`,
+            candidatesSeen,
+            attempts
+          };
+        }
+      }
+    } else {
+      for (const key of keys) {
+        attempts.push(`gradle.properties:${key}`);
+      }
+    }
+
+    const modulesDir = resolve(
+      resolveGradleUserHome(),
+      "caches",
+      "modules-2",
+      "files-2.1",
+      group,
+      name
+    );
+    attempts.push(`modules-2:${modulesDir}`);
+
+    let entries: string[] = [];
+    try {
+      entries = await readdir(modulesDir);
+    } catch {
+      return { resolved: false, candidatesSeen, attempts };
+    }
+
+    const filtered = entries.filter((entry) => {
+      if (entry.startsWith(".")) {
+        return false;
+      }
+      if (includeSnapshots) {
+        return true;
+      }
+      const lower = entry.toLowerCase();
+      return !lower.endsWith("-snapshot") && !lower.endsWith("-dev");
+    });
+
+    candidatesSeen.push(...filtered);
+
+    if (filtered.length === 0) {
+      return { resolved: false, candidatesSeen, attempts };
+    }
+
+    const sorted = [...filtered].sort(compareSemverDescending);
+    const chosen = sorted[0];
+    if (!chosen) {
+      return { resolved: false, candidatesSeen, attempts };
+    }
+    return {
+      resolved: true,
+      version: chosen,
+      source: `modules-2:${modulesDir}`,
+      candidatesSeen,
+      attempts
+    };
   }
 
   async detectProjectLoader(projectPath: string): Promise<WorkspaceProjectLoaderOutput> {
