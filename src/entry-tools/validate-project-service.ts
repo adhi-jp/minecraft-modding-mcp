@@ -1,11 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import fastGlob from "fast-glob";
 import { z } from "zod";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
-import { createError, ERROR_CODES } from "../errors.js";
+import { createError, ERROR_CODES, isAppError } from "../errors.js";
+import { buildVersionSourceSearchRoots } from "../gradle-paths.js";
+import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
@@ -13,6 +15,37 @@ import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
 const WORKSPACE_TEXT_FILE_READ_CONCURRENCY = 4;
+
+const VALIDATE_PROJECT_TASKS_OFF = process.env.VALIDATE_PROJECT_TASKS_OFF === "1";
+
+export type TaskStatus = "ok" | "skipped" | "missing" | "error";
+
+type TaskEntryBase = {
+  status: TaskStatus;
+  durationMs?: number;
+  error?: { code: string; detail: string };
+  warnings?: string[];
+};
+
+export type TaskStatusReport = {
+  "workspace.detected": TaskEntryBase & { evidence?: string[] };
+  "gradle.readable": TaskEntryBase & { propertiesPath?: string; buildScripts?: string[] };
+  "loom.cache.found": TaskEntryBase & { cachePath?: string };
+  "minecraft.artifact.resolved": TaskEntryBase & { artifactId?: string; mapping?: SourceMapping };
+  "mixins.validated": TaskEntryBase & { counts?: { ok: number; partial: number; invalid: number } };
+  "accessWideners.validated": TaskEntryBase & { counts?: { ok: number; invalid: number } };
+  "accessTransformers.validated": TaskEntryBase & { counts?: { ok: number; invalid: number } };
+};
+
+const TASK_KEYS = [
+  "workspace.detected",
+  "gradle.readable",
+  "loom.cache.found",
+  "minecraft.artifact.resolved",
+  "mixins.validated",
+  "accessWideners.validated",
+  "accessTransformers.validated"
+] as const;
 
 const mixinInputSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("inline"), source: nonEmptyString }),
@@ -139,6 +172,18 @@ type ValidateProjectDeps = {
   discoverAccessWideners: (projectPath: string) => Promise<string[]>;
   discoverAccessTransformers?: (projectPath: string) => Promise<string[]>;
   detectProjectMinecraftVersion?: (projectPath: string) => Promise<string | undefined>;
+  resolveArtifact?: (input: {
+    target: { kind: "version"; value: string };
+    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourcePriority?: "loom-first" | "maven-first";
+    projectPath?: string;
+    scope?: "vanilla" | "merged" | "loader";
+    preferProjectVersion?: boolean;
+  }) => Promise<{
+    artifactId: string;
+    mappingApplied: SourceMapping;
+    warnings?: string[];
+  }>;
 };
 
 export async function discoverWorkspaceMixins(projectPath: string, configPaths?: string[]): Promise<string[]> {
@@ -334,8 +379,366 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
   return [...discovered].sort((left, right) => left.localeCompare(right));
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function probeWorkspaceDetected(projectPath: string): Promise<TaskStatusReport["workspace.detected"]> {
+  const startedAt = Date.now();
+  const candidates = [
+    "gradle.properties",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "build.gradle",
+    "build.gradle.kts"
+  ];
+  try {
+    const evidence: string[] = [];
+    for (const candidate of candidates) {
+      if (await pathExists(resolve(projectPath, candidate))) {
+        evidence.push(candidate);
+      }
+    }
+    const durationMs = Date.now() - startedAt;
+    if (evidence.length === 0) {
+      return { status: "missing", durationMs };
+    }
+    return { status: "ok", durationMs, evidence };
+  } catch (error) {
+    return {
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      error: {
+        code: isAppError(error) ? error.code : "ERR_PROBE_FAILED",
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
+async function probeGradleReadable(projectPath: string): Promise<TaskStatusReport["gradle.readable"]> {
+  const startedAt = Date.now();
+  const propertiesPath = resolve(projectPath, "gradle.properties");
+  try {
+    const propsExists = await pathExists(propertiesPath);
+    let propsRead = false;
+    if (propsExists) {
+      await readFile(propertiesPath, "utf8");
+      propsRead = true;
+    }
+    const buildScriptCandidates = [
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts"
+    ];
+    const buildScripts: string[] = [];
+    for (const candidate of buildScriptCandidates) {
+      if (await pathExists(resolve(projectPath, candidate))) {
+        buildScripts.push(candidate);
+      }
+    }
+    const durationMs = Date.now() - startedAt;
+    if (!propsExists && buildScripts.length === 0) {
+      return { status: "missing", durationMs };
+    }
+    return {
+      status: "ok",
+      durationMs,
+      ...(propsRead ? { propertiesPath } : {}),
+      buildScripts
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      error: {
+        code: isAppError(error) ? error.code : "ERR_GRADLE_READ_FAILED",
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
+async function probeLoomCacheFound(projectPath: string): Promise<TaskStatusReport["loom.cache.found"]> {
+  const startedAt = Date.now();
+  try {
+    const roots = buildVersionSourceSearchRoots(projectPath);
+    for (const root of roots) {
+      if (await pathExists(root)) {
+        return {
+          status: "ok",
+          durationMs: Date.now() - startedAt,
+          cachePath: root
+        };
+      }
+    }
+    return { status: "missing", durationMs: Date.now() - startedAt };
+  } catch (error) {
+    return {
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      error: {
+        code: isAppError(error) ? error.code : "ERR_LOOM_PROBE_FAILED",
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
+async function probeMinecraftArtifactResolved(
+  resolveArtifact: NonNullable<ValidateProjectDeps["resolveArtifact"]>,
+  args: {
+    version: string;
+    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourcePriority?: "loom-first" | "maven-first";
+    projectPath: string;
+    scope?: "vanilla" | "merged" | "loader";
+    preferProjectVersion?: boolean;
+  }
+): Promise<TaskStatusReport["minecraft.artifact.resolved"]> {
+  const startedAt = Date.now();
+  try {
+    const output = await resolveArtifact({
+      target: { kind: "version", value: args.version },
+      mapping: args.mapping,
+      sourcePriority: args.sourcePriority,
+      projectPath: args.projectPath,
+      scope: args.scope,
+      preferProjectVersion: args.preferProjectVersion
+    });
+    return {
+      status: "ok",
+      durationMs: Date.now() - startedAt,
+      artifactId: output.artifactId,
+      mapping: output.mappingApplied,
+      ...(Array.isArray(output.warnings) && output.warnings.length > 0
+        ? { warnings: output.warnings }
+        : {})
+    };
+  } catch (error) {
+    return {
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      error: {
+        code: isAppError(error) ? error.code : "ERR_ARTIFACT_PROBE_FAILED",
+        detail: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
+}
+
+function downstreamSkipReason(
+  report: Pick<TaskStatusReport, "workspace.detected" | "gradle.readable" | "minecraft.artifact.resolved">,
+  upstream: ReadonlyArray<keyof typeof report>
+): TaskEntryBase | undefined {
+  for (const key of upstream) {
+    const entry = report[key];
+    if (entry.status !== "ok") {
+      return { status: "skipped" };
+    }
+  }
+  return undefined;
+}
+
+function buildValidationEntryWithCounts<T extends { ok: number; invalid: number }>(
+  upstream: TaskEntryBase | undefined,
+  discoveredCount: number,
+  errorCount: number,
+  counts: T,
+  durationMs: number
+): TaskEntryBase & { counts?: T } {
+  if (upstream) {
+    return upstream;
+  }
+  if (discoveredCount === 0) {
+    return { status: "missing", durationMs };
+  }
+  if (errorCount > 0) {
+    return { status: "error", durationMs, counts };
+  }
+  return { status: "ok", durationMs, counts };
+}
+
+function projectTaskEntry<T extends TaskEntryBase>(
+  entry: T,
+  detail: "summary" | "standard" | "full",
+  include: string[]
+): TaskEntryBase {
+  const fullDetail = detail !== "summary" && include.includes("workspace");
+  if (fullDetail) {
+    return entry;
+  }
+  const slim: TaskEntryBase = { status: entry.status };
+  if (entry.error) {
+    slim.error = entry.error;
+  }
+  if (entry.warnings && entry.warnings.length > 0) {
+    slim.warnings = entry.warnings;
+  }
+  return slim;
+}
+
+function projectTaskStatusReport(
+  report: TaskStatusReport,
+  detail: "summary" | "standard" | "full",
+  include: string[]
+): TaskStatusReport {
+  const projected: Record<string, TaskEntryBase> = {};
+  for (const key of TASK_KEYS) {
+    projected[key] = projectTaskEntry(report[key], detail, include);
+  }
+  return projected as TaskStatusReport;
+}
+
 export class ValidateProjectService {
   constructor(private readonly deps: ValidateProjectDeps) {}
+
+  private async runUpstreamProbes(projectPath: string): Promise<{
+    workspace: TaskStatusReport["workspace.detected"];
+    gradle: TaskStatusReport["gradle.readable"];
+    loom: TaskStatusReport["loom.cache.found"];
+  }> {
+    const workspace = await probeWorkspaceDetected(projectPath);
+    const loom = await probeLoomCacheFound(projectPath);
+    let gradle: TaskStatusReport["gradle.readable"];
+    if (workspace.status !== "ok") {
+      gradle = { status: "skipped" };
+    } else {
+      gradle = await probeGradleReadable(projectPath);
+    }
+    return { workspace, gradle, loom };
+  }
+
+  private async buildEarlyTasksForBlocked(
+    projectPath: string,
+    detail: "summary" | "standard" | "full",
+    include: string[],
+    discovery?: {
+      mixinDiscoveryCount: number;
+      awDiscoveryCount: number;
+      atDiscoveryCount: number;
+    }
+  ): Promise<TaskStatusReport | undefined> {
+    if (VALIDATE_PROJECT_TASKS_OFF) {
+      return undefined;
+    }
+    const { workspace, gradle, loom } = await this.runUpstreamProbes(projectPath);
+    const minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"] = {
+      status: "skipped"
+    };
+    const validatedSkipped: TaskEntryBase = { status: "skipped" };
+    const buildValidatorEntry = (
+      discoveredCount: number | undefined
+    ): TaskEntryBase => {
+      if (workspace.status !== "ok" || gradle.status !== "ok") {
+        return validatedSkipped;
+      }
+      if (minecraftArtifactResolved.status !== "ok") {
+        return validatedSkipped;
+      }
+      return discoveredCount === 0 || discoveredCount === undefined
+        ? { status: "missing" }
+        : validatedSkipped;
+    };
+    const report: TaskStatusReport = {
+      "workspace.detected": workspace,
+      "gradle.readable": gradle,
+      "loom.cache.found": loom,
+      "minecraft.artifact.resolved": minecraftArtifactResolved,
+      "mixins.validated": buildValidatorEntry(discovery?.mixinDiscoveryCount),
+      "accessWideners.validated": buildValidatorEntry(discovery?.awDiscoveryCount),
+      "accessTransformers.validated": buildValidatorEntry(discovery?.atDiscoveryCount)
+    };
+    return projectTaskStatusReport(report, detail, include);
+  }
+
+  private async buildFullTaskStatusReport(args: {
+    projectPath: string;
+    detail: "summary" | "standard" | "full";
+    include: string[];
+    resolvedVersion: string;
+    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourcePriority?: "loom-first" | "maven-first";
+    scope?: "vanilla" | "merged" | "loader";
+    preferProjectVersion?: boolean;
+    mixinDiscoveryCount: number;
+    mixinCaughtErrors: number;
+    mixinCounts: { ok: number; partial: number; invalid: number };
+    mixinDurationMs: number;
+    awDiscoveryCount: number;
+    awCaughtErrors: number;
+    awCounts: { ok: number; invalid: number };
+    awDurationMs: number;
+    atDiscoveryCount: number;
+    atCaughtErrors: number;
+    atCounts: { ok: number; invalid: number };
+    atDurationMs: number;
+  }): Promise<TaskStatusReport | undefined> {
+    if (VALIDATE_PROJECT_TASKS_OFF) {
+      return undefined;
+    }
+    const { workspace, gradle, loom } = await this.runUpstreamProbes(args.projectPath);
+    let minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"];
+    if (workspace.status !== "ok" || gradle.status !== "ok") {
+      minecraftArtifactResolved = { status: "skipped" };
+    } else if (this.deps.resolveArtifact) {
+      minecraftArtifactResolved = await probeMinecraftArtifactResolved(this.deps.resolveArtifact, {
+        version: args.resolvedVersion,
+        mapping: args.mapping,
+        sourcePriority: args.sourcePriority,
+        projectPath: args.projectPath,
+        scope: args.scope,
+        preferProjectVersion: args.preferProjectVersion
+      });
+    } else {
+      minecraftArtifactResolved = { status: "skipped" };
+    }
+    const upstreamSkip = downstreamSkipReason(
+      {
+        "workspace.detected": workspace,
+        "gradle.readable": gradle,
+        "minecraft.artifact.resolved": minecraftArtifactResolved
+      },
+      ["workspace.detected", "gradle.readable", "minecraft.artifact.resolved"]
+    );
+    const mixinsValidated = buildValidationEntryWithCounts<{ ok: number; partial: number; invalid: number }>(
+      upstreamSkip,
+      args.mixinDiscoveryCount,
+      args.mixinCaughtErrors,
+      args.mixinCounts,
+      args.mixinDurationMs
+    );
+    const accessWidenersValidated = buildValidationEntryWithCounts<{ ok: number; invalid: number }>(
+      upstreamSkip,
+      args.awDiscoveryCount,
+      args.awCaughtErrors,
+      args.awCounts,
+      args.awDurationMs
+    );
+    const accessTransformersValidated = buildValidationEntryWithCounts<{ ok: number; invalid: number }>(
+      upstreamSkip,
+      args.atDiscoveryCount,
+      args.atCaughtErrors,
+      args.atCounts,
+      args.atDurationMs
+    );
+    const report: TaskStatusReport = {
+      "workspace.detected": workspace,
+      "gradle.readable": gradle,
+      "loom.cache.found": loom,
+      "minecraft.artifact.resolved": minecraftArtifactResolved,
+      "mixins.validated": mixinsValidated,
+      "accessWideners.validated": accessWidenersValidated,
+      "accessTransformers.validated": accessTransformersValidated
+    };
+    return projectTaskStatusReport(report, args.detail, args.include);
+  }
 
   async execute(input: ValidateProjectInput): Promise<Record<string, unknown> & { warnings?: string[] }> {
     const detail = resolveDetail(input.detail);
@@ -628,39 +1031,42 @@ export class ValidateProjectService {
           });
         }
         if (!input.version && !input.preferProjectVersion) {
-          return {
-            ...buildEntryToolResult({
-              task: "project-summary",
-              detail,
-              include,
-              summary: {
-                status: "blocked",
-                headline: "project-summary requires version or preferProjectVersion=true.",
-                subject: createSummarySubject({
-                  task: "project-summary",
-                  kind: input.subject.kind,
-                  projectPath: input.subject.projectPath,
-                  discover: input.subject.discover
-                }),
-                nextActions: [
-                  {
-                    tool: "validate-project",
-                    params: {
-                      task: "project-summary",
-                      subject: input.subject
-                    }
+          const baseResult = buildEntryToolResult({
+            task: "project-summary",
+            detail,
+            include,
+            summary: {
+              status: "blocked",
+              headline: "project-summary requires version or preferProjectVersion=true.",
+              subject: createSummarySubject({
+                task: "project-summary",
+                kind: input.subject.kind,
+                projectPath: input.subject.projectPath,
+                discover: input.subject.discover
+              }),
+              nextActions: [
+                {
+                  tool: "validate-project",
+                  params: {
+                    task: "project-summary",
+                    subject: input.subject
                   }
-                ],
-                notes: [
-                  "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version."
-                ]
-              },
-              blocks: {
-                workspace: {
-                  projectPath: input.subject.projectPath
                 }
+              ],
+              notes: [
+                "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version."
+              ]
+            },
+            blocks: {
+              workspace: {
+                projectPath: input.subject.projectPath
               }
-            }),
+            }
+          });
+          const tasks = await this.buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
+          return {
+            ...baseResult,
+            ...(tasks ? { tasks } : {}),
             warnings: []
           };
         }
@@ -684,42 +1090,49 @@ export class ValidateProjectService {
         ]);
 
         if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 || accessTransformers.length > 0)) {
-          return {
-            ...buildEntryToolResult({
-              task: "project-summary",
-              detail,
-              include,
-              summary: {
-                status: "blocked",
-                headline: "Could not resolve Minecraft version for discovered workspace validators.",
-                subject: createSummarySubject({
-                  task: "project-summary",
-                  kind: input.subject.kind,
-                  projectPath,
-                  discover: input.subject.discover,
-                  mapping: input.mapping,
-                  sourcePriority: input.sourcePriority,
-                  scope: input.scope
-                }),
-                nextActions: [
-                  {
-                    tool: "validate-project",
-                    params: {
-                      task: "project-summary",
-                      subject: input.subject
-                    }
+          const baseResult = buildEntryToolResult({
+            task: "project-summary",
+            detail,
+            include,
+            summary: {
+              status: "blocked",
+              headline: "Could not resolve Minecraft version for discovered workspace validators.",
+              subject: createSummarySubject({
+                task: "project-summary",
+                kind: input.subject.kind,
+                projectPath,
+                discover: input.subject.discover,
+                mapping: input.mapping,
+                sourcePriority: input.sourcePriority,
+                scope: input.scope
+              }),
+              nextActions: [
+                {
+                  tool: "validate-project",
+                  params: {
+                    task: "project-summary",
+                    subject: input.subject
                   }
-                ],
-                notes: [
-                  "Pass version explicitly, or make sure gradle.properties declares the Minecraft version before using preferProjectVersion=true."
-                ]
-              },
-              blocks: {
-                workspace: {
-                  projectPath
                 }
+              ],
+              notes: [
+                "Pass version explicitly, or make sure gradle.properties declares the Minecraft version before using preferProjectVersion=true."
+              ]
+            },
+            blocks: {
+              workspace: {
+                projectPath
               }
-            }),
+            }
+          });
+          const tasks = await this.buildEarlyTasksForBlocked(projectPath, detail, include, {
+            mixinDiscoveryCount: mixinConfigs.length,
+            awDiscoveryCount: accessWideners.length,
+            atDiscoveryCount: accessTransformers.length
+          });
+          return {
+            ...baseResult,
+            ...(tasks ? { tasks } : {}),
             warnings: [
               "Could not resolve Minecraft version from gradle.properties for discovered workspace validators."
             ]
@@ -727,44 +1140,49 @@ export class ValidateProjectService {
         }
 
         if (!resolvedVersion) {
-          return {
-            ...buildEntryToolResult({
-              task: "project-summary",
-              detail,
-              include,
-              summary: {
-                status: "ok",
-                headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
-                subject: createSummarySubject({
-                  task: "project-summary",
-                  kind: input.subject.kind,
-                  projectPath,
-                  discover: input.subject.discover,
-                  mapping: input.mapping,
-                  sourcePriority: input.sourcePriority,
-                  scope: input.scope
-                }),
-                counts: {
-                  valid: 0,
-                  partial: 0,
-                  invalid: 0
-                }
-              },
-              blocks: {
-                workspace: {
-                  projectPath
-                }
+          const baseResult = buildEntryToolResult({
+            task: "project-summary",
+            detail,
+            include,
+            summary: {
+              status: "ok",
+              headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
+              subject: createSummarySubject({
+                task: "project-summary",
+                kind: input.subject.kind,
+                projectPath,
+                discover: input.subject.discover,
+                mapping: input.mapping,
+                sourcePriority: input.sourcePriority,
+                scope: input.scope
+              }),
+              counts: {
+                valid: 0,
+                partial: 0,
+                invalid: 0
               }
-            }),
+            },
+            blocks: {
+              workspace: {
+                projectPath
+              }
+            }
+          });
+          const tasks = await this.buildEarlyTasksForBlocked(projectPath, detail, include);
+          return {
+            ...baseResult,
+            ...(tasks ? { tasks } : {}),
             warnings: []
           };
         }
 
         const validationVersion = resolvedVersion;
         const warnings: string[] = [];
+        const mixinDurationStart = Date.now();
         let validMixins = 0;
         let partialMixins = 0;
         let invalidMixins = 0;
+        let mixinCaughtErrors = 0;
         for (const configPath of mixinConfigs) {
           try {
             const mixinResult = await this.deps.validateMixin({
@@ -801,14 +1219,18 @@ export class ValidateProjectService {
             }
           } catch (error) {
             invalidMixins += 1;
+            mixinCaughtErrors += 1;
             if (error instanceof Error) {
               warnings.push(`${configPath}: ${error.message}`);
             }
           }
         }
+        const mixinDurationMs = Date.now() - mixinDurationStart;
 
+        const awDurationStart = Date.now();
         let validAw = 0;
         let invalidAw = 0;
+        let awCaughtErrors = 0;
         for (const awPath of accessWideners) {
           try {
             const output = await this.deps.validateAccessWidener({
@@ -830,14 +1252,18 @@ export class ValidateProjectService {
             }
           } catch (error) {
             invalidAw += 1;
+            awCaughtErrors += 1;
             if (error instanceof Error) {
               warnings.push(error.message);
             }
           }
         }
+        const awDurationMs = Date.now() - awDurationStart;
 
+        const atDurationStart = Date.now();
         let validAt = 0;
         let invalidAt = 0;
+        let atCaughtErrors = 0;
         for (const atPath of accessTransformers) {
           try {
             if (!this.deps.validateAccessTransformer) {
@@ -865,57 +1291,83 @@ export class ValidateProjectService {
             }
           } catch (error) {
             invalidAt += 1;
+            atCaughtErrors += 1;
             if (error instanceof Error) {
               warnings.push(error.message);
             }
           }
         }
+        const atDurationMs = Date.now() - atDurationStart;
 
         const invalidCount = invalidMixins + invalidAw + invalidAt;
         const partialCount = partialMixins;
         const status = invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok";
 
-        return {
-          ...buildEntryToolResult({
-            task: "project-summary",
-            detail,
-            include,
-            summary: {
-              status,
-              headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
-              subject: createSummarySubject({
-                task: "project-summary",
-                kind: input.subject.kind,
-                projectPath,
-                discover: input.subject.discover,
-                version: resolvedVersion,
-                mapping: input.mapping,
-                sourcePriority: input.sourcePriority,
-                scope: input.scope
-              }),
-              counts: {
+        const baseResult = buildEntryToolResult({
+          task: "project-summary",
+          detail,
+          include,
+          summary: {
+            status,
+            headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
+            subject: createSummarySubject({
+              task: "project-summary",
+              kind: input.subject.kind,
+              projectPath,
+              discover: input.subject.discover,
+              version: resolvedVersion,
+              mapping: input.mapping,
+              sourcePriority: input.sourcePriority,
+              scope: input.scope
+            }),
+            counts: {
+              valid: validMixins + validAw + validAt,
+              partial: partialCount,
+              invalid: invalidCount
+            }
+          },
+          blocks: {
+            project: {
+              summary: {
                 valid: validMixins + validAw + validAt,
                 partial: partialCount,
                 invalid: invalidCount
               }
             },
-            blocks: {
-              project: {
-                summary: {
-                  valid: validMixins + validAw + validAt,
-                  partial: partialCount,
-                  invalid: invalidCount
-                }
-              },
-              workspace: {
-                projectPath,
-                mixinConfigs,
-                accessWideners,
-                accessTransformers
-              }
-            },
-            alwaysBlocks: ["project"]
-          }),
+            workspace: {
+              projectPath,
+              mixinConfigs,
+              accessWideners,
+              accessTransformers
+            }
+          },
+          alwaysBlocks: ["project"]
+        });
+        const tasks = await this.buildFullTaskStatusReport({
+          projectPath,
+          detail,
+          include,
+          resolvedVersion: validationVersion,
+          mapping: input.mapping,
+          sourcePriority: input.sourcePriority,
+          scope: input.scope,
+          preferProjectVersion: input.preferProjectVersion,
+          mixinDiscoveryCount: mixinConfigs.length,
+          mixinCaughtErrors,
+          mixinCounts: { ok: validMixins, partial: partialMixins, invalid: invalidMixins },
+          mixinDurationMs,
+          awDiscoveryCount: accessWideners.length,
+          awCaughtErrors,
+          awCounts: { ok: validAw, invalid: invalidAw },
+          awDurationMs,
+          atDiscoveryCount: accessTransformers.length,
+          atCaughtErrors,
+          atCounts: { ok: validAt, invalid: invalidAt },
+          atDurationMs
+        });
+        return {
+          ...baseResult,
+          ...(tasks ? { tasks } : {}),
           warnings
         };
       }

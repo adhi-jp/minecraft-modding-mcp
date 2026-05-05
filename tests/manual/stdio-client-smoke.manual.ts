@@ -28,7 +28,8 @@ const EXPECTED_TOOLS = [
   "get-class-api-matrix",
   "resolve-workspace-symbol",
   "check-symbol-exists",
-  "index-artifact"
+  "index-artifact",
+  "verify-mixin-target"
 ] as const;
 
 type ErrorPayload = {

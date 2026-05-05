@@ -73,6 +73,10 @@ import {
   manageCacheSchema,
   manageCacheShape
 } from "./entry-tools/manage-cache-service.js";
+import {
+  VerifyMixinTargetService,
+  VERIFY_MIXIN_TARGET_OFF
+} from "./entry-tools/verify-mixin-target-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 
@@ -377,6 +381,37 @@ const getClassMembersShape = {
   )
 };
 const getClassMembersSchema = z.object(getClassMembersShape);
+
+const verifyMixinTargetMemberSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("method"),
+    name: nonEmptyString,
+    descriptor: z.string().trim().min(1).optional()
+  }),
+  z.object({
+    kind: z.literal("field"),
+    name: nonEmptyString,
+    descriptor: z.string().trim().min(1).optional()
+  })
+]);
+
+const verifyMixinTargetShape = {
+  owner: nonEmptyString.describe("Fully-qualified class name of the target owner (e.g. net.minecraft.world.entity.LivingEntity)."),
+  member: verifyMixinTargetMemberSchema.describe(
+    'Member to verify. Object with kind. Examples: {"kind":"method","name":"tick","descriptor":"()V"} or {"kind":"field","name":"airSupply"}.'
+  ),
+  mixinMemberName: optionalNonEmptyString.describe(
+    "Optional caller-authored mixin field/method name. Drives @Accessor (getXxx/setXxx) and @Invoker (invokeXxx/callXxx) advice when the target is private."
+  ),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  projectPath: optionalNonEmptyString.describe("Workspace root path for target.kind=workspace and Loom cache assistance."),
+  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
+  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
+  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
+};
+const verifyMixinTargetSchema = z.object(verifyMixinTargetShape);
 
 const searchClassSourceShape = {
   artifactId: nonEmptyString,
@@ -1015,13 +1050,90 @@ const validateProjectService = new ValidateProjectService({
   discoverAccessWideners: discoverWorkspaceAccessWideners,
   discoverAccessTransformers: discoverWorkspaceAccessTransformers,
   detectProjectMinecraftVersion: (projectPath) =>
-    workspaceMappingService.detectProjectMinecraftVersion(projectPath)
+    workspaceMappingService.detectProjectMinecraftVersion(projectPath),
+  resolveArtifact: async (input) => {
+    const output = await sourceService.resolveArtifact({
+      target: input.target,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion
+    });
+    return {
+      artifactId: output.artifactId,
+      mappingApplied: output.mappingApplied,
+      warnings: output.warnings
+    };
+  }
 });
 const manageCacheService = new ManageCacheService({
   registry: createCacheRegistry({
     cacheDir: config.cacheDir,
     sqlitePath: config.sqlitePath
   })
+});
+const verifyMixinTargetService = new VerifyMixinTargetService({
+  resolveArtifact: async (input) => {
+    const output = await sourceService.resolveArtifact({
+      target: input.target,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion
+    });
+    return {
+      artifactId: output.artifactId,
+      mappingApplied: output.mappingApplied,
+      binaryJarPath: output.binaryJarPath,
+      provenance: output.provenance,
+      warnings: output.warnings
+    };
+  },
+  getSignature: (input) =>
+    (sourceService as unknown as {
+      explorerService: {
+        getSignature: (input: Record<string, unknown>) => Promise<{
+          classAccessFlags?: number;
+          constructors: Array<Record<string, unknown>>;
+          methods: Array<Record<string, unknown>>;
+          fields: Array<Record<string, unknown>>;
+          warnings: string[];
+        }>;
+      };
+    }).explorerService.getSignature(input) as Promise<{
+      classAccessFlags?: number;
+      constructors: Array<{
+        ownerFqn: string;
+        name: string;
+        javaSignature: string;
+        jvmDescriptor: string;
+        accessFlags: number;
+        isSynthetic: boolean;
+        sourceLine?: number;
+      }>;
+      methods: Array<{
+        ownerFqn: string;
+        name: string;
+        javaSignature: string;
+        jvmDescriptor: string;
+        accessFlags: number;
+        isSynthetic: boolean;
+        sourceLine?: number;
+      }>;
+      fields: Array<{
+        ownerFqn: string;
+        name: string;
+        javaSignature: string;
+        jvmDescriptor: string;
+        accessFlags: number;
+        isSynthetic: boolean;
+        sourceLine?: number;
+      }>;
+      warnings: string[];
+    }>
 });
 
 registerResources(server, sourceService);
@@ -2184,6 +2296,28 @@ server.tool("manage-cache",
     manageCacheService.execute(input as z.infer<typeof manageCacheSchema>) as Promise<Record<string, unknown>>
   )
 );
+
+if (!VERIFY_MIXIN_TARGET_OFF) {
+  server.tool("verify-mixin-target",
+    "Single-call probe: does this target owner / member exist and which @Shadow / @Accessor / @Invoker should the mixin use? Reuses target.kind workspace/version/coordinate/dependency/jar.",
+    verifyMixinTargetShape,
+    { readOnlyHint: true },
+    async (args) => runTool("verify-mixin-target", args, verifyMixinTargetSchema, async (input) =>
+      verifyMixinTargetService.execute({
+        owner: input.owner,
+        member: input.member,
+        mixinMemberName: input.mixinMemberName,
+        mapping: input.mapping,
+        sourcePriority: input.sourcePriority,
+        projectPath: input.projectPath,
+        target: input.target as ResolveArtifactTargetInput,
+        scope: input.scope,
+        preferProjectVersion: input.preferProjectVersion,
+        strictVersion: input.strictVersion
+      }) as unknown as Promise<Record<string, unknown>>
+    )
+  );
+}
 
 server.tool("resolve-artifact",
   "Resolve source artifact from a target object ({ kind, value }) and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",

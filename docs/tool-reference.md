@@ -39,6 +39,15 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - Retryable `suggestedCall` payloads omit parameters when the supplied value already matches the tool default, keeping recovery calls smaller without changing behavior.
 - Source-oriented tools expose `artifactContents` so callers can tell whether the backing artifact is a `source-jar` or a `decompiled-binary`. `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` also expose `returnedNamespace`.
 - `get-class-members` returns `decompiledFallback` (with `constructors`, `fields`, `methods`, each entry is `{ name, line, kind }`) and `decompiledMemberCounts` whenever bytecode enumeration yields zero but the decompiled source for the class is already indexed. The bytecode-derived `members` / `counts` are preserved as-is; the fallback is additive and carries no descriptor or access modifier. `qualityFlags` gains `"members-from-decompiled-source"` in that case. Use `get-class-source` for descriptors and full context.
+- `get-class-members` also returns an additive `status: "ok" | "members_unavailable" | "partial"` field so callers can distinguish "really 0 members" from "extraction unavailable":
+
+  | `status` | When | Extra fields |
+  | --- | --- | --- |
+  | `"ok"` | `counts.total > 0`, OR `counts.total === 0` AND binary extraction succeeded AND `decompiledFallback` did not fire (genuinely empty class). | none |
+  | `"partial"` | `decompiledFallback` is populated (bytecode returned zero but the indexed decompiled source supplied member names; `qualityFlags` includes `"members-from-decompiled-source"`). | `decompiledFallback`, `decompiledMemberCounts` |
+  | `"members_unavailable"` | Binary signature extraction threw a non-`ERR_CLASS_NOT_FOUND` error AND no decompiled fallback was available. | `unavailableReason: string`, `suggestedCall: { tool: "get-class-source", params: { target: { type: "artifact", artifactId }, className, mode: "snippet", mapping } }` (the params validate against `get-class-source`'s input schema). |
+
+  The shape is purely additive: `members` / `counts` / `decompiledFallback` / `decompiledMemberCounts` / `qualityFlags` are unchanged for callers that ignore `status`. `ERR_CLASS_NOT_FOUND` still propagates as a thrown error rather than as `members_unavailable`. Set `MEMBERS_STATUS_LEGACY=1` at process start to omit `status` / `unavailableReason` / `suggestedCall` entirely (legacy shape).
 - `search-class-source` accepts `queryNamespace`. When set and the artifact's `mappingApplied` differs, `intent="symbol"` queries for fully-qualified class names are translated through `find-mapping` (source=`queryNamespace`, target=artifact namespace) before the indexed search runs; the response carries a `translatedQuery` block describing the rewrite. `intent="text"` / `intent="path"` do not translate — text search is a literal match against the artifact namespace; the response surfaces a `warnings` array instead. `sourcePriority` is only consulted during translation.
 - `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` default `compact` to `true`. Pass `compact: false` for the full diagnostic shape. When enabled, compact mode strips empty arrays, null values, and empty objects from the response. For `resolve-artifact`, compact mode also omits `provenance`, `artifactContents`, `sampleEntries`, `adjacentSourceCandidates`, `binaryJarPath`, `coordinate`, `repoUrl`, and `resolvedSourceJarPath`. For mapping tools, compact mode has two projections: (1) the redundant `candidates` array is omitted entirely when the result is a single full-confidence exact-match resolution; (2) when the result is unresolved with more than three candidates, the top three keep full metadata while the tail is slimmed to `{kind, symbol, owner, name, descriptor, confidence, matchKind}` and the response surfaces `candidateDetailsTruncated: true`. `candidatesTruncated` retains its pre-compact meaning ("more candidates exist upstream than this response returned") and is set independently by the service when `maxCandidates` clipped the list — the two signals can both appear.
 - `get-class-source`, `get-class-members`, `search-class-source`, and `list-artifact-files` accept `compact: true` (opt-in, default `false`) to strip debug/diagnostic metadata and empty fields. `get-class-source` omits `provenance`, `artifactContents`, and `qualityFlags`. `get-class-members` omits `provenance`, `artifactContents`, `qualityFlags`, and `context`; `decompiledFallback` and `decompiledMemberCounts` are preserved. `search-class-source` and `list-artifact-files` omit `artifactContents` only — the primary `hits` / `items` payload is always preserved.
@@ -85,6 +94,48 @@ Workspace detection is memoised in a process-resident `WorkspaceContextCache` (1
 - `validate-mixin` runs each stage (`resolve` / `mapping-health` / `parse` / `target-lookup`) against an independent soft-deadline. When the `target-lookup` stage exhausts its budget mid-loop, completed targets stay in `targetOutcomes` with `status: "ok"` (and `slowTarget: true` plus `elapsedMs` when the per-target soft cap was exceeded) while remaining targets land as `status: "deferred-budget"`. The summary then carries `targetsDeferredBudget` and `degradedReason: "stage-budget"`, and `validationStatus` is promoted to `"partial"`. If the budget is exhausted before the first iteration, `targetOutcomes` stays empty, `targetsDeferredBudget` is omitted, and `degradedReason: "stage-budget-pre-target"`.
 - Empty Mixin configs are treated as warning-only discovery results with `summary.total=0` instead of invalid input; malformed JSON still returns `ERR_INVALID_INPUT`.
 
+## verify-mixin-target
+
+Single-call probe for "does this owner / member exist, and which `@Shadow` / `@Accessor` / `@Invoker` should the mixin use?" Use it before authoring a mixin to avoid round-tripping through `find-class`, `get-class-members`, and `validate-mixin`.
+
+Input shape:
+
+- `owner` — fully-qualified class name (e.g. `net.minecraft.world.entity.LivingEntity`).
+- `member` — discriminated by `kind`. `{"kind":"method","name":"tick","descriptor":"()V"}` or `{"kind":"field","name":"airSupply"}`. `descriptor` is optional; when omitted, the tool returns every overload (methods) or any matching name (fields).
+- `mixinMemberName` (optional) — the caller-authored mixin field/method name. Drives the `accessorAdvice` rule table when the target is private (`getXxx` / `setXxx` → `@Accessor`, `invokeXxx` / `callXxx` → `@Invoker`).
+- `target` — same shape as `resolve-artifact.target`: `{"kind":"version","value":"1.21.10"}`, `{"kind":"workspace"}` (uses `projectPath`), `{"kind":"dependency","group":"...","name":"..."}`, `{"kind":"coordinate","value":"..."}`, or `{"kind":"jar","value":"..."}`.
+- `mapping`, `sourcePriority`, `projectPath`, `scope`, `preferProjectVersion`, `strictVersion` — same semantics as `resolve-artifact`.
+
+Output shape:
+
+- `exists: boolean` — true when at least one member matches by name (and descriptor when supplied).
+- `resolvedOwner: { className, mapping }` — echoes the resolved namespace.
+- `matches: Array<{ name, descriptor, accessFlags[], javaSignature?, sourceLine? }>` — every member matching the request.
+- `candidates: Array<{ name, descriptor, reason }>` — populated when `exists=false`. Two reasons are emitted: `"name match, descriptor … differs from requested …"` (descriptor mismatch) or `"name … is similar to requested …"` (Levenshtein-near misses, sourced from the same `suggestSimilar` helper used by the Mixin validator).
+- `accessorAdvice` — annotation-recommendation block. Emitted only when `matches.length === 1` (a single unique match): descriptor-mismatch / nearest-neighbor / candidate-only responses carry no advice (rule table cannot be applied against an unmatched member), and ambiguous overload responses (descriptor omitted, multiple `matches[]`) also carry no advice (a single rule cannot describe several different targets). Re-call with an explicit `descriptor` to disambiguate the overload.
+- `provenance: { artifactId, mappingNamespace, workspaceResolution?, dependencyResolution? }` — the workspace / dependency resolution shape from `resolve-artifact` is preserved when `target.kind` was `workspace` or `dependency`.
+
+`accessorAdvice` rule matrix (top-down; first match wins):
+
+| # | `member.kind` | target visibility | `mixinMemberName` regex | `suggestedAnnotation` |
+|---|---|---|---|---|
+| 1 | any | `public` / `protected` | (any) | `"@Inject-only"` (target already visible to mixin) |
+| 2 | `field` | `private` | `^get[A-Z]\w*$` / `^set[A-Z]\w*$` / `^is[A-Z]\w*$` | `"@Accessor"` (target field name inferred via prefix removal) |
+| 3 | `field` | `private` | (anything else, including absent) | `"@Shadow"` (or `"@Shadow @Final"` when target is `final`) |
+| 4 | `method` | `private` | `^invoke[A-Z]\w*$` / `^call[A-Z]\w*$` | `"@Invoker"` |
+| 5 | `method` | `private` | any other non-empty value | `"@Shadow"` |
+| 6 | `method` | `private` | (absent) | `null` + `candidates: [@Shadow, @Invoker]` |
+
+`"@Inject-only"` is a pseudo-tag, NOT a real Mixin annotation. It signals "no `@Shadow` is needed because the target is already accessible to the mixin"; the caller can use `@Inject` (or a direct method call) without declaring a shadow. `accessorAdvice.exampleSnippet` is a deterministic Java fragment built from the recommendation; the tool does NOT compile-check the snippet — run a Gradle build before committing.
+
+Errors:
+
+- Owner not found returns `ERR_CLASS_NOT_FOUND` with `details.suggestedCall.tool === "find-class"` and `details.suggestedCall.params.artifactId` pre-filled to the resolved artifact, so the caller can immediately re-probe with the correct simple-name query.
+- Workspace targets without a detectable Minecraft version still raise `ERR_WORKSPACE_VERSION_UNRESOLVED` (inherited from `resolve-artifact`).
+- Namespace mismatch raises `ERR_NAMESPACE_MISMATCH` when an explicit `mapping` argument differs from the resolved artifact's `mappingApplied`. The tool does NOT yet auto-translate `owner` / `member.name` / `descriptor` between namespaces; supply them in the artifact's namespace, or omit `mapping` so the resolver picks the namespace automatically. `details` carries `requestedMapping` and `mappingApplied` so callers can branch programmatically. Auto-translation (per-member name + descriptor remap matching the `get-class-members` flow) is a planned follow-up; until then the explicit error replaces silent `ERR_CLASS_NOT_FOUND` / `exists:false` regressions when the namespaces diverge.
+
+Set `VERIFY_MIXIN_TARGET_OFF=1` at process start to remove the tool from `tools/list` entirely and reject direct calls. Use as a rollback path while the accessor-inference rules stabilize.
+
 ## Errors
 
 `ProblemDetails.code` may carry the codes below in addition to the existing tool-specific values.
@@ -113,6 +164,9 @@ These environment variables are read once at worker startup and provide rollback
 | `WORKSPACE_TARGET_OFF=1` | Rejects `target.kind="workspace"` on `resolve-artifact`, `get-class-source`, and `get-class-members` with `ERR_INVALID_INPUT`. Restores the pre-workspace-target behaviour where callers must always supply `target.kind="version"`/`"jar"`/`"coordinate"`. | `tests/source-service-workspace-target.test.ts` (`synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set`) |
 | `DEPENDENCY_TARGET_OFF=1` | Rejects `target.kind="dependency"` on the same three tools with `ERR_INVALID_INPUT`. | `tests/source-service-dependency-target.test.ts` (`synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set`) |
 | `WORKSPACE_FALLBACK_LEGACY=1` | Forces the `ERR_MAPPING_NOT_APPLIED` `suggestedCall` back to the pre-workspace shape (`{ target, mapping: "obfuscated" }` with the legacy scope flip on `vanilla`+`mojang`). Use when an integration relies on the legacy retry payload. | `tests/source-service-mapping-not-applied-fallback.test.ts` (`buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set`) |
+| `VALIDATE_PROJECT_TASKS_OFF=1` | Omits the additive `tasks` per-probe status report from `validate-project task="project-summary"` results. The headline `result.summary.status`, `result.project`, and `result.workspace` blocks are unchanged. Use as a rollback path while the per-probe contract stabilizes. | `tests/entry-tools-validate-project-tasks.test.ts` (`validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks field`) |
+| `MEMBERS_STATUS_LEGACY=1` | Omits the additive `status` / `unavailableReason` / `suggestedCall` fields from `get-class-members` results. Restores the pre-status response shape for callers that pre-date the new enum. | `tests/source-service-get-class-members-status.test.ts` (`B7: MEMBERS_STATUS_LEGACY=1 strips the new fields`) |
+| `VERIFY_MIXIN_TARGET_OFF=1` | Removes `verify-mixin-target` from `tools/list` and rejects direct invocations with `ERR_INVALID_INPUT`. Use as a rollback path while the accessor-inference rules stabilize. | `tests/entry-tools-verify-mixin-target.test.ts` (`C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls`) |
 
 
 ## Migration Notes
@@ -124,6 +178,21 @@ These environment variables are read once at worker startup and provide rollback
 - Start with `analyze-mod` for metadata-first mod inspection and safe remap preview/apply flows before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
 - Start with `validate-project` for workspace summaries and direct Mixin, Access Widener, or Access Transformer validation before using `validate-mixin`, `validate-access-widener`, or `validate-access-transformer` directly.
 - `validate-project task="project-summary"` discovers mixins and access wideners by default. Add `discover: ["access-transformers"]` when you also want Access Transformer files included in the workspace summary.
+- `validate-project task="project-summary"` returns an additive `tasks` field alongside the existing aggregate `result.summary` / `result.project` blocks. The headline `result.summary.status` is unchanged; the new field reports per-probe status so a `status: "blocked"` headline still preserves which probes succeeded.
+
+  | Probe key | What it checks | `status: "ok"` evidence | Other states |
+  | --- | --- | --- | --- |
+  | `workspace.detected` | A `gradle.properties`, `settings.gradle{,.kts}`, or `build.gradle{,.kts}` file exists at `subject.projectPath`. | `evidence: ["gradle.properties", ...]` lists the gradle files that were found. | `missing` when no gradle files exist; `error` when the filesystem read itself failed. |
+  | `gradle.readable` | `gradle.properties` can be read and the workspace's gradle build scripts are enumerable. | `propertiesPath` and `buildScripts[]` (relative paths). | `skipped` when `workspace.detected` is not `ok`; `missing` when no gradle files at all; `error` on parse / read failure. |
+  | `loom.cache.found` | A Loom (Fabric / Quilt) cache directory under the workspace or `GRADLE_USER_HOME` exists. Independent of `workspace.detected` so callers can detect a global Loom cache even on non-gradle workspaces. | `cachePath` of the first matching directory. | `missing` when none of the candidate roots exist; `error` on filesystem failure. |
+  | `minecraft.artifact.resolved` | `resolve-artifact` with `target: { kind: "version", value: <resolvedVersion> }` succeeds against the workspace context. | `artifactId` and `mappingApplied`. | `skipped` when `workspace.detected` or `gradle.readable` is not `ok`; `error` when `resolve-artifact` throws (carries `error.code` and `error.detail`). |
+  | `mixins.validated` | At least one `*.mixins.json` file was discovered AND every per-config validation completed without throwing. | `counts: { ok, partial, invalid }` (validation outcomes from `validate-mixin`). | `skipped` when any upstream probe is non-`ok`; `missing` when discovery returned 0 paths; `error` when one or more per-config validations threw. |
+  | `accessWideners.validated` | At least one Access Widener file was discovered AND every validation completed without throwing. | `counts: { ok, invalid }`. | `skipped` / `missing` / `error` follow the same rules as `mixins.validated`. |
+  | `accessTransformers.validated` | At least one Access Transformer file was discovered AND every validation completed without throwing. | `counts: { ok, invalid }`. | Same as `mixins.validated`. |
+
+  Status precedence (top wins): `skipped` (upstream blocked) > `missing` (no items) > `error` (item-level caught) > `ok`.
+
+  Output projection: with `detail: "summary"` (or when `include` does not contain `"workspace"`), each `tasks[*]` entry is slimmed to `status`, `error?`, and `warnings?` only — `evidence` / `buildScripts` / `counts` / `propertiesPath` / `cachePath` / `artifactId` / `mapping` / `durationMs` are stripped. With `detail: "full"` (or `"standard"`) AND `include` containing `"workspace"`, every sub-field is preserved. Set `VALIDATE_PROJECT_TASKS_OFF=1` at process start to omit the field entirely (legacy shape).
 - `validate-access-widener` keeps vanilla validation when `projectPath`, `scope`, and `preferProjectVersion` are omitted. Supplying Loom workspace context switches it into runtime-aware mode, which returns `provenance` and per-entry runtime access evidence without changing the existing summary shape.
 - `validate-access-transformer` accepts `atNamespace="srg" | "mojang" | "obfuscated"`. When `projectPath` points at a Forge or NeoForge workspace, the tool can infer that namespace automatically and validate against loader/runtime artifacts for `scope="loader"`.
 - Start with `manage-cache` for cache inventory and safe cleanup. Use `executionMode="preview"` before `executionMode="apply"`.

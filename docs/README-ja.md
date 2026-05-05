@@ -13,7 +13,7 @@
 
 `@adhisang/minecraft-modding-mcp` は、AI アシスタントに Minecraft のソースコード、マッピング、Mod JAR、レジストリデータ、バリデーションワークフローへの構造化アクセスを提供する [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) サーバーです。Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントで利用できます。
 
-**36 ツール**（6 エントリー + 30 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
+**37 ツール**（6 エントリー + 31 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
 
 ## 特長
 
@@ -344,6 +344,7 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 | `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (stage budget が部分結果を返す場合は `validationStatus: "partial"` と `targetOutcomes` を含む) |
 | `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |
 | `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |
+| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 call で返す |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### レジストリと診断

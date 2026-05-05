@@ -13,7 +13,7 @@
 
 `@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants structured access to Minecraft source code, mappings, mod JARs, registry data, and validation workflows. It works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
-**36 tools** (6 entry + 30 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+**37 tools** (6 entry + 31 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 
@@ -345,6 +345,7 @@ Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Acce
 | `validate-mixin` | Validate Mixin source against a target Minecraft version (returns `validationStatus: "partial"` with `targetOutcomes` when a stage budget defers work) |
 | `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |
 | `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |
+| `verify-mixin-target` | Single-call probe for owner / member existence with `@Shadow` / `@Accessor` / `@Invoker` advice |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### Registry & Diagnostics

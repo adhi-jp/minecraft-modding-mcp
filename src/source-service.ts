@@ -142,6 +142,7 @@ import {
 
 const WORKSPACE_TARGET_OFF = process.env.WORKSPACE_TARGET_OFF === "1";
 const DEPENDENCY_TARGET_OFF = process.env.DEPENDENCY_TARGET_OFF === "1";
+const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
 
 export type ResolveArtifactInput = {
   target: ResolveArtifactTargetInput;
@@ -526,6 +527,8 @@ export type DecompiledFallback = {
   origin: "source-extracted";
 };
 
+export type GetClassMembersStatus = "ok" | "members_unavailable" | "partial";
+
 export type GetClassMembersOutput = {
   className: string;
   members: {
@@ -556,6 +559,9 @@ export type GetClassMembersOutput = {
     methods: number;
     total: number;
   };
+  status?: GetClassMembersStatus;
+  unavailableReason?: string;
+  suggestedCall?: { tool: string; params: Record<string, unknown> };
   warnings: string[];
 };
 
@@ -5204,21 +5210,49 @@ export class SourceService {
       context: "binary lookup"
     });
 
-    const signature = await this.explorerService.getSignature({
-      fqn: lookupClassName,
-      jarPath: binaryJarPath,
-      access,
-      includeSynthetic,
-      includeInherited,
-      memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined
-    });
-    warnings.push(...signature.warnings);
+    let signatureContext: ExplorerResponseContext;
+    let signatureConstructors: SignatureMember[];
+    let signatureFields: SignatureMember[];
+    let signatureMethods: SignatureMember[];
+    let binaryExtractionFailed = false;
+    let binaryExtractionFailureReason: string | undefined;
+    try {
+      const signature = await this.explorerService.getSignature({
+        fqn: lookupClassName,
+        jarPath: binaryJarPath,
+        access,
+        includeSynthetic,
+        includeInherited,
+        memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined
+      });
+      warnings.push(...signature.warnings);
+      signatureContext = signature.context;
+      signatureConstructors = signature.constructors;
+      signatureFields = signature.fields;
+      signatureMethods = signature.methods;
+    } catch (error) {
+      if (isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND) {
+        throw error;
+      }
+      binaryExtractionFailed = true;
+      binaryExtractionFailureReason = error instanceof Error ? error.message : String(error);
+      signatureContext = {
+        minecraftVersion: version ?? "unknown",
+        mappingType: "unknown",
+        mappingNamespace: mappingApplied === "intermediary" ? "obfuscated" : mappingApplied,
+        jarHash: "",
+        generatedAt: new Date().toISOString()
+      };
+      signatureConstructors = [];
+      signatureFields = [];
+      signatureMethods = [];
+    }
 
     let remappedConstructors =
       version != null
         ? (
             await this.remapSignatureMembers(
-              signature.constructors,
+              signatureConstructors,
               "method",
               version,
               mappingApplied,
@@ -5227,12 +5261,12 @@ export class SourceService {
               warnings
             )
           ).members
-        : signature.constructors;
+        : signatureConstructors;
     let remappedFields =
       version != null
         ? (
             await this.remapSignatureMembers(
-              signature.fields,
+              signatureFields,
               "field",
               version,
               mappingApplied,
@@ -5241,12 +5275,12 @@ export class SourceService {
               warnings
             )
           ).members
-        : signature.fields;
+        : signatureFields;
     let remappedMethods =
       version != null
         ? (
             await this.remapSignatureMembers(
-              signature.methods,
+              signatureMethods,
               "method",
               version,
               mappingApplied,
@@ -5255,7 +5289,7 @@ export class SourceService {
               warnings
             )
           ).members
-        : signature.methods;
+        : signatureMethods;
 
     // Apply memberPattern after remap when the lookup namespace differs from the requested namespace.
     if (requestedMapping !== mappingApplied && memberPattern) {
@@ -5341,6 +5375,39 @@ export class SourceService {
       }
     }
 
+    let statusFields: Pick<GetClassMembersOutput, "status" | "unavailableReason" | "suggestedCall"> = {};
+    if (!MEMBERS_STATUS_LEGACY) {
+      let status: GetClassMembersStatus;
+      let unavailableReason: string | undefined;
+      let suggestedCall: GetClassMembersOutput["suggestedCall"];
+      if (counts.total > 0) {
+        status = "ok";
+      } else if (decompiledFallback) {
+        status = "partial";
+      } else if (binaryExtractionFailed) {
+        status = "members_unavailable";
+        unavailableReason =
+          binaryExtractionFailureReason
+          ?? `binary extraction failed for "${className}".`;
+        suggestedCall = {
+          tool: "get-class-source",
+          params: {
+            target: { type: "artifact", artifactId },
+            className,
+            mode: "snippet",
+            mapping: requestedMapping
+          }
+        };
+      } else {
+        status = "ok";
+      }
+      statusFields = {
+        status,
+        ...(unavailableReason ? { unavailableReason } : {}),
+        ...(suggestedCall ? { suggestedCall } : {})
+      };
+    }
+
     return {
       className,
       members: {
@@ -5350,7 +5417,7 @@ export class SourceService {
       },
       counts,
       truncated,
-      context: signature.context,
+      context: signatureContext,
       origin,
       artifactId,
       requestedMapping,
@@ -5366,6 +5433,7 @@ export class SourceService {
       }),
       ...(decompiledFallback ? { decompiledFallback } : {}),
       ...(decompiledMemberCounts ? { decompiledMemberCounts } : {}),
+      ...statusFields,
       warnings
     };
   }

@@ -1,0 +1,521 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createError, ERROR_CODES, isAppError } from "../src/errors.ts";
+import {
+  VerifyMixinTargetService,
+  type VerifyMixinTargetDeps,
+  type VerifyMixinTargetInput
+} from "../src/entry-tools/verify-mixin-target-service.ts";
+
+type Member = {
+  ownerFqn: string;
+  name: string;
+  javaSignature: string;
+  jvmDescriptor: string;
+  accessFlags: number;
+  isSynthetic: boolean;
+};
+
+function buildDeps(members: {
+  constructors?: Member[];
+  fields?: Member[];
+  methods?: Member[];
+  resolveError?: Error;
+  signatureError?: Error;
+  workspaceProvenance?: { projectPath: string; cacheHit?: boolean };
+}): VerifyMixinTargetDeps {
+  return {
+    resolveArtifact: async () => {
+      if (members.resolveError) throw members.resolveError;
+      return {
+        artifactId: "minecraft-1.21.10",
+        mappingApplied: "obfuscated",
+        binaryJarPath: "/tmp/fake.jar",
+        provenance: members.workspaceProvenance
+          ? ({
+              target: { kind: "version", value: "1.21.10" },
+              resolvedAt: new Date().toISOString(),
+              resolvedFrom: { origin: "local-jar" },
+              transformChain: [],
+              workspaceResolution: {
+                projectPath: members.workspaceProvenance.projectPath,
+                detected: { minecraftVersion: "1.21.10" },
+                source: "test",
+                cacheHit: members.workspaceProvenance.cacheHit ?? false,
+                warnings: []
+              }
+            } as unknown as never)
+          : undefined,
+        warnings: []
+      };
+    },
+    getSignature: async () => {
+      if (members.signatureError) throw members.signatureError;
+      return {
+        constructors: members.constructors ?? [],
+        methods: members.methods ?? [],
+        fields: members.fields ?? [],
+        warnings: []
+      };
+    }
+  };
+}
+
+const baseInput: Omit<VerifyMixinTargetInput, "member"> = {
+  owner: "net.minecraft.world.entity.LivingEntity",
+  target: { kind: "version", value: "1.21.10" }
+};
+
+test("C1: existing method with explicit descriptor returns exists=true and matches=1", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "tick", descriptor: "()V" }
+  });
+  assert.equal(result.exists, true);
+  assert.equal(result.matches.length, 1);
+  assert.ok(result.accessorAdvice);
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Inject-only");
+});
+
+test("C2: existing method with descriptor omitted returns all overloads as matches", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        },
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick(int)",
+          jvmDescriptor: "(I)V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "tick" }
+  });
+  assert.equal(result.exists, true);
+  assert.equal(result.matches.length, 2);
+  assert.equal(result.candidates.length, 0);
+  assert.equal(
+    result.accessorAdvice,
+    undefined,
+    "accessorAdvice must NOT be emitted for ambiguous overloads (matches.length > 1)"
+  );
+});
+
+test("C3: name match with descriptor mismatch returns exists=false plus descriptor candidates", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick(int)",
+          jvmDescriptor: "(I)V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "tick", descriptor: "()V" }
+  });
+  assert.equal(result.exists, false);
+  assert.equal(result.matches.length, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.match(result.candidates[0]!.reason, /descriptor.*differs/);
+  assert.equal(
+    result.accessorAdvice,
+    undefined,
+    "accessorAdvice must NOT be emitted when exists=false (F3 fix)"
+  );
+});
+
+test("C4: method not found by name returns nearest neighbors via suggestSimilar", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tickServer",
+          javaSignature: "public void tickServer()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        },
+        {
+          ownerFqn: "Owner",
+          name: "tickEnd",
+          javaSignature: "public void tickEnd()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "tickServr" }
+  });
+  assert.equal(result.exists, false);
+  assert.ok(result.candidates.length >= 1);
+  assert.equal(
+    result.candidates.some((c) => c.name === "tickServer"),
+    true
+  );
+  assert.equal(
+    result.accessorAdvice,
+    undefined,
+    "accessorAdvice must NOT be emitted when exists=false (F3 fix)"
+  );
+});
+
+test("C5: private field without mixinMemberName returns @Shadow", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "airSupply",
+          javaSignature: "private int airSupply",
+          jvmDescriptor: "I",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Shadow\nprivate /);
+});
+
+test("C5b: private method without mixinMemberName returns null + candidates", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "doInternal",
+          javaSignature: "private void doInternal()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "doInternal" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, null);
+  assert.equal(result.accessorAdvice?.candidates?.length, 2);
+  const annotations = result.accessorAdvice?.candidates?.map((c) => c.annotation) ?? [];
+  assert.ok(annotations.includes("@Shadow"));
+  assert.ok(annotations.includes("@Invoker"));
+});
+
+test("C6: private field with getXxx mixinMemberName returns @Accessor", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "airSupply",
+          javaSignature: "private int airSupply",
+          jvmDescriptor: "I",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" },
+    mixinMemberName: "getAirSupply"
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Accessor");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Accessor\("airSupply"\)/);
+});
+
+test("C7: private method with invokeXxx mixinMemberName returns @Invoker", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "doInternal",
+          javaSignature: "private void doInternal()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "doInternal" },
+    mixinMemberName: "invokeDoInternal"
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Invoker");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Invoker\("doInternal"\)/);
+});
+
+test("C8: public method returns @Inject-only with reasoning", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "method", name: "tick" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Inject-only");
+  assert.match(result.accessorAdvice?.reasoning ?? "", /already visible/i);
+});
+
+test("C9: workspace target populates provenance.workspaceResolution", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        {
+          ownerFqn: "Owner",
+          name: "tick",
+          javaSignature: "public void tick()",
+          jvmDescriptor: "()V",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ],
+      workspaceProvenance: { projectPath: "/workspace/demo-mod", cacheHit: false }
+    })
+  );
+  const result = await service.execute({
+    owner: "Owner",
+    member: { kind: "method", name: "tick" },
+    target: { kind: "workspace" },
+    projectPath: "/workspace/demo-mod"
+  });
+  assert.ok(result.provenance.workspaceResolution);
+  assert.equal(result.provenance.workspaceResolution!.projectPath, "/workspace/demo-mod");
+});
+
+test("C10: owner not found rethrows ERR_CLASS_NOT_FOUND with find-class suggestedCall", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      signatureError: createError({
+        code: ERROR_CODES.CLASS_NOT_FOUND,
+        message: "Class \"Owner\" was not found."
+      })
+    })
+  );
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "Owner",
+        member: { kind: "method", name: "tick" },
+        target: { kind: "version", value: "1.21.10" }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.CLASS_NOT_FOUND);
+      const details = (err as { details?: { suggestedCall?: { tool?: string } } }).details ?? {};
+      assert.equal(details.suggestedCall?.tool, "find-class");
+      return true;
+    }
+  );
+});
+
+test("C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const script = `
+    import assert from "node:assert/strict";
+    import { VerifyMixinTargetService, VERIFY_MIXIN_TARGET_OFF } from "./src/entry-tools/verify-mixin-target-service.ts";
+    assert.equal(VERIFY_MIXIN_TARGET_OFF, true);
+    const service = new VerifyMixinTargetService({
+      resolveArtifact: async () => { throw new Error("should not be called"); },
+      getSignature: async () => { throw new Error("should not be called"); }
+    });
+    let threw = false;
+    try {
+      await service.execute({
+        owner: "Owner",
+        member: { kind: "method", name: "tick" },
+        target: { kind: "version", value: "1.21.10" }
+      });
+    } catch (error) {
+      threw = true;
+      assert.match((error).message, /VERIFY_MIXIN_TARGET_OFF/);
+    }
+    assert.equal(threw, true);
+
+    // tools/list path: importing index.ts must not register verify-mixin-target.
+    const { server } = await import("./src/index.ts");
+    const handler = server.server._requestHandlers.get("tools/list");
+    assert.ok(handler);
+    const response = await handler({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, {});
+    const names = response.tools.map((t) => t.name);
+    assert.equal(names.includes("verify-mixin-target"), false);
+    console.log("OK");
+  `;
+  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, VERIFY_MIXIN_TARGET_OFF: "1" },
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OK/);
+});
+
+test("C14: @Accessor setter template emits void with parameter (not zero-arg)", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "health",
+          javaSignature: "private float health",
+          jvmDescriptor: "F",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "health" },
+    mixinMemberName: "setHealth"
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Accessor");
+  const snippet = result.accessorAdvice?.exampleSnippet ?? "";
+  assert.match(snippet, /void setHealth\(<type> value\);/, `setter must emit void with parameter; got: ${snippet}`);
+  assert.doesNotMatch(snippet, /<returnType> setHealth\(\);/);
+});
+
+test("C14b: @Accessor getter template stays zero-arg with return type", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "airSupply",
+          javaSignature: "private int airSupply",
+          jvmDescriptor: "I",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" },
+    mixinMemberName: "getAirSupply"
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Accessor");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /<returnType> getAirSupply\(\);/);
+});
+
+test("C13: explicit input.mapping that differs from resolved.mappingApplied throws ERR_NAMESPACE_MISMATCH", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.16.5",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      provenance: undefined,
+      warnings: []
+    }),
+    getSignature: async () => {
+      throw new Error("getSignature must NOT be reached when namespace mismatch is detected");
+    }
+  });
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "tick" },
+        target: { kind: "version", value: "1.16.5" },
+        mapping: "mojang"
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.NAMESPACE_MISMATCH);
+      const details = (err as { details?: { mappingApplied?: string; requestedMapping?: string } }).details ?? {};
+      assert.equal(details.requestedMapping, "mojang");
+      assert.equal(details.mappingApplied, "obfuscated");
+      return true;
+    }
+  );
+});
+
+test("C12: exampleSnippet is deterministic for given (annotation, kind, accessFlags)", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "airSupply",
+          javaSignature: "private int airSupply",
+          jvmDescriptor: "I",
+          accessFlags: 0x0002,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const a = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" }
+  });
+  const b = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" }
+  });
+  assert.equal(a.accessorAdvice?.exampleSnippet, b.accessorAdvice?.exampleSnippet);
+});

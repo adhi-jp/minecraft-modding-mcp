@@ -120,12 +120,14 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
     en: [
       "| `validate-mixin` | Validate Mixin source against a target Minecraft version (returns `validationStatus: \"partial\"` with `targetOutcomes` when a stage budget defers work) |",
       "| `validate-access-widener` | Validate Access Widener content against a target Minecraft version, optionally using runtime-aware Loom artifacts |",
-      "| `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |"
+      "| `validate-access-transformer` | Validate Access Transformer content against a target Minecraft version, optionally using Forge/NeoForge runtime artifacts |",
+      "| `verify-mixin-target` | Single-call probe for owner / member existence with `@Shadow` / `@Accessor` / `@Invoker` advice |"
     ],
     ja: [
       "| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (stage budget が部分結果を返す場合は `validationStatus: \"partial\"` と `targetOutcomes` を含む) |",
       "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |",
-      "| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |"
+      "| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |",
+      "| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 call で返す |"
     ]
   },
   "registry-diagnostics": {

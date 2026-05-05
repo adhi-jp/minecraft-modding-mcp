@@ -621,7 +621,7 @@ export function refreshMixinValidationOutcome(result: MixinValidationResult): Mi
   return result;
 }
 
-function validateInjection(
+export function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
@@ -688,7 +688,7 @@ function validateInjection(
   }
 }
 
-function validateShadow(
+export function validateShadow(
   shadow: ParsedShadow,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],
@@ -761,7 +761,7 @@ function validateShadow(
   }
 }
 
-function validateAccessor(
+export function validateAccessor(
   accessor: ParsedAccessor,
   targetMembers: Map<string, ResolvedTargetMembers>,
   targetNames: string[],

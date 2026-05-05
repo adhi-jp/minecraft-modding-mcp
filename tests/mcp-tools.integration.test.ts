@@ -44,7 +44,8 @@ const EXPECTED_TOOLS = [
   "decompile-mod-jar",
   "get-mod-class-source",
   "search-mod-source",
-  "remap-mod-jar"
+  "remap-mod-jar",
+  "verify-mixin-target"
 ] as const;
 
 type RequestHandler = (

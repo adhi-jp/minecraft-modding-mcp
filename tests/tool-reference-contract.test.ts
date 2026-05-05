@@ -71,8 +71,46 @@ test("tool-reference.md documents the operational env toggles", async () => {
     "MIXIN_STAGE_PROGRESS_OFF",
     "WORKSPACE_TARGET_OFF",
     "DEPENDENCY_TARGET_OFF",
-    "WORKSPACE_FALLBACK_LEGACY"
+    "WORKSPACE_FALLBACK_LEGACY",
+    "VALIDATE_PROJECT_TASKS_OFF"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
+  }
+});
+
+test("tool-reference.md documents the validate-project per-task probe keys", async () => {
+  const doc = await loadDoc();
+  for (const probe of [
+    "tasks",
+    "workspace.detected",
+    "gradle.readable",
+    "loom.cache.found",
+    "minecraft.artifact.resolved",
+    "mixins.validated",
+    "accessWideners.validated",
+    "accessTransformers.validated"
+  ]) {
+    assert.ok(doc.includes(probe), `tool-reference.md must mention validate-project tasks key "${probe}"`);
+  }
+});
+
+test("tool-reference.md documents the get-class-members status enum", async () => {
+  const doc = await loadDoc();
+  for (const value of ["\"ok\"", "\"members_unavailable\"", "\"partial\"", "unavailableReason", "MEMBERS_STATUS_LEGACY"]) {
+    assert.ok(doc.includes(value), `tool-reference.md must mention get-class-members status token "${value}"`);
+  }
+});
+
+test("tool-reference.md documents the verify-mixin-target tool and accessorAdvice", async () => {
+  const doc = await loadDoc();
+  for (const token of [
+    "verify-mixin-target",
+    "accessorAdvice",
+    "@Inject-only",
+    "@Accessor",
+    "@Invoker",
+    "VERIFY_MIXIN_TARGET_OFF"
+  ]) {
+    assert.ok(doc.includes(token), `tool-reference.md must mention verify-mixin-target token "${token}"`);
   }
 });
