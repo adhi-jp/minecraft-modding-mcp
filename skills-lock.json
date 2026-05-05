@@ -79,6 +79,12 @@
       "skillPath": "skills/verification-before-completion/SKILL.md",
       "computedHash": "9b446f0c7fe1cfb560b1d34439523b1a76d5f177290007b2c053a1c749a4a8ba"
     },
+    "vibe-commit-message": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-commit-message/SKILL.md",
+      "computedHash": "0b10f2f6d79d756a19b840704261729fe41d2e8fa8e9c4ddc45ff9cd489713a5"
+    },
     "vibe-plan-execution": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
