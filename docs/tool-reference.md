@@ -136,6 +136,83 @@ Errors:
 
 Set `VERIFY_MIXIN_TARGET_OFF=1` at process start to remove the tool from `tools/list` entirely and reject direct calls. Use as a rollback path while the accessor-inference rules stabilize.
 
+## Batch lookup contract
+
+`batch-class-source`, `batch-class-members`, `batch-symbol-exists`, and `batch-mappings` share one envelope. Each call sends a fixed shortlist (1..50 entries) and receives a per-entry result plus an aggregate summary. The batch runs `entries.length` underlying calls but resolves the shared artifact ONCE (where applicable), so the round-trip cost is `1 resolve + N per-entry` rather than `N × (resolve + per-entry)`.
+
+Common input fields:
+
+- `entries: Array<...>` — 1..50 per-entry payloads. Tool-specific shape (see each subsection).
+- `concurrency: number` (1..8, default 4) — passed to the worker pool. Above 8 is rejected with `ERR_INVALID_INPUT` (`fieldErrors[0].path === "concurrency"`).
+- `failFast: boolean` (default `false`) — when `true`, the first per-entry error sets an abort flag. Workers that have not yet picked up an entry short-circuit with `error.code === "ERR_BATCH_ABORTED"`. **In-flight workers continue to completion** — they are not cancelled (no AbortSignal wiring). Already-completed `ok` entries are still returned in `results`.
+- `compact: boolean` (default `true`) — applies the same per-tool projection that the corresponding single tool's `compact: true` mode applies. When `false`, per-entry `result` is byte-identical to the single tool's `compact: false` output.
+- Per-tool shared inputs (`target`, `mapping`, `projectPath`, `version`, etc.) follow the same shape as the matching single tool.
+
+Common output:
+
+```json
+{
+  "results": [
+    {
+      "index": 0,
+      "status": "ok",
+      "result": { ... single-tool-result-shape ... },
+      "warnings": ["..."],
+      "durationMs": 12.34
+    },
+    {
+      "index": 1,
+      "status": "error",
+      "error": {
+        "code": "ERR_CLASS_NOT_FOUND",
+        "detail": "...",
+        "suggestedCall": { "tool": "get-class-source", "params": { ... } }
+      },
+      "warnings": [],
+      "durationMs": 5.6
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "ok": 1,
+    "error": 1,
+    "sharedArtifactId": "...",
+    "sharedArtifactProvenance": { ... }
+  }
+}
+```
+
+Per-entry retry semantics: each `error.suggestedCall` proposes the **matching single tool**, never the batch tool itself. The retry mapping is fixed:
+
+| Batch tool | Single tool retry |
+|---|---|
+| `batch-class-source` | `get-class-source` (with `target: { type: "artifact", artifactId: <shared> }`) |
+| `batch-class-members` | `get-class-members` (with `target: { type: "artifact", artifactId: <shared> }`) |
+| `batch-symbol-exists` | `check-symbol-exists` (with `version` derived from the resolved artifact) |
+| `batch-mappings` | `find-mapping` (with `version` carried from the top-level batch input) |
+
+Every per-entry `suggestedCall` is validated through the same `tool-schema-registry` gate as single-tool errors (see `## Errors → suggestedCall schema validation gate`).
+
+If the **shared resolution itself** fails (e.g. `target.kind="version"` with an unknown version), the batch returns a top-level error envelope (no `results[]`). `failFast` does not apply because no entries ran.
+
+Rollback: `BATCH_TOOLS_OFF=1` removes all four batch tools from `tools/list`. Direct `tools/call` for any of them returns the SDK-level "Method not found" tool-result envelope (`{ content: [{ type: "text", text: "MCP error -32602: Tool <name> not found" }], isError: true }`) — no `ProblemDetails` is produced, so callers cannot rely on `error.code === "ERR_*"` for disabled tools.
+
+### batch-class-source
+
+Read source for many classes against one shared resolved artifact. Per-entry: `{ className, mode?, startLine?, endLine?, maxLines?, maxChars?, outputFile? }`. Shared: `target`, `mapping`, `projectPath`, `scope`, `preferProjectVersion`, `strictVersion`, `allowDecompile`. Result shape per entry mirrors `get-class-source`. Duplicate `className` entries each run independently — no de-duplication.
+
+### batch-class-members
+
+List members for many classes against one shared resolved artifact. Per-entry: `{ className, access?, includeSynthetic?, includeInherited?, memberPattern?, maxMembers? }`. Shared inputs match `batch-class-source`. Result shape per entry mirrors `get-class-members`, including the `status` field (`"available"` / `"unavailable"` / etc.).
+
+### batch-symbol-exists
+
+Probe symbol existence for many entries against one shared Minecraft-version artifact. Per-entry: `{ kind: "class" | "field" | "method", name, owner?, descriptor?, nameMode?, signatureMode?, maxCandidates? }`. Shared: `target`, `mapping`, `projectPath`, `scope`, `preferProjectVersion`, `strictVersion`, `allowDecompile`. **`target.kind` is restricted to `"workspace"` or `"version"`** — `dependency` / `jar` / `coordinate` resolve to artifacts whose `provenance.version` is the library's own version (e.g. an Architectury or mod-loader version), NOT a Minecraft version, so querying the Minecraft mapping graph with that string would be a category error. The schema rejects the disallowed kinds with `ERR_INVALID_INPUT`. The shared Minecraft version is derived from `sharedArtifact.version` (version target) or `provenance.workspaceResolution.detected.minecraftVersion` (workspace target). When neither populates, the batch raises `ERR_WORKSPACE_VERSION_UNRESOLVED` at the resolution stage.
+
+### batch-mappings
+
+Translate symbols across mapping namespaces with one shared Minecraft version. Per-entry: `{ kind, name, owner?, descriptor?, sourceMapping, targetMapping, signatureMode?, disambiguation?, maxCandidates? }`. Shared: top-level `version` (required) plus `sourcePriority` / `projectPath`. Per-entry `version` is rejected with an `unrecognized_keys` zod issue; the batch shape is intentionally single-version. There is no shared artifact resolution — each entry hits the mapping graph directly — so `summary.sharedArtifactId` is omitted.
+
 ## Errors
 
 `ProblemDetails.code` may carry the codes below in addition to the existing tool-specific values.
@@ -176,6 +253,7 @@ These environment variables are read once at worker startup and provide rollback
 | `MEMBERS_STATUS_LEGACY=1` | Omits the additive `status` / `unavailableReason` / `suggestedCall` fields from `get-class-members` results. Restores the pre-status response shape for callers that pre-date the new enum. | `tests/source-service-get-class-members-status.test.ts` (`B7: MEMBERS_STATUS_LEGACY=1 strips the new fields`) |
 | `VERIFY_MIXIN_TARGET_OFF=1` | Removes `verify-mixin-target` from `tools/list` and rejects direct invocations with `ERR_INVALID_INPUT`. Use as a rollback path while the accessor-inference rules stabilize. | `tests/entry-tools-verify-mixin-target.test.ts` (`C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls`) |
 | `SUGGESTED_CALL_VALIDATE_OFF=1` | Bypasses the `ProblemDetails.suggestedCall` schema validation gate. Raw caller-supplied payloads are emitted unchanged (matching the pre-gate behaviour); `error.hints` does not gain the fallback line. Use only as an emergency rollback if the gate causes unexpected drops in production. | `tests/build-suggested-call.test.ts` (`D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation`) |
+| `BATCH_TOOLS_OFF=1` | Removes the 4 batch lookup tools (`batch-class-source`, `batch-class-members`, `batch-symbol-exists`, `batch-mappings`) from `tools/list`. Direct calls return the SDK "Tool not found" tool-result envelope (`isError: true`, no `ProblemDetails`). Use as an emergency rollback while the batch contract stabilizes. | `tests/manual/stdio-client-smoke.manual.ts` (`runBatchToolsOffProbe`) |
 
 
 ## Migration Notes

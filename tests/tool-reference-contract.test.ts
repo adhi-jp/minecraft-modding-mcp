@@ -73,9 +73,26 @@ test("tool-reference.md documents the operational env toggles", async () => {
     "DEPENDENCY_TARGET_OFF",
     "WORKSPACE_FALLBACK_LEGACY",
     "VALIDATE_PROJECT_TASKS_OFF",
-    "SUGGESTED_CALL_VALIDATE_OFF"
+    "SUGGESTED_CALL_VALIDATE_OFF",
+    "BATCH_TOOLS_OFF"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
+  }
+});
+
+test("tool-reference.md documents the batch lookup contract and 4 batch tools", async () => {
+  const doc = await loadDoc();
+  for (const token of [
+    "Batch lookup contract",
+    "## batch-class-source",
+    "## batch-class-members",
+    "## batch-symbol-exists",
+    "## batch-mappings",
+    "ERR_BATCH_ABORTED",
+    "failFast",
+    "sharedArtifactId"
+  ]) {
+    assert.ok(doc.includes(token), `tool-reference.md must mention batch-contract token "${token}"`);
   }
 });
 

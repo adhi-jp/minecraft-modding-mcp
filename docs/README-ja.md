@@ -358,6 +358,19 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 | `get-runtime-metrics` | ランタイムメトリクスとレイテンシスナップショットを確認する |
 <!-- END GENERATED TOOL TABLE: registry-diagnostics -->
 
+### バッチ参照
+
+固定ショートリスト (1..50 entries) に対して 1 つの解決済みアーティファクト (または 1 つの Minecraft バージョン) を共有するツール群です。エントリごとに `{ status, result?, error? }` を返し、最後に集計用の `summary` を付けます。共有 envelope、`failFast` のセマンティクス、エントリごとのリトライマッピングは `docs/tool-reference.md` の `Batch lookup contract` に詳述しています。
+
+<!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
+| ツール | 役割 |
+| --- | --- |
+| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して複数クラスのソースを 1 call で読み取る (1..50 entries) |
+| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して複数クラスのメンバーを 1 call で列挙する (1..50 entries) |
+| `batch-symbol-exists` | 共有解決した 1 つの Minecraft-version アーティファクトに対して複数シンボルの存在確認を 1 call で行う (workspace / version target のみ) |
+| `batch-mappings` | 共有 Minecraft バージョンの下で複数シンボルを名前空間横断にマッピング翻訳する (共有アーティファクトなし) |
+<!-- END GENERATED TOOL TABLE: batch-lookup -->
+
 詳細なパラメータ制約、移行メモ、リソースの挙動、環境変数の完全な一覧は [tool-reference.md](tool-reference.md) を参照してください。
 
 ## 開発

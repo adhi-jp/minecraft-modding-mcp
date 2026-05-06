@@ -6,7 +6,8 @@ export const TOOL_SURFACE_SECTION_IDS = [
   "nbt-utilities",
   "mod-analysis",
   "validation",
-  "registry-diagnostics"
+  "registry-diagnostics",
+  "batch-lookup"
 ] as const;
 
 export type ToolSurfaceSectionId = (typeof TOOL_SURFACE_SECTION_IDS)[number];
@@ -138,6 +139,20 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
     ja: [
       "| `get-registry-data` | 生成済みレジストリスナップショットを読み取り、必要に応じてエントリデータも含める |",
       "| `get-runtime-metrics` | ランタイムメトリクスとレイテンシスナップショットを確認する |"
+    ]
+  },
+  "batch-lookup": {
+    en: [
+      "| `batch-class-source` | Read source for many classes against one shared resolved artifact (1..50 entries per call) |",
+      "| `batch-class-members` | List members for many classes against one shared resolved artifact (1..50 entries per call) |",
+      "| `batch-symbol-exists` | Probe symbol existence for many entries against one shared Minecraft-version artifact (workspace / version targets only) |",
+      "| `batch-mappings` | Translate many symbols across mapping namespaces with one shared Minecraft version (no shared artifact) |"
+    ],
+    ja: [
+      "| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して複数クラスのソースを 1 call で読み取る (1..50 entries) |",
+      "| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して複数クラスのメンバーを 1 call で列挙する (1..50 entries) |",
+      "| `batch-symbol-exists` | 共有解決した 1 つの Minecraft-version アーティファクトに対して複数シンボルの存在確認を 1 call で行う (workspace / version target のみ) |",
+      "| `batch-mappings` | 共有 Minecraft バージョンの下で複数シンボルを名前空間横断にマッピング翻訳する (共有アーティファクトなし) |"
     ]
   }
 };

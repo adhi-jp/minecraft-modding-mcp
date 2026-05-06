@@ -45,7 +45,11 @@ const EXPECTED_TOOLS = [
   "get-mod-class-source",
   "search-mod-source",
   "remap-mod-jar",
-  "verify-mixin-target"
+  "verify-mixin-target",
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
 ] as const;
 
 type RequestHandler = (

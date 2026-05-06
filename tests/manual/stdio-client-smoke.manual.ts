@@ -29,7 +29,18 @@ const EXPECTED_TOOLS = [
   "resolve-workspace-symbol",
   "check-symbol-exists",
   "index-artifact",
-  "verify-mixin-target"
+  "verify-mixin-target",
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
+] as const;
+
+const BATCH_TOOLS = [
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
 ] as const;
 
 type ErrorPayload = {
@@ -851,5 +862,78 @@ async function main(): Promise<void> {
   }
 }
 
+async function runBatchToolsOffProbe(): Promise<void> {
+  const stdioMode = selectManualStdioMode(await canUseStdioPipeReliably());
+  const root = await mkdtemp(join(tmpdir(), "stdio-smoke-batch-off-"));
+  const cacheDir = join(root, "cache");
+  const sqlitePath = join(cacheDir, "source-cache.db");
+  await mkdir(cacheDir, { recursive: true });
+
+  const env = {
+    ...process.env,
+    NODE_ENV: "production",
+    MCP_CACHE_DIR: cacheDir,
+    MCP_SQLITE_PATH: sqlitePath,
+    BATCH_TOOLS_OFF: "1"
+  };
+
+  const transport: ManagedTransport = stdioMode.kind === "native"
+    ? new StdioClientTransport({
+        command: "node",
+        args: ["--import", "tsx", "src/cli.ts"],
+        env
+      })
+    : createDirectWorkerBridgeTransport({
+        cwd: process.cwd(),
+        env
+      });
+
+  const client = new Client({ name: "stdio-smoke-batch-off", version: "1.0.0" });
+
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    const toolNames = tools.map((tool) => tool.name);
+    for (const batchName of BATCH_TOOLS) {
+      assert.ok(
+        !toolNames.includes(batchName),
+        `BATCH_TOOLS_OFF=1: tool "${batchName}" must not appear in tools/list, but it did.`
+      );
+    }
+
+    // Pinned at Phase 0 step 6: disabled tools surface as a successful tool-call
+    // reply with `isError:true` and a single text-content entry whose text is
+    // exactly `MCP error -32602: Tool <name> not found`. This asserts that exact
+    // shape so the test catches a regression if the SDK ever switches to a
+    // structuredContent envelope or a thrown JSON-RPC -32601.
+    const callResult = (await client.callTool({
+      name: "batch-class-source",
+      arguments: {
+        target: { kind: "version", value: "1.21.10" },
+        entries: [{ className: "x.y.Z" }]
+      }
+    })) as {
+      content: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
+
+    assert.equal(callResult.isError, true, "BATCH_TOOLS_OFF=1: callTool reply must have isError:true.");
+    assert.ok(Array.isArray(callResult.content) && callResult.content.length >= 1, "BATCH_TOOLS_OFF=1: callTool reply must have a content array.");
+    const first = callResult.content[0];
+    assert.equal(first?.type, "text", "BATCH_TOOLS_OFF=1: first content entry must be type=text.");
+    assert.equal(
+      first?.text,
+      "MCP error -32602: Tool batch-class-source not found",
+      "BATCH_TOOLS_OFF=1: callTool text payload did not match the pinned 'Tool not found' shape."
+    );
+
+    console.log("Manual stdio client smoke (BATCH_TOOLS_OFF=1) passed: 4 batch tools absent and callTool returns the SDK-level 'not found' envelope.");
+  } finally {
+    await closeTransportWithTimeout(transport);
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 await main();
+await runBatchToolsOffProbe();
 process.exit(0);

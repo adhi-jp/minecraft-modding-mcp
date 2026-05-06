@@ -77,10 +77,22 @@ import {
   VerifyMixinTargetService,
   VERIFY_MIXIN_TARGET_OFF
 } from "./entry-tools/verify-mixin-target-service.js";
+import { BATCH_TOOLS_OFF } from "./entry-tools/batch-runner.js";
+import { BatchClassSourceService } from "./entry-tools/batch-class-source-service.js";
+import { BatchClassMembersService } from "./entry-tools/batch-class-members-service.js";
+import { BatchSymbolExistsService } from "./entry-tools/batch-symbol-exists-service.js";
+import { BatchMappingsService } from "./entry-tools/batch-mappings-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 import { registerToolSchema } from "./tool-schema-registry.js";
 import { buildSuggestedCall } from "./build-suggested-call.js";
+import {
+  statusForErrorCode,
+  type ExampleCall,
+  type ProblemDetails,
+  type ProblemFieldError,
+  type SuggestedCall
+} from "./error-mapping.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
@@ -92,36 +104,6 @@ type SearchSymbolKind = "class" | "interface" | "enum" | "record" | "method" | "
 type MemberAccess = "public" | "all";
 type WorkspaceSymbolKind = "class" | "field" | "method";
 
-type ProblemFieldError = {
-  path: string;
-  message: string;
-  code?: string;
-};
-
-type SuggestedCall = {
-  tool: string;
-  params: Record<string, unknown>;
-};
-
-type ExampleCall = {
-  tool: string;
-  params: Record<string, unknown>;
-  reason: string;
-};
-
-type ProblemDetails = {
-  type: string;
-  title: string;
-  detail: string;
-  status: number;
-  code: string;
-  instance: string;
-  fieldErrors?: ProblemFieldError[];
-  hints?: string[];
-  suggestedCall?: SuggestedCall;
-  exampleCalls?: ExampleCall[];
-  failedStage?: string;
-};
 
 type ToolMeta = {
   requestId: string;
@@ -421,6 +403,129 @@ const verifyMixinTargetShape = {
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
 };
 const verifyMixinTargetSchema = z.object(verifyMixinTargetShape);
+
+const batchSymbolKindSchema = z.enum(["class", "field", "method"]);
+
+const batchClassSourceEntrySchema = z.object({
+  className: nonEmptyString,
+  mode: sourceModeSchema.optional(),
+  startLine: optionalPositiveInt,
+  endLine: optionalPositiveInt,
+  maxLines: optionalPositiveInt,
+  maxChars: optionalPositiveInt,
+  outputFile: optionalNonEmptyString
+});
+
+const batchClassSourceShape = {
+  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
+  allowDecompile: z.boolean().optional(),
+  projectPath: optionalNonEmptyString,
+  scope: artifactScopeSchema.optional(),
+  preferProjectVersion: z.boolean().optional(),
+  strictVersion: z.boolean().optional(),
+  concurrency: z.number().int().min(1).max(8).optional().describe("1..8, default 4"),
+  failFast: z.boolean().optional().describe("default false"),
+  compact: z.boolean().optional().describe("default true"),
+  entries: z
+    .array(batchClassSourceEntrySchema)
+    .min(1)
+    .max(50)
+    .describe("1..50 entries; each shares the resolved target artifact.")
+};
+const batchClassSourceSchema = z.object(batchClassSourceShape);
+
+const batchClassMembersEntrySchema = z.object({
+  className: nonEmptyString,
+  access: memberAccessSchema.optional(),
+  includeSynthetic: z.boolean().optional(),
+  includeInherited: z.boolean().optional(),
+  memberPattern: optionalNonEmptyString,
+  maxMembers: optionalPositiveInt
+});
+
+const batchClassMembersShape = {
+  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
+  allowDecompile: z.boolean().optional(),
+  projectPath: optionalNonEmptyString,
+  scope: artifactScopeSchema.optional(),
+  preferProjectVersion: z.boolean().optional(),
+  strictVersion: z.boolean().optional(),
+  concurrency: z.number().int().min(1).max(8).optional(),
+  failFast: z.boolean().optional(),
+  compact: z.boolean().optional(),
+  entries: z.array(batchClassMembersEntrySchema).min(1).max(50)
+};
+const batchClassMembersSchema = z.object(batchClassMembersShape);
+
+const batchSymbolExistsTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("version"), value: nonEmptyString }),
+  workspaceTargetSchema
+]).describe(
+  'Object with kind. Only kind="version" or kind="workspace" is accepted; dependency/jar/coordinate targets carry library versions, not Minecraft versions, and would corrupt the mapping query.'
+);
+
+const batchSymbolExistsEntrySchema = z.object({
+  kind: batchSymbolKindSchema,
+  name: nonEmptyString,
+  owner: optionalNonEmptyString,
+  descriptor: optionalDescriptorString,
+  nameMode: classNameModeSchema.optional(),
+  signatureMode: z.enum(["exact", "name-only"]).optional(),
+  maxCandidates: optionalPositiveInt
+});
+
+const batchSymbolExistsShape = {
+  target: batchSymbolExistsTargetSchema,
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
+  allowDecompile: z.boolean().optional(),
+  projectPath: optionalNonEmptyString,
+  scope: artifactScopeSchema.optional(),
+  preferProjectVersion: z.boolean().optional(),
+  strictVersion: z.boolean().optional(),
+  concurrency: z.number().int().min(1).max(8).optional(),
+  failFast: z.boolean().optional(),
+  compact: z.boolean().optional(),
+  entries: z.array(batchSymbolExistsEntrySchema).min(1).max(50)
+};
+const batchSymbolExistsSchema = z.object(batchSymbolExistsShape);
+
+const batchMappingsEntrySchema = z
+  .object({
+    kind: batchSymbolKindSchema,
+    name: nonEmptyString,
+    owner: optionalNonEmptyString,
+    descriptor: optionalDescriptorString,
+    sourceMapping: sourceMappingSchema,
+    targetMapping: sourceMappingSchema,
+    signatureMode: z.enum(["exact", "name-only"]).optional(),
+    disambiguation: z
+      .object({
+        ownerHint: optionalNonEmptyString,
+        descriptorHint: optionalNonEmptyString
+      })
+      .partial()
+      .optional(),
+    maxCandidates: optionalPositiveInt
+  })
+  .strict();
+
+const batchMappingsShape = {
+  version: nonEmptyString.describe(
+    "Minecraft version shared by every entry. Per-entry version is rejected; this batch shape is intentionally single-version."
+  ),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
+  projectPath: optionalNonEmptyString,
+  concurrency: z.number().int().min(1).max(8).optional(),
+  failFast: z.boolean().optional(),
+  compact: z.boolean().optional(),
+  entries: z.array(batchMappingsEntrySchema).min(1).max(50)
+};
+const batchMappingsSchema = z.object(batchMappingsShape);
 
 const searchClassSourceShape = {
   artifactId: nonEmptyString,
@@ -1145,6 +1250,22 @@ const verifyMixinTargetService = new VerifyMixinTargetService({
     }>
 });
 
+const batchClassSourceService = new BatchClassSourceService({
+  resolveArtifact: (input) => sourceService.resolveArtifact(input),
+  getClassSource: (input) => sourceService.getClassSource(input)
+});
+const batchClassMembersService = new BatchClassMembersService({
+  resolveArtifact: (input) => sourceService.resolveArtifact(input),
+  getClassMembers: (input) => sourceService.getClassMembers(input)
+});
+const batchSymbolExistsService = new BatchSymbolExistsService({
+  resolveArtifact: (input) => sourceService.resolveArtifact(input),
+  checkSymbolExists: (input) => sourceService.checkSymbolExists(input)
+});
+const batchMappingsService = new BatchMappingsService({
+  findMapping: (input) => sourceService.findMapping(input)
+});
+
 registerResources(server, sourceService);
 
 let processHandlersAttached = false;
@@ -1319,71 +1440,6 @@ function extractValidatedSuggestionAndExamples(details: unknown): {
   }
 
   return { suggestedCall, exampleCalls, primaryDropped };
-}
-
-function statusForErrorCode(code: string): number {
-  if (
-    code === ERROR_CODES.INVALID_INPUT ||
-    code === ERROR_CODES.COORDINATE_PARSE_FAILED ||
-    code === ERROR_CODES.INVALID_LINE_RANGE ||
-    code === ERROR_CODES.NBT_PARSE_FAILED ||
-    code === ERROR_CODES.NBT_INVALID_TYPED_JSON ||
-    code === ERROR_CODES.JSON_PATCH_INVALID ||
-    code === ERROR_CODES.NBT_ENCODE_FAILED ||
-    code === ERROR_CODES.NBT_UNSUPPORTED_FEATURE
-  ) {
-    return 400;
-  }
-
-  if (code === ERROR_CODES.JSON_PATCH_CONFLICT || code === ERROR_CODES.CONTEXT_UNRESOLVED) {
-    return 409;
-  }
-
-  if (
-    code === ERROR_CODES.SOURCE_NOT_FOUND ||
-    code === ERROR_CODES.FILE_NOT_FOUND ||
-    code === ERROR_CODES.JAR_NOT_FOUND ||
-    code === ERROR_CODES.VERSION_NOT_FOUND ||
-    code === ERROR_CODES.CLASS_NOT_FOUND
-  ) {
-    return 404;
-  }
-
-  if (
-    code === ERROR_CODES.MAPPING_NOT_APPLIED ||
-    code === ERROR_CODES.MAPPING_UNAVAILABLE ||
-    code === ERROR_CODES.NAMESPACE_MISMATCH ||
-    code === ERROR_CODES.DECOMPILE_DISABLED ||
-    code === ERROR_CODES.REMAP_FAILED
-  ) {
-    return 422;
-  }
-
-  if (
-    code === ERROR_CODES.REMAPPER_UNAVAILABLE ||
-    code === ERROR_CODES.JAVA_PROCESS_FAILED
-  ) {
-    return 503;
-  }
-
-  if (code === ERROR_CODES.LIMIT_EXCEEDED) {
-    return 413;
-  }
-
-  if (code === ERROR_CODES.REPO_FETCH_FAILED) {
-    return 502;
-  }
-
-  if (
-    code === ERROR_CODES.DECOMPILER_UNAVAILABLE ||
-    code === ERROR_CODES.DECOMPILER_FAILED ||
-    code === ERROR_CODES.JAVA_UNAVAILABLE ||
-    code === ERROR_CODES.REGISTRY_GENERATION_FAILED
-  ) {
-    return 503;
-  }
-
-  return 500;
 }
 
 function extractFailedStageFromDetails(details: unknown): string | undefined {
@@ -2423,6 +2479,48 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
     )
   );
   registerToolSchema("verify-mixin-target", verifyMixinTargetSchema);
+}
+
+if (!BATCH_TOOLS_OFF) {
+  server.tool("batch-class-source",
+    "Batch lookup: read source for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-source.",
+    batchClassSourceShape,
+    { readOnlyHint: true },
+    async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
+      batchClassSourceService.execute(input as z.infer<typeof batchClassSourceSchema>) as unknown as Promise<Record<string, unknown>>
+    )
+  );
+  registerToolSchema("batch-class-source", batchClassSourceSchema);
+
+  server.tool("batch-class-members",
+    "Batch lookup: list members for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-members.",
+    batchClassMembersShape,
+    { readOnlyHint: true },
+    async (args) => runTool("batch-class-members", args, batchClassMembersSchema, async (input) =>
+      batchClassMembersService.execute(input as z.infer<typeof batchClassMembersSchema>) as unknown as Promise<Record<string, unknown>>
+    )
+  );
+  registerToolSchema("batch-class-members", batchClassMembersSchema);
+
+  server.tool("batch-symbol-exists",
+    "Batch existence/mapping query: probe many symbols in one call against a shared Minecraft-version artifact. Accepts target.kind=workspace or version only (other kinds carry library versions, not Minecraft versions). Per-entry retry suggestions point at check-symbol-exists.",
+    batchSymbolExistsShape,
+    { readOnlyHint: true },
+    async (args) => runTool("batch-symbol-exists", args, batchSymbolExistsSchema, async (input) =>
+      batchSymbolExistsService.execute(input as z.infer<typeof batchSymbolExistsSchema>) as unknown as Promise<Record<string, unknown>>
+    )
+  );
+  registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
+
+  server.tool("batch-mappings",
+    "Batch mapping translation: resolve many symbols across mapping namespaces with one shared Minecraft version. Per-entry retry suggestions point at find-mapping.",
+    batchMappingsShape,
+    { readOnlyHint: true },
+    async (args) => runTool("batch-mappings", args, batchMappingsSchema, async (input) =>
+      batchMappingsService.execute(input as z.infer<typeof batchMappingsSchema>) as unknown as Promise<Record<string, unknown>>
+    )
+  );
+  registerToolSchema("batch-mappings", batchMappingsSchema);
 }
 
 server.tool("resolve-artifact",

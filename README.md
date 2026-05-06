@@ -359,6 +359,19 @@ Tools for querying generated registry data and inspecting server runtime state.
 | `get-runtime-metrics` | Inspect runtime metrics and latency snapshots |
 <!-- END GENERATED TOOL TABLE: registry-diagnostics -->
 
+### Batch Lookup
+
+Tools that share one resolved artifact (or one Minecraft version) across a fixed shortlist of entries (1..50 per call). Per-entry results are returned with `{ status, result?, error? }` plus an aggregate `summary`. See `docs/tool-reference.md` → `Batch lookup contract` for the shared envelope, `failFast` semantics, and per-entry retry mapping.
+
+<!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
+| Tool | Purpose |
+| --- | --- |
+| `batch-class-source` | Read source for many classes against one shared resolved artifact (1..50 entries per call) |
+| `batch-class-members` | List members for many classes against one shared resolved artifact (1..50 entries per call) |
+| `batch-symbol-exists` | Probe symbol existence for many entries against one shared Minecraft-version artifact (workspace / version targets only) |
+| `batch-mappings` | Translate many symbols across mapping namespaces with one shared Minecraft version (no shared artifact) |
+<!-- END GENERATED TOOL TABLE: batch-lookup -->
+
 Detailed parameter constraints, migration notes, resource behavior, and the full environment-variable matrix live in [docs/tool-reference.md](docs/tool-reference.md).
 
 ## Development
