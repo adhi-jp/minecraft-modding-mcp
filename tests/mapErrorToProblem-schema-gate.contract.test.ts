@@ -80,10 +80,9 @@ test("D10: bug-shaped suggestedCall is dropped and error.hints carries the fallb
 test("D13: byte-identical envelope for valid suggestions (no key additions, no defaults injected)", async () => {
   const { mapErrorToProblem } = await import("../src/index.ts");
 
-  // The caller-supplied params object contains exactly two keys: className and target.
-  // After the gate, the published payload must contain the SAME two keys — no
-  // defaults injected from the get-class-source schema (mode, allowDecompile,
-  // compact, etc. would otherwise appear).
+  // Two-key input; the published payload must retain exactly those two keys
+  // so the get-class-source schema defaults (mode, allowDecompile, compact)
+  // do not slip into the agent-visible payload.
   const callerParams: Record<string, unknown> = {
     className: "net.minecraft.world.entity.LivingEntity",
     target: { type: "resolve", kind: "version", value: "1.21.10" }
@@ -102,7 +101,6 @@ test("D13: byte-identical envelope for valid suggestions (no key additions, no d
     callerParams,
     "published suggestedCall.params must be byte-identical to the caller-supplied object"
   );
-  // Confirm no defaulted fields slipped in.
   const publishedKeys = Object.keys(problem.suggestedCall!.params).sort();
   assert.deepEqual(publishedKeys, ["className", "target"]);
 });

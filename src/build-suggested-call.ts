@@ -29,14 +29,9 @@ export type ValidatedExampleCall = {
 export type SuggestedCallOutput = {
   suggestedCall?: ValidatedSuggestedCall;
   exampleCalls?: ValidatedExampleCall[];
-  /**
-   * Set to `true` when the caller supplied a `params` object but it failed
-   * schema validation (so no `suggestedCall` was emitted). Construction sites
-   * spread this output into their AppError `details`; the central extractor
-   * in `mapErrorToProblem` reads the marker to decide whether to append the
-   * "suggested call payload failed schema validation" hint to `error.hints`.
-   * Never appears in published envelopes — `mapErrorToProblem` strips it.
-   */
+  /** Set to `true` when the caller supplied `params` but the gate dropped it.
+   * Spread into AppError `details`; `mapErrorToProblem` reads the marker to
+   * append the fallback hint to `error.hints` and strips it before emission. */
   _suggestedCallPrimaryDropped?: true;
 };
 
@@ -58,11 +53,11 @@ export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput
 
   const primaryParams = asParamsRecord(spec.params);
   if (primaryParams) {
-    // Unknown-tool fail-open: when the registry has no schema for this tool
-    // name, the gate cannot judge the payload and passes it through. Common
-    // when tests exercise services without booting `src/index.ts`'s schema
-    // registrations (the registry is a process-wide singleton populated at
-    // startup). Production loads index.ts and every tool is known.
+    // Unknown-tool fail-open: the registry is populated at index.ts startup;
+    // service-level tests that do not boot index.ts run with an empty
+    // registry and rely on this pass-through. Callers that synthesize a tool
+    // name from runtime data (e.g. `?? "unknown"`) MUST skip this helper, or
+    // a non-callable payload escapes via this branch.
     if (!getToolSchema(spec.tool)) {
       return { suggestedCall: { tool: spec.tool, params: primaryParams } };
     }
@@ -72,8 +67,6 @@ export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput
     }
   }
 
-  // Caller supplied a primary but it failed validation (or is malformed).
-  // Track the drop so downstream emitters can surface the fallback hint.
   const droppedMarker: { _suggestedCallPrimaryDropped: true } | Record<never, never> =
     spec.params !== undefined ? { _suggestedCallPrimaryDropped: true as const } : {};
 

@@ -901,11 +901,11 @@ async function runBatchToolsOffProbe(): Promise<void> {
       );
     }
 
-    // Pinned at Phase 0 step 6: disabled tools surface as a successful tool-call
-    // reply with `isError:true` and a single text-content entry whose text is
-    // exactly `MCP error -32602: Tool <name> not found`. This asserts that exact
-    // shape so the test catches a regression if the SDK ever switches to a
-    // structuredContent envelope or a thrown JSON-RPC -32601.
+    // Disabled tools surface as a successful tool-call reply with
+    // `isError:true` and one text-content entry whose text is exactly
+    // `MCP error -32602: Tool <name> not found`. The exact-shape assertion
+    // catches a regression if the SDK ever switches to a structuredContent
+    // envelope or a thrown JSON-RPC -32601.
     const callResult = (await client.callTool({
       name: "batch-class-source",
       arguments: {

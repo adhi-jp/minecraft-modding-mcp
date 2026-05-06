@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ZodError } from "zod";
-
 import { createError, ERROR_CODES } from "../src/errors.ts";
 import {
   BatchMappingsService,
@@ -109,10 +107,6 @@ test("E7: per-entry retry suggestedCall proposes find-mapping and validates", as
 });
 
 test("F4: per-entry version is rejected by the schema (entries[].version unknown key)", async () => {
-  const { batchMappingsSchema } = await import("../src/index.ts").then(
-    (m) => m as unknown as { batchMappingsSchema: { safeParse: (v: unknown) => { success: boolean; error?: ZodError } } }
-  );
-  // The schema is not exported by name today; access via the registry instead.
   const { getToolSchema } = await import("../src/tool-schema-registry.ts");
   const schema = getToolSchema("batch-mappings");
   assert.ok(schema, "batch-mappings schema must be registered");
@@ -130,19 +124,16 @@ test("F4: per-entry version is rejected by the schema (entries[].version unknown
   });
   assert.equal(parsed.success, false);
   if (!parsed.success) {
-    const issues = parsed.error.issues;
-    // .strict() surfaces an `unrecognized_keys` issue keyed at the entries[] item
-    // path with the rejected key (`version`) listed in `keys`. Assert both.
-    const hasVersionIssue = issues.some((issue) => {
+    // `.strict()` reports the unrecognized key at the entries[] item path
+    // with the rejected key listed in `issue.keys`.
+    const hasVersionIssue = parsed.error.issues.some((issue) => {
       if (issue.path[0] !== "entries") return false;
       if (issue.code !== "unrecognized_keys") return false;
       const keys = (issue as unknown as { keys?: string[] }).keys ?? [];
       return keys.includes("version");
     });
-    assert.ok(hasVersionIssue, `expected an unrecognized_keys issue with version; got ${JSON.stringify(issues)}`);
+    assert.ok(hasVersionIssue, `expected an unrecognized_keys issue with version; got ${JSON.stringify(parsed.error.issues)}`);
   }
-  // Sanity: silence the unused import.
-  void batchMappingsSchema;
 });
 
 test("schema: batch-mappings rejects entries.length=0 and entries.length=51", async () => {
@@ -227,12 +218,9 @@ test("E8: batch-mappings compact:true strips empty arrays and applies mapping pr
     ]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;
-  // mapping fixtures return resolved with empty candidates / warnings — compact strips them.
+  // The fixture resolves with empty candidates / warnings; compact strips
+  // empty arrays via compactResponse before the mapping projection runs.
   assert.ok(!("warnings" in result));
   assert.ok(!("ambiguityReasons" in result));
-  // The mapping projection drops the empty candidates array for resolved-exact responses
-  // when candidates.length === 0; the test-fixture status is "resolved" so the mapping
-  // projection's resolved-exact path is not taken here, but compactResponse still removes
-  // the empty array.
   assert.ok(!("candidates" in result), "empty candidates array should be dropped under compact");
 });

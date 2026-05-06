@@ -12,6 +12,7 @@ import type {
   RuntimeValidationProvenance,
   SourceMapping
 } from "./types.js";
+import { buildSuggestedCall } from "./build-suggested-call.js";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -1013,39 +1014,58 @@ export function validateParsedMixin(
     if (suggestedCallContext?.projectPath) classSourceContext.projectPath = suggestedCallContext.projectPath;
     if (suggestedCallContext?.mapping) classSourceContext.mapping = suggestedCallContext.mapping;
 
+    const assignSuggested = (
+      issue: ValidationIssue,
+      tool: string,
+      params: Record<string, unknown>
+    ): void => {
+      // Result-level suggestions go through the same schema gate as
+      // error-side suggestedCall payloads; a payload that does not parse
+      // stays unset rather than reaching the agent in broken form.
+      const gated = buildSuggestedCall({ tool, params });
+      if (gated.suggestedCall) {
+        issue.suggestedCall = gated.suggestedCall;
+      }
+    };
+
     for (const issue of issues) {
       switch (issue.kind) {
         case "target-not-found":
           issue.explanation = `The class "${issue.target}" was not found in the game jar. It may be misspelled, from a different version, or use a different mapping namespace.`;
           if (version && mapping) {
-            issue.suggestedCall = {
-              tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...symbolLookupContext }
-            };
+            assignSuggested(issue, "check-symbol-exists", {
+              kind: "class",
+              name: issue.target,
+              version,
+              sourceMapping: mapping,
+              nameMode: "auto",
+              ...symbolLookupContext
+            });
           }
           break;
         case "validation-incomplete":
           issue.explanation = `Target metadata for "${issue.target}" could not be loaded reliably, so validation was only partial. This usually indicates a tool or environment limitation rather than a confirmed code error.`;
           if (version) {
-            issue.suggestedCall = {
-              tool: "get-class-source",
-              params: {
-                className: issue.target,
-                target: { type: "resolve" as const, kind: "version" as const, value: version },
-                ...(mapping ? { mapping } : {}),
-                mode: "metadata",
-                ...classSourceContext
-              }
-            };
+            assignSuggested(issue, "get-class-source", {
+              className: issue.target,
+              target: { type: "resolve" as const, kind: "version" as const, value: version },
+              ...(mapping ? { mapping } : {}),
+              mode: "metadata",
+              ...classSourceContext
+            });
           }
           break;
         case "target-mapping-failed":
           issue.explanation = `Mapping lookup failed for "${issue.target}". The class may exist under a different name in the target namespace.`;
           if (version && mapping) {
-            issue.suggestedCall = {
-              tool: "check-symbol-exists",
-              params: { kind: "class", name: issue.target, version, sourceMapping: mapping, nameMode: "auto", ...symbolLookupContext }
-            };
+            assignSuggested(issue, "check-symbol-exists", {
+              kind: "class",
+              name: issue.target,
+              version,
+              sourceMapping: mapping,
+              nameMode: "auto",
+              ...symbolLookupContext
+            });
           }
           break;
         case "method-not-found": {
@@ -1053,16 +1073,13 @@ export function validateParsedMixin(
           const className = parts[0] ?? issue.target;
           issue.explanation = `The method was not found in the target class. It may be named differently in the current mapping, or might not exist in this version.`;
           if (version) {
-            issue.suggestedCall = {
-              tool: "get-class-source",
-              params: {
-                className,
-                target: { type: "resolve" as const, kind: "version" as const, value: version },
-                ...(mapping ? { mapping } : {}),
-                mode: "metadata",
-                ...classSourceContext
-              }
-            };
+            assignSuggested(issue, "get-class-source", {
+              className,
+              target: { type: "resolve" as const, kind: "version" as const, value: version },
+              ...(mapping ? { mapping } : {}),
+              mode: "metadata",
+              ...classSourceContext
+            });
           }
           break;
         }
@@ -1072,10 +1089,14 @@ export function validateParsedMixin(
           const fieldName = parts[1] ?? issue.target;
           issue.explanation = `The field "${fieldName}" was not found in the target class. Verify the field name matches the expected mapping namespace.`;
           if (version && mapping) {
-            issue.suggestedCall = {
-              tool: "check-symbol-exists",
-              params: { kind: "field", owner: ownerName, name: fieldName, version, sourceMapping: mapping, ...symbolLookupContext }
-            };
+            assignSuggested(issue, "check-symbol-exists", {
+              kind: "field",
+              owner: ownerName,
+              name: fieldName,
+              version,
+              sourceMapping: mapping,
+              ...symbolLookupContext
+            });
           }
           break;
         }

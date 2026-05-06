@@ -179,7 +179,13 @@ test("decideRetryRecommendation prefers narrow-query over clear-cache when both 
   assert.equal(rec, "narrow-query");
 });
 
-test("buildSyntheticCallToolResult shape includes structuredContent.error.code and meta.restart", () => {
+test("buildSyntheticCallToolResult shape includes structuredContent.error.code and meta.restart", async () => {
+  // Boot src/index.ts so the supervisor's `getToolSchema` registration
+  // check clears for `validate-mixin`, and use schema-valid args so the
+  // downstream `buildSuggestedCall` validation also passes — both gates
+  // must clear for the suggestion to surface.
+  await import("../src/index.ts");
+
   const ctx: RestartContext = {
     toolName: "validate-mixin",
     durationMs: 1234,
@@ -187,7 +193,10 @@ test("buildSyntheticCallToolResult shape includes structuredContent.error.code a
     lastStageElapsedMs: 555,
     lastStageMeta: { targetIndex: 9, targetTotal: 12 },
     exit: { code: null, signal: "SIGABRT" },
-    toolArgsRedacted: { projectPath: "/p" },
+    toolArgsRedacted: {
+      input: { mode: "inline", source: "package x; class Y {}" },
+      version: "1.21.10"
+    },
     retryRecommendation: "narrow-query"
   };
   const reply = buildSyntheticCallToolResult(42, ctx) as {
@@ -215,7 +224,10 @@ test("buildSyntheticCallToolResult shape includes structuredContent.error.code a
   assert.equal(error.failedStage, "target-lookup");
   assert.deepEqual(error.suggestedCall, {
     tool: "validate-mixin",
-    params: { projectPath: "/p" }
+    params: {
+      input: { mode: "inline", source: "package x; class Y {}" },
+      version: "1.21.10"
+    }
   });
 
   const meta = reply.result.structuredContent.meta;
@@ -233,6 +245,81 @@ test("buildSyntheticCallToolResult shape includes structuredContent.error.code a
   // content[0].text duplicates structuredContent as JSON
   const parsed = JSON.parse(reply.result.content[0].text);
   assert.equal(parsed.error.code, "ERR_WORKER_RESTART");
+});
+
+test("buildSyntheticCallToolResult drops suggestedCall when toolName is unregistered (typo / disabled / version-skewed)", async () => {
+  // An unregistered tool name (typo, BATCH_TOOLS_OFF=1 /
+  // VERIFY_MIXIN_TARGET_OFF=1 disabled tool, version-skew from an older
+  // server run) cannot produce a re-callable payload. The supervisor must
+  // check `getToolSchema` itself because `buildSuggestedCall` fails open
+  // for unregistered names by design.
+  await import("../src/index.ts");
+
+  const ctx: RestartContext = {
+    toolName: "not-a-real-tool",
+    durationMs: 100,
+    lastStage: "target-lookup",
+    lastStageElapsedMs: 50,
+    lastStageMeta: undefined,
+    exit: { code: 1, signal: null },
+    toolArgsRedacted: { projectPath: "/p" },
+    toolArgsRedactedModified: false,
+    retryRecommendation: "same-request"
+  };
+  const reply = buildSyntheticCallToolResult(101, ctx) as {
+    result: {
+      structuredContent: {
+        error: Record<string, unknown>;
+        meta: Record<string, unknown>;
+      };
+    };
+  };
+  const error = reply.result.structuredContent.error;
+  assert.equal(
+    error.suggestedCall,
+    undefined,
+    "synthetic restart with unregistered toolName must drop suggestedCall (registry-not-registered → not re-callable)"
+  );
+  // Diagnostic args still surface for debug inspection.
+  const restart = reply.result.structuredContent.meta.restart as Record<string, unknown>;
+  assert.deepEqual(restart.redactedToolArgs, { projectPath: "/p" });
+});
+
+test("buildSyntheticCallToolResult drops suggestedCall when toolName is missing (caller-side skip-gate)", () => {
+  // When ctx.toolName is absent the supervisor falls back to
+  // tool = "unknown", which is not re-callable; skip the gate at the call
+  // site rather than relying on a fail-closed unknown-tool branch (that
+  // would disrupt every test exercising services without booting
+  // src/index.ts). `restart.redactedToolArgs` still surfaces the args.
+  const ctx: RestartContext = {
+    durationMs: 100,
+    lastStage: "target-lookup",
+    lastStageElapsedMs: 50,
+    lastStageMeta: undefined,
+    exit: { code: 1, signal: null },
+    toolArgsRedacted: { projectPath: "/p" },
+    retryRecommendation: "same-request"
+    // toolName intentionally omitted — supervisor falls back to "unknown".
+  };
+  const reply = buildSyntheticCallToolResult(99, ctx) as {
+    result: {
+      structuredContent: {
+        error: Record<string, unknown>;
+        meta: Record<string, unknown>;
+      };
+    };
+  };
+  const error = reply.result.structuredContent.error;
+  // Caller-side skip: no suggestedCall on the public envelope when the
+  // tool name was synthesized as "unknown".
+  assert.equal(
+    error.suggestedCall,
+    undefined,
+    "synthetic restart with toolName=undefined must drop suggestedCall (supervisor skips the gate for unsynthesizable names)"
+  );
+  // Diagnostic args still surface for debug inspection.
+  const restart = reply.result.structuredContent.meta.restart as Record<string, unknown>;
+  assert.deepEqual(restart.redactedToolArgs, { projectPath: "/p" });
 });
 
 test("buildLegacyJsonRpcError returns -32603 envelope", () => {
@@ -464,10 +551,12 @@ test("buildSyntheticCallToolResult OMITS suggestedCall when redaction modified t
   assert.equal(reply.result.structuredContent.meta.restart.redactedToolArgsModified, true);
 });
 
-test("buildSyntheticCallToolResult EMITS suggestedCall when redaction did not modify the args", () => {
-  // When the args round-trip cleanly (no truncate / no <redacted>),
-  // `suggestedCall` is safe to surface; the diagnostic field still echoes
-  // the args.
+test("buildSyntheticCallToolResult EMITS suggestedCall when toolName is registered AND args satisfy the schema (clean restart path)", async () => {
+  // The supervisor checks `getToolSchema` before calling
+  // `buildSuggestedCall`; both the registration check and the schema gate
+  // must pass for the suggestion to surface.
+  await import("../src/index.ts");
+
   const ctx: RestartContext = {
     toolName: "validate-mixin",
     durationMs: 1,
@@ -475,7 +564,10 @@ test("buildSyntheticCallToolResult EMITS suggestedCall when redaction did not mo
     lastStageElapsedMs: 0,
     lastStageMeta: undefined,
     exit: baseExit,
-    toolArgsRedacted: { projectPath: "/p", version: "1.21" },
+    toolArgsRedacted: {
+      input: { mode: "inline", source: "package x; class Y {}" },
+      version: "1.21"
+    },
     toolArgsRedactedModified: false,
     retryRecommendation: "same-request"
   };
@@ -489,7 +581,10 @@ test("buildSyntheticCallToolResult EMITS suggestedCall when redaction did not mo
   };
   assert.deepEqual(reply.result.structuredContent.error.suggestedCall, {
     tool: "validate-mixin",
-    params: { projectPath: "/p", version: "1.21" }
+    params: {
+      input: { mode: "inline", source: "package x; class Y {}" },
+      version: "1.21"
+    }
   });
   assert.equal(reply.result.structuredContent.meta.restart.redactedToolArgsModified, false);
 });

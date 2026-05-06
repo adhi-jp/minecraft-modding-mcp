@@ -14,16 +14,15 @@ test.before(async () => {
 test("D5: valid params return suggestedCall with caller-supplied params (no safeParse re-emit)", async () => {
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  // Omit `mode` and `compact` so the assertions below can confirm schema
+  // defaults are NOT injected into the published payload.
   const callerParams = {
     className: "net.minecraft.world.entity.LivingEntity",
     target: { type: "resolve" as const, kind: "version" as const, value: "1.21.10" }
-    // Note: deliberately omit `mode`, `compact`, etc. so we can confirm defaults are NOT injected.
   };
   const out = buildSuggestedCall({ tool: "get-class-source", params: callerParams });
   assert.ok(out.suggestedCall, "expected suggestedCall to be present");
   assert.equal(out.suggestedCall!.tool, "get-class-source");
-  // Caller-supplied object is preserved as-is — the schema's defaulted fields (mode, allowDecompile,
-  // compact) are NOT injected into the published params.
   assert.equal(out.suggestedCall!.params, callerParams);
   assert.equal((out.suggestedCall!.params as Record<string, unknown>).mode, undefined);
   assert.equal((out.suggestedCall!.params as Record<string, unknown>).compact, undefined);
@@ -118,6 +117,11 @@ test("invalid primary + no surviving examples returns no suggestedCall (marker p
 });
 
 test("unknown tool name fails open: passes the caller payload through (registry-not-populated case)", async () => {
+  // Service-level tests that do not boot src/index.ts run with an empty
+  // registry; the gate falls open and passes the payload through. Callers
+  // that synthesize the tool name from runtime data (e.g. an `?? "unknown"`
+  // fallback) MUST skip the gate themselves so a non-callable payload
+  // cannot escape via this branch.
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
   const out = buildSuggestedCall({
@@ -125,8 +129,6 @@ test("unknown tool name fails open: passes the caller payload through (registry-
     params: { foo: "bar" },
     examples: [{ params: { foo: "bar" }, reason: "no schema to validate against" }]
   });
-  // Unknown tool: the gate cannot judge the payload, so it passes through.
-  // Only registered tools with invalid params are dropped.
   assert.ok(out.suggestedCall);
   assert.equal(out.suggestedCall!.tool, "definitely-not-a-real-tool");
   assert.deepEqual(out.suggestedCall!.params, { foo: "bar" });

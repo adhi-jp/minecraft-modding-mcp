@@ -10,6 +10,8 @@ import type {
 
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "./json-rpc-framing.js";
 import { log } from "./logger.js";
+import { buildSuggestedCall } from "./build-suggested-call.js";
+import { getToolSchema } from "./tool-schema-registry.js";
 
 const DEFAULT_CLIENT_MODE: ConcreteFramingMode = "line";
 const WORKER_MODE_ENV = "MCP_STDIO_WORKER_MODE";
@@ -261,10 +263,26 @@ export function buildSyntheticCallToolResult(
   // that are not safe to retry. Surface them on `meta.restart.redactedToolArgs`
   // for diagnostics instead.
   if (ctx.toolArgsRedacted !== undefined && !ctx.toolArgsRedactedModified) {
-    error.suggestedCall = {
-      tool,
-      params: ctx.toolArgsRedacted
-    };
+    // Only emit `suggestedCall` when the resolved tool name is a
+    // currently-registered public tool. The "unknown" fallback above and
+    // unregistered names (typo, disabled tool, version-skewed) cannot
+    // produce a re-callable payload; buildSuggestedCall fails open for
+    // unregistered names so the registration check belongs here. The
+    // diagnostic `restart.redactedToolArgs` field below still surfaces the
+    // args.
+    if (
+      ctx.toolName !== undefined &&
+      ctx.toolName.length > 0 &&
+      getToolSchema(ctx.toolName) !== undefined
+    ) {
+      const gated = buildSuggestedCall({
+        tool: ctx.toolName,
+        params: ctx.toolArgsRedacted as Record<string, unknown>
+      });
+      if (gated.suggestedCall) {
+        error.suggestedCall = gated.suggestedCall;
+      }
+    }
   }
   if (ctx.lastStage !== undefined) {
     error.failedStage = ctx.lastStage;

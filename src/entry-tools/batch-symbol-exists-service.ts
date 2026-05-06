@@ -43,11 +43,9 @@ export type BatchSymbolExistsEntry = {
 
 /**
  * Subset of `ResolveArtifactTargetInput` accepted by `batch-symbol-exists`.
- * Library/jar/coordinate targets resolve to artifacts whose `provenance.version`
- * is the library's own version (e.g. an Architectury or mod-loader version),
- * NOT the Minecraft version, so querying the Minecraft mapping graph with that
- * value would be a category error. The schema gate (zod) rejects the disallowed
- * kinds before this service is invoked.
+ * Library/jar/coordinate targets carry the library's own version, not the
+ * Minecraft version, so querying the Minecraft mapping graph with that value
+ * would be a category error. The zod schema rejects the disallowed kinds.
  */
 export type BatchSymbolExistsTarget =
   | (SourceTargetInput & { kind: "version" })
@@ -73,6 +71,7 @@ type SharedArtifact = {
   provenance?: Record<string, unknown>;
   version: string;
   sourceMapping: SourceMapping;
+  warnings?: string[];
 };
 
 function deriveMinecraftVersion(
@@ -127,12 +126,18 @@ export class BatchSymbolExistsService {
           artifactId: resolved.artifactId,
           provenance: resolved.provenance as unknown as Record<string, unknown>,
           version,
-          sourceMapping: resolved.mappingApplied
+          sourceMapping: resolved.mappingApplied,
+          ...(Array.isArray(resolved.warnings) && resolved.warnings.length > 0
+            ? { warnings: [...resolved.warnings] }
+            : {})
         };
       },
       artifactSummary: (artifact) => ({
         sharedArtifactId: artifact.artifactId,
-        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {})
+        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
+        ...(artifact.warnings && artifact.warnings.length > 0
+          ? { sharedArtifactWarnings: artifact.warnings }
+          : {})
       }),
       perEntry: async (entry, _index, sharedArtifact) => {
         if (!sharedArtifact) {

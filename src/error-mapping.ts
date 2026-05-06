@@ -1,4 +1,5 @@
 import { ERROR_CODES, isAppError, type ErrorCode } from "./errors.js";
+import { log } from "./logger.js";
 
 export type ProblemFieldError = {
   path: string;
@@ -36,6 +37,12 @@ export function statusForErrorCode(code: string): number {
     return 412;
   }
 
+  if (code === ERROR_CODES.STAGE_BUDGET_PRE_PARSE) {
+    // 408 (Request Timeout): caller-recoverable stage-budget exhaustion,
+    // not an internal server failure.
+    return 408;
+  }
+
   if (
     code === ERROR_CODES.INVALID_INPUT ||
     code === ERROR_CODES.COORDINATE_PARSE_FAILED ||
@@ -68,7 +75,9 @@ export function statusForErrorCode(code: string): number {
     code === ERROR_CODES.MAPPING_UNAVAILABLE ||
     code === ERROR_CODES.NAMESPACE_MISMATCH ||
     code === ERROR_CODES.DECOMPILE_DISABLED ||
-    code === ERROR_CODES.REMAP_FAILED
+    code === ERROR_CODES.REMAP_FAILED ||
+    code === ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED ||
+    code === ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED
   ) {
     return 422;
   }
@@ -126,14 +135,10 @@ function extractHints(details: unknown): string[] | undefined {
 }
 
 /**
- * Convert an error caught during a batch entry's underlying service call into the
- * ProblemDetails shape that single-tool callers see. This is a per-entry-only
- * subset of `mapErrorToProblem` — it does not handle ZodErrors (the per-entry
- * input is a typed sub-object that has already passed the batch tool's schema
- * gate, so runtime errors are AppError or generic Error) and does not call
- * `buildInvalidInputGuidance`. Callers that need a synthesized retry payload
- * pass it via the optional `suggestedCall` parameter; this helper only attaches
- * it after coercing the value to the expected shape.
+ * Per-entry subset of `mapErrorToProblem` for batch tools. ZodErrors are not
+ * handled here (per-entry input has already cleared the batch tool's schema
+ * gate); the optional `suggestedCall` is attached as-is for the caller's
+ * synthesized retry payload.
  */
 export function errorToBatchEntryProblem(
   caughtError: unknown,
@@ -156,12 +161,20 @@ export function errorToBatchEntryProblem(
     };
   }
 
-  const message =
+  // Generic-error sanitization: fixed public detail, raw message logged
+  // server-side keyed by `instance`. Mirrors `mapErrorToProblem` so the
+  // public envelope cannot leak filesystem paths, parser internals, or
+  // assertion text on a non-AppError path.
+  const rawMessage =
     caughtError instanceof Error ? caughtError.message : String(caughtError);
+  log("error", "batch.entry.unhandled", {
+    instance,
+    reason: rawMessage
+  });
   return {
     type: "https://minecraft-modding-mcp.dev/problems/internal",
     title: "Internal server error",
-    detail: message || "Unexpected server error.",
+    detail: "Unexpected server error.",
     status: 500,
     code: ERROR_CODES.INTERNAL,
     instance,

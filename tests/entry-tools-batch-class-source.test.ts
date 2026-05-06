@@ -169,6 +169,41 @@ test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABOR
   assert.equal((out.results[2] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
 });
 
+test("shared resolution warnings flow into summary.sharedArtifactWarnings (not lost)", async () => {
+  // Per-entry calls dispatch by `artifactId` and never re-run resolution,
+  // so the shared `resolveArtifact` warnings reach the caller only via
+  // `summary.sharedArtifactWarnings`.
+  const deps: BatchClassSourceDeps = {
+    resolveArtifact: async () => ({
+      ...buildResolved(),
+      warnings: [
+        "version approximated: 1.21 → 1.21.10",
+        "loom-cache miss; fell back to maven coordinate"
+      ]
+    }),
+    getClassSource: async (input) => buildOkSource(input.className)
+  };
+  const service = new BatchClassSourceService(deps);
+  const out = await service.execute({
+    ...baseInput,
+    entries: [{ className: "a.A" }, { className: "b.B" }]
+  });
+  assert.deepEqual(out.summary.sharedArtifactWarnings, [
+    "version approximated: 1.21 → 1.21.10",
+    "loom-cache miss; fell back to maven coordinate"
+  ]);
+});
+
+test("shared resolution with no warnings omits sharedArtifactWarnings (no empty array leak)", async () => {
+  const { deps } = buildDeps({});
+  const service = new BatchClassSourceService(deps);
+  const out = await service.execute({
+    ...baseInput,
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(out.summary.sharedArtifactWarnings, undefined);
+});
+
 test("E4: shared artifact resolution runs exactly once and summary carries sharedArtifactId", async () => {
   const { deps, spy } = buildDeps({});
   const service = new BatchClassSourceService(deps);
@@ -291,6 +326,82 @@ test("schema gate: per-entry suggestedCall validates against get-class-source sc
   assert.ok(suggested);
   const result = validateToolParams(suggested!.tool, suggested!.params);
   assert.equal(result.valid, true, "per-entry suggestedCall must validate against the registered schema");
+});
+
+test("schema rejects duplicate entries[].outputFile (concurrent-write race guard)", async () => {
+  const { getToolSchema } = await import("../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "version", value: "1.21.10" },
+    entries: [
+      { className: "a.A", outputFile: "/tmp/out.java" },
+      { className: "b.B", outputFile: "/tmp/out.java" }
+    ]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const issue = parsed.error.issues.find((i) =>
+      i.path.length === 3 &&
+      i.path[0] === "entries" &&
+      i.path[1] === 1 &&
+      i.path[2] === "outputFile"
+    );
+    assert.ok(issue, `expected an entries.1.outputFile duplicate issue; got ${JSON.stringify(parsed.error.issues)}`);
+    assert.match((issue as { message: string }).message, /Duplicate outputFile/);
+  }
+});
+
+test("schema accepts unique outputFile per entry", async () => {
+  const { getToolSchema } = await import("../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "version", value: "1.21.10" },
+    entries: [
+      { className: "a.A", outputFile: "/tmp/a.java" },
+      { className: "b.B", outputFile: "/tmp/b.java" },
+      { className: "c.C" }
+    ]
+  });
+  assert.equal(parsed.success, true);
+});
+
+test("schema rejects relative-path aliases that resolve to the same canonical outputFile", async () => {
+  // Writer-side normalization (`path.resolve`) and the schema guard must
+  // share semantics so relative aliases collide instead of slipping past
+  // trim()-only equality.
+  const { getToolSchema } = await import("../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "version", value: "1.21.10" },
+    entries: [
+      { className: "a.A", outputFile: "out.java" },
+      { className: "b.B", outputFile: "./out.java" },
+      { className: "c.C", outputFile: "dir/../out.java" }
+    ]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    // Both alias entries (1, 2) collide with entry 0; expect at least one of
+    // them to surface a duplicate-outputFile issue.
+    const aliasIssues = parsed.error.issues.filter((i) =>
+      i.path.length === 3 &&
+      i.path[0] === "entries" &&
+      typeof i.path[1] === "number" &&
+      i.path[1] >= 1 &&
+      i.path[2] === "outputFile"
+    );
+    assert.ok(
+      aliasIssues.length >= 2,
+      `expected ≥2 alias issues across entries 1 and 2; got ${JSON.stringify(parsed.error.issues)}`
+    );
+    for (const issue of aliasIssues) {
+      assert.match(
+        (issue as { message: string }).message,
+        /Duplicate outputFile \(resolves to/,
+        "alias rejection should cite the canonical resolved path so the user sees what collided"
+      );
+    }
+  }
 });
 
 test("top-level resolution failure surfaces as a thrown error (no results array)", async () => {

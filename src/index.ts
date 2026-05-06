@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { makeStageEmitter, type StageEmitterExtra } from "./stage-emitter.js";
@@ -434,7 +435,31 @@ const batchClassSourceShape = {
     .max(50)
     .describe("1..50 entries; each shares the resolved target artifact.")
 };
-const batchClassSourceSchema = z.object(batchClassSourceShape);
+const batchClassSourceSchema = z.object(batchClassSourceShape).superRefine((value, ctx) => {
+  // Per-entry `outputFile` is forwarded into the concurrently-dispatched
+  // `getClassSource` calls; two entries resolving to the same physical file
+  // would race on `writeFile`. Normalize via `path.resolve` so aliases like
+  // `out.java` / `./out.java` / `dir/../out.java` collide as expected,
+  // matching the writer's `isAbsolute(p) ? p : resolvePath(p)` rule.
+  const seen = new Map<string, { index: number; raw: string }>();
+  for (let i = 0; i < value.entries.length; i += 1) {
+    const entry = value.entries[i];
+    if (!entry || entry.outputFile === undefined) continue;
+    const trimmed = entry.outputFile.trim();
+    if (trimmed.length === 0) continue;
+    const canonical = pathIsAbsolute(trimmed) ? trimmed : pathResolve(trimmed);
+    const previous = seen.get(canonical);
+    if (previous !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries", i, "outputFile"],
+        message: `Duplicate outputFile (resolves to "${canonical}") with entry ${previous.index} (raw "${previous.raw}"); concurrent batch writes to the same file would race. Each entry's outputFile must resolve to a unique path.`
+      });
+    } else {
+      seen.set(canonical, { index: i, raw: trimmed });
+    }
+  }
+});
 
 const batchClassMembersEntrySchema = z.object({
   className: nonEmptyString,
@@ -1370,8 +1395,6 @@ function extractValidatedSuggestionAndExamples(details: unknown): {
     return { primaryDropped: false };
   }
   const record = details as Record<string, unknown>;
-  // Construction-site helper output spread into details may carry this marker
-  // when the caller supplied a primary that was dropped at construction time.
   let primaryDropped = record._suggestedCallPrimaryDropped === true;
   let suggestedCall: SuggestedCall | undefined;
 

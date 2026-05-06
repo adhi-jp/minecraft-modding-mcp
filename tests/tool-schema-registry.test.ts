@@ -115,7 +115,7 @@ test("listRegisteredTools returns names in sorted order", async () => {
   assert.deepEqual(names, sorted);
 });
 
-// Touch the temp dir so the lint allows the import (mkdtemp side effect; matches sibling tests).
+// mkdtemp side-effect to keep `tmpdir` / `mkdtemp` imports live for lint.
 test.before(async () => {
   await mkdtemp(join(tmpdir(), "mcp-tool-schema-registry-pre-"));
 });

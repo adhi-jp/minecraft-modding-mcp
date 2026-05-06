@@ -55,6 +55,7 @@ export type BatchClassMembersInput = {
 type SharedArtifact = {
   artifactId: string;
   provenance?: Record<string, unknown>;
+  warnings?: string[];
 };
 
 export class BatchClassMembersService {
@@ -82,12 +83,18 @@ export class BatchClassMembersService {
         });
         return {
           artifactId: resolved.artifactId,
-          provenance: resolved.provenance as unknown as Record<string, unknown>
+          provenance: resolved.provenance as unknown as Record<string, unknown>,
+          ...(Array.isArray(resolved.warnings) && resolved.warnings.length > 0
+            ? { warnings: [...resolved.warnings] }
+            : {})
         };
       },
       artifactSummary: (artifact) => ({
         sharedArtifactId: artifact.artifactId,
-        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {})
+        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
+        ...(artifact.warnings && artifact.warnings.length > 0
+          ? { sharedArtifactWarnings: artifact.warnings }
+          : {})
       }),
       perEntry: async (entry, _index, sharedArtifact) => {
         if (!sharedArtifact) {

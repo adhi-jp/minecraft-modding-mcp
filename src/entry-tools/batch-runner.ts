@@ -32,6 +32,12 @@ export type BatchSummary = {
   error: number;
   sharedArtifactId?: string;
   sharedArtifactProvenance?: Record<string, unknown>;
+  /** Warnings from the one-shot shared `resolveArtifact` call (version
+   * approximation, mapping fallback, source coverage gaps, workspace /
+   * dependency resolution caveats). Per-entry dispatch is by `artifactId`
+   * and never re-runs resolution, so these warnings reach the caller only
+   * via this field. Omitted when the resolution emitted none. */
+  sharedArtifactWarnings?: string[];
 };
 
 export type BatchOutput<TResult> = {
@@ -52,6 +58,7 @@ export type BatchRunOptions<TEntry, TResult, TArtifact> = {
   artifactSummary?: (artifact: TArtifact) => {
     sharedArtifactId?: string;
     sharedArtifactProvenance?: Record<string, unknown>;
+    sharedArtifactWarnings?: string[];
   };
   /** Per-entry handler. Returns `{ result, warnings }` on success. Errors thrown
    * here are caught and converted to a per-entry ProblemDetails — the mapper
@@ -155,16 +162,17 @@ export async function runBatch<TEntry, TResult, TArtifact>(
         : {}),
       ...(artifactSummary.sharedArtifactProvenance !== undefined
         ? { sharedArtifactProvenance: artifactSummary.sharedArtifactProvenance }
+        : {}),
+      ...(artifactSummary.sharedArtifactWarnings !== undefined &&
+      artifactSummary.sharedArtifactWarnings.length > 0
+        ? { sharedArtifactWarnings: artifactSummary.sharedArtifactWarnings }
         : {})
     }
   };
 }
 
-/** Extract the `warnings: string[]` field from a service-level result so that
- * batch entries surface warnings on the per-entry envelope (mirrors the
- * `splitWarnings` step that `runTool` applies for single-tool calls). Returns a
- * tuple of the projected result (with `warnings` removed) and the extracted
- * list. */
+/** Lift `warnings: string[]` off a service result onto the per-entry batch
+ * envelope, mirroring `runTool`'s `splitWarnings` for single-tool calls. */
 export function splitEntryWarnings<T extends Record<string, unknown>>(
   raw: T
 ): { result: Omit<T, "warnings">; warnings: string[] } {
