@@ -252,6 +252,33 @@ test("F1: duplicate className entries each produce a result (no de-duplication)"
   assert.equal(out.summary.ok, 2);
 });
 
+test("F1: per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource", async () => {
+  const seen: GetClassSourceInput[] = [];
+  const deps: BatchClassSourceDeps = {
+    resolveArtifact: async () => buildResolved(),
+    getClassSource: async (input) => {
+      seen.push(input);
+      return buildOkSource(input.className);
+    }
+  };
+  const service = new BatchClassSourceService(deps);
+  await service.execute({
+    ...baseInput,
+    entries: [
+      { className: "a.A", mode: "metadata" },
+      { className: "b.B", mode: "snippet", startLine: 10, endLine: 25, maxLines: 30 },
+      { className: "c.C", mode: "full", maxChars: 4096 }
+    ]
+  });
+  assert.equal(seen[0]!.mode, "metadata");
+  assert.equal(seen[1]!.mode, "snippet");
+  assert.equal(seen[1]!.startLine, 10);
+  assert.equal(seen[1]!.endLine, 25);
+  assert.equal(seen[1]!.maxLines, 30);
+  assert.equal(seen[2]!.mode, "full");
+  assert.equal(seen[2]!.maxChars, 4096);
+});
+
 test("schema gate: per-entry suggestedCall validates against get-class-source schema", async () => {
   const { validateToolParams } = await import("../src/tool-schema-registry.ts");
   const { deps } = buildDeps({ failClass: "fail.X" });

@@ -194,3 +194,45 @@ test("schema: batch-symbol-exists rejects target.kind=dependency", async () => {
   });
   assert.equal(parsed.success, false);
 });
+
+test("F4: schema rejects batch-mappings call with omitted top-level version", async () => {
+  const { getToolSchema } = await import("../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-mappings")!;
+  const parsed = schema.safeParse({
+    entries: [
+      {
+        kind: "class",
+        name: "a.A",
+        sourceMapping: "obfuscated",
+        targetMapping: "mojang"
+      }
+    ]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    assert.ok(
+      parsed.error.issues.some((issue) => issue.path[0] === "version"),
+      `expected a top-level "version" issue; got ${JSON.stringify(parsed.error.issues)}`
+    );
+  }
+});
+
+test("E8: batch-mappings compact:true strips empty arrays and applies mapping projection", async () => {
+  const service = new BatchMappingsService(buildDeps({}));
+  const out = await service.execute({
+    ...baseInput,
+    compact: true,
+    entries: [
+      { kind: "class", name: "a.A", sourceMapping: "obfuscated", targetMapping: "mojang" }
+    ]
+  });
+  const result = (out.results[0] as { result: Record<string, unknown> }).result;
+  // mapping fixtures return resolved with empty candidates / warnings — compact strips them.
+  assert.ok(!("warnings" in result));
+  assert.ok(!("ambiguityReasons" in result));
+  // The mapping projection drops the empty candidates array for resolved-exact responses
+  // when candidates.length === 0; the test-fixture status is "resolved" so the mapping
+  // projection's resolved-exact path is not taken here, but compactResponse still removes
+  // the empty array.
+  assert.ok(!("candidates" in result), "empty candidates array should be dropped under compact");
+});
