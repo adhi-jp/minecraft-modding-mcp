@@ -79,6 +79,7 @@ import {
 } from "./entry-tools/verify-mixin-target-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
+import { registerToolSchema } from "./tool-schema-registry.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
@@ -2242,6 +2243,7 @@ server.tool("list-versions",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("list-versions", listVersionsSchema);
 
 server.tool("inspect-minecraft",
   "High-level v3 entry tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings.",
@@ -2251,6 +2253,7 @@ server.tool("inspect-minecraft",
     inspectMinecraftService.execute(input as z.infer<typeof inspectMinecraftSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
 server.tool("analyze-symbol",
   "High-level v3 entry tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview.",
@@ -2260,6 +2263,7 @@ server.tool("analyze-symbol",
     analyzeSymbolService.execute(input as z.infer<typeof analyzeSymbolSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("analyze-symbol", analyzeSymbolSchema);
 
 server.tool("compare-minecraft",
   "High-level v3 entry tool for version comparisons, class diffs, registry diffs, and migration overviews.",
@@ -2269,6 +2273,7 @@ server.tool("compare-minecraft",
     compareMinecraftService.execute(input as z.infer<typeof compareMinecraftSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("compare-minecraft", compareMinecraftSchema);
 
 server.tool("analyze-mod",
   "High-level v3 entry tool for mod metadata inspection, decompile/search flows, class source, and safe remap previews/applies.",
@@ -2278,6 +2283,7 @@ server.tool("analyze-mod",
     analyzeModService.execute(input as z.infer<typeof analyzeModSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("analyze-mod", analyzeModSchema);
 
 server.tool("validate-project",
   "High-level v3 entry tool for project summary, direct mixin validation, and access widener/access transformer validation.",
@@ -2287,6 +2293,7 @@ server.tool("validate-project",
     validateProjectService.execute(input as z.infer<typeof validateProjectSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("validate-project", validateProjectSchema);
 
 server.tool("manage-cache",
   "High-level v3 entry tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
@@ -2296,6 +2303,7 @@ server.tool("manage-cache",
     manageCacheService.execute(input as z.infer<typeof manageCacheSchema>) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("manage-cache", manageCacheSchema);
 
 if (!VERIFY_MIXIN_TARGET_OFF) {
   server.tool("verify-mixin-target",
@@ -2317,6 +2325,7 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
       }) as unknown as Promise<Record<string, unknown>>
     )
   );
+  registerToolSchema("verify-mixin-target", verifyMixinTargetSchema);
 }
 
 server.tool("resolve-artifact",
@@ -2337,6 +2346,7 @@ server.tool("resolve-artifact",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("resolve-artifact", resolveArtifactSchema);
 
 const findClassShape = {
   className: nonEmptyString.describe("Simple name (e.g. Blocks) or fully-qualified name (e.g. net.minecraft.world.level.block.Blocks)"),
@@ -2357,6 +2367,7 @@ server.tool("find-class",
     }) as unknown as Record<string, unknown>
   )
 );
+registerToolSchema("find-class", findClassSchema);
 
 server.tool("get-class-source",
   "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). Default mode=metadata returns symbol outline only; use mode=snippet for bounded excerpts or mode=full for entire source.",
@@ -2386,6 +2397,7 @@ server.tool("get-class-source",
     );
   })
 );
+registerToolSchema("get-class-source", getClassSourceSchema);
 
 server.tool("get-class-members",
   "Get fields/methods/constructors for one class from binary bytecode by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }).",
@@ -2414,6 +2426,7 @@ server.tool("get-class-members",
     );
   })
 );
+registerToolSchema("get-class-members", getClassMembersSchema);
 
 server.tool("search-class-source",
   "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output.",
@@ -2449,6 +2462,7 @@ server.tool("search-class-source",
       }) as Promise<Record<string, unknown>>;
     })
 );
+registerToolSchema("search-class-source", searchClassSourceSchema);
 
 server.tool("get-artifact-file",
   "Get full source file content by artifactId and file path.",
@@ -2462,6 +2476,7 @@ server.tool("get-artifact-file",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("get-artifact-file", getArtifactFileSchema);
 
 server.tool("list-artifact-files",
   "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
@@ -2476,6 +2491,7 @@ server.tool("list-artifact-files",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("list-artifact-files", listArtifactFilesSchema);
 
 server.tool("trace-symbol-lifecycle",
   "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
@@ -2495,6 +2511,7 @@ server.tool("trace-symbol-lifecycle",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("trace-symbol-lifecycle", traceSymbolLifecycleSchema);
 
 server.tool("diff-class-signatures",
   "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
@@ -2511,6 +2528,7 @@ server.tool("diff-class-signatures",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("diff-class-signatures", diffClassSignaturesSchema);
 
 server.tool("find-mapping",
   "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
@@ -2532,6 +2550,7 @@ server.tool("find-mapping",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("find-mapping", findMappingSchema);
 
 server.tool("resolve-method-mapping-exact",
   "Resolve one method mapping exactly by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous.",
@@ -2550,6 +2569,7 @@ server.tool("resolve-method-mapping-exact",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("resolve-method-mapping-exact", resolveMethodMappingExactSchema);
 
 server.tool("get-class-api-matrix",
   "List class/member API rows across obfuscated/mojang/intermediary/yarn mappings for one class and Minecraft version.",
@@ -2566,6 +2586,7 @@ server.tool("get-class-api-matrix",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("get-class-api-matrix", getClassApiMatrixSchema);
 
 server.tool("resolve-workspace-symbol",
   "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
@@ -2585,6 +2606,7 @@ server.tool("resolve-workspace-symbol",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("resolve-workspace-symbol", resolveWorkspaceSymbolSchema);
 
 server.tool("check-symbol-exists",
   "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
@@ -2605,6 +2627,7 @@ server.tool("check-symbol-exists",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("check-symbol-exists", checkSymbolExistsSchema);
 
 server.tool("nbt-to-json",
   "Decode Java Edition NBT binary payload (base64) into typed JSON.",
@@ -2619,6 +2642,7 @@ server.tool("nbt-to-json",
     )
   )
 );
+registerToolSchema("nbt-to-json", nbtToJsonSchema);
 
 server.tool("nbt-apply-json-patch",
   "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
@@ -2633,6 +2657,7 @@ server.tool("nbt-apply-json-patch",
     )
   )
 );
+registerToolSchema("nbt-apply-json-patch", nbtApplyJsonPatchSchema);
 
 server.tool("json-to-nbt",
   "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
@@ -2647,6 +2672,7 @@ server.tool("json-to-nbt",
     )
   )
 );
+registerToolSchema("json-to-nbt", jsonToNbtSchema);
 
 server.tool("index-artifact",
   "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
@@ -2658,6 +2684,7 @@ server.tool("index-artifact",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("index-artifact", indexArtifactSchema);
 
 server.tool("get-runtime-metrics",
   "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
@@ -2666,6 +2693,7 @@ server.tool("get-runtime-metrics",
     Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
   )
 );
+registerToolSchema("get-runtime-metrics", emptySchema);
 
 server.tool("validate-mixin",
   "Validate Mixin source against Minecraft bytecode signatures for a given version.",
@@ -2695,6 +2723,7 @@ server.tool("validate-mixin",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("validate-mixin", validateMixinSchema);
 
 server.tool("validate-access-widener",
   "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
@@ -2712,6 +2741,7 @@ server.tool("validate-access-widener",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("validate-access-widener", validateAccessWidenerSchema);
 
 server.tool("validate-access-transformer",
   "Validate Access Transformer file entries against Minecraft bytecode signatures for a given version.",
@@ -2729,6 +2759,7 @@ server.tool("validate-access-transformer",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("validate-access-transformer", validateAccessTransformerSchema);
 
 server.tool("analyze-mod-jar",
   "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
@@ -2741,6 +2772,7 @@ server.tool("analyze-mod-jar",
     return result as unknown as Record<string, unknown>;
   })
 );
+registerToolSchema("analyze-mod-jar", analyzeModJarSchema);
 
 server.tool("get-registry-data",
   "Get Minecraft registry data (blocks, items, biomes, etc.) for a specific version by running the server data generator.",
@@ -2755,6 +2787,7 @@ server.tool("get-registry-data",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("get-registry-data", getRegistryDataSchema);
 
 server.tool("compare-versions",
   "Compare two Minecraft versions to find added/removed classes and registry entry changes. Useful for understanding what changed between versions during mod migration.",
@@ -2770,6 +2803,7 @@ server.tool("compare-versions",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("compare-versions", compareVersionsSchema);
 
 server.tool("decompile-mod-jar",
   "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar by exposing the actual source code.",
@@ -2784,6 +2818,7 @@ server.tool("decompile-mod-jar",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("decompile-mod-jar", decompileModJarSchema);
 
 server.tool("get-mod-class-source",
   "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached.",
@@ -2799,6 +2834,7 @@ server.tool("get-mod-class-source",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("get-mod-class-source", getModClassSourceSchema);
 
 server.tool("search-mod-source",
   "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
@@ -2813,6 +2849,7 @@ server.tool("search-mod-source",
     }) as Promise<Record<string, unknown>>
   )
 );
+registerToolSchema("search-mod-source", searchModSourceSchema);
 
 server.tool("remap-mod-jar",
   "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
@@ -2831,6 +2868,7 @@ server.tool("remap-mod-jar",
     return result as unknown as Record<string, unknown>;
   })
 );
+registerToolSchema("remap-mod-jar", remapModJarSchema);
 
 export async function startServer(): Promise<void> {
   if (serverStarted) {

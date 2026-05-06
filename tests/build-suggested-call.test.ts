@@ -1,0 +1,160 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-build-suggested-call-cache");
+
+test.before(async () => {
+  await mkdtemp(join(tmpdir(), "mcp-build-suggested-call-pre-"));
+});
+
+test("D5: valid params return suggestedCall with caller-supplied params (no safeParse re-emit)", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const callerParams = {
+    className: "net.minecraft.world.entity.LivingEntity",
+    target: { type: "resolve" as const, kind: "version" as const, value: "1.21.10" }
+    // Note: deliberately omit `mode`, `compact`, etc. so we can confirm defaults are NOT injected.
+  };
+  const out = buildSuggestedCall({ tool: "get-class-source", params: callerParams });
+  assert.ok(out.suggestedCall, "expected suggestedCall to be present");
+  assert.equal(out.suggestedCall!.tool, "get-class-source");
+  // Caller-supplied object is preserved as-is — the schema's defaulted fields (mode, allowDecompile,
+  // compact) are NOT injected into the published params.
+  assert.equal(out.suggestedCall!.params, callerParams);
+  assert.equal((out.suggestedCall!.params as Record<string, unknown>).mode, undefined);
+  assert.equal((out.suggestedCall!.params as Record<string, unknown>).compact, undefined);
+  assert.equal(out.exampleCalls, undefined);
+});
+
+test("D6: invalid params with no examples returns empty object", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "get-class-members",
+    params: {
+      target: {
+        type: "resolve",
+        kind: "coordinate",
+        value: "{\"type\": \"resolve\", \"kind\": \"version\", \"value\": \"1.21.10\"}"
+      }
+    }
+  });
+  assert.deepEqual(out, {});
+});
+
+test("D7: invalid primary + one valid example yields exampleCalls with only the valid one", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "get-class-source",
+    params: { className: "" /* fails non-empty */ },
+    examples: [
+      {
+        params: {
+          className: "net.minecraft.world.entity.LivingEntity",
+          target: { type: "resolve", kind: "version", value: "1.21.10" }
+        },
+        reason: "Use the resolve target to look up by Minecraft version."
+      }
+    ]
+  });
+  assert.equal(out.suggestedCall, undefined);
+  assert.ok(out.exampleCalls);
+  assert.equal(out.exampleCalls!.length, 1);
+  assert.equal(out.exampleCalls![0]!.tool, "get-class-source");
+  assert.equal(out.exampleCalls![0]!.valid, true);
+  assert.equal(
+    out.exampleCalls![0]!.reason,
+    "Use the resolve target to look up by Minecraft version."
+  );
+});
+
+test("D8: invalid primary + partially-valid examples returns only the validated subset", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "get-class-source",
+    params: { className: "" },
+    examples: [
+      {
+        params: { className: "" /* still invalid */ },
+        reason: "Bad example — should be filtered."
+      },
+      {
+        params: {
+          className: "net.minecraft.world.level.block.Blocks",
+          target: { type: "resolve", kind: "version", value: "1.21.10" }
+        },
+        reason: "Good example — should survive."
+      }
+    ]
+  });
+  assert.equal(out.suggestedCall, undefined);
+  assert.ok(out.exampleCalls);
+  assert.equal(out.exampleCalls!.length, 1);
+  assert.equal(out.exampleCalls![0]!.reason, "Good example — should survive.");
+});
+
+test("invalid primary + no surviving examples returns empty object", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "get-class-source",
+    params: { className: "" },
+    examples: [
+      { params: { className: "" }, reason: "still bad" }
+    ]
+  });
+  assert.deepEqual(out, {});
+});
+
+test("unknown tool name returns empty object even with non-empty examples", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "definitely-not-a-real-tool",
+    params: { foo: "bar" },
+    examples: [{ params: { foo: "bar" }, reason: "no schema to validate against" }]
+  });
+  assert.deepEqual(out, {});
+});
+
+test("D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation (subprocess; module-load read)", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "-e",
+      `
+        const { buildSuggestedCall } = await import("./src/build-suggested-call.ts");
+        const buggyParams = {
+          target: {
+            type: "resolve",
+            kind: "coordinate",
+            value: "{\\\"type\\\": \\\"resolve\\\", \\\"kind\\\": \\\"version\\\", \\\"value\\\": \\\"1.21.10\\\"}"
+          }
+        };
+        const out = buildSuggestedCall({ tool: "get-class-members", params: buggyParams });
+        process.stdout.write(JSON.stringify(out));
+      `
+    ],
+    {
+      env: { ...process.env, SUGGESTED_CALL_VALIDATE_OFF: "1" },
+      encoding: "utf8"
+    }
+  );
+  assert.equal(result.status, 0, `subprocess failed: ${result.stderr}`);
+  const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+  assert.ok(parsed.suggestedCall, "expected suggestedCall under bypass");
+  const suggested = parsed.suggestedCall as { tool: string; params: Record<string, unknown> };
+  assert.equal(suggested.tool, "get-class-members");
+  // Bug-shaped payload emerges unchanged: target.value still holds the JSON string.
+  const target = suggested.params.target as { value: unknown };
+  assert.match(String(target.value), /^\{/);
+  assert.equal(parsed.exampleCalls, undefined);
+});
