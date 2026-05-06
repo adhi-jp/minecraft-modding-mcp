@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import fastGlob from "fast-glob";
 
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { buildVersionSourceSearchRoots, normalizeOptionalProjectPath } from "./gradle-paths.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
@@ -1748,7 +1749,7 @@ export class MappingService {
           targetMapping,
           sourcePriority: priority,
           nextAction: "Try mapping=obfuscated which is always available.",
-          suggestedCall: { tool: "resolve-artifact", params: { mapping: "obfuscated" } }
+          ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
         }
       });
     }

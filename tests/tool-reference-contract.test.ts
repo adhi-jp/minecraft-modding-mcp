@@ -72,9 +72,22 @@ test("tool-reference.md documents the operational env toggles", async () => {
     "WORKSPACE_TARGET_OFF",
     "DEPENDENCY_TARGET_OFF",
     "WORKSPACE_FALLBACK_LEGACY",
-    "VALIDATE_PROJECT_TASKS_OFF"
+    "VALIDATE_PROJECT_TASKS_OFF",
+    "SUGGESTED_CALL_VALIDATE_OFF"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
+  }
+});
+
+test("tool-reference.md documents the suggestedCall schema gate and exampleCalls fallback", async () => {
+  const doc = await loadDoc();
+  for (const token of [
+    "schema validation gate",
+    "exampleCalls",
+    "suggested call payload failed schema validation; using fallback examples",
+    "byte-identical"
+  ]) {
+    assert.ok(doc.includes(token), `tool-reference.md must mention suggestedCall gate token "${token}"`);
   }
 });
 

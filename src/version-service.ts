@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { computeFileSha1 } from "./hash.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
@@ -121,7 +122,7 @@ function ensureVersionDetail(value: unknown, version: string): VersionDetails {
       details: {
         version,
         nextAction: "Use list-versions to see available Minecraft versions.",
-        suggestedCall: { tool: "list-versions", params: {} }
+        ...buildSuggestedCall({ tool: "list-versions", params: {} })
       }
     });
   }
@@ -229,7 +230,7 @@ export class VersionService {
         details: {
           version: normalizedVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -264,7 +265,7 @@ export class VersionService {
         details: {
           version: normalizedVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -278,7 +279,7 @@ export class VersionService {
         details: {
           version: normalizedVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -380,7 +381,7 @@ export class VersionService {
         details: {
           version: normalizedVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -394,7 +395,7 @@ export class VersionService {
         details: {
           version: normalizedVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }

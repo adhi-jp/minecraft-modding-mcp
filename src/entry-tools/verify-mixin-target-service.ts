@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import { suggestSimilar } from "../mixin-validator.js";
 import type {
@@ -343,13 +344,13 @@ export class VerifyMixinTargetService {
             owner,
             artifactId: resolved.artifactId,
             nextAction: `Use find-class to locate the canonical FQCN for "${owner}" before retrying verify-mixin-target.`,
-            suggestedCall: {
+            ...buildSuggestedCall({
               tool: "find-class",
               params: {
                 artifactId: resolved.artifactId,
                 className: owner.includes(".") ? owner.slice(owner.lastIndexOf(".") + 1) : owner
               }
-            }
+            })
           }
         });
       }

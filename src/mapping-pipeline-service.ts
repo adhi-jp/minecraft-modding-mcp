@@ -1,3 +1,4 @@
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import type { ResolvedSourceArtifact, SourceMapping, SourceTargetInput } from "./types.js";
 
@@ -104,13 +105,13 @@ export function applyMappingPipeline(input: MappingPipelineInput): MappingPipeli
         binaryJarPath: input.resolved.binaryJarPath,
         sourceJarPath: input.resolved.sourceJarPath,
         nextAction: "Provide a source-backed artifact (source jar) or use mapping=obfuscated.",
-        suggestedCall: {
+        ...buildSuggestedCall({
           tool: "resolve-artifact",
           params: {
             target: input.target,
             mapping: "obfuscated"
           }
-        }
+        })
       }
     });
   }

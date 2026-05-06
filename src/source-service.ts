@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
 import fastGlob from "fast-glob";
 
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js";
 import { buildArtifactAlias, loadConfig } from "./config.js";
@@ -181,6 +182,13 @@ export type ArtifactContentsSummary = {
   indexedContentKinds: string[];
   resourcesIncluded: boolean;
   sourceCoverage: "full" | "partial";
+};
+
+type MappingFallbackSuggestion = {
+  suggestedCall?: { tool: string; params: Record<string, unknown> };
+  exampleCalls?: Array<{ tool: string; params: Record<string, unknown>; reason: string }>;
+  _suggestedCallPrimaryDropped?: true;
+  nextAction: string;
 };
 
 type SymbolKind = "class" | "interface" | "enum" | "record" | "method" | "field";
@@ -1242,7 +1250,7 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
     details: {
       mapping,
       nextAction: "Try mapping=obfuscated which is always available.",
-      suggestedCall: { tool: "resolve-artifact", params: { mapping: "obfuscated" } }
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
     }
   });
 }
@@ -2069,14 +2077,14 @@ export class SourceService {
           searchedPaths: discovery.searchedPaths,
           candidateArtifacts: discovery.candidateArtifacts,
           nextAction: "Provide projectPath for a Loom workspace with generated runtime jars, or run Gradle tasks that populate the Loom cache before retrying.",
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "validate-access-widener",
             params: {
               version,
               scope: requestedScope,
               ...(normalizedProjectPath ? { projectPath: normalizedProjectPath } : {})
             }
-          }
+          })
         }
       });
     }
@@ -2471,10 +2479,7 @@ export class SourceService {
     value: string;
     scope: ArtifactScope | undefined;
     effectiveMapping: SourceMapping;
-  }): Promise<{
-    suggestedCall: { tool: string; params: Record<string, unknown> };
-    nextAction: string;
-  }> {
+  }): Promise<MappingFallbackSuggestion> {
     const { input, kind, value, scope, effectiveMapping } = args;
     const isVanillaMojang = scope === "vanilla" && effectiveMapping === "mojang";
 
@@ -2500,14 +2505,14 @@ export class SourceService {
       cached.minecraftVersion === value
     ) {
       return {
-        suggestedCall: {
+        ...buildSuggestedCall({
           tool: "resolve-artifact",
           params: {
             target: { kind: "workspace" },
             projectPath,
             mapping: cached.compileMapping
           }
-        },
+        }),
         nextAction: `Workspace at ${projectPath} maps as ${cached.compileMapping}. Retry with target.kind="workspace" to use the project's compile mapping.`
       };
     }
@@ -2535,14 +2540,14 @@ export class SourceService {
           };
           this.workspaceContextCache.write(partial);
           return {
-            suggestedCall: {
+            ...buildSuggestedCall({
               tool: "resolve-artifact",
               params: {
                 target: { kind: "workspace" },
                 projectPath,
                 mapping: detection.mappingApplied
               }
-            },
+            }),
             nextAction: `Workspace at ${projectPath} maps as ${detection.mappingApplied}. Retry with target.kind="workspace" to use the project's compile mapping.`
           };
         }
@@ -2560,20 +2565,17 @@ export class SourceService {
     scope: ArtifactScope | undefined;
     isVanillaMojang: boolean;
     projectPath: string | undefined;
-  }): {
-    suggestedCall: { tool: string; params: Record<string, unknown> };
-    nextAction: string;
-  } {
+  }): MappingFallbackSuggestion {
     const { kind, value, scope, isVanillaMojang, projectPath } = args;
     if (isVanillaMojang && projectPath) {
       return {
-        suggestedCall: {
+        ...buildSuggestedCall({
           tool: "resolve-artifact",
           params: buildResolveArtifactParams(
             { kind, value },
             { mapping: "mojang", scope: "merged", projectPath }
           )
-        },
+        }),
         nextAction:
           "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
           "Retry with scope=merged to allow source-jar resolution from the project cache."
@@ -2581,26 +2583,26 @@ export class SourceService {
     }
     if (isVanillaMojang) {
       return {
-        suggestedCall: {
+        ...buildSuggestedCall({
           tool: "resolve-artifact",
           params: buildResolveArtifactParams(
             { kind, value },
             { mapping: "obfuscated", scope: "vanilla" }
           )
-        },
+        }),
         nextAction:
           "scope=vanilla blocks Loom cache discovery needed for mojang mapping. " +
           "Without a projectPath, use mapping=obfuscated to read vanilla runtime names directly."
       };
     }
     return {
-      suggestedCall: {
+      ...buildSuggestedCall({
         tool: "resolve-artifact",
         params: buildResolveArtifactParams(
           { kind, value },
           { mapping: "obfuscated", ...(scope ? { scope } : {}) }
         )
-      },
+      }),
       nextAction: "Retry with mapping=obfuscated to use the runtime obfuscated namespace."
     };
   }
@@ -2700,13 +2702,13 @@ export class SourceService {
           strict: workspace.strict === true,
           nextAction:
             "Set minecraft_version in gradle.properties or pass target.kind=\"version\" with an explicit Minecraft version.",
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "resolve-artifact",
             params: {
               target: { kind: "version", value: "<your-mc-version>" },
               projectPath
             }
-          }
+          })
         }
       });
     }
@@ -2894,7 +2896,7 @@ export class SourceService {
           candidatesSeen: result.candidatesSeen,
           ambiguous,
           nextAction,
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "resolve-artifact",
             params: {
               target: {
@@ -2905,7 +2907,7 @@ export class SourceService {
               },
               projectPath
             }
-          }
+          })
         }
       });
     }
@@ -3143,8 +3145,7 @@ export class SourceService {
             scope,
             effectiveMapping
           });
-          const suggestedCall = fallback.suggestedCall;
-          const nextAction = fallback.nextAction;
+          const { nextAction, ...fallbackGated } = fallback;
           throw createError({
             code: ERROR_CODES.MAPPING_NOT_APPLIED,
             message: caughtError.message,
@@ -3156,7 +3157,7 @@ export class SourceService {
                 versionSourceDiscovery?.candidateArtifacts ?? resolved.adjacentSourceCandidates ?? [],
               recommendedCommand: this.buildVersionSourceRecoveryCommand(input.projectPath),
               nextAction,
-              suggestedCall
+              ...fallbackGated
             }
           });
         }
@@ -3173,13 +3174,13 @@ export class SourceService {
               target: { kind, value },
               nextAction:
                 "Use target: { kind: \"version\", value } or a versioned Maven coordinate so mapping artifacts can be resolved.",
-              suggestedCall: {
+              ...buildSuggestedCall({
                 tool: "resolve-artifact",
                 params: buildResolveArtifactParams(
                   { kind: "version", value },
                   { ...(scope ? { scope } : {}) }
                 )
-              }
+              })
             }
           });
         }
@@ -3245,10 +3246,10 @@ export class SourceService {
                 selectedSourceJar: versionSourceDiscovery.selectedSourceJarPath,
                 candidateArtifacts: versionSourceDiscovery.candidateArtifacts,
                 nextAction: "Use strictVersion=false (default) to allow approximation, or ensure the exact version source jar is in the Loom cache.",
-                suggestedCall: {
+                ...buildSuggestedCall({
                   tool: "resolve-artifact",
                   params: buildResolveArtifactParams({ kind: "version", value }, { strictVersion: false })
-                }
+                })
               }
             });
           }
@@ -4129,7 +4130,7 @@ export class SourceService {
         details: {
           includeSnapshots,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -4147,7 +4148,7 @@ export class SourceService {
         details: {
           fromVersion: requestedFrom,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -4158,7 +4159,7 @@ export class SourceService {
         details: {
           toVersion: requestedTo,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -4354,7 +4355,7 @@ export class SourceService {
         message: "No Minecraft versions were returned by manifest.",
         details: {
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -4370,7 +4371,7 @@ export class SourceService {
         details: {
           fromVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -4381,7 +4382,7 @@ export class SourceService {
         details: {
           toVersion,
           nextAction: "Use list-versions to see available Minecraft versions.",
-          suggestedCall: { tool: "list-versions", params: {} }
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
         }
       });
     }
@@ -5179,10 +5180,10 @@ export class SourceService {
           mapping: requestedMapping,
           nextAction:
             "Resolve with target: { kind: \"version\", value: ... } or specify a versioned coordinate.",
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "resolve-artifact",
             params: buildResolveArtifactParams({ kind: "version", value: "latest" })
-          }
+          })
         }
       });
     }
@@ -5389,7 +5390,7 @@ export class SourceService {
         unavailableReason =
           binaryExtractionFailureReason
           ?? `binary extraction failed for "${className}".`;
-        suggestedCall = {
+        suggestedCall = buildSuggestedCall({
           tool: "get-class-source",
           params: {
             target: { type: "artifact", artifactId },
@@ -5397,7 +5398,7 @@ export class SourceService {
             mode: "snippet",
             mapping: requestedMapping
           }
-        };
+        }).suggestedCall;
       } else {
         status = "ok";
       }
@@ -7834,7 +7835,7 @@ export class SourceService {
     };
 
     let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
-    let suggestedCall: { tool: string; params: Record<string, unknown> } = {
+    let suggestionSpec: { tool: string; params: Record<string, unknown> } = {
       tool: "find-class",
       params: { className: simpleName, artifactId: input.artifactId }
     };
@@ -7854,7 +7855,7 @@ export class SourceService {
           : " and a binary fallback has not produced source for that class.") +
         " Use get-class-api-matrix or find-mapping instead of find-class for vanilla API discovery.";
       if (input.version) {
-        suggestedCall = {
+        suggestionSpec = {
           tool: "get-class-api-matrix",
           params: {
             version: input.version,
@@ -7863,7 +7864,7 @@ export class SourceService {
           }
         };
       } else {
-        suggestedCall = {
+        suggestionSpec = {
           tool: "find-class",
           params: { className: simpleName, artifactId: input.artifactId }
         };
@@ -7875,7 +7876,7 @@ export class SourceService {
     }
 
     details.nextAction = nextAction;
-    details.suggestedCall = suggestedCall;
+    Object.assign(details, buildSuggestedCall(suggestionSpec));
 
     return createError({
       code: ERROR_CODES.CLASS_NOT_FOUND,
@@ -7904,17 +7905,17 @@ export class SourceService {
         symbol: input.symbol,
         classLikeSymbol,
         nextAction: "Pass lifecycle input as Class.method and use the separate descriptor field for exact overload matching.",
-        suggestedCall: input.version
-          ? {
-          tool: "check-symbol-exists",
-          params: {
-            version: input.version,
-            kind: "class",
-            name: classLikeSymbol,
-            sourceMapping: input.mapping
-          }
-          }
-          : undefined
+        ...(input.version
+          ? buildSuggestedCall({
+              tool: "check-symbol-exists",
+              params: {
+                version: input.version,
+                kind: "class",
+                name: classLikeSymbol,
+                sourceMapping: input.mapping
+              }
+            })
+          : {})
       }
     });
   }
@@ -8431,7 +8432,10 @@ export class SourceService {
         details: {
           artifactId: resolved.artifactId,
           nextAction: "Use list-artifact-files to inspect the artifact's contents.",
-          suggestedCall: { tool: "list-artifact-files", params: { artifactId: resolved.artifactId } }
+          ...buildSuggestedCall({
+            tool: "list-artifact-files",
+            params: { artifactId: resolved.artifactId }
+          })
         }
       });
     }
@@ -8473,10 +8477,10 @@ export class SourceService {
         details: {
           artifactId,
           nextAction: "Use resolve-artifact to resolve a source artifact first.",
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "resolve-artifact",
             params: buildResolveArtifactParams({ kind: "version", value: "latest" })
-          }
+          })
         }
       });
     }

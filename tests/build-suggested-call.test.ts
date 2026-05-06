@@ -30,7 +30,7 @@ test("D5: valid params return suggestedCall with caller-supplied params (no safe
   assert.equal(out.exampleCalls, undefined);
 });
 
-test("D6: invalid params with no examples returns empty object", async () => {
+test("D6: invalid params with no examples returns no suggestedCall and no exampleCalls", async () => {
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
   const out = buildSuggestedCall({
@@ -43,7 +43,10 @@ test("D6: invalid params with no examples returns empty object", async () => {
       }
     }
   });
-  assert.deepEqual(out, {});
+  assert.equal(out.suggestedCall, undefined);
+  assert.equal(out.exampleCalls, undefined);
+  // The internal marker tells mapErrorToProblem to add the fallback hint.
+  assert.equal(out._suggestedCallPrimaryDropped, true);
 });
 
 test("D7: invalid primary + one valid example yields exampleCalls with only the valid one", async () => {
@@ -99,7 +102,7 @@ test("D8: invalid primary + partially-valid examples returns only the validated 
   assert.equal(out.exampleCalls![0]!.reason, "Good example — should survive.");
 });
 
-test("invalid primary + no surviving examples returns empty object", async () => {
+test("invalid primary + no surviving examples returns no suggestedCall (marker present)", async () => {
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
   const out = buildSuggestedCall({
@@ -109,10 +112,12 @@ test("invalid primary + no surviving examples returns empty object", async () =>
       { params: { className: "" }, reason: "still bad" }
     ]
   });
-  assert.deepEqual(out, {});
+  assert.equal(out.suggestedCall, undefined);
+  assert.equal(out.exampleCalls, undefined);
+  assert.equal(out._suggestedCallPrimaryDropped, true);
 });
 
-test("unknown tool name returns empty object even with non-empty examples", async () => {
+test("unknown tool name fails open: passes the caller payload through (registry-not-populated case)", async () => {
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
   const out = buildSuggestedCall({
@@ -120,7 +125,12 @@ test("unknown tool name returns empty object even with non-empty examples", asyn
     params: { foo: "bar" },
     examples: [{ params: { foo: "bar" }, reason: "no schema to validate against" }]
   });
-  assert.deepEqual(out, {});
+  // Unknown tool: the gate cannot judge the payload, so it passes through.
+  // Only registered tools with invalid params are dropped.
+  assert.ok(out.suggestedCall);
+  assert.equal(out.suggestedCall!.tool, "definitely-not-a-real-tool");
+  assert.deepEqual(out.suggestedCall!.params, { foo: "bar" });
+  assert.equal(out._suggestedCallPrimaryDropped, undefined);
 });
 
 test("D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation (subprocess; module-load read)", () => {

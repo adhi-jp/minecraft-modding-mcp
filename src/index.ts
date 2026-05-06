@@ -80,6 +80,7 @@ import {
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 import { registerToolSchema } from "./tool-schema-registry.js";
+import { buildSuggestedCall } from "./build-suggested-call.js";
 
 if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
@@ -102,6 +103,12 @@ type SuggestedCall = {
   params: Record<string, unknown>;
 };
 
+type ExampleCall = {
+  tool: string;
+  params: Record<string, unknown>;
+  reason: string;
+};
+
 type ProblemDetails = {
   type: string;
   title: string;
@@ -112,6 +119,7 @@ type ProblemDetails = {
   fieldErrors?: ProblemFieldError[];
   hints?: string[];
   suggestedCall?: SuggestedCall;
+  exampleCalls?: ExampleCall[];
   failedStage?: string;
 };
 
@@ -1229,19 +1237,88 @@ function toHints(details: unknown): string[] | undefined {
   return hints;
 }
 
-function toSuggestedCall(details: unknown): SuggestedCall | undefined {
+const VALIDATION_FALLBACK_HINT =
+  "suggested call payload failed schema validation; using fallback examples";
+
+function extractValidatedSuggestionAndExamples(details: unknown): {
+  suggestedCall?: SuggestedCall;
+  exampleCalls?: ExampleCall[];
+  primaryDropped: boolean;
+} {
   if (typeof details !== "object" || details == null) {
-    return undefined;
+    return { primaryDropped: false };
   }
-  const maybe = (details as Record<string, unknown>).suggestedCall;
-  if (typeof maybe !== "object" || maybe == null) {
-    return undefined;
+  const record = details as Record<string, unknown>;
+  // Construction-site helper output spread into details may carry this marker
+  // when the caller supplied a primary that was dropped at construction time.
+  let primaryDropped = record._suggestedCallPrimaryDropped === true;
+  let suggestedCall: SuggestedCall | undefined;
+
+  const rawSuggested = record.suggestedCall;
+  if (rawSuggested !== undefined) {
+    if (
+      typeof rawSuggested === "object" &&
+      rawSuggested !== null &&
+      !Array.isArray(rawSuggested)
+    ) {
+      const call = rawSuggested as { tool?: unknown; params?: unknown };
+      if (
+        typeof call.tool === "string" &&
+        typeof call.params === "object" &&
+        call.params !== null &&
+        !Array.isArray(call.params)
+      ) {
+        const validated = buildSuggestedCall({
+          tool: call.tool,
+          params: call.params as Record<string, unknown>
+        });
+        if (validated.suggestedCall) {
+          suggestedCall = validated.suggestedCall;
+        } else {
+          primaryDropped = true;
+        }
+      } else {
+        primaryDropped = true;
+      }
+    } else {
+      primaryDropped = true;
+    }
   }
-  const call = maybe as Record<string, unknown>;
-  if (typeof call.tool !== "string" || typeof call.params !== "object" || call.params == null) {
-    return undefined;
+
+  let exampleCalls: ExampleCall[] | undefined;
+  const rawExamples = record.exampleCalls;
+  if (Array.isArray(rawExamples)) {
+    const validated: ExampleCall[] = [];
+    for (const entry of rawExamples) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const ex = entry as { tool?: unknown; params?: unknown; reason?: unknown };
+      if (
+        typeof ex.tool !== "string" ||
+        typeof ex.params !== "object" ||
+        ex.params === null ||
+        Array.isArray(ex.params) ||
+        typeof ex.reason !== "string"
+      ) {
+        continue;
+      }
+      const result = buildSuggestedCall({
+        tool: ex.tool,
+        params: ex.params as Record<string, unknown>
+      });
+      if (result.suggestedCall) {
+        validated.push({
+          tool: ex.tool,
+          params: result.suggestedCall.params,
+          reason: ex.reason
+        });
+      }
+    }
+    if (validated.length > 0) {
+      exampleCalls = validated;
+    }
   }
-  return { tool: call.tool, params: call.params as Record<string, unknown> };
+
+  return { suggestedCall, exampleCalls, primaryDropped };
 }
 
 function statusForErrorCode(code: string): number {
@@ -1893,84 +1970,92 @@ function buildValidateProjectSuggestedParams(normalizedInput: unknown): Record<s
   return result;
 }
 
-function buildInvalidInputGuidance(tool: string, normalizedInput: unknown): {
+type InvalidInputGuidance = {
   hints?: string[];
   suggestedCall?: SuggestedCall;
-} | undefined {
-  if (tool === "validate-mixin") {
-    const hints = [
-      "validate-mixin.input must be an object with input.mode = \"inline\" | \"path\" | \"paths\" | \"config\" | \"project\".",
-      "Whole-project example: {\"input\":{\"mode\":\"project\",\"path\":\"/workspace\"},\"version\":\"1.21.10\",\"preferProjectVersion\":true,\"preferProjectMapping\":true}.",
-      "Legacy top-level source/sourcePath/sourcePaths/mixinConfigPath fields are no longer accepted; wrap them under input.mode instead."
-    ];
+  exampleCalls?: ExampleCall[];
+  primaryDropped?: boolean;
+};
 
-    return {
-      hints,
-      suggestedCall: {
-        tool,
-        params: buildValidateMixinSuggestedParams(normalizedInput)
-      }
-    };
+function gatedGuidance(
+  tool: string,
+  hints: string[],
+  params: Record<string, unknown>
+): InvalidInputGuidance {
+  const validated = buildSuggestedCall({ tool, params });
+  return {
+    hints,
+    ...validated,
+    primaryDropped: !validated.suggestedCall
+  };
+}
+
+function buildInvalidInputGuidance(
+  tool: string,
+  normalizedInput: unknown
+): InvalidInputGuidance | undefined {
+  if (tool === "validate-mixin") {
+    return gatedGuidance(
+      tool,
+      [
+        "validate-mixin.input must be an object with input.mode = \"inline\" | \"path\" | \"paths\" | \"config\" | \"project\".",
+        "Whole-project example: {\"input\":{\"mode\":\"project\",\"path\":\"/workspace\"},\"version\":\"1.21.10\",\"preferProjectVersion\":true,\"preferProjectMapping\":true}.",
+        "Legacy top-level source/sourcePath/sourcePaths/mixinConfigPath fields are no longer accepted; wrap them under input.mode instead."
+      ],
+      buildValidateMixinSuggestedParams(normalizedInput)
+    );
   }
 
   if (tool === "resolve-artifact") {
-    return {
-      hints: [
+    return gatedGuidance(
+      tool,
+      [
         "resolve-artifact.target must be an object: {\"kind\":\"version|jar|coordinate\",\"value\":\"...\"}.",
         "Bare string targets are not accepted; wrap the value under target.kind and target.value."
       ],
-      suggestedCall: {
-        tool,
-        params: buildResolveArtifactSuggestedParams(normalizedInput)
-      }
-    };
+      buildResolveArtifactSuggestedParams(normalizedInput)
+    );
   }
 
   if (tool === "get-class-source" || tool === "get-class-members") {
-    return {
-      hints: [
+    return gatedGuidance(
+      tool,
+      [
         `${tool}.target must be an object: {"type":"resolve","kind":"version|jar|coordinate","value":"..."} or {"type":"artifact","artifactId":"..."}.`,
         "Bare string targets are not accepted; wrap the value under target.type/target.kind/target.value."
       ],
-      suggestedCall: {
-        tool,
-        params: buildSourceLookupSuggestedParams(tool, normalizedInput)
-      }
-    };
+      buildSourceLookupSuggestedParams(tool, normalizedInput)
+    );
   }
 
   if (tool === "validate-project") {
-    return {
-      hints: [
+    return gatedGuidance(
+      tool,
+      [
         "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener|access-transformer.",
         "task=\"project-summary\" uses {\"subject\":{\"kind\":\"workspace\",\"projectPath\":\"/workspace\"}}.",
         "Legacy include names like projectSummary/detectedConfig/validationSummary are not accepted; use include:[\"workspace\"] only when you need discovery details."
       ],
-      suggestedCall: {
-        tool,
-        params: buildValidateProjectSuggestedParams(normalizedInput)
-      }
-    };
+      buildValidateProjectSuggestedParams(normalizedInput)
+    );
   }
 
   if (tool === "analyze-mod") {
-    return {
-      hints: [
+    return gatedGuidance(
+      tool,
+      [
         "analyze-mod.subject must be an object with subject.kind=jar|class.",
         "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
         "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings."
       ],
-      suggestedCall: {
-        tool,
-        params: buildAnalyzeModSuggestedParams(normalizedInput)
-      }
-    };
+      buildAnalyzeModSuggestedParams(normalizedInput)
+    );
   }
 
   return undefined;
 }
 
-function mapErrorToProblem(
+export function mapErrorToProblem(
   caughtError: unknown,
   requestId: string,
   context?: { tool?: string; normalizedInput?: unknown }
@@ -1979,6 +2064,11 @@ function mapErrorToProblem(
     const guidance = context?.tool
       ? buildInvalidInputGuidance(context.tool, context.normalizedInput)
       : undefined;
+    const baseHints =
+      guidance?.hints ?? ["Check fieldErrors and submit a valid tool argument payload."];
+    const hintsWithFallback = guidance?.primaryDropped
+      ? [...baseHints, VALIDATION_FALLBACK_HINT]
+      : baseHints;
     return {
       type: "https://minecraft-modding-mcp.dev/problems/invalid-input",
       title: "Invalid input",
@@ -1987,14 +2077,16 @@ function mapErrorToProblem(
       code: ERROR_CODES.INVALID_INPUT,
       instance: requestId,
       fieldErrors: toFieldErrorsFromZod(caughtError),
-      hints: guidance?.hints ?? ["Check fieldErrors and submit a valid tool argument payload."],
+      hints: hintsWithFallback,
       ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
+      ...(guidance?.exampleCalls ? { exampleCalls: guidance.exampleCalls } : {}),
       ...(context?.tool === "validate-mixin" ? { failedStage: "input-validation" } : {})
     };
   }
 
   if (isAppError(caughtError)) {
-    const suggestedCall = toSuggestedCall(caughtError.details);
+    const { suggestedCall, exampleCalls, primaryDropped } =
+      extractValidatedSuggestionAndExamples(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
     if (
       !failedStage
@@ -2003,6 +2095,11 @@ function mapErrorToProblem(
     ) {
       failedStage = "input-validation";
     }
+    const baseHints = toHints(caughtError.details);
+    const hintsWithFallback =
+      primaryDropped && !suggestedCall
+        ? [...(baseHints ?? []), VALIDATION_FALLBACK_HINT]
+        : baseHints;
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -2011,8 +2108,9 @@ function mapErrorToProblem(
       code: caughtError.code,
       instance: requestId,
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
-      hints: toHints(caughtError.details),
+      hints: hintsWithFallback,
       ...(suggestedCall ? { suggestedCall } : {}),
+      ...(exampleCalls ? { exampleCalls } : {}),
       ...(failedStage ? { failedStage } : {})
     };
   }
@@ -2084,13 +2182,12 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
             code: "invalid_enum_value"
           })),
           nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
-          suggestedCall:
-            suggestedReplacementInput
-              ? {
-                  tool,
-                  params: suggestedReplacementInput
-                }
-              : undefined
+          ...(suggestedReplacementInput
+            ? buildSuggestedCall({
+                tool,
+                params: suggestedReplacementInput as Record<string, unknown>
+              })
+            : {})
         }
       });
     }

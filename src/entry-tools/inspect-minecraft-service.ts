@@ -11,6 +11,7 @@ import type {
   SearchClassSourceOutput
 } from "../source-service.js";
 import type { ListVersionsOutput } from "../version-service.js";
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
@@ -461,8 +462,8 @@ export class InspectMinecraftService {
   private async buildArtifactContextSuggestedCall(
     task: ArtifactContextTask,
     subject: Extract<Subject, { kind: "class" | "search" | "file" }>
-  ): Promise<{ tool: string; params: Record<string, unknown> }> {
-    return {
+  ): Promise<ReturnType<typeof buildSuggestedCall>> {
+    return buildSuggestedCall({
       tool: "inspect-minecraft",
       params: {
         task,
@@ -477,7 +478,7 @@ export class InspectMinecraftService {
           }
         }
       }
-    };
+    });
   }
 
   private taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
@@ -491,7 +492,7 @@ export class InspectMinecraftService {
         message: "class-source requires a class subject; version subjects resolve artifacts, not class names.",
         details: {
           nextAction: "Retry class-source with subject.kind=class and attach artifact context, or use task=artifact to inspect the version first.",
-          suggestedCall: {
+          ...buildSuggestedCall({
             tool: "inspect-minecraft",
             params: {
               task: "class-source",
@@ -507,7 +508,7 @@ export class InspectMinecraftService {
                 }
               }
             }
-          }
+          })
         }
       });
     }
@@ -520,13 +521,13 @@ export class InspectMinecraftService {
         nextAction: suggestedTask === "artifact"
           ? `Retry with task=artifact for this ${subject.kind} subject, or reshape the subject so it supplies the input that ${task} needs.`
           : `Retry with task=${suggestedTask} for this subject, or reshape the subject so it supplies the input that ${task} needs.`,
-        suggestedCall: {
+        ...buildSuggestedCall({
           tool: "inspect-minecraft",
           params: {
             task: suggestedTask,
             subject
           }
-        }
+        })
       }
     });
   }
@@ -587,7 +588,7 @@ export class InspectMinecraftService {
           message: `${subject.kind} subject requires artifact context.`,
           details: {
             nextAction: "Add subject.artifact or use subject.kind=workspace so inspect-minecraft can resolve the artifact first.",
-            suggestedCall: await this.buildArtifactContextSuggestedCall(suggestedTask, subject)
+            ...(await this.buildArtifactContextSuggestedCall(suggestedTask, subject))
           }
         });
       }

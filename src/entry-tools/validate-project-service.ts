@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import fastGlob from "fast-glob";
 import { z } from "zod";
 
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { mapWithConcurrencyLimit } from "../concurrency.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import { buildVersionSourceSearchRoots } from "../gradle-paths.js";
@@ -767,14 +768,14 @@ export class ValidateProjectService {
               failedStage: "input-validation",
               nextAction:
                 "Pass version explicitly (e.g. \"1.21.10\"). task=\"project-summary\" supports preferProjectVersion for auto-detection from gradle.properties, but direct task=\"mixin\" requires an explicit version.",
-              suggestedCall: {
+              ...buildSuggestedCall({
                 tool: "validate-project",
                 params: {
                   task: "mixin",
                   subject: input.subject,
                   version: "1.21.10"
                 }
-              }
+              })
             }
           });
         }
@@ -859,14 +860,14 @@ export class ValidateProjectService {
               failedStage: "input-validation",
               nextAction:
                 "Pass version explicitly (e.g. \"1.21.10\"). Access Widener validation resolves class names against a specific Minecraft version.",
-              suggestedCall: {
+              ...buildSuggestedCall({
                 tool: "validate-project",
                 params: {
                   task: "access-widener",
                   subject: input.subject,
                   version: "1.21.10"
                 }
-              }
+              })
             }
           });
         }
@@ -942,14 +943,14 @@ export class ValidateProjectService {
               failedStage: "input-validation",
               nextAction:
                 "Pass version explicitly (e.g. \"1.21.10\"). Access Transformer validation resolves class names against a specific Minecraft version.",
-              suggestedCall: {
+              ...buildSuggestedCall({
                 tool: "validate-project",
                 params: {
                   task: "access-transformer",
                   subject: input.subject,
                   version: "1.21.10"
                 }
-              }
+              })
             }
           });
         }
