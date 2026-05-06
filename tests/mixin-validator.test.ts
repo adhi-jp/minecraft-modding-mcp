@@ -155,22 +155,22 @@ test("suggestSimilar handles ranking, truncation, and empty results", () => {
 });
 
 test("suggestSimilar skips candidates whose length gap already exceeds maxDistance", async () => {
-  const source = await readFile("src/mixin-validator.ts", "utf8");
+  const source = await readFile("src/mixin/helpers.ts", "utf8");
   const block =
     source.match(/export function suggestSimilar\([\s\S]*?return scored\.slice\(0, maxResults\)\.map\(\(s\) => s\.candidate\);\n\}/)?.[0] ?? "";
 
   assert.match(block, /Math\.abs\(normalizedName\.length - normalizedCandidate\.length\) > maxDistance/);
 });
 
-test("validateParsedMixin hoists warning-classifier regexes out of the hot function body", async () => {
-  const source = await readFile("src/mixin-validator.ts", "utf8");
+test("classifyStructuredWarning hoists warning-classifier regexes out of the hot function body", async () => {
+  const helpersSource = await readFile("src/mixin/helpers.ts", "utf8");
   const block =
-    source.match(/export function validateParsedMixin\([\s\S]*?const structuredWarnings: StructuredWarning\[] = warnings\.map/)?.[0] ?? "";
+    helpersSource.match(/export function classifyStructuredWarning\([\s\S]*?\n\}/)?.[0] ?? "";
 
   assert.doesNotMatch(block, /const MAPPING_WARNING_RE =/);
-  assert.match(source, /const MAPPING_WARNING_RE = /);
-  assert.match(source, /const CONFIG_WARNING_RE = /);
-  assert.match(source, /const PARSE_WARNING_RE = /);
+  assert.match(helpersSource, /const MAPPING_WARNING_RE = /);
+  assert.match(helpersSource, /const CONFIG_WARNING_RE = /);
+  assert.match(helpersSource, /const PARSE_WARNING_RE = /);
 });
 
 /* ------------------------------------------------------------------ */

@@ -11,6 +11,54 @@ import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
 import { collectMatchedJarEntriesAsUtf8, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
 import { VersionService, isUnobfuscatedVersion, type ResolvedVersionMappings } from "./version-service.js";
+import type {
+  DirectionIndex,
+  MappingLookupSource,
+  MappingSymbolKind,
+  MappingSymbolRecord,
+  PairKey,
+  PairRecord
+} from "./mapping/internal-types.js";
+import {
+  addLookupEntries,
+  addToSetMap,
+  buildSymbolKey,
+  classNameParts,
+  createClassSymbolRecord,
+  createDirectionIndex,
+  createFieldSymbolRecord,
+  createMethodSymbolRecord,
+  exactLookupKeys,
+  mergeDirectionIndexes,
+  normalizedVariants,
+  normalizeMappedSymbolOutput,
+  parseFieldName,
+  parseInputSymbol,
+  parseMethodName,
+  registerRecord,
+  simpleLookupKeys,
+  simpleName,
+  splitOwnerAndName,
+  stripLineInfo
+} from "./mapping/parsers/symbol-records.js";
+import {
+  buildAdjacency,
+  buildTargetRecordIndex,
+  ensurePairIndex,
+  pairKey,
+  parsePairKey
+} from "./mapping/parsers/normalize.js";
+import {
+  PROGUARD_PRIMITIVES,
+  parseClientMappings,
+  parseProguardMethod,
+  proguardTypeToJvm
+} from "./mapping/parsers/proguard.js";
+import {
+  addPairRecords,
+  normalizeTinyNamespace,
+  parseTinyMappings
+} from "./mapping/parsers/tiny.js";
 
 const SUPPORTED_MAPPINGS: ReadonlySet<SourceMapping> = new Set([
   "obfuscated",
@@ -29,30 +77,6 @@ const MAX_CANDIDATES = 200;
 const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
 
 type MatchRankKey = keyof typeof MATCH_RANK;
-type PairKey = `${SourceMapping}->${SourceMapping}`;
-type MappingLookupSource = "loom-cache" | "maven" | "mojang-client-mappings";
-type MappingSymbolKind = "class" | "field" | "method";
-
-type MappingSymbolRecord = {
-  kind: MappingSymbolKind;
-  symbol: string;
-  owner?: string;
-  name: string;
-  descriptor?: string;
-};
-
-type DirectionIndex = {
-  exact: Map<string, Set<string>>;
-  normalized: Map<string, Set<string>>;
-  simple: Map<string, Set<string>>;
-  records: Map<string, MappingSymbolRecord>;
-};
-
-type PairRecord = {
-  index: DirectionIndex;
-  source: MappingLookupSource;
-  mappingArtifact: string;
-};
 
 type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
@@ -237,598 +261,7 @@ export type SymbolExistenceInput = {
 
 export type SymbolExistenceOutput = SymbolResolutionOutput;
 
-function createDirectionIndex(): DirectionIndex {
-  return {
-    exact: new Map<string, Set<string>>(),
-    normalized: new Map<string, Set<string>>(),
-    simple: new Map<string, Set<string>>(),
-    records: new Map<string, MappingSymbolRecord>()
-  };
-}
-
-function addToSetMap(map: Map<string, Set<string>>, key: string, value: string): void {
-  const normalizedKey = key.trim();
-  if (!normalizedKey) {
-    return;
-  }
-
-  const existing = map.get(normalizedKey) ?? new Set<string>();
-  existing.add(value);
-  map.set(normalizedKey, existing);
-}
-
-function normalizedVariants(symbol: string): string[] {
-  const variants = [symbol];
-  let dotted: string | undefined;
-  if (symbol.includes("/")) {
-    dotted = symbol.replace(/\//g, ".");
-    if (dotted !== symbol) {
-      variants.push(dotted);
-    }
-  }
-
-  if (symbol.includes(".")) {
-    const slashed = symbol.replace(/\./g, "/");
-    if (slashed !== symbol && slashed !== dotted) {
-      variants.push(slashed);
-    }
-  }
-
-  return variants;
-}
-
-function simpleName(symbol: string): string | undefined {
-  const trimmed = symbol.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const withoutDescriptor = trimmed.includes("(") ? trimmed.slice(0, trimmed.indexOf("(")) : trimmed;
-  const base = withoutDescriptor.split(/[./]/).at(-1)?.trim();
-  return base || undefined;
-}
-
-function normalizeMappedSymbolOutput(symbol: string): string {
-  return symbol.replace(/\//g, ".");
-}
-
-function splitOwnerAndName(symbol: string): { owner: string; name: string } | undefined {
-  const trimmed = symbol.trim();
-  const separatorIndex = Math.max(trimmed.lastIndexOf("."), trimmed.lastIndexOf("/"));
-  if (separatorIndex <= 0 || separatorIndex >= trimmed.length - 1) {
-    return undefined;
-  }
-  return {
-    owner: trimmed.slice(0, separatorIndex),
-    name: trimmed.slice(separatorIndex + 1)
-  };
-}
-
-function stripLineInfo(input: string): string {
-  let value = input.trim();
-  while (/^\d+:\d+:/.test(value)) {
-    value = value.replace(/^\d+:\d+:/, "");
-  }
-  return value.replace(/:\d+:\d+$/, "").trim();
-}
-
-function parseMethodName(value: string): string | undefined {
-  const match = /^(.+?)\s+([^\s(]+)\((.*)\)$/.exec(value);
-  if (!match) {
-    return undefined;
-  }
-  return match[2]?.trim() || undefined;
-}
-
-function parseFieldName(value: string): string | undefined {
-  const match = /^(.+?)\s+([^\s]+)$/.exec(value);
-  if (!match) {
-    return undefined;
-  }
-  return match[2]?.trim() || undefined;
-}
-
-function buildSymbolKey(record: MappingSymbolRecord): string {
-  return `${record.kind}|${record.owner ?? ""}|${record.name}|${record.descriptor ?? ""}`;
-}
-
-function classNameParts(classFqn: string): { owner?: string; name: string } {
-  const separatorIndex = classFqn.lastIndexOf(".");
-  if (separatorIndex <= 0 || separatorIndex >= classFqn.length - 1) {
-    return {
-      owner: undefined,
-      name: classFqn
-    };
-  }
-  return {
-    owner: classFqn.slice(0, separatorIndex),
-    name: classFqn.slice(separatorIndex + 1)
-  };
-}
-
-function createClassSymbolRecord(className: string): MappingSymbolRecord {
-  const symbol = normalizeMappedSymbolOutput(className.trim());
-  const parts = classNameParts(symbol);
-  return {
-    kind: "class",
-    symbol,
-    owner: parts.owner,
-    name: parts.name
-  };
-}
-
-function createFieldSymbolRecord(owner: string, fieldName: string): MappingSymbolRecord {
-  const normalizedOwner = normalizeMappedSymbolOutput(owner.trim());
-  const normalizedName = fieldName.trim();
-  return {
-    kind: "field",
-    symbol: `${normalizedOwner}.${normalizedName}`,
-    owner: normalizedOwner,
-    name: normalizedName
-  };
-}
-
-function createMethodSymbolRecord(
-  owner: string,
-  methodName: string,
-  descriptor: string | undefined
-): MappingSymbolRecord {
-  const normalizedOwner = normalizeMappedSymbolOutput(owner.trim());
-  const normalizedName = methodName.trim();
-  const normalizedDescriptor = descriptor?.trim() || undefined;
-  return {
-    kind: "method",
-    symbol: `${normalizedOwner}.${normalizedName}${normalizedDescriptor ?? ""}`,
-    owner: normalizedOwner,
-    name: normalizedName,
-    descriptor: normalizedDescriptor
-  };
-}
-
-function parseInputSymbol(symbol: string): MappingSymbolRecord | undefined {
-  const trimmed = symbol.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
-    return undefined;
-  }
-
-  const openIndex = trimmed.indexOf("(");
-  if (openIndex >= 0) {
-    const closeIndex = trimmed.indexOf(")", openIndex);
-    if (closeIndex < 0) {
-      return undefined;
-    }
-    const ownerAndMethod = splitOwnerAndName(trimmed.slice(0, openIndex));
-    if (!ownerAndMethod) {
-      return undefined;
-    }
-    const descriptor = trimmed.slice(openIndex);
-    return createMethodSymbolRecord(ownerAndMethod.owner, ownerAndMethod.name, descriptor);
-  }
-
-  const ownerAndName = splitOwnerAndName(trimmed);
-  if (!ownerAndName) {
-    return createClassSymbolRecord(trimmed);
-  }
-
-  if (/^[A-Z$]/.test(ownerAndName.name)) {
-    return createClassSymbolRecord(trimmed);
-  }
-  return createFieldSymbolRecord(ownerAndName.owner, ownerAndName.name);
-}
-
-function exactLookupKeys(record: MappingSymbolRecord): string[] {
-  const keys = new Set<string>([record.symbol]);
-  if (record.kind === "method" && record.owner && record.descriptor) {
-    keys.add(`${record.owner}.${record.name}`);
-  }
-  return [...keys];
-}
-
-function simpleLookupKeys(record: MappingSymbolRecord): string[] {
-  if (record.kind === "class") {
-    return [record.name];
-  }
-  if (record.kind === "field") {
-    return [record.name];
-  }
-  if (record.descriptor) {
-    return [record.name, `${record.name}${record.descriptor}`];
-  }
-  return [record.name];
-}
-
-function registerRecord(index: DirectionIndex, record: MappingSymbolRecord): string {
-  const key = buildSymbolKey(record);
-  if (!index.records.has(key)) {
-    index.records.set(key, record);
-  }
-  return key;
-}
-
-function addLookupEntries(index: DirectionIndex, fromRecord: MappingSymbolRecord, toRecord: MappingSymbolRecord): void {
-  if (!fromRecord.symbol || !toRecord.symbol) {
-    return;
-  }
-
-  const targetKey = registerRecord(index, toRecord);
-  for (const key of exactLookupKeys(fromRecord)) {
-    addToSetMap(index.exact, key, targetKey);
-    for (const variant of normalizedVariants(key)) {
-      if (variant !== key) {
-        addToSetMap(index.normalized, variant, targetKey);
-      }
-    }
-  }
-
-  for (const key of simpleLookupKeys(fromRecord)) {
-    addToSetMap(index.simple, key, targetKey);
-  }
-}
-
-function mergeDirectionIndexes(target: DirectionIndex, source: DirectionIndex): void {
-  const mergeMap = (targetMap: Map<string, Set<string>>, sourceMap: Map<string, Set<string>>): void => {
-    for (const [key, values] of sourceMap.entries()) {
-      const existing = targetMap.get(key) ?? new Set<string>();
-      for (const value of values) {
-        existing.add(value);
-      }
-      targetMap.set(key, existing);
-    }
-  };
-
-  mergeMap(target.exact, source.exact);
-  mergeMap(target.normalized, source.normalized);
-  mergeMap(target.simple, source.simple);
-  for (const [key, value] of source.records.entries()) {
-    if (!target.records.has(key)) {
-      target.records.set(key, value);
-    }
-  }
-}
-
-function pairKey(sourceMapping: SourceMapping, targetMapping: SourceMapping): PairKey {
-  return `${sourceMapping}->${targetMapping}`;
-}
-
-function parsePairKey(key: PairKey): { sourceMapping: SourceMapping; targetMapping: SourceMapping } {
-  const separator = key.indexOf("->");
-  const source = separator >= 0 ? key.slice(0, separator) : key;
-  const target = separator >= 0 ? key.slice(separator + 2) : "";
-  return {
-    sourceMapping: source as SourceMapping,
-    targetMapping: target as SourceMapping
-  };
-}
-
-function buildAdjacency(pairs: Map<PairKey, PairRecord>): Map<SourceMapping, SourceMapping[]> {
-  const adjacency = new Map<SourceMapping, Set<SourceMapping>>();
-  for (const key of pairs.keys()) {
-    const { sourceMapping, targetMapping } = parsePairKey(key);
-    let neighbors = adjacency.get(sourceMapping);
-    if (!neighbors) {
-      neighbors = new Set<SourceMapping>();
-      adjacency.set(sourceMapping, neighbors);
-    }
-    neighbors.add(targetMapping);
-  }
-
-  return new Map(
-    [...adjacency.entries()].map(([mapping, neighbors]) => [mapping, [...neighbors]])
-  );
-}
-
-function buildTargetRecordIndex(
-  pairs: Map<PairKey, PairRecord>
-): Map<SourceMapping, MappingSymbolRecord[]> {
-  const recordsByTarget = new Map<SourceMapping, Map<string, MappingSymbolRecord>>();
-  for (const [key, pair] of pairs.entries()) {
-    const { targetMapping } = parsePairKey(key);
-    let bucket = recordsByTarget.get(targetMapping);
-    if (!bucket) {
-      bucket = new Map<string, MappingSymbolRecord>();
-      recordsByTarget.set(targetMapping, bucket);
-    }
-    for (const record of pair.index.records.values()) {
-      bucket.set(buildSymbolKey(record), record);
-    }
-  }
-
-  return new Map(
-    [...recordsByTarget.entries()].map(([mapping, records]) => [mapping, [...records.values()]])
-  );
-}
-
-function ensurePairIndex(indexes: Map<PairKey, DirectionIndex>, from: SourceMapping, to: SourceMapping): DirectionIndex {
-  const key = pairKey(from, to);
-  const existing = indexes.get(key);
-  if (existing) {
-    return existing;
-  }
-  const created = createDirectionIndex();
-  indexes.set(key, created);
-  return created;
-}
-
-/** Map of proguard primitive type names to JVM type characters. */
-const PROGUARD_PRIMITIVES: Record<string, string> = {
-  void: "V", boolean: "Z", byte: "B", char: "C",
-  short: "S", int: "I", long: "J", float: "F", double: "D"
-};
-
-/**
- * Convert a single proguard type (e.g. "int", "net.minecraft.Foo", "int[][]")
- * to JVM notation (e.g. "I", "Lnet/minecraft/Foo;", "[[I").
- * `classLookup` maps mojang class names → obfuscated class names (for the obfuscated descriptor).
- * Pass `undefined` to skip class name translation (for mojang descriptors).
- */
-function proguardTypeToJvm(type: string, classLookup: Map<string, string> | undefined): string {
-  let arrayDepth = 0;
-  let base = type;
-  while (base.endsWith("[]")) {
-    arrayDepth += 1;
-    base = base.slice(0, -2);
-  }
-  const prefix = "[".repeat(arrayDepth);
-  const primitive = PROGUARD_PRIMITIVES[base];
-  if (primitive) {
-    return `${prefix}${primitive}`;
-  }
-  const translated = classLookup ? (classLookup.get(base) ?? base) : base;
-  return `${prefix}L${translated.replace(/\./g, "/")};`;
-}
-
-/**
- * Parse a proguard method signature (after stripLineInfo) into a JVM descriptor.
- * Input format: "returnType methodName(paramType1,paramType2,...)"
- * Returns `{ name, descriptor }` or `undefined` if parsing fails.
- */
-function parseProguardMethod(
-  value: string,
-  classLookup: Map<string, string> | undefined
-): { name: string; descriptor: string } | undefined {
-  const match = /^(.+?)\s+([^\s(]+)\((.*)\)$/.exec(value);
-  if (!match) {
-    return undefined;
-  }
-  const returnType = match[1]!.trim();
-  const name = match[2]!.trim();
-  const params = match[3]!.trim();
-  if (!name) {
-    return undefined;
-  }
-  const paramParts = params ? params.split(",").map((p) => p.trim()) : [];
-  const paramDescriptor = paramParts.map((p) => proguardTypeToJvm(p, classLookup)).join("");
-  const returnDescriptor = proguardTypeToJvm(returnType, classLookup);
-  return { name, descriptor: `(${paramDescriptor})${returnDescriptor}` };
-}
-
-function parseClientMappings(text: string): Map<PairKey, DirectionIndex> {
-  const obfuscatedToMojang = createDirectionIndex();
-  const mojangToObfuscated = createDirectionIndex();
-
-  // Two-pass parsing: first collect class name mappings, then parse members with descriptors.
-  const lines = text.split(/\r?\n/);
-
-  // Pass 1: collect class name mappings (mojang → obfuscated)
-  const mojangToObfuscatedClass = new Map<string, string>();
-  let classCount = 0;
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
-    if (classMatch) {
-      const mojangClass = classMatch[1]?.trim() ?? "";
-      const obfuscatedClass = classMatch[2]?.trim() ?? "";
-      if (mojangClass && obfuscatedClass) {
-        mojangToObfuscatedClass.set(mojangClass, obfuscatedClass);
-        classCount += 1;
-      }
-    }
-  }
-
-  if (classCount === 0) {
-    throw createError({
-      code: ERROR_CODES.MAPPING_UNAVAILABLE,
-      message: "No class mappings could be parsed from client mappings."
-    });
-  }
-
-  // Pass 2: build full index with descriptors
-  let currentClass: { obfuscated: string; mojang: string } | undefined;
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-
-    const classMatch = /^(.+?)\s+->\s+(.+):$/.exec(line);
-    if (classMatch) {
-      const mojangClass = classMatch[1]?.trim() ?? "";
-      const obfuscatedClass = classMatch[2]?.trim() ?? "";
-      if (!mojangClass || !obfuscatedClass) {
-        currentClass = undefined;
-        continue;
-      }
-
-      currentClass = {
-        obfuscated: obfuscatedClass,
-        mojang: mojangClass
-      };
-
-      addLookupEntries(
-        obfuscatedToMojang,
-        createClassSymbolRecord(obfuscatedClass),
-        createClassSymbolRecord(mojangClass)
-      );
-      addLookupEntries(
-        mojangToObfuscated,
-        createClassSymbolRecord(mojangClass),
-        createClassSymbolRecord(obfuscatedClass)
-      );
-      continue;
-    }
-
-    if (!currentClass) {
-      continue;
-    }
-
-    const arrowIndex = line.indexOf(" -> ");
-    if (arrowIndex < 0) {
-      continue;
-    }
-    const leftRaw = line.slice(0, arrowIndex).trim();
-    const rightRaw = line.slice(arrowIndex + 4).trim();
-    if (!leftRaw || !rightRaw) {
-      continue;
-    }
-
-    const mojangMemberSignature = stripLineInfo(leftRaw);
-
-    // Try method parsing with JVM descriptor
-    const obfuscatedMethod = parseProguardMethod(mojangMemberSignature, mojangToObfuscatedClass);
-    if (obfuscatedMethod) {
-      const mojangMethod = parseProguardMethod(mojangMemberSignature, undefined);
-      const obfuscatedDescriptor = obfuscatedMethod.descriptor;
-      const mojangDescriptor = mojangMethod?.descriptor;
-
-      addLookupEntries(
-        obfuscatedToMojang,
-        createMethodSymbolRecord(currentClass.obfuscated, rightRaw, obfuscatedDescriptor),
-        createMethodSymbolRecord(currentClass.mojang, obfuscatedMethod.name, mojangDescriptor)
-      );
-      addLookupEntries(
-        mojangToObfuscated,
-        createMethodSymbolRecord(currentClass.mojang, obfuscatedMethod.name, mojangDescriptor),
-        createMethodSymbolRecord(currentClass.obfuscated, rightRaw, obfuscatedDescriptor)
-      );
-      continue;
-    }
-
-    const fieldName = parseFieldName(mojangMemberSignature);
-    if (!fieldName) {
-      continue;
-    }
-    addLookupEntries(
-      obfuscatedToMojang,
-      createFieldSymbolRecord(currentClass.obfuscated, rightRaw),
-      createFieldSymbolRecord(currentClass.mojang, fieldName)
-    );
-    addLookupEntries(
-      mojangToObfuscated,
-      createFieldSymbolRecord(currentClass.mojang, fieldName),
-      createFieldSymbolRecord(currentClass.obfuscated, rightRaw)
-    );
-  }
-
-  const result = new Map<PairKey, DirectionIndex>();
-  result.set(pairKey("obfuscated", "mojang"), obfuscatedToMojang);
-  result.set(pairKey("mojang", "obfuscated"), mojangToObfuscated);
-  return result;
-}
-
-function normalizeTinyNamespace(namespace: string): SourceMapping | undefined {
-  const normalized = namespace.trim().toLowerCase();
-  if (normalized === "obfuscated" || normalized === "official") {
-    return "obfuscated";
-  }
-  if (normalized === "mojang") {
-    return "mojang";
-  }
-  if (normalized === "intermediary") {
-    return "intermediary";
-  }
-  if (normalized === "named" || normalized === "yarn") {
-    return "yarn";
-  }
-  return undefined;
-}
-
-function addPairRecords(
-  target: Map<PairKey, DirectionIndex>,
-  records: Map<SourceMapping, MappingSymbolRecord>
-): void {
-  for (const [sourceMapping, sourceRecord] of records.entries()) {
-    for (const [targetMapping, targetRecord] of records.entries()) {
-      if (sourceMapping === targetMapping) {
-        continue;
-      }
-      addLookupEntries(ensurePairIndex(target, sourceMapping, targetMapping), sourceRecord, targetRecord);
-    }
-  }
-}
-
-function parseTinyMappings(text: string): Map<PairKey, DirectionIndex> {
-  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (lines.length === 0) {
-    return new Map();
-  }
-
-  const header = lines[0]!.split("\t");
-  if (header.length < 5 || header[0] !== "tiny" || header[1] !== "2") {
-    return new Map();
-  }
-
-  const namespaceColumns = header.slice(3).map((namespace, index) => ({
-    mapping: normalizeTinyNamespace(namespace),
-    columnIndex: index + 1
-  }));
-  const recognized = namespaceColumns.filter(
-    (entry): entry is { mapping: SourceMapping; columnIndex: number } => entry.mapping != null
-  );
-  if (recognized.length < 2) {
-    return new Map();
-  }
-
-  const result = new Map<PairKey, DirectionIndex>();
-  const currentClassNames = new Map<SourceMapping, string>();
-  for (const line of lines.slice(1)) {
-    const columns = line.split("\t");
-    if (columns[0] === "c") {
-      const classRecords = new Map<SourceMapping, MappingSymbolRecord>();
-      for (const namespace of recognized) {
-        const value = columns[namespace.columnIndex]?.trim() ?? "";
-        if (!value) {
-          continue;
-        }
-        currentClassNames.set(namespace.mapping, value);
-        classRecords.set(namespace.mapping, createClassSymbolRecord(value));
-      }
-      addPairRecords(result, classRecords);
-      continue;
-    }
-
-    if (columns[0] === "" && columns[1] === "f") {
-      const fieldRecords = new Map<SourceMapping, MappingSymbolRecord>();
-      for (const namespace of recognized) {
-        const owner = currentClassNames.get(namespace.mapping);
-        const value = columns[namespace.columnIndex + 2]?.trim() ?? "";
-        if (!owner || !value) {
-          continue;
-        }
-        fieldRecords.set(namespace.mapping, createFieldSymbolRecord(owner, value));
-      }
-      addPairRecords(result, fieldRecords);
-      continue;
-    }
-
-    if (columns[0] === "" && columns[1] === "m") {
-      const descriptor = columns[2]?.trim() || undefined;
-      const methodRecords = new Map<SourceMapping, MappingSymbolRecord>();
-      for (const namespace of recognized) {
-        const owner = currentClassNames.get(namespace.mapping);
-        const value = columns[namespace.columnIndex + 2]?.trim() ?? "";
-        if (!owner || !value) {
-          continue;
-        }
-        methodRecords.set(namespace.mapping, createMethodSymbolRecord(owner, value, descriptor));
-      }
-      addPairRecords(result, methodRecords);
-    }
-  }
-
-  return result;
-}
+/* parsers extracted to src/mapping/parsers/{symbol-records,normalize,proguard,tiny}.ts */
 
 function addCandidates(
   target: Map<string, CandidateAccumulator>,

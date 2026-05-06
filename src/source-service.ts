@@ -17,12 +17,10 @@ import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { parseCoordinate } from "./maven-resolver.js";
 import {
   MinecraftExplorerService,
-  modifierPrefix,
-  parseFieldType,
-  parseMethodDescriptor,
   type ResponseContext as ExplorerResponseContext,
   type SignatureMember
 } from "./minecraft-explorer-service.js";
+import { rebuildJavaSignature, remapJvmDescriptor } from "./source/descriptor-utils.js";
 import { parseMixinSource } from "./mixin-parser.js";
 import { parseAccessWidener } from "./access-widener-parser.js";
 import { parseAccessTransformer } from "./access-transformer-parser.js";
@@ -8916,41 +8914,4 @@ export class SourceService {
   }
 }
 
-function remapJvmDescriptor(descriptor: string, classMap: Map<string, string>): string {
-  if (classMap.size === 0) {
-    return descriptor;
-  }
-  return descriptor.replace(/L([^;]+);/g, (match, ref: string) => {
-    const dotFqn = ref.replace(/\//g, ".");
-    const remapped = classMap.get(dotFqn);
-    return remapped ? `L${remapped.replace(/\./g, "/")};` : match;
-  });
-}
-
-function rebuildJavaSignature(
-  member: { name: string; ownerFqn: string; accessFlags: number },
-  remappedDescriptor: string,
-  isField: boolean
-): string {
-  const modifiers = modifierPrefix(member.accessFlags, isField ? "field" : "method");
-  const prefix = modifiers ? `${modifiers} ` : "";
-  if (isField) {
-    try {
-      const { type } = parseFieldType(remappedDescriptor, 0, { allowVoid: false });
-      return `${prefix}${type} ${member.name}`.trim();
-    } catch {
-      return `${prefix}${member.name}`.trim();
-    }
-  }
-  try {
-    const { args, returnType } = parseMethodDescriptor(remappedDescriptor);
-    const argStr = args.join(", ");
-    if (member.name === "<init>") {
-      const ownerSimple = member.ownerFqn.split(".").pop()!;
-      return `${prefix}${ownerSimple}(${argStr})`.trim();
-    }
-    return `${prefix}${returnType} ${member.name}(${argStr})`.trim();
-  } catch {
-    return `${prefix}${member.name}`.trim();
-  }
-}
+/* descriptor utils extracted to src/source/descriptor-utils.ts */
