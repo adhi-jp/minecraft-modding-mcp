@@ -105,7 +105,7 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
     });
   }
 
-  const artifact = getArtifact(svc, artifactId);
+  const artifact = svc.getArtifact(artifactId);
   const force = input.force ?? false;
   const hasFiles = svc.filesRepo.listFiles(artifact.artifactId, { limit: 1 }).items.length > 0;
   const meta = svc.indexMetaRepo.get(artifact.artifactId);

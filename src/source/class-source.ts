@@ -84,7 +84,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 function normalizeMemberAccess(access: MemberAccess | undefined): MemberAccess {

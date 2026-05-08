@@ -66,7 +66,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -863,8 +871,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     kind: "field" | "method"
   ): Promise<DiffClassMemberDelta> => {
     const [addedResult, removedResult] = await Promise.all([
-      remapSignatureMembers(svc, delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings),
-      remapSignatureMembers(svc, delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings)
+      svc.remapSignatureMembers(delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings),
+      svc.remapSignatureMembers(delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings)
     ]);
     const remappedModified = await Promise.all(
       delta.modified.map(async (change) => {
@@ -882,8 +890,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
           });
         }
         const [fromResult, toResult] = await Promise.all([
-          remapSignatureMembers(svc, [change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings),
-          remapSignatureMembers(svc, [change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings)
+          svc.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings),
+          svc.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings)
         ]);
         const fromMember = fromResult.members[0];
         const toMember = toResult.members[0];

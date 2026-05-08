@@ -52,7 +52,6 @@ import type {
 import { isUnobfuscatedVersion } from "../version-service.js";
 import type { WorkspaceProjectLoader } from "../workspace-mapping-service.js";
 import * as indexer from "./indexer.js";
-import * as workspaceTarget from "./workspace-target.js";
 
 type VersionSourceCandidate = {
   jarPath: string;
@@ -126,7 +125,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
@@ -153,11 +160,13 @@ function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: b
   const normalizedPath = normalizePathStyle(path).toLowerCase();
   return (
     normalizedPath.includes("/minecraftmaven/") ||
-    normalizedPath.includes("net/minecraft/minecraft/") ||
-    normalizedPath.includes("/minecraft/") ||
+    normalizedPath.includes("/net/minecraft/") ||
+    /(?:^|\/)minecraft(?:-[a-z0-9._+]+)*-sources\.jar$/i.test(normalizedPath) ||
     normalizedPath.includes("minecraft-merged") ||
-    normalizedPath.includes("minecraft-merged-mojang") ||
-    /\bminecraft-[a-z]+-[\d.]+\.jar$/.test(normalizedPath)
+    normalizedPath.includes("minecraft-common") ||
+    normalizedPath.includes("minecraft-clientonly") ||
+    normalizedPath.includes("minecraft-client") ||
+    normalizedPath.includes("minecraft-server")
   );
 }
 
@@ -593,7 +602,7 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
     };
   }
 
-  const discovery = await discoverAccessWidenerRuntimeCandidates(svc, {
+  const discovery = await svc.discoverAccessWidenerRuntimeCandidates({
     version,
     projectPath: normalizedProjectPath,
     requestedScope
@@ -744,7 +753,7 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
     ? await svc.workspaceMappingService.detectProjectLoader(normalizedProjectPath)
     : { resolved: false, loader: undefined, evidence: [], warnings: [] };
   const loader = loaderDetection.resolved ? loaderDetection.loader ?? "unknown" : "unknown";
-  const discovery = await discoverAccessTransformerRuntimeCandidates(svc, {
+  const discovery = await svc.discoverAccessTransformerRuntimeCandidates({
     version,
     projectPath: normalizedProjectPath,
     requestedScope,
@@ -1166,7 +1175,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
   const synthesisWarnings: string[] = [];
 
   if (input.target.kind === "workspace") {
-    const synthesized = await workspaceTarget.synthesizeWorkspaceTarget(svc, input, input.target);
+    const synthesized = await svc.synthesizeWorkspaceTarget(input, input.target);
     workspaceProvenance = synthesized.provenance;
     synthesisWarnings.push(...synthesized.warnings);
     input = {
@@ -1176,7 +1185,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       mapping: synthesized.mapping
     };
   } else if (input.target.kind === "dependency") {
-    const synthesized = await workspaceTarget.synthesizeDependencyTarget(svc, input, input.target);
+    const synthesized = await svc.synthesizeDependencyTarget(input, input.target);
     dependencyProvenance = synthesized.provenance;
     dependencyOrigin = true;
     dependencyRequestedMapping = synthesized.requestedMapping;
@@ -1266,7 +1275,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       !runtimeNamesUnobfuscated &&
       scope !== "vanilla"
     ) {
-      versionSourceDiscovery = await discoverVersionSourceJar(svc, {
+      versionSourceDiscovery = await svc.discoverVersionSourceJar({
         version: resolvedVersion,
         projectPath: input.projectPath
       });
@@ -1348,7 +1357,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
           ]
         };
       } else if (isAppError(caughtError) && caughtError.code === ERROR_CODES.MAPPING_NOT_APPLIED) {
-        const fallback = await buildMappingFallbackSuggestedCall(svc, {
+        const fallback = await svc.buildMappingFallbackSuggestedCall({
           input,
           kind,
           value,
@@ -1514,7 +1523,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       provenance,
       qualityFlags: resolved.qualityFlags,
       repoUrl: resolved.repoUrl,
-      artifactContents: buildArtifactContentsSummary(svc, {
+      artifactContents: svc.buildArtifactContentsSummary({
         origin: resolved.origin,
         sourceJarPath: resolved.sourceJarPath,
         isDecompiled: resolved.isDecompiled,

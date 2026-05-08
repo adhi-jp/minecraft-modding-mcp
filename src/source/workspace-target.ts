@@ -39,7 +39,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPath: string): Promise<WorkspaceContext> {
@@ -125,7 +133,7 @@ export async function synthesizeWorkspaceTarget(
 
   const cachedBefore = svc.workspaceContextCache.read(projectPath);
   const cacheHit = Boolean(cachedBefore && !cachedBefore.partial);
-  const ctx = cacheHit ? cachedBefore! : await loadOrDetectWorkspaceContext(svc, projectPath);
+  const ctx = cacheHit ? cachedBefore! : await svc.loadOrDetectWorkspaceContext(projectPath);
 
   const warnings: string[] = [];
   const resolvedVersion = ctx.minecraftVersion;

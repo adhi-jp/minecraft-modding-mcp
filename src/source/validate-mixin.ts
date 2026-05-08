@@ -13,6 +13,7 @@ import { performance } from "node:perf_hooks";
 
 import fastGlob from "fast-glob";
 
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { type AppError, ERROR_CODES, createError, isAppError } from "../errors.js";
 import { parseMixinSource } from "../mixin-parser.js";
 import {
@@ -137,7 +138,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 function normalizePathStyle(path: string): string {
@@ -197,11 +206,59 @@ function sameStringArray(left: readonly string[] | undefined, right: readonly st
   return true;
 }
 
-function sameMixinValidationProvenance(
-  left: MixinValidationProvenance,
-  right: MixinValidationProvenance
+function sameScopeFallback(
+  left: MixinValidationProvenance["scopeFallback"] | undefined,
+  right: MixinValidationProvenance["scopeFallback"] | undefined
 ): boolean {
-  if (left === right) return true;
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.requested === right.requested && left.applied === right.applied && left.reason === right.reason;
+}
+
+function sameResolutionTrace(
+  left: MixinValidationProvenance["resolutionTrace"] | undefined,
+  right: MixinValidationProvenance["resolutionTrace"] | undefined
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftEntry = left[index];
+    const rightEntry = right[index];
+    if (!leftEntry || !rightEntry) {
+      return false;
+    }
+    if (
+      leftEntry.target !== rightEntry.target ||
+      leftEntry.step !== rightEntry.step ||
+      leftEntry.input !== rightEntry.input ||
+      leftEntry.output !== rightEntry.output ||
+      leftEntry.success !== rightEntry.success ||
+      leftEntry.detail !== rightEntry.detail
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameMixinValidationProvenance(
+  left: MixinValidationProvenance | undefined,
+  right: MixinValidationProvenance | undefined
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
   return (
     left.version === right.version &&
     left.jarPath === right.jarPath &&
@@ -211,11 +268,13 @@ function sameMixinValidationProvenance(
     left.appliedScope === right.appliedScope &&
     left.requestedSourcePriority === right.requestedSourcePriority &&
     left.appliedSourcePriority === right.appliedSourcePriority &&
+    sameStringArray(left.resolutionNotes, right.resolutionNotes) &&
     left.jarType === right.jarType &&
+    sameStringArray(left.mappingChain, right.mappingChain) &&
     left.remapFailures === right.remapFailures &&
     left.mappingAutoDetected === right.mappingAutoDetected &&
-    sameStringArray(left.resolutionNotes, right.resolutionNotes) &&
-    sameStringArray(left.mappingChain, right.mappingChain)
+    sameScopeFallback(left.scopeFallback, right.scopeFallback) &&
+    sameResolutionTrace(left.resolutionTrace, right.resolutionTrace)
   );
 }
 
@@ -1127,7 +1186,7 @@ async function runValidateMixinPipeline(svc: SourceService, ctx: {
     const retryWarning =
       `Retrying validate-mixin with sourcePriority="maven-first" after partial validation using "${currentSourcePriority}".`;
     try {
-      const retried = await validateMixinSingle(svc, {
+      const retried = await svc.validateMixinSingle({
         ...input,
         source,
         sourcePath: undefined,

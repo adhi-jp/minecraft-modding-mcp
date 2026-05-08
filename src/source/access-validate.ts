@@ -10,6 +10,7 @@
 
 import { parseAccessTransformer } from "../access-transformer-parser.js";
 import { parseAccessWidener } from "../access-widener-parser.js";
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import {
   validateParsedAccessTransformer,
@@ -54,7 +55,15 @@ function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   ) {
     return mapping;
   }
-  return "obfuscated";
+  throw createError({
+    code: ERROR_CODES.MAPPING_UNAVAILABLE,
+    message: `Unsupported mapping "${mapping}".`,
+    details: {
+      mapping,
+      nextAction: "Try mapping=obfuscated which is always available.",
+      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
+    }
+  });
 }
 
 function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceMapping | undefined {
@@ -179,8 +188,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
       let fields = sig.fields;
       if (needsLookupMapping) {
         const [ctorResult, methodResult, fieldResult] = await Promise.all([
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.constructors,
             "method",
             resolvedVersion,
@@ -190,8 +198,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
             warnings,
             input.projectPath
           ),
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.methods,
             "method",
             resolvedVersion,
@@ -201,8 +208,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
             warnings,
             input.projectPath
           ),
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.fields,
             "field",
             resolvedVersion,
@@ -325,8 +331,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
 
       if (needsLookupMapping && isSourceMappingNamespace(atNamespace) && isSourceMappingNamespace(lookupMapping)) {
         const [ctorResult, methodResult, fieldResult] = await Promise.all([
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.constructors,
             "method",
             resolvedVersion,
@@ -336,8 +341,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             warnings,
             input.projectPath
           ),
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.methods,
             "method",
             resolvedVersion,
@@ -347,8 +351,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             warnings,
             input.projectPath
           ),
-          remapSignatureMembers(
-            svc,
+          svc.remapSignatureMembers(
             sig.fields,
             "field",
             resolvedVersion,
