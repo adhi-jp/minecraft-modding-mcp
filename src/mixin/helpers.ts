@@ -9,7 +9,6 @@ import type { ParsedMixin } from "../mixin-parser.js";
 import type {
   ConfidenceBreakdown,
   ConfidencePenalty,
-  IssueCategory,
   IssueConfidence,
   MappingHealthReport,
   MixinValidationProvenance,
@@ -20,7 +19,7 @@ import type {
   StructuredWarning,
   ValidationStatus,
   ValidationSummary
-} from "../mixin-validator.js";
+} from "./types.js";
 
 export const TOOL_RESOLUTION_PATHS: ResolutionPath[] = [
   "target-mapping-failed",
