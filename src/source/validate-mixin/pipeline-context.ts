@@ -44,7 +44,6 @@ export type MixinPipelineScopeFallback = {
 };
 
 export interface MutableMixinPipelineContext {
-  // Read-only inputs threaded through every stage.
   readonly input: ValidateMixinSingleInput;
   readonly source: string;
   readonly requestedScope: ArtifactScope;
@@ -55,10 +54,9 @@ export interface MutableMixinPipelineContext {
   readonly testHooks: ValidateMixinOptions["__testHooks"];
   readonly onStage: (stage: ValidateMixinStage) => void;
 
-  // Mutable state shared across stages.
   warnings: string[];
 
-  // Resolve stage output.
+  // Populated by the resolve stage.
   version: string;
   mappingAutoDetected: boolean;
   requestedMapping: SourceMapping;
@@ -68,13 +66,13 @@ export interface MutableMixinPipelineContext {
   signatureLookupMapping: SourceMapping;
   scopeFallback?: MixinPipelineScopeFallback;
 
-  // Mapping-health stage output.
+  // Populated by the mapping-health stage.
   healthReport?: MappingHealthReport;
 
-  // Parse stage output.
+  // Populated by the parse stage.
   parsed: ParsedMixin;
 
-  // Target-lookup stage state.
+  // Mutated by the target-lookup stage.
   targetOutcomes: MixinTargetOutcome[];
   degradedReason?: "stage-budget" | "stage-budget-pre-target";
   deferredTargetClasses: Set<string>;
@@ -90,7 +88,6 @@ export interface MutableMixinPipelineContext {
   nextTargetIndex: number;
   skippedForValidator: Set<string>;
 
-  // Stage helpers (closures over stageEmitter / onStage).
   enterStage(stage: ValidateMixinStage): Promise<number>;
   checkPreParseBudget(stage: ValidateMixinStage, startedAt: number, budgetMs: number): void;
 }
