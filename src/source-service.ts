@@ -67,6 +67,7 @@ import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
 import { SourceServiceState } from "./source/state.js";
 import * as cacheMetrics from "./source/cache-metrics.js";
+import * as indexer from "./source/indexer.js";
 import { log } from "./logger.js";
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "./stage-emitter.js";
 import { normalizePathForHost } from "./path-converter.js";
@@ -680,31 +681,8 @@ export type DiffClassSignaturesOutput = {
   warnings: string[];
 };
 
-export type IndexArtifactInput = {
-  artifactId: string;
-  force?: boolean;
-};
-
-type IndexRebuildReason =
-  | "force"
-  | "missing_meta"
-  | "schema_mismatch"
-  | "signature_mismatch"
-  | "already_current";
-
-export type IndexArtifactOutput = {
-  artifactId: string;
-  reindexed: boolean;
-  reason: IndexRebuildReason;
-  counts: {
-    files: number;
-    symbols: number;
-    ftsRows: number;
-  };
-  indexedAt: string;
-  durationMs: number;
-  mappingApplied: SourceMapping;
-};
+/* IndexRebuildReason, IndexArtifactInput, IndexArtifactOutput moved to src/source/indexer.ts */
+export type { IndexArtifactInput, IndexArtifactOutput } from "./source/indexer.js";
 
 export type ValidateMixinInput = {
   input:
@@ -890,28 +868,7 @@ export type ValidateAccessTransformerInput = {
 
 export type ValidateAccessTransformerOutput = AccessTransformerValidationResult;
 
-interface IndexedFileRecord {
-  filePath: string;
-  content: string;
-  contentBytes: number;
-  contentHash: string;
-}
-
-interface RebuiltArtifactData {
-  files: IndexedFileRecord[];
-  symbols: Array<{
-    filePath: string;
-    symbolKind: string;
-    symbolName: string;
-    qualifiedName: string | undefined;
-    line: number;
-  }>;
-  indexedAt: string;
-  indexDurationMs: number;
-  totalContentBytes: number;
-}
-
-const INDEX_SCHEMA_VERSION = 1;
+/* IndexedFileRecord, RebuiltArtifactData, INDEX_SCHEMA_VERSION moved to src/source/indexer.ts */
 
 interface IndexedSymbolHit {
   symbol: SymbolRow;
@@ -1700,7 +1657,7 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
 
 export class SourceService {
   readonly config: Config;
-  private readonly db;
+  readonly db;
   readonly artifactsRepo: ArtifactsRepo;
   readonly filesRepo: FilesRepo;
   readonly indexMetaRepo: IndexMetaRepo;
@@ -7083,61 +7040,8 @@ export class SourceService {
     return this.metrics.snapshot();
   }
 
-  async indexArtifact(input: IndexArtifactInput): Promise<IndexArtifactOutput> {
-    const artifactId = input.artifactId?.trim();
-    if (!artifactId) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "artifactId must be non-empty."
-      });
-    }
-
-    const artifact = this.getArtifact(artifactId);
-    const force = input.force ?? false;
-    const hasFiles = this.hasAnyFiles(artifact.artifactId);
-    const meta = this.indexMetaRepo.get(artifact.artifactId);
-    const expectedSignature = artifact.artifactSignature ?? this.fallbackArtifactSignature(artifact.artifactId);
-    const reason = this.resolveIndexRebuildReason({
-      force,
-      expectedSignature,
-      hasFiles,
-      meta
-    });
-
-    if (reason === "already_current") {
-      this.metrics.recordReindexSkip();
-      const currentMeta = meta as ArtifactIndexMetaRow;
-      return {
-        artifactId: artifact.artifactId,
-        reindexed: false,
-        reason,
-        counts: {
-          files: currentMeta.filesCount,
-          symbols: currentMeta.symbolsCount,
-          ftsRows: currentMeta.ftsRowsCount
-        },
-        indexedAt: currentMeta.indexedAt,
-        durationMs: 0,
-        mappingApplied: artifact.mappingApplied ?? "obfuscated"
-      };
-    }
-
-    const resolved = this.toResolvedArtifact(artifact);
-    const rebuilt = await this.rebuildAndPersistArtifactIndex(resolved, reason);
-    this.metrics.recordReindex();
-    return {
-      artifactId: artifact.artifactId,
-      reindexed: true,
-      reason,
-      counts: {
-        files: rebuilt.files.length,
-        symbols: rebuilt.symbols.length,
-        ftsRows: rebuilt.files.length
-      },
-      indexedAt: rebuilt.indexedAt,
-      durationMs: rebuilt.indexDurationMs,
-      mappingApplied: artifact.mappingApplied ?? "obfuscated"
-    };
+  async indexArtifact(input: indexer.IndexArtifactInput): Promise<indexer.IndexArtifactOutput> {
+    return indexer.indexArtifact(this, input);
   }
 
   private searchSymbolIntent(
@@ -8259,7 +8163,7 @@ export class SourceService {
   }
 
   private fallbackArtifactSignature(artifactId: string): string {
-    return createHash("sha256").update(artifactId).digest("hex");
+    return indexer.fallbackArtifactSignature(artifactId);
   }
 
   private resolveIndexRebuildReason(input: {
@@ -8267,394 +8171,43 @@ export class SourceService {
     expectedSignature: string;
     hasFiles: boolean;
     meta: ArtifactIndexMetaRow | undefined;
-  }): IndexRebuildReason {
-    if (input.force) {
-      return "force";
-    }
-    if (!input.hasFiles || !input.meta) {
-      return "missing_meta";
-    }
-    if (input.meta.indexSchemaVersion !== INDEX_SCHEMA_VERSION) {
-      return "schema_mismatch";
-    }
-    if (input.meta.artifactSignature !== input.expectedSignature) {
-      return "signature_mismatch";
-    }
-    return "already_current";
+  }) {
+    return indexer.resolveIndexRebuildReason(input);
   }
 
   private toResolvedArtifact(artifact: ArtifactRow): ResolvedSourceArtifact {
-    return {
-      artifactId: artifact.artifactId,
-      artifactAlias: artifact.alias,
-      artifactSignature: artifact.artifactSignature ?? this.fallbackArtifactSignature(artifact.artifactId),
-      origin: artifact.origin,
-      binaryJarPath: artifact.binaryJarPath,
-      sourceJarPath: artifact.sourceJarPath,
-      coordinate: artifact.coordinate,
-      version: artifact.version,
-      requestedMapping: artifact.requestedMapping,
-      mappingApplied: artifact.mappingApplied,
-      repoUrl: artifact.repoUrl,
-      provenance: artifact.provenance,
-      qualityFlags: artifact.qualityFlags,
-      isDecompiled: artifact.isDecompiled,
-      resolvedAt: new Date().toISOString()
-    };
+    return indexer.toResolvedArtifact(this, artifact);
   }
 
   private async rebuildAndPersistArtifactIndex(
     resolved: ResolvedSourceArtifact,
-    reason: Exclude<IndexRebuildReason, "already_current">
-  ): Promise<RebuiltArtifactData> {
-    const rebuilt = await this.buildRebuiltArtifactData(resolved);
-    const timestamp = new Date().toISOString();
-    const chunkSize = Math.max(1, this.config.indexInsertChunkSize ?? 200);
-
-    const tx = this.db.transaction(() => {
-      this.artifactsRepo.upsertArtifact({
-        artifactId: resolved.artifactId,
-        alias: resolved.artifactAlias,
-        origin: resolved.origin,
-        coordinate: resolved.coordinate,
-        version: resolved.version,
-        binaryJarPath: resolved.binaryJarPath,
-        sourceJarPath: resolved.sourceJarPath,
-        repoUrl: resolved.repoUrl,
-        requestedMapping: resolved.requestedMapping,
-        mappingApplied: resolved.mappingApplied,
-        provenance: resolved.provenance,
-        qualityFlags: resolved.qualityFlags,
-        artifactSignature: resolved.artifactSignature,
-        isDecompiled: resolved.isDecompiled,
-        timestamp
-      });
-      this.filesRepo.clearFilesForArtifact(resolved.artifactId);
-      for (const chunk of chunkArray(rebuilt.files, chunkSize)) {
-        this.filesRepo.insertFilesForArtifact(resolved.artifactId, chunk);
-      }
-      this.symbolsRepo.clearSymbolsForArtifact(resolved.artifactId);
-      for (const chunk of chunkArray(rebuilt.symbols, chunkSize)) {
-        this.symbolsRepo.insertSymbolsForArtifact(resolved.artifactId, chunk);
-      }
-      this.indexMetaRepo.upsert({
-        artifactId: resolved.artifactId,
-        artifactSignature: resolved.artifactSignature,
-        indexSchemaVersion: INDEX_SCHEMA_VERSION,
-        filesCount: rebuilt.files.length,
-        symbolsCount: rebuilt.symbols.length,
-        ftsRowsCount: rebuilt.files.length,
-        indexedAt: rebuilt.indexedAt,
-        indexDurationMs: rebuilt.indexDurationMs
-      });
-    });
-    tx();
-    this.upsertCacheMetrics(resolved.artifactId, rebuilt.totalContentBytes, timestamp);
-
-    log("info", "index.rebuild.done", {
-      artifactId: resolved.artifactId,
-      reason,
-      files: rebuilt.files.length,
-      symbols: rebuilt.symbols.length,
-      indexDurationMs: rebuilt.indexDurationMs
-    });
-
-    return rebuilt;
+    reason: Exclude<indexer.IndexRebuildReason, "already_current">
+  ): Promise<indexer.RebuiltArtifactData> {
+    return indexer.rebuildAndPersistArtifactIndex(this, resolved, reason);
   }
 
-  private async buildRebuiltArtifactData(resolved: ResolvedSourceArtifact): Promise<RebuiltArtifactData> {
-    const indexStartedAt = Date.now();
-    let files: IndexedFileRecord[] = [];
-    if (resolved.sourceJarPath) {
-      files = await this.loadFromSourceJar(resolved.sourceJarPath);
-    } else if (resolved.binaryJarPath) {
-      const decompileInputJarPath = await this.maybeRemapBinaryForMojang(resolved);
-      // When the binary jar was remapped from obfuscated to mojang, swap the resolved
-      // artifact's binaryJarPath to the remapped jar so downstream bytecode consumers
-      // (getClassMembers, validateMixin) look up mojang names in the mojang jar — not
-      // the original obfuscated jar. Persistence in upsertArtifact happens after this
-      // function returns, so the swap reaches both the database row and the
-      // resolveArtifact response.
-      if (decompileInputJarPath !== resolved.binaryJarPath) {
-        resolved.binaryJarPath = decompileInputJarPath;
-      }
-      const vineflowerPath = await resolveVineflowerJar(
-        this.config.cacheDir,
-        this.config.vineflowerJarPath
-      );
-      const decompileStartedAt = Date.now();
-      try {
-        const decompileResult = await decompileBinaryJar(decompileInputJarPath, this.config.cacheDir, {
-          vineflowerJarPath: vineflowerPath,
-          artifactIdCandidate: resolved.artifactId,
-          timeoutMs: 120_000,
-          signature: resolved.artifactId
-        });
-        files = decompileResult.javaFiles.map((entry) => ({
-          filePath: normalizePathStyle(entry.filePath),
-          content: entry.content,
-          contentBytes: Buffer.byteLength(entry.content, "utf8"),
-          contentHash: createHash("sha256").update(entry.content).digest("hex")
-        }));
-      } catch (caughtError) {
-        if (isAppError(caughtError) && caughtError.code === ERROR_CODES.DECOMPILER_FAILED) {
-          throw createError({
-            code: ERROR_CODES.DECOMPILER_FAILED,
-            message: caughtError.message,
-            details: {
-              ...(caughtError.details ?? {}),
-              artifactId: resolved.artifactId,
-              binaryJarPath: resolved.binaryJarPath,
-              producedJavaCount:
-                typeof (caughtError.details as Record<string, unknown> | undefined)?.producedJavaCount === "number"
-                  ? (caughtError.details as Record<string, unknown>).producedJavaCount
-                  : 0,
-              nextAction:
-                "Verify Java runtime and Vineflower availability, then retry. If available, prefer source-backed artifacts.",
-              recommendedCommand: "echo $MCP_VINEFLOWER_JAR_PATH"
-            }
-          });
-        }
-        throw caughtError;
-      } finally {
-        this.metrics.recordDuration("decompile_duration_ms", Date.now() - decompileStartedAt);
-      }
-    } else {
-      throw createError({
-        code: ERROR_CODES.SOURCE_NOT_FOUND,
-        message: "No source artifact available.",
-        details: {
-          artifactId: resolved.artifactId,
-          nextAction: "Use list-artifact-files to inspect the artifact's contents.",
-          ...buildSuggestedCall({
-            tool: "list-artifact-files",
-            params: { artifactId: resolved.artifactId }
-          })
-        }
-      });
-    }
-
-    const symbols: RebuiltArtifactData["symbols"] = [];
-    for (const file of files) {
-      const extracted = extractSymbolsFromSource(file.filePath, file.content);
-      for (const symbol of extracted) {
-        symbols.push({
-          filePath: file.filePath,
-          ...symbol
-        });
-      }
-    }
-
-    return {
-      files,
-      symbols,
-      indexedAt: new Date().toISOString(),
-      indexDurationMs: Date.now() - indexStartedAt,
-      totalContentBytes: files.reduce((sum, file) => sum + file.contentBytes, 0)
-    };
+  private async buildRebuiltArtifactData(resolved: ResolvedSourceArtifact): Promise<indexer.RebuiltArtifactData> {
+    return indexer.buildRebuiltArtifactData(this, resolved);
   }
 
   getArtifact(artifactId: string): ArtifactRow {
-    if (artifactId.includes("..") || artifactId.includes("/")) {
-      // intentionally reject suspicious IDs that are not artifact hashes
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "artifactId contains invalid characters.",
-        details: { artifactId }
-      });
-    }
-    const artifact = this.artifactsRepo.getArtifact(artifactId);
-    if (!artifact) {
-      throw createError({
-        code: ERROR_CODES.SOURCE_NOT_FOUND,
-        message: "Artifact not found. Resolve context first.",
-        details: {
-          artifactId,
-          nextAction: "Use resolve-artifact to resolve a source artifact first.",
-          ...buildSuggestedCall({
-            tool: "resolve-artifact",
-            params: buildResolveArtifactParams({ kind: "version", value: "latest" })
-          })
-        }
-      });
-    }
-
-    return artifact;
+    return indexer.getArtifact(this, artifactId);
   }
 
   private async ingestIfNeeded(resolved: ResolvedSourceArtifact): Promise<void> {
-    const existing = this.artifactsRepo.getArtifact(resolved.artifactId);
-    const hasFiles = this.hasAnyFiles(resolved.artifactId);
-    const meta = this.indexMetaRepo.get(resolved.artifactId);
-    const reason = this.resolveIndexRebuildReason({
-      force: false,
-      expectedSignature: resolved.artifactSignature,
-      hasFiles,
-      meta
-    });
-
-    if (existing && reason === "already_current") {
-      // Mojang binary-remap reconciliation on the warm cache hit path:
-      // resolveSourceTargetInternal always returns the original binary jar
-      // (resolver does not know about prior remap output), so without this
-      // step a warm-cache resolve would return mappingApplied="mojang"
-      // alongside binaryJarPath pointing at the obfuscated client jar.
-      // maybeRemapBinaryForMojang short-circuits on a healthy cache hit
-      // (existsSync + ZIP magic) and re-remaps when the cache is missing
-      // or corrupted, so this also recovers from out-of-band cache loss.
-      const transformChain = resolved.provenance?.transformChain ?? [];
-      if (transformChain.includes("binary-remap:obf->mojang") && resolved.binaryJarPath) {
-        const reconciledBinaryJarPath = await this.maybeRemapBinaryForMojang(resolved);
-        if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
-          resolved.binaryJarPath = reconciledBinaryJarPath;
-        }
-      }
-      // Backfill / rotate alias on the warm-cache path. Without this, schema-v4
-      // migrated rows (alias=NULL) and rows whose alias parameters changed since
-      // the last upsert would return an artifactAlias from resolveArtifact that
-      // does not resolve back via getArtifact(alias), breaking the 3.1b lookup
-      // contract. UNIQUE conflicts here are caller bugs (two distinct artifactIds
-      // colliding on alias) and surface as DB errors rather than silent drift.
-      if (resolved.artifactAlias && existing.alias !== resolved.artifactAlias) {
-        this.artifactsRepo.setAlias(resolved.artifactId, resolved.artifactAlias);
-      }
-      this.metrics.recordArtifactCacheHit();
-      const touchedAt = new Date().toISOString();
-      this.artifactsRepo.touchArtifact(resolved.artifactId, touchedAt);
-      this.touchCacheMetrics(resolved.artifactId, touchedAt);
-      return;
-    }
-
-    this.metrics.recordArtifactCacheMiss();
-    this.metrics.recordReindex();
-    log("info", "index.rebuild.start", {
-      artifactId: resolved.artifactId,
-      reason
-    });
-
-    await this.rebuildAndPersistArtifactIndex(
-      resolved,
-      reason === "already_current" ? "missing_meta" : reason
-    );
-    this.enforceCacheLimits();
+    return indexer.ingestIfNeeded(this, resolved);
   }
 
-  /**
-   * If the resolved artifact's transformChain promised an "obf -> mojang"
-   * binary remap, run tiny-remapper now and return the remapped jar path.
-   * Otherwise return the original binaryJarPath unchanged.
-   *
-   * Cache safety: writes to a per-attempt temp file then atomic-renames into
-   * <cacheDir>/remapped/<artifactId>.jar. A per-target inflight Promise map
-   * collapses concurrent calls so two simultaneous resolveArtifact calls for
-   * the same artifactId share one tiny-remapper run instead of racing on the
-   * same output path.
-   */
   private async maybeRemapBinaryForMojang(resolved: ResolvedSourceArtifact): Promise<string> {
-    const binaryJarPath = resolved.binaryJarPath;
-    if (!binaryJarPath) {
-      throw createError({
-        code: ERROR_CODES.SOURCE_NOT_FOUND,
-        message: "Cannot run binary remap: resolved artifact has no binary jar path.",
-        details: { artifactId: resolved.artifactId }
-      });
-    }
-    const transformChain = resolved.provenance?.transformChain ?? [];
-    if (!transformChain.includes("binary-remap:obf->mojang")) {
-      return binaryJarPath;
-    }
-    if (!resolved.version) {
-      throw createError({
-        code: ERROR_CODES.MAPPING_NOT_APPLIED,
-        message: "Binary remap promised but artifact has no resolved Minecraft version.",
-        details: {
-          artifactId: resolved.artifactId,
-          binaryJarPath,
-          nextAction: "Use target.kind=\"version\" so the remap pipeline can locate Mojang mappings."
-        }
-      });
-    }
-
-    const remappedDir = join(this.config.cacheDir, "remapped");
-    const remappedJarPath = join(remappedDir, `${resolved.artifactId}.jar`);
-    if (existsSync(remappedJarPath)) {
-      // Validate the cached jar is at least structurally a ZIP (`PK\x03\x04`) and
-      // non-empty before reusing. If a prior atomic-rename window was interrupted
-      // or the cache file was hand-edited, drop it and re-remap rather than
-      // silently feeding a corrupt jar into Vineflower.
-      if (await this.isUsableJarFile(remappedJarPath)) {
-        await this.recordRemappedJarBytesFromDisk(resolved.artifactId, remappedJarPath);
-        return remappedJarPath;
-      }
-      log("warn", "binary-remap.cache.evict-corrupt", {
-        artifactId: resolved.artifactId,
-        remappedJarPath
-      });
-      try {
-        await unlink(remappedJarPath);
-      } catch {
-        // ignore: race with another process or already-deleted file.
-      }
-      this.releaseRemappedJarBytes(resolved.artifactId);
-    }
-
-    const inflight = this.state.inflightRemaps.get(remappedJarPath);
-    if (inflight) {
-      return inflight;
-    }
-
-    const remapPromise = this.runBinaryRemap({
-      version: resolved.version,
-      inputJar: binaryJarPath,
-      remappedDir,
-      remappedJarPath
-    });
-    this.state.inflightRemaps.set(remappedJarPath, remapPromise);
-    try {
-      const path = await remapPromise;
-      await this.recordRemappedJarBytesFromDisk(resolved.artifactId, path);
-      return path;
-    } finally {
-      this.state.inflightRemaps.delete(remappedJarPath);
-    }
+    return indexer.maybeRemapBinaryForMojang(this, resolved);
   }
 
   private async recordRemappedJarBytesFromDisk(artifactId: string, path: string): Promise<void> {
-    try {
-      const fileStat = await stat(path);
-      this.recordRemappedJarBytes(artifactId, fileStat.size);
-    } catch {
-      // best-effort: accounting will be rebuilt on the next refreshCacheMetrics.
-    }
+    return indexer.recordRemappedJarBytesFromDisk(this, artifactId, path);
   }
 
-  /**
-   * Best-effort structural check that `path` is a non-empty file beginning with
-   * the ZIP local-file-header magic (`50 4B 03 04`). Used to drop partial /
-   * corrupt remap-cache entries before they reach Vineflower. False positives
-   * are acceptable (Vineflower will surface a clearer error); false negatives
-   * are not (a corrupt cache hit must be evicted).
-   */
   private async isUsableJarFile(path: string): Promise<boolean> {
-    try {
-      const stats = await stat(path);
-      if (!stats.isFile() || stats.size < 4) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(path, "r");
-      const header = Buffer.alloc(4);
-      const { bytesRead } = await handle.read(header, 0, 4, 0);
-      return bytesRead === 4 && header[0] === 0x50 && header[1] === 0x4b && header[2] === 0x03 && header[3] === 0x04;
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return indexer.isUsableJarFile(path);
   }
 
   private async runBinaryRemap(input: {
@@ -8663,60 +8216,11 @@ export class SourceService {
     remappedDir: string;
     remappedJarPath: string;
   }): Promise<string> {
-    const tinyRemapperJarPath = await resolveTinyRemapperJar(
-      this.config.cacheDir,
-      this.config.tinyRemapperJarPath
-    );
-    const mojangTiny = await resolveMojangTinyFile(input.version, this.config);
-
-    await mkdir(input.remappedDir, { recursive: true });
-
-    const tempPath = `${input.remappedJarPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
-    const remapStartedAt = Date.now();
-    try {
-      await remapJar(tinyRemapperJarPath, {
-        inputJar: input.inputJar,
-        outputJar: tempPath,
-        mappingsFile: mojangTiny.path,
-        fromNamespace: "obfuscated",
-        toNamespace: "mojang",
-        timeoutMs: this.config.remapTimeoutMs,
-        maxMemoryMb: this.config.remapMaxMemoryMb
-      });
-      const tempStats = await stat(tempPath);
-      if (tempStats.size === 0) {
-        throw createError({
-          code: ERROR_CODES.REMAP_FAILED,
-          message: "tiny-remapper produced an empty output jar.",
-          details: { inputJar: input.inputJar, tempPath }
-        });
-      }
-      await rename(tempPath, input.remappedJarPath);
-      return input.remappedJarPath;
-    } catch (caughtError) {
-      try {
-        await unlink(tempPath);
-      } catch {
-        // tempPath may not exist if remapJar failed before writing anything; ignore.
-      }
-      throw caughtError;
-    } finally {
-      this.metrics.recordDuration("binary_remap_duration_ms", Date.now() - remapStartedAt);
-    }
+    return indexer.runBinaryRemap(this, input);
   }
 
-  private async loadFromSourceJar(sourceJarPath: string): Promise<IndexedFileRecord[]> {
-    const files: IndexedFileRecord[] = [];
-    for await (const entry of iterateJavaEntriesAsUtf8(sourceJarPath, this.config.maxContentBytes)) {
-      files.push({
-        filePath: normalizePathStyle(entry.filePath),
-        content: entry.content,
-        contentBytes: Buffer.byteLength(entry.content, "utf8"),
-        contentHash: createHash("sha256").update(entry.content).digest("hex")
-      });
-    }
-
-    return files;
+  private async loadFromSourceJar(sourceJarPath: string): Promise<indexer.IndexedFileRecord[]> {
+    return indexer.loadFromSourceJar(this, sourceJarPath);
   }
 
   private hasAnyFiles(artifactId: string): boolean {
