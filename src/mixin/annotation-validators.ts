@@ -1,9 +1,3 @@
-/**
- * Per-annotation validators (`@Inject`/`@Shadow`/`@Accessor`/`@Invoker`)
- * for the mixin validation engine. Behavior-preserving extraction from
- * `src/mixin-validator.ts`.
- */
-
 import type { ParsedAccessor, ParsedInjection, ParsedShadow } from "../mixin-parser.js";
 import type {
   IssueConfidence,

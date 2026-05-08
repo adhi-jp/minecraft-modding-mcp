@@ -1,10 +1,3 @@
-/**
- * Helper functions for the mixin validation engine. Pure / behavior-preserving;
- * extracted from `src/mixin-validator.ts` so the validators stay focused on
- * orchestration. The validators in `mixin-validator.ts` re-export these for
- * backward compatibility with existing importers.
- */
-
 import type { ParsedMixin } from "../mixin-parser.js";
 import type {
   ConfidenceBreakdown,

@@ -1,12 +1,3 @@
-/**
- * Workspace and dependency target synthesis used by resolveArtifact when
- * `target.kind="workspace"` or `target.kind="dependency"`. Reads the
- * workspace context cache, synthesises a concrete `version` /
- * `coordinate` target, and produces the WorkspaceResolutionProvenance /
- * DependencyResolutionProvenance payloads. Behavior-preserving extraction
- * from `src/source-service.ts`.
- */
-
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import type { SourceService } from "../source-service.js";

@@ -1,8 +1,3 @@
-/**
- * `validateParsedMixin` orchestrator for the mixin validation engine.
- * Behavior-preserving extraction from `src/mixin-validator.ts`.
- */
-
 import type { ParsedMixin } from "../mixin-parser.js";
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import type {

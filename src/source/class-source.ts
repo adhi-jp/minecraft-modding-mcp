@@ -1,14 +1,3 @@
-/**
- * Class source / class members / class lookup tools for SourceService:
- * findClass (symbol-index lookup), getClassSource (file content with
- * line/char windowing and binary fallback), getClassMembers
- * (bytecode signature + remap + decompiled fallback). Also owns the
- * supporting helpers (resolveClassFilePath, resolveClassNameForLookup,
- * buildClassSourceNotFoundError, buildFallbackProvenance,
- * buildDecompiledFallback). Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import { writeFile } from "node:fs/promises";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 

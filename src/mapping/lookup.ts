@@ -1,8 +1,3 @@
-/**
- * Pure lookup, normalization, and projection helpers for the MappingService
- * pipeline. Behavior-preserving extraction from `src/mapping-service.ts`.
- */
-
 import { ERROR_CODES, createError } from "../errors.js";
 import { normalizeOptionalProjectPath } from "../gradle-paths.js";
 import type { MappingSourcePriority, SourceMapping } from "../types.js";

@@ -458,17 +458,6 @@ function parseClassApiKinds(value: string | undefined): WorkspaceSymbolKind[] | 
   return [...new Set(normalized)];
 }
 
-/* Helpers moved to src/tool-guidance.ts: toFieldErrorsFromZod, toHints,
- * VALIDATION_FALLBACK_HINT, extractValidatedSuggestionAndExamples,
- * extractFailedStageFromDetails, extractFieldErrorsFromDetails,
- * asObjectRecord, asNonEmptyString, asStringArray, truncateSuggestionText,
- * parseJsonObjectString, inferTargetKindFromString, copySourceLookupSuggestionFields,
- * copyValidateMixinSharedParams, buildValidateMixinSuggestedParams,
- * buildResolveArtifactSuggestedParams, buildSourceLookupSuggestedParams,
- * filterAllowedIncludeValues, buildAnalyzeModSuggestedParams,
- * buildValidateProjectSuggestedParams, gatedGuidance,
- * buildInvalidInputGuidance, mapErrorToProblem, applyErrorMetaExtensions */
-
 function splitWarnings(data: Record<string, unknown>): {
   result: Record<string, unknown>;
   warnings: string[];

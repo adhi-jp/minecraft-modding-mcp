@@ -1,9 +1,3 @@
-/**
- * Proguard client-mappings parser. Two-pass: first pass collects
- * mojang→obfuscated class name mappings; second pass parses members with
- * descriptors. Pure; extracted from `src/mapping-service.ts`.
- */
-
 import { ERROR_CODES, createError } from "../../errors.js";
 import type { DirectionIndex, PairKey } from "../internal-types.js";
 import {

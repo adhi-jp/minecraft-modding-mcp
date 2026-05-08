@@ -1,11 +1,3 @@
-/**
- * Per-file artifact access entry points (`getArtifactFile`,
- * `listArtifactFiles`). Behavior-preserving extraction from
- * `src/source-service.ts`. Both methods are thin orchestrations over
- * `svc.filesRepo` and `svc.getArtifact`, with metric recording bracketed
- * around each call.
- */
-
 import { ERROR_CODES, createError } from "../errors.js";
 import { log } from "../logger.js";
 import type { SourceService } from "../source-service.js";

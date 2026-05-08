@@ -1,11 +1,3 @@
-/**
- * Pure helpers used by getClassSource / getClassMembers when extracting
- * class metadata and member declarations from decompiled Java source:
- * brace-depth tracking, body range scanning, nested-type detection,
- * symbol-line summarisation. Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import { extractSymbolsFromSource } from "../symbols/symbol-extractor.js";
 
 export type DecompiledMember = {

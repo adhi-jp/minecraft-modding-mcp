@@ -1,12 +1,3 @@
-/**
- * Symbol-lifecycle tracing, class-signature diff, and unobfuscated-runtime
- * symbol existence fallback for SourceService. Owns the diff-key
- * comparators (sortDiffMembers, diffMembersByKey, etc.), the lifecycle
- * symbol parser, and the obfuscated-name remap helpers used to walk
- * across mapping namespaces. Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { mapWithConcurrencyLimit } from "../concurrency.js";
 import { ERROR_CODES, createError, isAppError } from "../errors.js";

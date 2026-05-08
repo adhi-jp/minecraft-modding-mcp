@@ -1,10 +1,3 @@
-/**
- * Centralised zod schema definitions for every MCP tool the server exposes.
- * Behavior-preserving extraction from `src/index.ts` so the entry file can
- * focus on tool wiring. Schemas remain registered with the public schema
- * registry from the call sites that bind them to `server.tool(...)`.
- */
-
 import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 
 import { z } from "zod";

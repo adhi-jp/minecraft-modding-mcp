@@ -689,7 +689,6 @@ export type DiffClassSignaturesOutput = {
   warnings: string[];
 };
 
-/* IndexRebuildReason, IndexArtifactInput, IndexArtifactOutput moved to src/source/indexer.ts */
 export type { IndexArtifactInput, IndexArtifactOutput } from "./source/indexer.js";
 
 export type ValidateMixinInput = {
@@ -815,8 +814,6 @@ export type ValidateAccessTransformerInput = {
 };
 
 export type ValidateAccessTransformerOutput = AccessTransformerValidationResult;
-
-/* IndexedFileRecord, RebuiltArtifactData, INDEX_SCHEMA_VERSION moved to src/source/indexer.ts */
 
 function clampLimit(limit: number | undefined, fallback: number, max: number): number {
   if (!Number.isFinite(limit) || limit == null) {
@@ -1413,8 +1410,6 @@ export class SourceService {
   ): Promise<{ name: string; descriptor?: string }> {
     return lifecycle.resolveToObfuscatedMemberName(this, name, ownerInSourceMapping, descriptor, kind, version, mapping, sourcePriority, warnings);
   }
-
-/* remapSignatureMembers moved earlier — public delegate enables test monkey-patching */
 
   private fallbackArtifactSignature(artifactId: string): string {
     return indexer.fallbackArtifactSignature(artifactId);

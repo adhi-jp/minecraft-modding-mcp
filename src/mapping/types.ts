@@ -1,9 +1,3 @@
-/**
- * Public types for the MappingService API. Behavior-preserving extraction
- * from `src/mapping-service.ts`; the entry barrel re-exports every name
- * to preserve external import paths.
- */
-
 import type { MappingSourcePriority, SourceMapping } from "../types.js";
 import type {
   MappingLookupSource,

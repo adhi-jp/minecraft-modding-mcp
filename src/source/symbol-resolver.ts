@@ -1,11 +1,3 @@
-/**
- * resolveWorkspaceSymbol entry point: routes a workspace-aware symbol
- * lookup through workspaceMappingService.detectCompileMapping plus the
- * appropriate MappingService method (resolveMethodMappingExact /
- * getClassApiMatrix / findMapping). Behavior-preserving extraction
- * from `src/source-service.ts`.
- */
-
 import { ERROR_CODES, createError } from "../errors.js";
 import type { SourceService } from "../source-service.js";
 import type {

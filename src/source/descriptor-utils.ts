@@ -1,9 +1,3 @@
-/**
- * Pure descriptor / signature helpers used by SourceService when remapping
- * member metadata across mapping namespaces. Behavior-preserving extraction
- * from the tail of `src/source-service.ts`.
- */
-
 import {
   modifierPrefix,
   parseFieldType,

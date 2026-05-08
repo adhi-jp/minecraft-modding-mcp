@@ -1,12 +1,3 @@
-/**
- * Artifact resolution pipeline: discovery of version source jars,
- * AT/AW runtime jar resolution, version context inference, mapping
- * fallback suggestions, and the resolveArtifact entry that ties together
- * source-resolver, mapping pipeline, ingest, alias build, and final
- * provenance assembly. Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import fastGlob from "fast-glob";
 
 import { buildArtifactAlias } from "../config.js";

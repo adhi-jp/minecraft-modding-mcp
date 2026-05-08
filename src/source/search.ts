@@ -1,11 +1,3 @@
-/**
- * Search-intent dispatcher for SourceService: symbol / text / path searches
- * over indexed and brute-scan paths, plus the supporting helpers (regex
- * compilation, glob translation, package-prefix filter, scoring,
- * cursor context). Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import { ERROR_CODES, createError } from "../errors.js";
 import { log } from "../logger.js";
 import {

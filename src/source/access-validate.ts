@@ -1,13 +1,3 @@
-/**
- * validateAccessWidener and validateAccessTransformer entry points used
- * by the validate-access-widener / validate-access-transformer tools.
- * Each method parses the file, resolves a runtime jar (or falls back to
- * the version jar), remaps class FQNs and member signatures into the
- * jar's namespace, then defers to the parsed validators in
- * src/mixin/access-validators.ts. Behavior-preserving extraction from
- * `src/source-service.ts`.
- */
-
 import { parseAccessTransformer } from "../access-transformer-parser.js";
 import { parseAccessWidener } from "../access-widener-parser.js";
 import { buildSuggestedCall } from "../build-suggested-call.js";

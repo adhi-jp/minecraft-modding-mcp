@@ -1,8 +1,3 @@
-/**
- * Access Widener and Access Transformer file validators. Behavior-preserving
- * extraction from `src/mixin-validator.ts`.
- */
-
 import type { ParsedAccessTransformer } from "../access-transformer-parser.js";
 import type { ParsedAccessWidener } from "../access-widener-parser.js";
 import type {

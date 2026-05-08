@@ -1,9 +1,3 @@
-/**
- * Symbol-record helpers and DirectionIndex builders used by every mapping
- * parser. Pure functions; behavior-preserving extraction from
- * `src/mapping-service.ts`.
- */
-
 import type {
   DirectionIndex,
   MappingSymbolRecord

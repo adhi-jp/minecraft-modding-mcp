@@ -1,10 +1,3 @@
-/**
- * Artifact indexing pipeline: signature checks, ingest-if-needed,
- * source-jar loading, decompile-from-binary, binary remap to Mojang
- * namespace, and persistence into the artifact/file/symbol/meta repos.
- * Behavior-preserving extraction from `src/source-service.ts`.
- */
-
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, open, rename, stat, unlink } from "node:fs/promises";

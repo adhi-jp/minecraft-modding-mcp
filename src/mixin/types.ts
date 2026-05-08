@@ -1,9 +1,3 @@
-/**
- * Public types for the mixin validation engine. Behavior-preserving
- * extraction from `src/mixin-validator.ts` so helpers and validators no
- * longer round-trip type imports through the entry barrel.
- */
-
 import type { SignatureMember } from "../minecraft-explorer-service.js";
 import type { AccessWidenerEntry } from "../access-widener-parser.js";
 import type { AccessTransformerEntry } from "../access-transformer-parser.js";

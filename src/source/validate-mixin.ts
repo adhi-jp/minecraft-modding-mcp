@@ -1,11 +1,3 @@
-/**
- * validate-mixin orchestrator: dispatcher across the five input modes
- * (inline, path, paths, config, project), per-source pipeline (resolve,
- * mapping-health, parse, target-lookup), batch aggregation, and the
- * output compaction / report-mode trimming. Behavior-preserving
- * extraction from `src/source-service.ts`.
- */
-
 import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { isAbsolute, dirname, resolve as resolvePath } from "node:path";

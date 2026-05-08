@@ -1,9 +1,3 @@
-/**
- * Pair-key utilities and graph-shape helpers for mapping indexes. Pure;
- * extracted from `src/mapping-service.ts` so parsers and the MappingService
- * class share one definition.
- */
-
 import type { SourceMapping } from "../../types.js";
 import type {
   DirectionIndex,

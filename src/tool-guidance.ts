@@ -1,12 +1,3 @@
-/**
- * Tool-input guidance, error-to-problem mapping, and per-tool suggested-call
- * builders. Behavior-preserving extraction from `src/index.ts` so the entry
- * file can focus on tool wiring.
- *
- * `mapErrorToProblem` and `applyErrorMetaExtensions` remain re-exported from
- * `src/index.ts` for test compatibility.
- */
-
 import { ZodError } from "zod";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";

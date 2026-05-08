@@ -1,10 +1,3 @@
-/**
- * Cache-byte and LRU accounting for SourceService. Pure free functions
- * operating on the SourceService instance via its public infrastructure
- * fields and SourceServiceState wrapper. Behavior-preserving extraction
- * from `src/source-service.ts`.
- */
-
 import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
