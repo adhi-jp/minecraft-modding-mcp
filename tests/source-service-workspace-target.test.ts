@@ -187,10 +187,10 @@ test("synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second c
 
 test("getClassMembers and getClassSource pass input.mapping (raw, possibly undefined) to resolveArtifact symmetrically", async () => {
   const { readFile } = await import("node:fs/promises");
-  const source = await readFile("src/source-service.ts", "utf8");
+  const source = await readFile("src/source/class-source.ts", "utf8");
 
-  const getClassSourceMatch = source.match(/async getClassSource\(input: GetClassSourceInput\)[\s\S]*?await this\.resolveArtifact\(\{([\s\S]*?)\}\);/);
-  const getClassMembersMatch = source.match(/async getClassMembers\(input: GetClassMembersInput\)[\s\S]*?await this\.resolveArtifact\(\{([\s\S]*?)\}\);/);
+  const getClassSourceMatch = source.match(/export async function getClassSource\(svc: SourceService, input: GetClassSourceInput\)[\s\S]*?await svc\.resolveArtifact\(\{([\s\S]*?)\}\);/);
+  const getClassMembersMatch = source.match(/export async function getClassMembers\(svc: SourceService, input: GetClassMembersInput\)[\s\S]*?await svc\.resolveArtifact\(\{([\s\S]*?)\}\);/);
 
   assert.ok(getClassSourceMatch, "Could not locate getClassSource resolveArtifact call");
   assert.ok(getClassMembersMatch, "Could not locate getClassMembers resolveArtifact call");
