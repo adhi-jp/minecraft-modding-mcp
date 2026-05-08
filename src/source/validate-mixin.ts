@@ -1,21 +1,15 @@
-import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { isAbsolute, dirname, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import fastGlob from "fast-glob";
 
-import { buildSuggestedCall } from "../build-suggested-call.js";
 import { type AppError, ERROR_CODES, createError, isAppError } from "../errors.js";
-import { parseMixinSource } from "../mixin-parser.js";
 import {
   type IssueConfidence,
-  type MappingHealthReport,
   type MixinValidationProvenance,
   type MixinValidationResult,
   type MixinStageBudgets,
-  type ResolvedTargetMembers,
-  type TargetOutcome as MixinTargetOutcome,
   loadMixinStageBudgets,
   refreshMixinValidationOutcome,
   validateParsedMixin
@@ -23,7 +17,6 @@ import {
 import { normalizePathForHost } from "../path-converter.js";
 import type { SourceService } from "../source-service.js";
 import type {
-  ResolveArtifactOutput,
   ValidateMixinBatchResult,
   ValidateMixinInput,
   ValidateMixinOptions,
@@ -33,6 +26,16 @@ import type {
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "../stage-emitter.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping } from "../types.js";
 import type { FindMappingOutput as MappingFindMappingOutput } from "../mapping-service.js";
+import {
+  type MixinPipelineSeed,
+  type MutableMixinPipelineContext,
+  type ValidateMixinStage,
+  createMixinPipelineContext
+} from "./validate-mixin/pipeline-context.js";
+import { runResolveStage } from "./validate-mixin/pipeline/resolve.js";
+import { runMappingHealthStage } from "./validate-mixin/pipeline/mapping-health.js";
+import { runParseStage } from "./validate-mixin/pipeline/parse.js";
+import { runTargetLookupStage } from "./validate-mixin/pipeline/target-lookup.js";
 /* remapSignatureMembers reached via svc.remapSignatureMembers so tests can monkey-patch */
 
 export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
@@ -59,21 +62,6 @@ type ResolvedValidateMixinConfigSources = {
   sources: ValidateMixinConfigSource[];
   warnings: string[];
 };
-
-/**
- * Diagnostic tag attached to every AppError thrown out of validate-mixin.
- * - "input-validation": required field missing or sourcePath unreadable
- * - "resolve": jar / artifact resolution
- * - "mapping-health": mapping infrastructure probe
- * - "parse": parseMixinSource failure
- * - "target-lookup": per-target symbol/signature/remap loop
- */
-type ValidateMixinStage =
-  | "input-validation"
-  | "resolve"
-  | "mapping-health"
-  | "parse"
-  | "target-lookup";
 
 const COMMON_SOURCE_ROOTS = [
   "src/main/java",
@@ -115,29 +103,6 @@ function annotateValidateMixinError(err: unknown, stage: ValidateMixinStage): Ap
     code: ERROR_CODES.INTERNAL,
     message: `validate-mixin failed during stage "${stage}": ${message}`,
     details: { failedStage: stage }
-  });
-}
-
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
   });
 }
 
@@ -449,57 +414,6 @@ function shouldRetryValidateMixinWithMavenFirst(
   );
 }
 
-function findValidateMixinClassMapping(svc: SourceService, input: {
-  version: string;
-  className: string;
-  sourceMapping: SourceMapping;
-  targetMapping: SourceMapping;
-  sourcePriority: MappingSourcePriority;
-  projectPath?: string;
-  batchCaches?: ValidateMixinSingleInput["batchCaches"];
-}): Promise<MappingFindMappingOutput> {
-  const cache = input.batchCaches?.classMappings;
-  if (!cache) {
-    return svc.mappingService.findMapping({
-      version: input.version,
-      kind: "class",
-      name: input.className,
-      sourceMapping: input.sourceMapping,
-      targetMapping: input.targetMapping,
-      sourcePriority: input.sourcePriority,
-      projectPath: input.projectPath
-    });
-  }
-
-  const cacheKey = [
-    input.version,
-    input.className,
-    input.sourceMapping,
-    input.targetMapping,
-    input.sourcePriority,
-    input.projectPath ?? ""
-  ].join("\0");
-  const cached = cache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = svc.mappingService.findMapping({
-    version: input.version,
-    kind: "class",
-    name: input.className,
-    sourceMapping: input.sourceMapping,
-    targetMapping: input.targetMapping,
-    sourcePriority: input.sourcePriority,
-    projectPath: input.projectPath
-  }).catch((error) => {
-    cache.delete(cacheKey);
-    throw error;
-  });
-  cache.set(cacheKey, pending);
-  return pending;
-}
-
 export async function validateMixinSingle(svc: SourceService, input: ValidateMixinSingleInput): Promise<MixinValidationResult> {
   // Start at input-validation so path normalization, file reads, and the
   // simple guard checks all land under that stage.
@@ -578,489 +492,59 @@ export async function validateMixinSingle(svc: SourceService, input: ValidateMix
   }
 }
 
-async function runValidateMixinPipeline(svc: SourceService, ctx: {
-  input: ValidateMixinSingleInput;
-  version: string;
-  source: string;
-  requestedScope: ArtifactScope;
-  currentSourcePriority: MappingSourcePriority;
-  initialSourcePriority: MappingSourcePriority;
-  stageEmitter: StageEmitter;
-  stageBudgets: MixinStageBudgets;
-  testHooks: ValidateMixinOptions["__testHooks"];
-  onStage: (stage: ValidateMixinStage) => void;
-}): Promise<MixinValidationResult> {
-  const {
-    input,
-    source,
-    requestedScope,
-    currentSourcePriority,
-    initialSourcePriority,
-    stageEmitter,
-    stageBudgets,
-    testHooks,
-    onStage
-  } = ctx;
-  let { version } = ctx;
-  const enterStage = async (stage: ValidateMixinStage): Promise<number> => {
-    onStage(stage);
-    const startedAt = performance.now();
-    await stageEmitter(stage);
-    return startedAt;
-  };
-  const checkPreParseBudget = (
-    stage: ValidateMixinStage,
-    stageStartedAt: number,
-    budgetMs: number
-  ): void => {
-    const elapsed = performance.now() - stageStartedAt;
-    if (elapsed > budgetMs) {
-      throw createError({
-        code: ERROR_CODES.STAGE_BUDGET_PRE_PARSE,
-        message: `Stage ${stage} exhausted budget before parse completed.`,
-        details: {
-          failedStage: stage,
-          stageBudgetExhausted: true,
-          budgetMs,
-          elapsedMs: elapsed
-        }
-      });
-    }
-  };
-  const resolveStartedAt = await enterStage("resolve");
-  const warnings: string[] = [];
-  let mappingAutoDetected = false;
+async function runValidateMixinPipeline(svc: SourceService, seed: MixinPipelineSeed): Promise<MixinValidationResult> {
+  const ctx = createMixinPipelineContext(seed);
+  await runResolveStage(svc, ctx);
+  await runMappingHealthStage(svc, ctx);
+  await runParseStage(ctx);
+  await runTargetLookupStage(svc, ctx);
+  return finalizeValidateMixinPipeline(svc, ctx);
+}
 
-  let detectedMapping: SourceMapping | undefined;
-  if ((!input.mapping || input.preferProjectMapping) && input.projectPath) {
-    try {
-      const detection = await svc.workspaceMappingService.detectCompileMapping({ projectPath: input.projectPath });
-      if (detection.resolved && detection.mappingApplied) {
-        detectedMapping = detection.mappingApplied;
-        mappingAutoDetected = true;
-        warnings.push(`Auto-detected mapping '${detectedMapping}' from project configuration.`);
-        warnings.push(...detection.warnings);
-      } else {
-        warnings.push(...detection.warnings);
-      }
-    } catch {
-      // Detection failed — fall through to default
-    }
-  }
-
-  const requestedMapping = normalizeMapping(detectedMapping ?? input.mapping);
-  let mappingApplied: SourceMapping = requestedMapping;
-
-  if (input.preferProjectVersion && input.projectPath) {
-    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
-    if (detected && detected !== version) {
-      warnings.push(`Overriding version "${version}" with project version "${detected}" from gradle.properties.`);
-    }
-    version = detected ?? version;
-  }
-
-  let jarPath: string;
-  let resolvedArtifact: ResolveArtifactOutput | undefined;
-  let signatureLookupMapping: SourceMapping = "obfuscated";
-  let scopeFallback: { requested: string; applied: string; reason: string } | undefined;
-  if (input.scope && input.scope !== "vanilla" && input.projectPath) {
-    try {
-      resolvedArtifact = await svc.resolveArtifact({
-        target: { kind: "version", value: version },
-        mapping: requestedMapping,
-        sourcePriority: currentSourcePriority,
-        projectPath: input.projectPath,
-        scope: input.scope,
-        preferProjectVersion: false
-      });
-      jarPath = resolvedArtifact.binaryJarPath ?? (await svc.versionService.resolveVersionJar(version)).jarPath;
-      warnings.push(...resolvedArtifact.warnings);
-      mappingApplied = resolvedArtifact.mappingApplied;
-      signatureLookupMapping = resolvedArtifact.mappingApplied;
-      if (resolvedArtifact.version) {
-        version = resolvedArtifact.version;
-      }
-    } catch (scopeErr) {
-      scopeFallback = {
-        requested: input.scope,
-        applied: "vanilla",
-        reason: `Loom cache unavailable: ${scopeErr instanceof Error ? scopeErr.message : String(scopeErr)}`
-      };
-      warnings.push(`Scope "${input.scope}" resolution failed; falling back to vanilla. ${scopeFallback.reason}`);
-      jarPath = (await svc.versionService.resolveVersionJar(version)).jarPath;
-    }
-  } else {
-    jarPath = (await svc.versionService.resolveVersionJar(version)).jarPath;
-  }
-
-  if (jarPath.includes("-sources.jar")) {
-    warnings.push(`Resolved jar appears to be a sources jar. Falling back to vanilla client jar.`);
-    jarPath = (await svc.versionService.resolveVersionJar(version)).jarPath;
-    signatureLookupMapping = "obfuscated";
-    scopeFallback = {
-      requested: input.scope ?? "vanilla",
-      applied: "vanilla",
-      reason: "Resolved jar was a sources jar, not a binary class jar."
-    };
-  }
-
-  if (testHooks?.afterResolve) {
-    await testHooks.afterResolve();
-  }
-  checkPreParseBudget("resolve", resolveStartedAt, stageBudgets.resolve);
-
-  const mappingHealthStartedAt = await enterStage("mapping-health");
-  let healthReport: MappingHealthReport | undefined;
-  try {
-    const health = await svc.mappingService.checkMappingHealth({
-      version,
-      requestedMapping,
-      sourcePriority: currentSourcePriority
-    });
-    const jarAvailable = existsSync(jarPath);
-    healthReport = {
-      jarAvailable,
-      jarPath,
-      mojangMappingsAvailable: health.mojangMappingsAvailable,
-      tinyMappingsAvailable: health.tinyMappingsAvailable,
-      memberRemapAvailable: health.memberRemapAvailable,
-      overallHealthy: jarAvailable && health.mojangMappingsAvailable,
-      degradations: [
-        ...(jarAvailable ? [] : ["Game jar not found."]),
-        ...health.degradations
-      ]
-    };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    healthReport = {
-      jarAvailable: existsSync(jarPath),
-      jarPath,
-      mojangMappingsAvailable: false,
-      tinyMappingsAvailable: false,
-      memberRemapAvailable: false,
-      overallHealthy: false,
-      degradations: [`Mapping health probe failed: ${reason}`]
-    };
-  }
-
-  if (testHooks?.afterMappingHealth) {
-    await testHooks.afterMappingHealth();
-  }
-  checkPreParseBudget("mapping-health", mappingHealthStartedAt, stageBudgets.mappingHealth);
-
-  const parseStartedAt = await enterStage("parse");
-  const parsed = parseMixinSource(source);
-
-  if (testHooks?.afterParse) {
-    await testHooks.afterParse();
-  }
-  checkPreParseBudget("parse", parseStartedAt, stageBudgets.parse);
-
-  const targetLookupStartedAt = await enterStage("target-lookup");
-  if (testHooks?.beforeTargetLoop) {
-    await testHooks.beforeTargetLoop();
-  }
-  let degradedReason: "stage-budget" | "stage-budget-pre-target" | undefined;
-  const targetOutcomes: MixinTargetOutcome[] = [];
-  const deferredTargetClasses = new Set<string>();
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const mappingFailedTargets = new Set<string>();
-  const remapFailedMembers = new Map<string, Set<string>>();
-  const wholeRemapFailedTargets = new Set<string>();
-  const signatureFailedTargets = new Set<string>();
-  const symbolExistsButSignatureFailed = new Set<string>();
-  const resolutionTrace: MixinValidationProvenance["resolutionTrace"] = input.explain ? [] : undefined;
-
-  const totalTargets = parsed.targets.length;
-  let processedTargetCount = 0;
-  let stageBudgetExhausted = false;
-  let nextTargetIndex = 0;
-  for (let targetIndex = 0; targetIndex < totalTargets; targetIndex++) {
-    const stageElapsed = performance.now() - targetLookupStartedAt;
-    if (stageElapsed > stageBudgets.targetLookup) {
-      stageBudgetExhausted = true;
-      nextTargetIndex = targetIndex;
-      break;
-    }
-    const target = parsed.targets[targetIndex];
-    await stageEmitter("target-lookup", {
-      targetIndex,
-      targetTotal: totalTargets,
-      targetClass: target.className,
-      memberCount:
-        parsed.injections.length + parsed.shadows.length + parsed.accessors.length
-    });
-    const targetStartedAt = performance.now();
-    if (testHooks?.beforeTargetIter) {
-      await testHooks.beforeTargetIter(targetIndex);
-    }
-    let resolvedClassName = target.className;
-    if (!resolvedClassName.includes(".")) {
-      const fqcn = parsed.imports.get(resolvedClassName);
-      if (fqcn) {
-        resolvedClassName = fqcn;
-      }
-    } else {
-      const segments = resolvedClassName.split(".");
-      const firstSegment = segments[0];
-      if (firstSegment && /^[A-Z]/.test(firstSegment)) {
-        const outerFqcn = parsed.imports.get(firstSegment);
-        if (outerFqcn) {
-          resolvedClassName = outerFqcn + "$" + segments.slice(1).join("$");
-        }
-      }
-    }
-
-    let obfuscatedName = resolvedClassName;
-
-    if (requestedMapping !== signatureLookupMapping) {
-      try {
-        const mapped = await findValidateMixinClassMapping(svc, {
-          version,
-          className: resolvedClassName,
-          sourceMapping: requestedMapping,
-          targetMapping: signatureLookupMapping,
-          sourcePriority: currentSourcePriority,
-          projectPath: input.projectPath,
-          batchCaches: input.batchCaches
-        });
-        if (mapped.resolved && mapped.resolvedSymbol) {
-          obfuscatedName = mapped.resolvedSymbol.name;
-          resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: true });
-        } else {
-          warnings.push(
-            `Could not map class "${resolvedClassName}" from ${requestedMapping} to ${signatureLookupMapping}; using "${obfuscatedName}" for lookup.`
-          );
-          mappingFailedTargets.add(target.className);
-          resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: "No mapping found" });
-        }
-      } catch (mapErr) {
-        warnings.push(
-          `Mapping lookup failed for class "${resolvedClassName}" while preparing ${signatureLookupMapping} lookup; using "${obfuscatedName}" for lookup.`
-        );
-        mappingFailedTargets.add(target.className);
-        resolutionTrace?.push({ target: target.className, step: "mapping", input: resolvedClassName, output: obfuscatedName, success: false, detail: mapErr instanceof Error ? mapErr.message : String(mapErr) });
-      }
-    }
-
-    try {
-      const sig = await svc.explorerService.getSignature({
-        fqn: obfuscatedName,
-        jarPath,
-        access: "all"
-      });
-      warnings.push(...sig.warnings);
-      resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: `${sig.methods.length} methods, ${sig.fields.length} fields`, success: true });
-
-      let constructors = sig.constructors;
-      let methods = sig.methods;
-      let fields = sig.fields;
-
-      if (requestedMapping !== signatureLookupMapping) {
-        try {
-          const [ctorResult, methodResult, fieldResult] = await Promise.all([
-            svc.remapSignatureMembers(
-              sig.constructors,
-              "method",
-              version,
-              signatureLookupMapping,
-              requestedMapping,
-              currentSourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            svc.remapSignatureMembers(
-              sig.methods,
-              "method",
-              version,
-              signatureLookupMapping,
-              requestedMapping,
-              currentSourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            svc.remapSignatureMembers(
-              sig.fields,
-              "field",
-              version,
-              signatureLookupMapping,
-              requestedMapping,
-              currentSourcePriority,
-              warnings,
-              input.projectPath
-            )
-          ]);
-          constructors = ctorResult.members;
-          methods = methodResult.members;
-          fields = fieldResult.members;
-
-          const targetFailed = new Set<string>();
-          for (const n of ctorResult.failedNames) targetFailed.add(n);
-          for (const n of methodResult.failedNames) targetFailed.add(n);
-          for (const n of fieldResult.failedNames) targetFailed.add(n);
-          if (targetFailed.size > 0) {
-            remapFailedMembers.set(target.className, targetFailed);
-            resolutionTrace?.push({ target: target.className, step: "remap", input: `${targetFailed.size} members`, output: "failed", success: false });
-          } else {
-            resolutionTrace?.push({ target: target.className, step: "remap", input: `${methods.length + fields.length} members`, output: "remapped", success: true });
-          }
-        } catch (remapErr) {
-          warnings.push(
-            `Member remapping failed for "${resolvedClassName}"; falling back to ${signatureLookupMapping} names. ` +
-            `Member names shown may be in the ${signatureLookupMapping} runtime namespace.`
-          );
-          mappingApplied = signatureLookupMapping;
-          wholeRemapFailedTargets.add(target.className);
-          resolutionTrace?.push({
-            target: target.className,
-            step: "remap",
-            input: resolvedClassName,
-            output: `${signatureLookupMapping} fallback`,
-            success: false,
-            detail: remapErr instanceof Error ? remapErr.message : String(remapErr)
-          });
-        }
-      }
-
-      targetMembers.set(target.className, {
-        className: target.className,
-        constructors,
-        methods,
-        fields
-      });
-    } catch (sigErr) {
-      warnings.push(`Could not load signature for class "${resolvedClassName}" (obfuscated: "${obfuscatedName}").`);
-      resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: "CLASS_NOT_FOUND", success: false, detail: sigErr instanceof Error ? sigErr.message : String(sigErr) });
-
-      try {
-        const existenceCheck = await svc.mappingService.checkSymbolExists({
-          version, kind: "class", name: resolvedClassName,
-          sourceMapping: requestedMapping, nameMode: "auto", sourcePriority: currentSourcePriority
-        });
-        if (existenceCheck.resolved) {
-          symbolExistsButSignatureFailed.add(target.className);
-          resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "exists in mapping graph", success: true });
-        } else {
-          resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "not found", success: false });
-        }
-      } catch {
-        signatureFailedTargets.add(target.className);
-        resolutionTrace?.push({ target: target.className, step: "fallback-check", input: resolvedClassName, output: "check failed", success: false });
-      }
-    }
-
-    const targetElapsed = performance.now() - targetStartedAt;
-    const hadToolIssue =
-      mappingFailedTargets.has(target.className) ||
-      signatureFailedTargets.has(target.className) ||
-      symbolExistsButSignatureFailed.has(target.className) ||
-      remapFailedMembers.has(target.className) ||
-      wholeRemapFailedTargets.has(target.className);
-    const completedOutcome: MixinTargetOutcome = hadToolIssue
-      ? {
-          targetClass: target.className,
-          status: "tool-issue",
-          elapsedMs: targetElapsed,
-          reason: signatureFailedTargets.has(target.className)
-            ? "signature-load-failed"
-            : symbolExistsButSignatureFailed.has(target.className)
-              ? "signature-load-failed-symbol-exists"
-              : mappingFailedTargets.has(target.className)
-                ? "mapping-failed"
-                : wholeRemapFailedTargets.has(target.className)
-                  ? "member-remap-failed-whole"
-                  : "member-remap-failed"
-        }
-      : {
-          targetClass: target.className,
-          status: "ok",
-          elapsedMs: targetElapsed
-        };
-    if (targetElapsed > stageBudgets.perTarget) {
-      completedOutcome.slowTarget = true;
-      completedOutcome.budgetMs = stageBudgets.perTarget;
-    }
-    targetOutcomes.push(completedOutcome);
-    processedTargetCount += 1;
-  }
-
-  const skippedForValidator = new Set<string>();
-  if (stageBudgetExhausted) {
-    if (processedTargetCount === 0) {
-      degradedReason = "stage-budget-pre-target";
-      for (const remaining of parsed.targets) {
-        skippedForValidator.add(remaining.className);
-      }
-    } else {
-      degradedReason = "stage-budget";
-      for (let j = nextTargetIndex; j < totalTargets; j++) {
-        const remaining = parsed.targets[j];
-        deferredTargetClasses.add(remaining.className);
-        skippedForValidator.add(remaining.className);
-        targetOutcomes.push({
-          targetClass: remaining.className,
-          status: "deferred-budget",
-          reason: "stage-budget",
-          budgetMs: stageBudgets.targetLookup
-        });
-      }
-    }
-  }
-
-  if (healthReport) {
-    const hasFailures =
-      signatureFailedTargets.size > 0 ||
-      mappingFailedTargets.size > 0 ||
-      symbolExistsButSignatureFailed.size > 0;
-    if (hasFailures && healthReport.overallHealthy) {
-      healthReport.overallHealthy = false;
-      healthReport.degradations.push(
-        `${mappingFailedTargets.size} mapping failure(s), ${signatureFailedTargets.size} signature failure(s), ${symbolExistsButSignatureFailed.size} partial validation target(s).`
-      );
-    }
-  }
+async function finalizeValidateMixinPipeline(svc: SourceService, ctx: MutableMixinPipelineContext): Promise<MixinValidationResult> {
+  const { input, source, requestedScope, currentSourcePriority, initialSourcePriority } = ctx;
 
   const resolutionNotes: string[] = [];
-  if (requestedMapping !== mappingApplied) {
+  if (ctx.requestedMapping !== ctx.mappingApplied) {
     resolutionNotes.push(
-      `Mapping fallback: requested "${requestedMapping}" but applied "${mappingApplied}" due to remapping failure.`
+      `Mapping fallback: requested "${ctx.requestedMapping}" but applied "${ctx.mappingApplied}" due to remapping failure.`
     );
   }
   const appliedScope = inferAppliedArtifactScope({
     requestedScope,
-    scopeFallback,
-    jarPath,
-    resolvedSourceJarPath: resolvedArtifact?.resolvedSourceJarPath
+    scopeFallback: ctx.scopeFallback,
+    jarPath: ctx.jarPath,
+    resolvedSourceJarPath: ctx.resolvedArtifact?.resolvedSourceJarPath
   });
-  if (!scopeFallback && requestedScope !== appliedScope) {
+  if (!ctx.scopeFallback && requestedScope !== appliedScope) {
     resolutionNotes.push(
       `Scope adjusted during validation: requested "${requestedScope}" but resolved artifact looks like "${appliedScope}".`
     );
   }
 
   const REMAP_WARNING_RE = /^(?:Could not remap|Remap failed for)\b/;
-  const remapFailures = warnings.filter((w) => REMAP_WARNING_RE.test(w)).length;
+  const remapFailures = ctx.warnings.filter((w) => REMAP_WARNING_RE.test(w)).length;
 
   let confidence: IssueConfidence = "definite";
-  if (requestedMapping !== mappingApplied) {
+  if (ctx.requestedMapping !== ctx.mappingApplied) {
     confidence = "uncertain";
   } else if (remapFailures > 0) {
     confidence = "likely";
   }
 
   const mappingChain: string[] = [];
-  if (requestedMapping !== signatureLookupMapping) {
-    mappingChain.push(`${requestedMapping} → ${signatureLookupMapping}`);
+  if (ctx.requestedMapping !== ctx.signatureLookupMapping) {
+    mappingChain.push(`${ctx.requestedMapping} → ${ctx.signatureLookupMapping}`);
   }
-  if (mappingApplied !== signatureLookupMapping) {
-    mappingChain.push(`fallback to ${mappingApplied}`);
+  if (ctx.mappingApplied !== ctx.signatureLookupMapping) {
+    mappingChain.push(`fallback to ${ctx.mappingApplied}`);
   }
 
   const provenance: MixinValidationProvenance = {
-    version,
-    jarPath,
-    requestedMapping,
-    mappingApplied,
+    version: ctx.version,
+    jarPath: ctx.jarPath,
+    requestedMapping: ctx.requestedMapping,
+    mappingApplied: ctx.mappingApplied,
     requestedScope,
     appliedScope,
     requestedSourcePriority: initialSourcePriority,
@@ -1069,30 +553,30 @@ async function runValidateMixinPipeline(svc: SourceService, ctx: {
     jarType: scopeToJarType(appliedScope),
     mappingChain: mappingChain.length > 0 ? mappingChain : undefined,
     remapFailures: remapFailures > 0 ? remapFailures : undefined,
-    mappingAutoDetected: mappingAutoDetected || undefined,
-    scopeFallback,
-    resolutionTrace: resolutionTrace && resolutionTrace.length > 0 ? resolutionTrace : undefined
+    mappingAutoDetected: ctx.mappingAutoDetected || undefined,
+    scopeFallback: ctx.scopeFallback,
+    resolutionTrace: ctx.resolutionTrace && ctx.resolutionTrace.length > 0 ? ctx.resolutionTrace : undefined
   };
 
   const baseResult = validateParsedMixin(
-    parsed, targetMembers, warnings, provenance, confidence, mappingFailedTargets, input.explain,
-    remapFailedMembers, signatureFailedTargets,
-    input.explain ? { scope: requestedScope, sourcePriority: currentSourcePriority, projectPath: input.projectPath, mapping: requestedMapping } : undefined,
+    ctx.parsed, ctx.targetMembers, ctx.warnings, provenance, confidence, ctx.mappingFailedTargets, input.explain,
+    ctx.remapFailedMembers, ctx.signatureFailedTargets,
+    input.explain ? { scope: requestedScope, sourcePriority: currentSourcePriority, projectPath: input.projectPath, mapping: ctx.requestedMapping } : undefined,
     input.warningMode,
-    healthReport,
-    symbolExistsButSignatureFailed.size > 0 ? symbolExistsButSignatureFailed : undefined,
-    skippedForValidator.size > 0 ? skippedForValidator : undefined
+    ctx.healthReport,
+    ctx.symbolExistsButSignatureFailed.size > 0 ? ctx.symbolExistsButSignatureFailed : undefined,
+    ctx.skippedForValidator.size > 0 ? ctx.skippedForValidator : undefined
   );
-  if (targetOutcomes.length > 0) {
-    baseResult.targetOutcomes = targetOutcomes;
+  if (ctx.targetOutcomes.length > 0) {
+    baseResult.targetOutcomes = ctx.targetOutcomes;
   }
-  if (degradedReason !== undefined) {
-    baseResult.summary = { ...baseResult.summary, degradedReason };
+  if (ctx.degradedReason !== undefined) {
+    baseResult.summary = { ...baseResult.summary, degradedReason: ctx.degradedReason };
   }
-  if (deferredTargetClasses.size > 0) {
+  if (ctx.deferredTargetClasses.size > 0) {
     baseResult.summary = {
       ...baseResult.summary,
-      targetsDeferredBudget: deferredTargetClasses.size
+      targetsDeferredBudget: ctx.deferredTargetClasses.size
     };
   }
   const result = refreshMixinValidationOutcome(baseResult);
