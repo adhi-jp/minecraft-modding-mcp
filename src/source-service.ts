@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { access, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 
@@ -65,7 +65,8 @@ import { FilesRepo } from "./storage/files-repo.js";
 import { IndexMetaRepo, type ArtifactIndexMetaRow } from "./storage/index-meta-repo.js";
 import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
-import { LruList } from "./lru-list.js";
+import { SourceServiceState } from "./source/state.js";
+import * as cacheMetrics from "./source/cache-metrics.js";
 import { log } from "./logger.js";
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "./stage-emitter.js";
 import { normalizePathForHost } from "./path-converter.js";
@@ -1698,28 +1699,23 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
 }
 
 export class SourceService {
-  private readonly config: Config;
+  readonly config: Config;
   private readonly db;
-  private readonly artifactsRepo: ArtifactsRepo;
-  private readonly filesRepo: FilesRepo;
-  private readonly indexMetaRepo: IndexMetaRepo;
-  private readonly symbolsRepo: SymbolsRepo;
-  private readonly metrics: RuntimeMetrics;
-  private readonly versionService: VersionService;
-  private readonly mappingService: MappingService;
-  private readonly workspaceMappingService: WorkspaceMappingService;
-  private readonly workspaceContextCache: WorkspaceContextCache;
-  private readonly explorerService: MinecraftExplorerService;
-  private readonly registryService: RegistryService;
-  private readonly versionDiffService: VersionDiffService;
-  private readonly modDecompileService: ModDecompileService;
-  private readonly modSearchService: ModSearchService;
-  private readonly lru = new LruList<{ totalContentBytes: number; updatedAt: string }>();
-  private cacheTotalContentBytes = 0;
-  private readonly remappedJarBytes = new Map<string, number>();
-  /** In-flight binary-remap jobs keyed by remapped jar path so concurrent
-   * resolveArtifact calls for the same artifactId share a single tiny-remapper run. */
-  private readonly inflightRemaps = new Map<string, Promise<string>>();
+  readonly artifactsRepo: ArtifactsRepo;
+  readonly filesRepo: FilesRepo;
+  readonly indexMetaRepo: IndexMetaRepo;
+  readonly symbolsRepo: SymbolsRepo;
+  readonly metrics: RuntimeMetrics;
+  readonly versionService: VersionService;
+  readonly mappingService: MappingService;
+  readonly workspaceMappingService: WorkspaceMappingService;
+  readonly workspaceContextCache: WorkspaceContextCache;
+  readonly explorerService: MinecraftExplorerService;
+  readonly registryService: RegistryService;
+  readonly versionDiffService: VersionDiffService;
+  readonly modDecompileService: ModDecompileService;
+  readonly modSearchService: ModSearchService;
+  readonly state = new SourceServiceState();
 
   constructor(
     explicitConfig?: Config,
@@ -8602,7 +8598,7 @@ export class SourceService {
       this.releaseRemappedJarBytes(resolved.artifactId);
     }
 
-    const inflight = this.inflightRemaps.get(remappedJarPath);
+    const inflight = this.state.inflightRemaps.get(remappedJarPath);
     if (inflight) {
       return inflight;
     }
@@ -8613,13 +8609,13 @@ export class SourceService {
       remappedDir,
       remappedJarPath
     });
-    this.inflightRemaps.set(remappedJarPath, remapPromise);
+    this.state.inflightRemaps.set(remappedJarPath, remapPromise);
     try {
       const path = await remapPromise;
       await this.recordRemappedJarBytesFromDisk(resolved.artifactId, path);
       return path;
     } finally {
-      this.inflightRemaps.delete(remappedJarPath);
+      this.state.inflightRemaps.delete(remappedJarPath);
     }
   }
 
@@ -8724,193 +8720,47 @@ export class SourceService {
   }
 
   private hasAnyFiles(artifactId: string): boolean {
-    return this.filesRepo.listFiles(artifactId, { limit: 1 }).items.length > 0;
+    return cacheMetrics.hasAnyFiles(this, artifactId);
   }
 
-  /**
-   * Best-effort cleanup of `<cacheDir>/remapped/<artifactId>.jar` written by
-   * `maybeRemapBinaryForMojang`. Called from cache-eviction paths so the
-   * Mojang-remapped binary jar does not outlive the artifact row that owns it.
-   * Also releases the jar's bytes from `cacheTotalContentBytes`. Errors are
-   * swallowed: orphaned jars remain visible to `manage-cache` under the
-   * `binary-remap` cache kind and can be reclaimed there.
-   */
   private unlinkRemappedJarForArtifact(artifactId: string): void {
-    this.releaseRemappedJarBytes(artifactId);
-    const remappedJarPath = join(this.config.cacheDir, "remapped", `${artifactId}.jar`);
-    try {
-      if (existsSync(remappedJarPath)) {
-        unlinkSync(remappedJarPath);
-      }
-    } catch {
-      // ignore: orphaned jar is still reclaimable via manage-cache binary-remap kind.
-    }
+    cacheMetrics.unlinkRemappedJarForArtifact(this, artifactId);
   }
 
-  /**
-   * Add the remapped jar's on-disk size to `cacheTotalContentBytes` so the
-   * `enforceCacheLimits` byte gate sees the jar before deciding to evict.
-   * Without this, a Mojang-remapped client jar (tens of MB) can accumulate
-   * silently while the indexed-source byte total stays below `maxCacheBytes`.
-   */
   private recordRemappedJarBytes(artifactId: string, sizeBytes: number): void {
-    const normalized = Math.max(0, Math.trunc(sizeBytes));
-    const existing = this.remappedJarBytes.get(artifactId) ?? 0;
-    this.cacheTotalContentBytes = Math.max(
-      0,
-      this.cacheTotalContentBytes - existing + normalized
-    );
-    this.remappedJarBytes.set(artifactId, normalized);
-    this.publishCacheMetrics();
+    cacheMetrics.recordRemappedJarBytes(this, artifactId, sizeBytes);
   }
 
   private releaseRemappedJarBytes(artifactId: string): void {
-    const existing = this.remappedJarBytes.get(artifactId);
-    if (!existing) {
-      return;
-    }
-    this.cacheTotalContentBytes = Math.max(0, this.cacheTotalContentBytes - existing);
-    this.remappedJarBytes.delete(artifactId);
-    this.publishCacheMetrics();
+    cacheMetrics.releaseRemappedJarBytes(this, artifactId);
   }
 
   private enforceCacheLimits(): void {
-    let artifactCount = this.lru.size;
-    let totalBytes = this.cacheTotalContentBytes;
-    if (artifactCount <= this.config.maxArtifacts && totalBytes <= this.config.maxCacheBytes) {
-      return;
-    }
-
-    const candidates = this.lru.toArray();
-    for (const candidate of candidates) {
-      const shouldEvict = artifactCount > this.config.maxArtifacts || totalBytes > this.config.maxCacheBytes;
-      if (!shouldEvict || artifactCount <= 1) {
-        break;
-      }
-
-      const artifactCountBefore = artifactCount;
-      const totalBytesBefore = totalBytes;
-      const remappedBytesForCandidate = this.remappedJarBytes.get(candidate.key) ?? 0;
-      this.filesRepo.deleteFilesForArtifact(candidate.key);
-      this.artifactsRepo.deleteArtifact(candidate.key);
-      this.unlinkRemappedJarForArtifact(candidate.key);
-      this.removeCacheMetrics(candidate.key, false);
-      artifactCount = Math.max(0, artifactCount - 1);
-      totalBytes = Math.max(
-        0,
-        totalBytes - candidate.value.totalContentBytes - remappedBytesForCandidate
-      );
-      this.metrics.recordCacheEviction();
-      log("warn", "cache.evict", {
-        artifactId: candidate.key,
-        artifactCountBefore,
-        totalBytesBefore,
-        artifactBytes: candidate.value.totalContentBytes + remappedBytesForCandidate
-      });
-    }
-
-    this.publishCacheMetrics();
+    cacheMetrics.enforceCacheLimits(this);
   }
 
   private refreshCacheMetrics(): void {
-    const cacheEntries = this.artifactsRepo.countArtifacts();
-    const totalContentBytes = this.artifactsRepo.totalContentBytes();
-    const lruAccounting = this.artifactsRepo.listArtifactsByLruWithContentBytes(Math.max(cacheEntries, 1));
-
-    this.lru.clear();
-    for (const row of lruAccounting) {
-      this.lru.upsert(row.artifactId, {
-        totalContentBytes: row.totalContentBytes,
-        updatedAt: row.updatedAt
-      });
-    }
-    this.remappedJarBytes.clear();
-    let remappedTotal = 0;
-    const remappedDir = join(this.config.cacheDir, "remapped");
-    if (existsSync(remappedDir)) {
-      // Only count remapped jars whose owning artifact is still in the LRU set.
-      // Orphaned jars (artifact deleted, prior unlink lost a race, externally
-      // placed) stay visible to manage-cache under the `binary-remap` kind
-      // for prune, but must not be folded into `cacheTotalContentBytes` here:
-      // enforceCacheLimits cannot evict them, so counting their bytes would
-      // force unrelated live artifacts to be evicted to chase orphan bytes.
-      const liveArtifactIds = new Set(this.lru.toArray().map((entry) => entry.key));
-      try {
-        for (const entry of readdirSync(remappedDir, { withFileTypes: true })) {
-          if (!entry.isFile() || !entry.name.endsWith(".jar")) {
-            continue;
-          }
-          const artifactId = entry.name.slice(0, -".jar".length);
-          if (!liveArtifactIds.has(artifactId)) {
-            continue;
-          }
-          try {
-            const fileStat = statSync(join(remappedDir, entry.name));
-            const size = Math.max(0, Math.trunc(fileStat.size));
-            this.remappedJarBytes.set(artifactId, size);
-            remappedTotal += size;
-          } catch {
-            // ignore stat failure on a single jar; total stays best-effort.
-          }
-        }
-      } catch {
-        // ignore listing failure; remapped accounting stays empty until next remap.
-      }
-    }
-    this.cacheTotalContentBytes = totalContentBytes + remappedTotal;
-    this.publishCacheMetrics();
+    cacheMetrics.refreshCacheMetrics(this);
   }
 
   private touchCacheMetrics(artifactId: string, updatedAt: string): void {
-    const entry = this.lru.touch(artifactId);
-    if (!entry) {
-      this.refreshCacheMetrics();
-      return;
-    }
-    entry.updatedAt = updatedAt;
-    this.publishCacheMetrics();
+    cacheMetrics.touchCacheMetrics(this, artifactId, updatedAt);
   }
 
   private upsertCacheMetrics(artifactId: string, totalContentBytes: number, updatedAt: string): void {
-    const normalizedBytes = Math.max(0, Math.trunc(totalContentBytes));
-    const existing = this.lru.remove(artifactId);
-    if (existing) {
-      this.cacheTotalContentBytes = Math.max(
-        0,
-        this.cacheTotalContentBytes - existing.totalContentBytes + normalizedBytes
-      );
-    } else {
-      this.cacheTotalContentBytes += normalizedBytes;
-    }
-    this.lru.upsert(artifactId, { totalContentBytes: normalizedBytes, updatedAt });
-    this.publishCacheMetrics();
+    cacheMetrics.upsertCacheMetrics(this, artifactId, totalContentBytes, updatedAt);
   }
 
   private removeCacheMetrics(artifactId: string, publish = true): void {
-    const existing = this.lru.remove(artifactId);
-    if (!existing) {
-      this.refreshCacheMetrics();
-      return;
-    }
-    this.cacheTotalContentBytes = Math.max(0, this.cacheTotalContentBytes - existing.totalContentBytes);
-    if (publish) {
-      this.publishCacheMetrics();
-    }
+    cacheMetrics.removeCacheMetrics(this, artifactId, publish);
   }
 
   private publishCacheMetrics(): void {
-    this.metrics.setCacheEntries(this.lru.size);
-    this.metrics.setCacheTotalContentBytes(this.cacheTotalContentBytes);
+    cacheMetrics.publishCacheMetrics(this);
   }
 
   private snapshotLruAccounting(): void {
-    this.metrics.setCacheArtifactByteAccountingRef(
-      this.lru.toArray().map(({ key, value }) => ({
-        artifactId: key,
-        totalContentBytes: value.totalContentBytes,
-        updatedAt: value.updatedAt
-      }))
-    );
+    cacheMetrics.snapshotLruAccounting(this);
   }
 }
 
