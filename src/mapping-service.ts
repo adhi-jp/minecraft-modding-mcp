@@ -2,15 +2,13 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import fastGlob from "fast-glob";
-
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
-import { buildVersionSourceSearchRoots, normalizeOptionalProjectPath } from "./gradle-paths.js";
+import { normalizeOptionalProjectPath } from "./gradle-paths.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
-import { collectMatchedJarEntriesAsUtf8, readJarEntryAsUtf8 } from "./source-jar-reader.js";
+import { collectMatchedJarEntriesAsUtf8 } from "./source-jar-reader.js";
 import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
-import { VersionService, isUnobfuscatedVersion, type ResolvedVersionMappings } from "./version-service.js";
+import { VersionService, isUnobfuscatedVersion } from "./version-service.js";
 import type {
   DirectionIndex,
   MappingLookupSource,
@@ -50,14 +48,12 @@ import {
 } from "./mapping/parsers/normalize.js";
 import {
   PROGUARD_PRIMITIVES,
-  parseClientMappings,
   parseProguardMethod,
   proguardTypeToJvm
 } from "./mapping/parsers/proguard.js";
 import {
   addPairRecords,
-  normalizeTinyNamespace,
-  parseTinyMappings
+  normalizeTinyNamespace
 } from "./mapping/parsers/tiny.js";
 import type {
   CandidateAccumulator,
@@ -100,6 +96,13 @@ import {
   toResolutionCandidate,
   toSymbolReference
 } from "./mapping/lookup.js";
+import { loadMojangPairs } from "./mapping/loaders/mojang.js";
+import { loadTinyPairsFromLoom } from "./mapping/loaders/tiny-loom.js";
+import { loadTinyPairsFromMaven } from "./mapping/loaders/tiny-maven.js";
+import type {
+  MappingLoaderDeps,
+  MappingLoaderResult
+} from "./mapping/loaders/types.js";
 import type {
   ClassApiMatrixEntry,
   ClassApiMatrixInput,
@@ -156,8 +159,6 @@ const SUPPORTED_MAPPINGS: ReadonlySet<SourceMapping> = new Set([
   "intermediary",
   "yarn"
 ]);
-
-const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
 
 type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
@@ -1488,274 +1489,24 @@ export class MappingService {
     }
   }
 
-  private async loadMojangPairs(version: string): Promise<{
-    pairs: Map<PairKey, DirectionIndex>;
-    warnings: string[];
-    mappingArtifact: string;
-  }> {
-    const warnings: string[] = [];
-    let metadata: ResolvedVersionMappings;
-    try {
-      metadata = await this.versionService.resolveVersionMappings(version);
-    } catch (caughtError) {
-      return {
-        pairs: new Map(),
-        warnings: [
-          `Failed to resolve version metadata for "${version}": ${
-            caughtError instanceof Error ? caughtError.message : String(caughtError)
-          }`
-        ],
-        mappingArtifact: `version:${version}`
-      };
-    }
-
-    const clientMappingsUrl = metadata.clientMappingsUrl ?? metadata.mappingsUrl;
-    if (!clientMappingsUrl) {
-      warnings.push(`Minecraft version "${version}" does not expose client mappings URL.`);
-      return {
-        pairs: new Map(),
-        warnings,
-        mappingArtifact: metadata.versionDetailUrl
-      };
-    }
-
-    const mappingsPath = join(this.config.cacheDir, "mappings", version, "client_mappings.txt");
-    if (!existsSync(mappingsPath)) {
-      await mkdir(dirname(mappingsPath), { recursive: true });
-      const downloaded = await downloadToCache(clientMappingsUrl, mappingsPath, {
-        fetchFn: this.fetchFn,
-        retries: this.config.fetchRetries,
-        timeoutMs: this.config.fetchTimeoutMs
-      });
-      if (!downloaded.ok || !downloaded.path) {
-        warnings.push(
-          `Failed to download client mappings from "${clientMappingsUrl}" (status: ${downloaded.statusCode ?? "unknown"}).`
-        );
-        return {
-          pairs: new Map(),
-          warnings,
-          mappingArtifact: clientMappingsUrl
-        };
-      }
-    }
-
-    try {
-      const content = await readFile(mappingsPath, "utf8");
-      return {
-        pairs: parseClientMappings(content),
-        warnings,
-        mappingArtifact: clientMappingsUrl
-      };
-    } catch (caughtError) {
-      warnings.push(
-        `Failed to parse client mappings for "${version}": ${
-          caughtError instanceof Error ? caughtError.message : String(caughtError)
-        }`
-      );
-      return {
-        pairs: new Map(),
-        warnings,
-        mappingArtifact: clientMappingsUrl
-      };
-    }
+  private async loadMojangPairs(version: string): Promise<MappingLoaderResult> {
+    return loadMojangPairs(this.loaderDeps(), version);
   }
 
-  private async loadTinyPairsFromLoom(version: string, projectPath?: string): Promise<{
-    pairs: Map<PairKey, DirectionIndex>;
-    warnings: string[];
-    mappingArtifact: string;
-  }> {
-    const searchRoots = buildVersionSourceSearchRoots(effectiveLoomSearchProjectPath(projectPath));
-    const merged = new Map<PairKey, DirectionIndex>();
-    const discoveredPaths = new Set<string>();
+  private async loadTinyPairsFromLoom(version: string, projectPath?: string): Promise<MappingLoaderResult> {
+    return loadTinyPairsFromLoom(version, projectPath);
+  }
 
-    for (const root of searchRoots) {
-      let discovered: string[] = [];
-      const versionRoot = join(root, version);
-      try {
-        discovered = existsSync(versionRoot)
-          ? await fastGlob.glob(["**/*.tiny", "**/*.tinyv2"], {
-              cwd: versionRoot,
-              absolute: true,
-              onlyFiles: true
-            })
-          : await fastGlob.glob([`${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tiny`, `${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tinyv2`], {
-              cwd: root,
-              absolute: true,
-              onlyFiles: true
-            });
-      } catch {
-        continue;
-      }
-      const byVersion = discovered
-        .filter((path) => path.replaceAll("\\", "/").includes(`/${version}/`))
-        .sort((left, right) => left.localeCompare(right));
-      if (byVersion.length === 0) {
-        continue;
-      }
+  private async loadTinyPairsFromMaven(version: string): Promise<MappingLoaderResult> {
+    return loadTinyPairsFromMaven(this.loaderDeps(), version);
+  }
 
-      for (const path of byVersion) {
-        discoveredPaths.add(path);
-        try {
-          const content = await readFile(path, "utf8");
-          const parsed = parseTinyMappings(content);
-          for (const [key, index] of parsed.entries()) {
-            const existing = merged.get(key);
-            if (!existing) {
-              merged.set(key, index);
-            } else {
-              mergeDirectionIndexes(existing, index);
-            }
-          }
-        } catch {
-          // best effort: skip unreadable or invalid files
-        }
-      }
-    }
-
-    const orderedPaths = [...discoveredPaths].sort((left, right) => left.localeCompare(right));
-    if (orderedPaths.length > 0) {
-      return {
-        pairs: merged,
-        warnings: [],
-        mappingArtifact: orderedPaths[0]!
-      };
-    }
-
+  private loaderDeps(): MappingLoaderDeps {
     return {
-      pairs: new Map(),
-      warnings: [`No Loom tiny mapping files matched version "${version}".`],
-      mappingArtifact: "loom-cache:none"
+      config: this.config,
+      fetchFn: this.fetchFn,
+      versionService: this.versionService
     };
-  }
-
-  private async loadTinyPairsFromMaven(version: string): Promise<{
-    pairs: Map<PairKey, DirectionIndex>;
-    warnings: string[];
-    mappingArtifact: string;
-  }> {
-    const warnings: string[] = [];
-    const merged = new Map<PairKey, DirectionIndex>();
-
-    const repos = this.config.sourceRepos;
-    const intermediaryUrls: string[] = [];
-    const yarnUrls: string[] = [];
-
-    const repoBases = repos.map((repo) => repo.replace(/\/+$/, ""));
-    const yarnCoordinatesByRepo = await Promise.all(
-      repoBases.map(async (base) => ({
-        base,
-        yarnCoordinates: await this.fetchYarnCoordinates(base, version)
-      }))
-    );
-
-    for (const { base, yarnCoordinates } of yarnCoordinatesByRepo) {
-      intermediaryUrls.push(
-        `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`,
-        `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}.jar`
-      );
-
-      for (const coordinate of yarnCoordinates) {
-        yarnUrls.push(
-          `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}-v2.jar`,
-          `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}.jar`
-        );
-      }
-    }
-
-    const allUrls = [...intermediaryUrls, ...yarnUrls];
-    const parsedResults = await Promise.allSettled(
-      allUrls.map(async (url) => {
-        const downloaded = await downloadToCache(url, defaultDownloadPath(this.config.cacheDir, url), {
-          fetchFn: this.fetchFn,
-          retries: this.config.fetchRetries,
-          timeoutMs: this.config.fetchTimeoutMs
-        });
-        if (!downloaded.ok || !downloaded.path) {
-          return undefined;
-        }
-
-        return this.parseTinyFromJar(downloaded.path);
-      })
-    );
-
-    for (const result of parsedResults) {
-      if (result.status !== "fulfilled" || !result.value) {
-        continue;
-      }
-      for (const [key, index] of result.value.entries()) {
-        const existing = merged.get(key);
-        if (!existing) {
-          merged.set(key, index);
-        } else {
-          mergeDirectionIndexes(existing, index);
-        }
-      }
-    }
-
-    if (merged.size === 0) {
-      warnings.push(`No Maven tiny mappings could be loaded for "${version}".`);
-    }
-
-    return {
-      pairs: merged,
-      warnings,
-      mappingArtifact: allUrls[0] ?? "maven:none"
-    };
-  }
-
-  private async parseTinyFromJar(jarPath: string): Promise<Map<PairKey, DirectionIndex>> {
-    const tinyEntries = (await collectMatchedJarEntriesAsUtf8(
-      jarPath,
-      (entry) => entry.toLowerCase().endsWith(".tiny") || entry.toLowerCase().endsWith(".tinyv2"),
-      { continueOnError: true }
-    )).sort((left, right) => left.filePath.localeCompare(right.filePath));
-
-    const merged = new Map<PairKey, DirectionIndex>();
-    for (const entry of tinyEntries) {
-      try {
-        const parsed = parseTinyMappings(entry.content);
-        for (const [key, index] of parsed.entries()) {
-          const existing = merged.get(key);
-          if (!existing) {
-            merged.set(key, index);
-          } else {
-            mergeDirectionIndexes(existing, index);
-          }
-        }
-      } catch {
-        // skip malformed tiny entries
-      }
-    }
-
-    return merged;
-  }
-
-  private async fetchYarnCoordinates(repoBase: string, version: string): Promise<string[]> {
-    const metadataUrl = `${repoBase}/net/fabricmc/yarn/maven-metadata.xml`;
-    try {
-      const response = await this.fetchFn(metadataUrl);
-      if (!response.ok) {
-        return [];
-      }
-      const xml = await response.text();
-      const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
-        .map((match) => match[1]?.trim() ?? "")
-        .filter((value) => value.startsWith(`${version}+build.`));
-
-      const sorted = versions.sort((left, right) => {
-        const leftBuild = Number.parseInt(left.split("+build.")[1] ?? "0", 10);
-        const rightBuild = Number.parseInt(right.split("+build.")[1] ?? "0", 10);
-        return rightBuild - leftBuild;
-      });
-
-      if (sorted.length > 0) {
-        return sorted.slice(0, 3);
-      }
-      return [version];
-    } catch {
-      return [version];
-    }
   }
 
   private trimGraphCache(): void {
