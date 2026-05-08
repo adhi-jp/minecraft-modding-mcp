@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
-import type { ValidateProjectInput, ValidateProjectService } from "../../validate-project-service.js";
+import type { ValidateProjectInput } from "../../validate-project-service.js";
+import { type ValidateProjectDeps } from "../internal.js";
 
 export async function handleAccessWidener(
-  svc: ValidateProjectService,
+  deps: ValidateProjectDeps,
   input: ValidateProjectInput,
   detail: DetailLevel,
   include: string[]
@@ -45,7 +46,7 @@ if (!input.version) {
 const content = input.subject.input.mode === "inline"
   ? input.subject.input.content
   : await readFile(input.subject.input.path, "utf8");
-const output = await svc.deps.validateAccessWidener({
+const output = await deps.validateAccessWidener({
   content,
   version: input.version,
   mapping: input.mapping,

@@ -1,20 +1,20 @@
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type NextAction, type Summary } from "../../response-contract.js";
 import { nextActionsOrUndefined } from "../../request-normalizers.js";
-import { hasPartialVanillaCoverage, type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { hasPartialVanillaCoverage, type Subject, buildClassSubject, resolveClassArtifactReference, invalidTaskSubjectError, resolveBinaryBackedClass, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleClassOverview(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[]
 ) {
   if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-    svc.invalidTaskSubjectError("class-overview", subject);
+    invalidTaskSubjectError("class-overview", subject);
   }
 
-  const classSubject = svc.buildClassSubject(subject);
+  const classSubject = buildClassSubject(subject);
   const className = classSubject.className;
-  const artifact = await svc.resolveClassArtifactReference(subject, classSubject, "class-overview");
+  const artifact = await resolveClassArtifactReference(deps, subject, classSubject, "class-overview");
 
   if (!artifact.artifactId) {
     const summary: Summary = {
@@ -43,7 +43,7 @@ svc: InspectMinecraftService,
     };
   }
 
-  const matches = await svc.deps.findClass({
+  const matches = await deps.findClass({
     artifactId: artifact.artifactId,
     className,
     limit: 10
@@ -52,13 +52,13 @@ svc: InspectMinecraftService,
   if (matches.total === 0) {
     const partialSourceFallback =
       subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact)
-        ? await svc.resolveBinaryBackedClass(className, {
+        ? await resolveBinaryBackedClass(deps, className, {
             version: artifact.version,
             mapping: classSubject.mapping
           })
         : undefined;
     if (partialSourceFallback) {
-      const metadata = await svc.deps.getClassSource({
+      const metadata = await deps.getClassSource({
         className: partialSourceFallback.className,
         artifactId: artifact.artifactId,
         mapping: classSubject.mapping,
@@ -196,7 +196,7 @@ svc: InspectMinecraftService,
   }
 
   const match = matches.matches[0]!;
-  const metadata = await svc.deps.getClassSource({
+  const metadata = await deps.getClassSource({
     className: match.qualifiedName,
     artifactId: artifact.artifactId,
     mode: "metadata"

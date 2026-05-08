@@ -1,19 +1,19 @@
 import { buildEntryToolResult, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
-import { type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { type Subject, buildClassSubject, resolveClassArtifactReference, invalidTaskSubjectError, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleClassSource(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[]
 ) {
   if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-    svc.invalidTaskSubjectError("class-source", subject);
+    invalidTaskSubjectError("class-source", subject);
   }
-  const classSubject = svc.buildClassSubject(subject);
+  const classSubject = buildClassSubject(subject);
   const className = classSubject.className;
-  const artifactContext = await svc.resolveClassArtifactReference(subject, classSubject, "class-source");
-  const source = await svc.deps.getClassSource({
+  const artifactContext = await resolveClassArtifactReference(deps, subject, classSubject, "class-source");
+  const source = await deps.getClassSource({
     className,
     artifactId: artifactContext.artifactId || undefined,
     mapping: classSubject.mapping,

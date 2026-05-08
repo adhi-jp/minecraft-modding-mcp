@@ -1,10 +1,11 @@
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
-import type { ValidateProjectInput, ValidateProjectService } from "../../validate-project-service.js";
+import type { ValidateProjectInput } from "../../validate-project-service.js";
+import { type ValidateProjectDeps } from "../internal.js";
 
 export async function handleMixin(
-  svc: ValidateProjectService,
+  deps: ValidateProjectDeps,
   input: ValidateProjectInput,
   detail: DetailLevel,
   include: string[]
@@ -41,7 +42,7 @@ if (!input.version) {
     }
   });
 }
-const output = await svc.deps.validateMixin({
+const output = await deps.validateMixin({
   input: input.subject.input,
   version: input.version,
   mapping: input.mapping,

@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
-import type { ValidateProjectInput, ValidateProjectService } from "../../validate-project-service.js";
+import type { ValidateProjectInput } from "../../validate-project-service.js";
+import { buildEarlyTasksForBlocked, buildFullTaskStatusReport, type ValidateProjectDeps } from "../internal.js";
 
 export async function handleProjectSummary(
-  svc: ValidateProjectService,
+  deps: ValidateProjectDeps,
   input: ValidateProjectInput,
   detail: DetailLevel,
   include: string[]
@@ -49,7 +50,7 @@ if (!input.version && !input.preferProjectVersion) {
       }
     }
   });
-  const tasks = await svc.buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
+  const tasks = await buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -59,19 +60,19 @@ if (!input.version && !input.preferProjectVersion) {
 
 const projectPath = input.subject.projectPath;
 const detectedProjectVersion = input.preferProjectVersion
-  ? await svc.deps.detectProjectMinecraftVersion?.(projectPath)
+  ? await deps.detectProjectMinecraftVersion?.(projectPath)
   : undefined;
 const resolvedVersion = detectedProjectVersion ?? input.version;
 const discover = input.subject.discover ?? ["mixins", "access-wideners"];
 const [mixinConfigs, accessWideners, accessTransformers] = await Promise.all([
   discover.includes("mixins")
-    ? svc.deps.discoverMixins(projectPath, input.configPaths)
+    ? deps.discoverMixins(projectPath, input.configPaths)
     : Promise.resolve([]),
   discover.includes("access-wideners")
-    ? svc.deps.discoverAccessWideners(projectPath)
+    ? deps.discoverAccessWideners(projectPath)
     : Promise.resolve([]),
   discover.includes("access-transformers")
-    ? svc.deps.discoverAccessTransformers?.(projectPath) ?? Promise.resolve([])
+    ? deps.discoverAccessTransformers?.(projectPath) ?? Promise.resolve([])
     : Promise.resolve([])
 ]);
 
@@ -111,7 +112,7 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
       }
     }
   });
-  const tasks = await svc.buildEarlyTasksForBlocked(projectPath, detail, include, {
+  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, {
     mixinDiscoveryCount: mixinConfigs.length,
     awDiscoveryCount: accessWideners.length,
     atDiscoveryCount: accessTransformers.length
@@ -154,7 +155,7 @@ if (!resolvedVersion) {
       }
     }
   });
-  const tasks = await svc.buildEarlyTasksForBlocked(projectPath, detail, include);
+  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -171,7 +172,7 @@ let invalidMixins = 0;
 let mixinCaughtErrors = 0;
 for (const configPath of mixinConfigs) {
   try {
-    const mixinResult = await svc.deps.validateMixin({
+    const mixinResult = await deps.validateMixin({
       input: {
         mode: "config",
         configPaths: [configPath]
@@ -219,7 +220,7 @@ let invalidAw = 0;
 let awCaughtErrors = 0;
 for (const awPath of accessWideners) {
   try {
-    const output = await svc.deps.validateAccessWidener({
+    const output = await deps.validateAccessWidener({
       content: await readFile(awPath, "utf8"),
       version: validationVersion,
       mapping: input.mapping,
@@ -252,13 +253,13 @@ let invalidAt = 0;
 let atCaughtErrors = 0;
 for (const atPath of accessTransformers) {
   try {
-    if (!svc.deps.validateAccessTransformer) {
+    if (!deps.validateAccessTransformer) {
       throw createError({
         code: ERROR_CODES.CONTEXT_UNRESOLVED,
         message: "Access Transformer validation is not configured."
       });
     }
-    const output = await svc.deps.validateAccessTransformer({
+    const output = await deps.validateAccessTransformer({
       content: await readFile(atPath, "utf8"),
       version: validationVersion,
       atNamespace: input.atNamespace,
@@ -329,7 +330,7 @@ const baseResult = buildEntryToolResult({
   },
   alwaysBlocks: ["project"]
 });
-const tasks = await svc.buildFullTaskStatusReport({
+const tasks = await buildFullTaskStatusReport(deps, {
   projectPath,
   detail,
   include,

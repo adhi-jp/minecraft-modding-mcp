@@ -20,6 +20,7 @@ import {
 
 test("entry tool schemas expose explicit defaults on safe public parameters", async () => {
   const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
+  const inspectMinecraftInternalSource = await readFile("src/entry-tools/inspect-minecraft/internal.ts", "utf8");
   const validateProjectSource = await readFile("src/entry-tools/validate-project-service.ts", "utf8");
   const analyzeSymbolSource = await readFile("src/entry-tools/analyze-symbol-service.ts", "utf8");
   const compareMinecraftSource = await readFile("src/entry-tools/compare-minecraft-service.ts", "utf8");
@@ -39,7 +40,7 @@ test("entry tool schemas expose explicit defaults on safe public parameters", as
   assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(inspectMinecraftSource, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
   assert.equal(
-    inspectMinecraftSource.match(/queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/g)?.length ?? 0,
+    inspectMinecraftInternalSource.match(/queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/g)?.length ?? 0,
     2
   );
   assert.match(analyzeModSource, /searchType:\s*z\.enum\(\["class", "method", "field", "content", "all"\]\)\.default\("all"\)/);

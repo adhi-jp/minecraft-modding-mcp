@@ -1,20 +1,20 @@
 import { buildEntryToolResult, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
-import { type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { type Subject, requireWorkspaceFileFocus, resolveWorkspaceArtifactReference, invalidTaskSubjectError, resolveArtifactReference, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleFile(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[]
 ) {
   if (subject.kind !== "file" && !(subject.kind === "workspace" && subject.focus?.kind === "file")) {
-    svc.invalidTaskSubjectError("file", subject);
+    invalidTaskSubjectError("file", subject);
   }
-  const fileSubject = subject.kind === "file" ? subject : svc.requireWorkspaceFileFocus(subject);
+  const fileSubject = subject.kind === "file" ? subject : requireWorkspaceFileFocus(subject);
   const artifact = subject.kind === "file"
-    ? await svc.resolveArtifactReference(subject, "file")
-    : await svc.resolveWorkspaceArtifactReference(subject, fileSubject.artifact);
-  const file = await svc.deps.getArtifactFile({
+    ? await resolveArtifactReference(deps, subject, "file")
+    : await resolveWorkspaceArtifactReference(deps, subject, fileSubject.artifact);
+  const file = await deps.getArtifactFile({
     artifactId: artifact.artifactId,
     filePath: fileSubject.filePath
   });

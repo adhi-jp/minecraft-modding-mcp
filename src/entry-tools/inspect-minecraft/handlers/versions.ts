@@ -1,14 +1,15 @@
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
 import { nextActionsOrUndefined } from "../../request-normalizers.js";
-import { type InspectMinecraftInput, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { type InspectMinecraftDeps } from "../internal.js";
+import { type InspectMinecraftInput } from "../../inspect-minecraft-service.js";
 
 export async function handleVersions(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   input: InspectMinecraftInput,
   detail: DetailLevel,
   include: string[]
 ) {
-  const versions = await svc.deps.listVersions({
+  const versions = await deps.listVersions({
     includeSnapshots: input.includeSnapshots,
     limit: input.limit
   });

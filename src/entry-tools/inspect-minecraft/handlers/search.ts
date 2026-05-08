@@ -1,9 +1,9 @@
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
 import { capArray, nextActionsOrUndefined } from "../../request-normalizers.js";
-import { classNameToFilePath, hasPartialVanillaCoverage, hitTargetsVanillaNamespace, looksLikeClassQuery, type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { classNameToFilePath, hasPartialVanillaCoverage, hitTargetsVanillaNamespace, looksLikeClassQuery, type Subject, requireWorkspaceSearchFocus, resolveWorkspaceArtifactReference, summarizeRequestedSubject, invalidTaskSubjectError, resolveBinaryBackedClass, resolveArtifactReference, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleSearch(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[],
@@ -11,16 +11,16 @@ svc: InspectMinecraftService,
   cursor: string | undefined
 ) {
   if (subject.kind !== "search" && !(subject.kind === "workspace" && subject.focus?.kind === "search")) {
-    svc.invalidTaskSubjectError("search", subject);
+    invalidTaskSubjectError("search", subject);
   }
 
-  const searchSubject = subject.kind === "search" ? subject : svc.requireWorkspaceSearchFocus(subject);
-  const requestedSubject = svc.summarizeRequestedSubject(subject);
+  const searchSubject = subject.kind === "search" ? subject : requireWorkspaceSearchFocus(subject);
+  const requestedSubject = summarizeRequestedSubject(subject);
   const queryMode = searchSubject.queryMode ?? "auto";
   const artifact = subject.kind === "search"
-    ? await svc.resolveArtifactReference(subject, "search")
-    : await svc.resolveWorkspaceArtifactReference(subject, searchSubject.artifact);
-  const search = await svc.deps.searchClassSource({
+    ? await resolveArtifactReference(deps, subject, "search")
+    : await resolveWorkspaceArtifactReference(deps, subject, searchSubject.artifact);
+  const search = await deps.searchClassSource({
     artifactId: artifact.artifactId,
     query: searchSubject.query,
     intent: searchSubject.intent,
@@ -43,7 +43,7 @@ svc: InspectMinecraftService,
     looksLikeClassQuery(searchSubject.query) &&
     !search.hits.some((hit) => hitTargetsVanillaNamespace(hit));
   const binaryBackedClassHit = needsBinaryBackedClassHit
-    ? await svc.resolveBinaryBackedClass(searchSubject.query, {
+    ? await resolveBinaryBackedClass(deps, searchSubject.query, {
         version: artifact.version,
         mapping: subject.mapping
       })

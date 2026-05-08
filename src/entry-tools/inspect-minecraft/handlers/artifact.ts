@@ -1,14 +1,14 @@
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
 import { nextActionsOrUndefined } from "../../request-normalizers.js";
-import { type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { type Subject, resolveArtifactReference, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleArtifact(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[]
 ) {
-  const resolved = await svc.resolveArtifactReference(subject);
+  const resolved = await resolveArtifactReference(deps, subject);
   if (!resolved.artifactId) {
     const summary: Summary = {
       status: "blocked",

@@ -1,17 +1,17 @@
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
 import { capArray, nextActionsOrUndefined } from "../../request-normalizers.js";
-import { hasPartialVanillaCoverage, type Subject, type InspectMinecraftService } from "../../inspect-minecraft-service.js";
+import { hasPartialVanillaCoverage, type Subject, resolveArtifactReference, type InspectMinecraftDeps } from "../internal.js";
 
 export async function handleListFiles(
-svc: InspectMinecraftService,
+deps: InspectMinecraftDeps,
   subject: Subject,
   detail: DetailLevel,
   include: string[],
   limit: number | undefined,
   cursor: string | undefined
 ) {
-  const artifact = await svc.resolveArtifactReference(subject, "list-files");
-  const files = await svc.deps.listArtifactFiles({
+  const artifact = await resolveArtifactReference(deps, subject, "list-files");
+  const files = await deps.listArtifactFiles({
     artifactId: artifact.artifactId,
     limit,
     cursor
