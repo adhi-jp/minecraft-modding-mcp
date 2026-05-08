@@ -31,6 +31,8 @@ import type {
 } from "../types.js";
 import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
+import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
+import { remapAndCountMembers, sliceMembersWithLimit } from "./class-source/members-builder.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
 
@@ -726,46 +728,21 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     });
   }
 
-  const lines = row.content.split(/\r?\n/);
-  const totalLines = lines.length;
-
-  let sourceText: string;
-  let returnedStart: number;
-  let returnedEnd: number;
-  let truncated = false;
-  let charsTruncated = false;
-
-  if (mode === "metadata") {
-    const metadataText = classSourceHelpers.extractClassMetadata(filePath, row.content);
-    sourceText = metadataText;
-    returnedStart = 1;
-    returnedEnd = totalLines;
-    truncated = false;
-  } else {
-    const requestedStart = startLine ?? 1;
-    const requestedEnd = endLine ?? totalLines;
-    const normalizedStart = Math.min(Math.max(1, requestedStart), Math.max(totalLines, 1));
-    const normalizedEnd = Math.min(Math.max(normalizedStart, requestedEnd), Math.max(totalLines, 1));
-    let selectedLines = lines.slice(normalizedStart - 1, normalizedEnd);
-    const clippedByRange = normalizedStart !== requestedStart || normalizedEnd !== requestedEnd;
-
-    let clippedByMax = false;
-    if (maxLines != null && selectedLines.length > maxLines) {
-      selectedLines = selectedLines.slice(0, maxLines);
-      clippedByMax = true;
-    }
-
-    sourceText = selectedLines.join("\n");
-    returnedStart = normalizedStart;
-    returnedEnd = normalizedStart + Math.max(0, selectedLines.length - 1);
-    truncated = clippedByRange || clippedByMax;
-  }
-
-  if (maxChars != null && sourceText.length > maxChars) {
-    sourceText = sourceText.slice(0, maxChars);
-    charsTruncated = true;
-    truncated = true;
-  }
+  const snippet = buildClassSourceSnippet({
+    filePath,
+    content: row.content,
+    mode,
+    startLine,
+    endLine,
+    maxLines,
+    maxChars
+  });
+  let sourceText = snippet.sourceText;
+  const totalLines = snippet.totalLines;
+  const returnedStart = snippet.returnedStart;
+  const returnedEnd = snippet.returnedEnd;
+  const truncated = snippet.truncated;
+  const charsTruncated = snippet.charsTruncated;
 
   let resolvedOutputFile: string | undefined;
   if (outputFile) {
@@ -986,81 +963,23 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     signatureMethods = [];
   }
 
-  let remappedConstructors =
-    version != null
-      ? (
-          await svc.remapSignatureMembers(
-            signatureConstructors,
-            "method",
-            version,
-            mappingApplied,
-            requestedMapping,
-            input.sourcePriority,
-            warnings
-          )
-        ).members
-      : signatureConstructors;
-  let remappedFields =
-    version != null
-      ? (
-          await svc.remapSignatureMembers(
-            signatureFields,
-            "field",
-            version,
-            mappingApplied,
-            requestedMapping,
-            input.sourcePriority,
-            warnings
-          )
-        ).members
-      : signatureFields;
-  let remappedMethods =
-    version != null
-      ? (
-          await svc.remapSignatureMembers(
-            signatureMethods,
-            "method",
-            version,
-            mappingApplied,
-            requestedMapping,
-            input.sourcePriority,
-            warnings
-          )
-        ).members
-      : signatureMethods;
-
-  if (requestedMapping !== mappingApplied && memberPattern) {
-    const lowerPattern = memberPattern.toLowerCase();
-    remappedConstructors = remappedConstructors.filter((m) => m.name.toLowerCase().includes(lowerPattern));
-    remappedFields = remappedFields.filter((m) => m.name.toLowerCase().includes(lowerPattern));
-    remappedMethods = remappedMethods.filter((m) => m.name.toLowerCase().includes(lowerPattern));
-  }
-
-  const counts = {
-    constructors: remappedConstructors.length,
-    fields: remappedFields.length,
-    methods: remappedMethods.length,
-    total: remappedConstructors.length + remappedFields.length + remappedMethods.length
-  };
-
-  let remaining = maxMembers;
-  const takeWithinLimit = (members: SignatureMember[]): SignatureMember[] => {
-    if (remaining <= 0) {
-      return [];
-    }
-    const slice = members.slice(0, remaining);
-    remaining -= slice.length;
-    return slice;
-  };
-
-  const constructors = takeWithinLimit(remappedConstructors);
-  const fields = takeWithinLimit(remappedFields);
-  const methods = takeWithinLimit(remappedMethods);
-  const returnedTotal = constructors.length + fields.length + methods.length;
-  const truncated = returnedTotal < counts.total;
-  if (truncated) {
-    warnings.push(`Member list was truncated to ${returnedTotal} entries (from ${counts.total}).`);
-  }
+  const remapped = await remapAndCountMembers(svc, {
+    signatureConstructors,
+    signatureFields,
+    signatureMethods,
+    version,
+    mappingApplied,
+    requestedMapping,
+    sourcePriority: input.sourcePriority,
+    memberPattern,
+    warnings
+  });
+  const counts = remapped.counts;
+  const sliced = sliceMembersWithLimit(remapped, counts.total, maxMembers, warnings);
+  const constructors = sliced.constructors;
+  const fields = sliced.fields;
+  const methods = sliced.methods;
+  const truncated = sliced.truncated;
 
   const normalizedProvenance =
     provenance ??
