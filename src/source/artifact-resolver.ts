@@ -862,6 +862,43 @@ export async function resolveVersionContext(svc: SourceService, input: {
   return detected;
 }
 
+export async function resolveBinaryFallbackArtifact(svc: SourceService, input: {
+  binaryJarPath?: string;
+  version?: string;
+  coordinate?: string;
+  requestedMapping: SourceMapping;
+  mappingApplied: SourceMapping;
+  provenance?: ArtifactProvenance;
+  qualityFlags: string[];
+}): Promise<ResolvedSourceArtifact | undefined> {
+  const binaryJarPath = normalizeOptionalString(input.binaryJarPath);
+  if (!binaryJarPath) {
+    return undefined;
+  }
+
+  try {
+    const fallbackResolved = await resolveSourceTargetInternal(
+      { kind: "jar", value: binaryJarPath },
+      { allowDecompile: true, preferBinaryOnly: true },
+      svc.config
+    );
+    fallbackResolved.version = fallbackResolved.version ?? input.version;
+    fallbackResolved.coordinate = fallbackResolved.coordinate ?? input.coordinate;
+    fallbackResolved.requestedMapping = input.requestedMapping;
+    fallbackResolved.mappingApplied = input.mappingApplied;
+    fallbackResolved.provenance = input.provenance;
+    fallbackResolved.qualityFlags = dedupeQualityFlags([
+      ...(fallbackResolved.qualityFlags ?? []),
+      ...input.qualityFlags,
+      "binary-fallback"
+    ]);
+    await svc.ingestIfNeeded(fallbackResolved);
+    return fallbackResolved;
+  } catch {
+    return undefined;
+  }
+}
+
 function buildVersionSourceRecoveryCommand(projectPath?: string): string {
   const normalizedProjectPath = normalizeOptionalProjectPath(projectPath);
   const prefix = normalizedProjectPath

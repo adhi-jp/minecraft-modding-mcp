@@ -2606,32 +2606,7 @@ export class SourceService {
     provenance?: ArtifactProvenance;
     qualityFlags: string[];
   }): Promise<ResolvedSourceArtifact | undefined> {
-    const binaryJarPath = normalizeOptionalString(input.binaryJarPath);
-    if (!binaryJarPath) {
-      return undefined;
-    }
-
-    try {
-      const fallbackResolved = await resolveSourceTargetInternal(
-        { kind: "jar", value: binaryJarPath },
-        { allowDecompile: true, preferBinaryOnly: true },
-        this.config
-      );
-      fallbackResolved.version = fallbackResolved.version ?? input.version;
-      fallbackResolved.coordinate = fallbackResolved.coordinate ?? input.coordinate;
-      fallbackResolved.requestedMapping = input.requestedMapping;
-      fallbackResolved.mappingApplied = input.mappingApplied;
-      fallbackResolved.provenance = input.provenance;
-      fallbackResolved.qualityFlags = dedupeQualityFlags([
-        ...(fallbackResolved.qualityFlags ?? []),
-        ...input.qualityFlags,
-        "binary-fallback"
-      ]);
-      await this.ingestIfNeeded(fallbackResolved);
-      return fallbackResolved;
-    } catch {
-      return undefined;
-    }
+    return artifactResolver.resolveBinaryFallbackArtifact(this, input);
   }
 
   private buildProvenance(input: {
