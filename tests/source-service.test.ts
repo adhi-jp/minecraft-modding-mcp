@@ -5299,20 +5299,20 @@ test("SourceService validateAccessWidener chooses the expected mapping namespace
 });
 
 test("SourceService runtime-aware access widener candidate scan avoids loader-constant scoring and broad jar globs", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
+  const source = await readFile("src/source/artifact-resolver.ts", "utf8");
 
   assert.doesNotMatch(source, /\(input\.requestedScope === "loader" \? 1_000 : 0\)/);
   assert.doesNotMatch(source, /fastGlob\.sync\("\*\*\/\*\.jar"/);
 });
 
 test("SourceService version/runtime discovery blocks avoid sync glob scans on hot paths", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
+  const source = await readFile("src/source/artifact-resolver.ts", "utf8");
   const versionSourceBlock =
-    source.match(/private async discoverVersionSourceJar\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+    source.match(/export async function discoverVersionSourceJar\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
   const accessWidenerBlock =
-    source.match(/private (?:async )?discoverAccessWidenerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+    source.match(/export async function discoverAccessWidenerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
   const accessTransformerBlock =
-    source.match(/private (?:async )?discoverAccessTransformerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
+    source.match(/export async function discoverAccessTransformerRuntimeCandidates\([\s\S]*?return \{\s*searchedPaths,/m)?.[0] ?? "";
 
   assert.doesNotMatch(versionSourceBlock, /fastGlob\.sync\(/);
   assert.doesNotMatch(accessWidenerBlock, /fastGlob\.sync\(/);
