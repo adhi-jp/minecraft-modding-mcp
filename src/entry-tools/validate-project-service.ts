@@ -12,6 +12,10 @@ import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { handleMixin } from "./validate-project/cases/mixin.js";
+import { handleAccessWidener } from "./validate-project/cases/access-widener.js";
+import { handleAccessTransformer } from "./validate-project/cases/access-transformer.js";
+import { handleProjectSummary } from "./validate-project/cases/project-summary.js";
 
 const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
@@ -21,7 +25,7 @@ const VALIDATE_PROJECT_TASKS_OFF = process.env.VALIDATE_PROJECT_TASKS_OFF === "1
 
 export type TaskStatus = "ok" | "skipped" | "missing" | "error";
 
-type TaskEntryBase = {
+export type TaskEntryBase = {
   status: TaskStatus;
   durationMs?: number;
   error?: { code: string; detail: string };
@@ -149,7 +153,7 @@ export const validateProjectSchema = z.object(validateProjectShape).superRefine(
 
 export type ValidateProjectInput = z.infer<typeof validateProjectSchema>;
 
-type ValidateProjectDeps = {
+export type ValidateProjectDeps = {
   validateMixin: (input: Record<string, unknown>) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   validateAccessWidener: (input: {
     content: string;
@@ -598,9 +602,13 @@ function projectTaskStatusReport(
 }
 
 export class ValidateProjectService {
-  constructor(private readonly deps: ValidateProjectDeps) {}
+  readonly deps: ValidateProjectDeps;
 
-  private async runUpstreamProbes(projectPath: string): Promise<{
+  constructor(deps: ValidateProjectDeps) {
+    this.deps = deps;
+  }
+
+  async runUpstreamProbes(projectPath: string): Promise<{
     workspace: TaskStatusReport["workspace.detected"];
     gradle: TaskStatusReport["gradle.readable"];
     loom: TaskStatusReport["loom.cache.found"];
@@ -616,7 +624,7 @@ export class ValidateProjectService {
     return { workspace, gradle, loom };
   }
 
-  private async buildEarlyTasksForBlocked(
+  async buildEarlyTasksForBlocked(
     projectPath: string,
     detail: "summary" | "standard" | "full",
     include: string[],
@@ -659,7 +667,7 @@ export class ValidateProjectService {
     return projectTaskStatusReport(report, detail, include);
   }
 
-  private async buildFullTaskStatusReport(args: {
+  async buildFullTaskStatusReport(args: {
     projectPath: string;
     detail: "summary" | "standard" | "full";
     include: string[];
@@ -746,632 +754,14 @@ export class ValidateProjectService {
     const include = resolveInclude(input.include);
 
     switch (input.task) {
-      case "mixin": {
-        if (input.subject.kind !== "mixin") {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=mixin requires subject.kind=mixin.",
-            details: {
-              task: input.task,
-              subjectKind: input.subject.kind,
-              failedStage: "input-validation",
-              nextAction: "Set subject.kind to \"mixin\" for task=\"mixin\"."
-            }
-          });
-        }
-        if (!input.version) {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=mixin requires version.",
-            details: {
-              task: "mixin",
-              failedStage: "input-validation",
-              nextAction:
-                "Pass version explicitly (e.g. \"1.21.10\"). task=\"project-summary\" supports preferProjectVersion for auto-detection from gradle.properties, but direct task=\"mixin\" requires an explicit version.",
-              ...buildSuggestedCall({
-                tool: "validate-project",
-                params: {
-                  task: "mixin",
-                  subject: input.subject,
-                  version: "1.21.10"
-                }
-              })
-            }
-          });
-        }
-        const output = await this.deps.validateMixin({
-          input: input.subject.input,
-          version: input.version,
-          mapping: input.mapping,
-          sourcePriority: input.sourcePriority,
-          scope: input.scope,
-          preferProjectVersion: input.preferProjectVersion,
-          preferProjectMapping: input.preferProjectMapping,
-          sourceRoots: input.sourceRoots,
-          minSeverity: input.minSeverity,
-          hideUncertain: input.hideUncertain,
-          explain: input.explain,
-          warningMode: input.warningMode,
-          warningCategoryFilter: input.warningCategoryFilter,
-          treatInfoAsWarning: input.treatInfoAsWarning,
-          includeIssues: input.includeIssues
-        });
-        const summary = output.summary as {
-          total?: number;
-          valid?: number;
-          partial?: number;
-          invalid?: number;
-        } | undefined;
-        const invalidCount = summary?.invalid ?? 0;
-        const partialCount = summary?.partial ?? 0;
-        return {
-          ...buildEntryToolResult({
-            task: "mixin",
-            detail,
-            include,
-            summary: {
-              status: invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok",
-              headline: `Validated ${summary?.total ?? 0} mixin input(s).`,
-              subject: createSummarySubject({
-                task: "mixin",
-                kind: input.subject.kind,
-                input: input.subject.input,
-                version: input.version,
-                mapping: input.mapping,
-                sourcePriority: input.sourcePriority,
-                scope: input.scope
-              }),
-              counts: {
-                valid: summary?.valid ?? 0,
-                partial: partialCount,
-                invalid: invalidCount
-              }
-            },
-            blocks: {
-              project: {
-                summary
-              },
-              issues: include.includes("issues") || detail !== "summary" ? output.results : undefined
-            },
-            alwaysBlocks: ["project"]
-          }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
-        };
-      }
-      case "access-widener": {
-        if (input.subject.kind !== "access-widener") {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-widener requires subject.kind=access-widener.",
-            details: {
-              task: input.task,
-              subjectKind: input.subject.kind,
-              failedStage: "input-validation",
-              nextAction: "Set subject.kind to \"access-widener\" for task=\"access-widener\"."
-            }
-          });
-        }
-        if (!input.version) {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-widener requires version.",
-            details: {
-              task: "access-widener",
-              failedStage: "input-validation",
-              nextAction:
-                "Pass version explicitly (e.g. \"1.21.10\"). Access Widener validation resolves class names against a specific Minecraft version.",
-              ...buildSuggestedCall({
-                tool: "validate-project",
-                params: {
-                  task: "access-widener",
-                  subject: input.subject,
-                  version: "1.21.10"
-                }
-              })
-            }
-          });
-        }
-        const content = input.subject.input.mode === "inline"
-          ? input.subject.input.content
-          : await readFile(input.subject.input.path, "utf8");
-        const output = await this.deps.validateAccessWidener({
-          content,
-          version: input.version,
-          mapping: input.mapping,
-          sourcePriority: input.sourcePriority,
-          scope: input.scope,
-          preferProjectVersion: input.preferProjectVersion
-        });
-        return {
-          ...buildEntryToolResult({
-            task: "access-widener",
-            detail,
-            include,
-            summary: {
-              status: output.valid ? "ok" : "invalid",
-              headline: output.valid
-                ? "Access Widener is valid."
-                : "Access Widener contains validation issues.",
-              subject: createSummarySubject({
-                task: "access-widener",
-                kind: input.subject.kind,
-                input: input.subject.input,
-                version: input.version,
-                mapping: input.mapping,
-                sourcePriority: input.sourcePriority
-              }),
-              counts: {
-                valid: output.valid ? 1 : 0,
-                invalid: output.valid ? 0 : 1
-              }
-            },
-            blocks: {
-              project: {
-                summary: {
-                  total: 1,
-                  valid: output.valid ? 1 : 0,
-                  invalid: output.valid ? 0 : 1
-                }
-              },
-              issues: include.includes("issues") || detail !== "summary" ? output.issues : undefined
-            },
-            alwaysBlocks: ["project"]
-          }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
-        };
-      }
-      case "access-transformer": {
-        if (input.subject.kind !== "access-transformer") {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-transformer requires subject.kind=access-transformer.",
-            details: {
-              task: input.task,
-              subjectKind: input.subject.kind,
-              failedStage: "input-validation",
-              nextAction:
-                "Set subject.kind to \"access-transformer\" for task=\"access-transformer\"."
-            }
-          });
-        }
-        if (!input.version) {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=access-transformer requires version.",
-            details: {
-              task: "access-transformer",
-              failedStage: "input-validation",
-              nextAction:
-                "Pass version explicitly (e.g. \"1.21.10\"). Access Transformer validation resolves class names against a specific Minecraft version.",
-              ...buildSuggestedCall({
-                tool: "validate-project",
-                params: {
-                  task: "access-transformer",
-                  subject: input.subject,
-                  version: "1.21.10"
-                }
-              })
-            }
-          });
-        }
-        const content = input.subject.input.mode === "inline"
-          ? input.subject.input.content
-          : await readFile(input.subject.input.path, "utf8");
-        if (!this.deps.validateAccessTransformer) {
-          throw createError({
-            code: ERROR_CODES.CONTEXT_UNRESOLVED,
-            message: "Access Transformer validation is not configured.",
-            details: {
-              task: "access-transformer",
-              failedStage: "dependency-resolution",
-              nextAction:
-                "The current runtime was built without an Access Transformer validator. Rebuild the MCP server with validateAccessTransformer configured, or use task=\"access-widener\" if the workspace uses Fabric AccessWideners."
-            }
-          });
-        }
-        const output = await this.deps.validateAccessTransformer({
-          content,
-          version: input.version,
-          atNamespace: input.atNamespace,
-          sourcePriority: input.sourcePriority,
-          scope: input.scope,
-          preferProjectVersion: input.preferProjectVersion
-        });
-        const issueEntries = Array.isArray(output.entries)
-          ? output.entries.filter((entry) => {
-              if (!entry || typeof entry !== "object" || !("valid" in entry)) {
-                return true;
-              }
-              return (entry as { valid?: boolean }).valid !== true;
-            })
-          : undefined;
-        return {
-          ...buildEntryToolResult({
-            task: "access-transformer",
-            detail,
-            include,
-            summary: {
-              status: output.valid ? "ok" : "invalid",
-              headline: output.valid
-                ? "Access Transformer is valid."
-                : "Access Transformer contains validation issues.",
-              subject: createSummarySubject({
-                task: "access-transformer",
-                kind: input.subject.kind,
-                input: input.subject.input,
-                version: input.version,
-                sourcePriority: input.sourcePriority,
-                scope: input.scope,
-                atNamespace: input.atNamespace
-              }),
-              counts: {
-                valid: output.valid ? 1 : 0,
-                invalid: output.valid ? 0 : 1
-              }
-            },
-            blocks: {
-              project: {
-                summary: {
-                  total: 1,
-                  valid: output.valid ? 1 : 0,
-                  invalid: output.valid ? 0 : 1
-                }
-              },
-              issues: include.includes("issues") || detail !== "summary" ? issueEntries : undefined
-            },
-            alwaysBlocks: ["project"]
-          }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
-        };
-      }
-      case "project-summary": {
-        if (input.subject.kind !== "workspace") {
-          throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: "task=project-summary requires subject.kind=workspace."
-          });
-        }
-        if (!input.version && !input.preferProjectVersion) {
-          const baseResult = buildEntryToolResult({
-            task: "project-summary",
-            detail,
-            include,
-            summary: {
-              status: "blocked",
-              headline: "project-summary requires version or preferProjectVersion=true.",
-              subject: createSummarySubject({
-                task: "project-summary",
-                kind: input.subject.kind,
-                projectPath: input.subject.projectPath,
-                discover: input.subject.discover
-              }),
-              nextActions: [
-                {
-                  tool: "validate-project",
-                  params: {
-                    task: "project-summary",
-                    subject: input.subject
-                  }
-                }
-              ],
-              notes: [
-                "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version."
-              ]
-            },
-            blocks: {
-              workspace: {
-                projectPath: input.subject.projectPath
-              }
-            }
-          });
-          const tasks = await this.buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
-          return {
-            ...baseResult,
-            ...(tasks ? { tasks } : {}),
-            warnings: []
-          };
-        }
-
-        const projectPath = input.subject.projectPath;
-        const detectedProjectVersion = input.preferProjectVersion
-          ? await this.deps.detectProjectMinecraftVersion?.(projectPath)
-          : undefined;
-        const resolvedVersion = detectedProjectVersion ?? input.version;
-        const discover = input.subject.discover ?? ["mixins", "access-wideners"];
-        const [mixinConfigs, accessWideners, accessTransformers] = await Promise.all([
-          discover.includes("mixins")
-            ? this.deps.discoverMixins(projectPath, input.configPaths)
-            : Promise.resolve([]),
-          discover.includes("access-wideners")
-            ? this.deps.discoverAccessWideners(projectPath)
-            : Promise.resolve([]),
-          discover.includes("access-transformers")
-            ? this.deps.discoverAccessTransformers?.(projectPath) ?? Promise.resolve([])
-            : Promise.resolve([])
-        ]);
-
-        if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 || accessTransformers.length > 0)) {
-          const baseResult = buildEntryToolResult({
-            task: "project-summary",
-            detail,
-            include,
-            summary: {
-              status: "blocked",
-              headline: "Could not resolve Minecraft version for discovered workspace validators.",
-              subject: createSummarySubject({
-                task: "project-summary",
-                kind: input.subject.kind,
-                projectPath,
-                discover: input.subject.discover,
-                mapping: input.mapping,
-                sourcePriority: input.sourcePriority,
-                scope: input.scope
-              }),
-              nextActions: [
-                {
-                  tool: "validate-project",
-                  params: {
-                    task: "project-summary",
-                    subject: input.subject
-                  }
-                }
-              ],
-              notes: [
-                "Pass version explicitly, or make sure gradle.properties declares the Minecraft version before using preferProjectVersion=true."
-              ]
-            },
-            blocks: {
-              workspace: {
-                projectPath
-              }
-            }
-          });
-          const tasks = await this.buildEarlyTasksForBlocked(projectPath, detail, include, {
-            mixinDiscoveryCount: mixinConfigs.length,
-            awDiscoveryCount: accessWideners.length,
-            atDiscoveryCount: accessTransformers.length
-          });
-          return {
-            ...baseResult,
-            ...(tasks ? { tasks } : {}),
-            warnings: [
-              "Could not resolve Minecraft version from gradle.properties for discovered workspace validators."
-            ]
-          };
-        }
-
-        if (!resolvedVersion) {
-          const baseResult = buildEntryToolResult({
-            task: "project-summary",
-            detail,
-            include,
-            summary: {
-              status: "ok",
-              headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
-              subject: createSummarySubject({
-                task: "project-summary",
-                kind: input.subject.kind,
-                projectPath,
-                discover: input.subject.discover,
-                mapping: input.mapping,
-                sourcePriority: input.sourcePriority,
-                scope: input.scope
-              }),
-              counts: {
-                valid: 0,
-                partial: 0,
-                invalid: 0
-              }
-            },
-            blocks: {
-              workspace: {
-                projectPath
-              }
-            }
-          });
-          const tasks = await this.buildEarlyTasksForBlocked(projectPath, detail, include);
-          return {
-            ...baseResult,
-            ...(tasks ? { tasks } : {}),
-            warnings: []
-          };
-        }
-
-        const validationVersion = resolvedVersion;
-        const warnings: string[] = [];
-        const mixinDurationStart = Date.now();
-        let validMixins = 0;
-        let partialMixins = 0;
-        let invalidMixins = 0;
-        let mixinCaughtErrors = 0;
-        for (const configPath of mixinConfigs) {
-          try {
-            const mixinResult = await this.deps.validateMixin({
-              input: {
-                mode: "config",
-                configPaths: [configPath]
-              },
-              version: validationVersion,
-              mapping: input.mapping,
-              sourcePriority: input.sourcePriority,
-              scope: input.scope,
-              projectPath,
-              preferProjectVersion: false,
-              preferProjectMapping: input.preferProjectMapping,
-              sourceRoots: input.sourceRoots,
-              minSeverity: input.minSeverity,
-              hideUncertain: input.hideUncertain,
-              explain: input.explain,
-              warningMode: input.warningMode,
-              warningCategoryFilter: input.warningCategoryFilter,
-              treatInfoAsWarning: input.treatInfoAsWarning,
-              includeIssues: input.includeIssues
-            });
-            const summary = mixinResult.summary as {
-              valid?: number;
-              partial?: number;
-              invalid?: number;
-            } | undefined;
-            validMixins += summary?.valid ?? 0;
-            partialMixins += summary?.partial ?? 0;
-            invalidMixins += summary?.invalid ?? 0;
-            if (Array.isArray(mixinResult.warnings)) {
-              warnings.push(...mixinResult.warnings);
-            }
-          } catch (error) {
-            invalidMixins += 1;
-            mixinCaughtErrors += 1;
-            if (error instanceof Error) {
-              warnings.push(`${configPath}: ${error.message}`);
-            }
-          }
-        }
-        const mixinDurationMs = Date.now() - mixinDurationStart;
-
-        const awDurationStart = Date.now();
-        let validAw = 0;
-        let invalidAw = 0;
-        let awCaughtErrors = 0;
-        for (const awPath of accessWideners) {
-          try {
-            const output = await this.deps.validateAccessWidener({
-              content: await readFile(awPath, "utf8"),
-              version: validationVersion,
-              mapping: input.mapping,
-              sourcePriority: input.sourcePriority,
-              projectPath,
-              scope: input.scope,
-              preferProjectVersion: input.preferProjectVersion
-            });
-            if (output.valid) {
-              validAw += 1;
-            } else {
-              invalidAw += 1;
-            }
-            if (Array.isArray(output.warnings)) {
-              warnings.push(...output.warnings);
-            }
-          } catch (error) {
-            invalidAw += 1;
-            awCaughtErrors += 1;
-            if (error instanceof Error) {
-              warnings.push(error.message);
-            }
-          }
-        }
-        const awDurationMs = Date.now() - awDurationStart;
-
-        const atDurationStart = Date.now();
-        let validAt = 0;
-        let invalidAt = 0;
-        let atCaughtErrors = 0;
-        for (const atPath of accessTransformers) {
-          try {
-            if (!this.deps.validateAccessTransformer) {
-              throw createError({
-                code: ERROR_CODES.CONTEXT_UNRESOLVED,
-                message: "Access Transformer validation is not configured."
-              });
-            }
-            const output = await this.deps.validateAccessTransformer({
-              content: await readFile(atPath, "utf8"),
-              version: validationVersion,
-              atNamespace: input.atNamespace,
-              sourcePriority: input.sourcePriority,
-              projectPath,
-              scope: input.scope,
-              preferProjectVersion: input.preferProjectVersion
-            });
-            if (output.valid) {
-              validAt += 1;
-            } else {
-              invalidAt += 1;
-            }
-            if (Array.isArray(output.warnings)) {
-              warnings.push(...output.warnings);
-            }
-          } catch (error) {
-            invalidAt += 1;
-            atCaughtErrors += 1;
-            if (error instanceof Error) {
-              warnings.push(error.message);
-            }
-          }
-        }
-        const atDurationMs = Date.now() - atDurationStart;
-
-        const invalidCount = invalidMixins + invalidAw + invalidAt;
-        const partialCount = partialMixins;
-        const status = invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok";
-
-        const baseResult = buildEntryToolResult({
-          task: "project-summary",
-          detail,
-          include,
-          summary: {
-            status,
-            headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
-            subject: createSummarySubject({
-              task: "project-summary",
-              kind: input.subject.kind,
-              projectPath,
-              discover: input.subject.discover,
-              version: resolvedVersion,
-              mapping: input.mapping,
-              sourcePriority: input.sourcePriority,
-              scope: input.scope
-            }),
-            counts: {
-              valid: validMixins + validAw + validAt,
-              partial: partialCount,
-              invalid: invalidCount
-            }
-          },
-          blocks: {
-            project: {
-              summary: {
-                valid: validMixins + validAw + validAt,
-                partial: partialCount,
-                invalid: invalidCount
-              }
-            },
-            workspace: {
-              projectPath,
-              mixinConfigs,
-              accessWideners,
-              accessTransformers
-            }
-          },
-          alwaysBlocks: ["project"]
-        });
-        const tasks = await this.buildFullTaskStatusReport({
-          projectPath,
-          detail,
-          include,
-          resolvedVersion: validationVersion,
-          mapping: input.mapping,
-          sourcePriority: input.sourcePriority,
-          scope: input.scope,
-          preferProjectVersion: input.preferProjectVersion,
-          mixinDiscoveryCount: mixinConfigs.length,
-          mixinCaughtErrors,
-          mixinCounts: { ok: validMixins, partial: partialMixins, invalid: invalidMixins },
-          mixinDurationMs,
-          awDiscoveryCount: accessWideners.length,
-          awCaughtErrors,
-          awCounts: { ok: validAw, invalid: invalidAw },
-          awDurationMs,
-          atDiscoveryCount: accessTransformers.length,
-          atCaughtErrors,
-          atCounts: { ok: validAt, invalid: invalidAt },
-          atDurationMs
-        });
-        return {
-          ...baseResult,
-          ...(tasks ? { tasks } : {}),
-          warnings
-        };
-      }
+      case "mixin":
+        return handleMixin(this, input, detail, include);
+      case "access-widener":
+        return handleAccessWidener(this, input, detail, include);
+      case "access-transformer":
+        return handleAccessTransformer(this, input, detail, include);
+      case "project-summary":
+        return handleProjectSummary(this, input, detail, include);
     }
   }
 }
