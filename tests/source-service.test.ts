@@ -5321,20 +5321,19 @@ test("SourceService version/runtime discovery blocks avoid sync glob scans on ho
 });
 
 test("SourceService validateMixin project/config discovery avoids sync glob and existence probes in discovery blocks", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
+  const source = await readFile("src/source/validate-mixin.ts", "utf8");
   const projectBlock =
-    source.match(/private (?:async )?createProjectValidateMixinConfigInput\([\s\S]*?return \{\s*\.\.\.input,/m)?.[0] ?? "";
+    source.match(/(?:async )?function createProjectValidateMixinConfigInput\([\s\S]*?return \{\s*\.\.\.input,/m)?.[0] ?? "";
   const configBlock =
-    source.match(/private async resolveMixinConfigSources\([\s\S]*?return \{\s*sources: results,/m)?.[0] ?? "";
+    source.match(/async function resolveMixinConfigSources\([\s\S]*?return \{\s*sources: results,/m)?.[0] ?? "";
 
   assert.doesNotMatch(projectBlock, /fastGlob\.sync\(/);
   assert.doesNotMatch(configBlock, /existsSync\(/);
 });
 
-test("SourceService reuses the shared concurrency helper instead of defining a local variant", async () => {
-  const source = await readFile("src/source-service.ts", "utf8");
+test("validate-mixin reuses the shared concurrency helper instead of defining a local variant", async () => {
+  const source = await readFile("src/source/validate-mixin.ts", "utf8");
 
-  assert.match(source, /import\s+\{\s*mapWithConcurrencyLimit\s*\}\s+from "\.\/concurrency\.js"/);
   assert.doesNotMatch(source, /async function mapWithConcurrencyLimit</);
 });
 

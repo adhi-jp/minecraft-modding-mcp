@@ -1,50 +1,17 @@
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { access, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
-
-import fastGlob from "fast-glob";
-
-import { buildSuggestedCall } from "./build-suggested-call.js";
-import { mapWithConcurrencyLimit } from "./concurrency.js";
-import { createError, ERROR_CODES, isAppError, type AppError } from "./errors.js";
-import { buildArtifactAlias, loadConfig } from "./config.js";
-import { decompileBinaryJar } from "./decompiler/vineflower.js";
-import { resolveVineflowerJar } from "./vineflower-resolver.js";
-import { remapJar } from "./tiny-remapper-service.js";
-import { resolveTinyRemapperJar } from "./tiny-remapper-resolver.js";
-import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
-import { parseCoordinate } from "./maven-resolver.js";
+import { loadConfig } from "./config.js";
 import {
   MinecraftExplorerService,
   type ResponseContext as ExplorerResponseContext,
   type SignatureMember
 } from "./minecraft-explorer-service.js";
-import { rebuildJavaSignature, remapJvmDescriptor } from "./source/descriptor-utils.js";
-import { parseMixinSource } from "./mixin-parser.js";
-import { parseAccessWidener } from "./access-widener-parser.js";
-import { parseAccessTransformer } from "./access-transformer-parser.js";
 import {
-  validateParsedMixin,
-  refreshMixinValidationOutcome,
-  validateParsedAccessWidener,
-  validateParsedAccessTransformer,
-  loadMixinStageBudgets,
-  type IssueConfidence,
-  type ResolvedTargetMembers,
   type MixinValidationResult,
   type MixinValidationProvenance,
   type MappingHealthReport,
   type AccessWidenerValidationResult,
   type AccessTransformerValidationResult,
-  type MixinStageBudgets,
-  type TargetOutcome as MixinTargetOutcome
+  type MixinStageBudgets
 } from "./mixin-validator.js";
-import {
-  resolveSourceTarget as resolveSourceTargetInternal,
-  type MappingVariant
-} from "./source-resolver.js";
-import { applyMappingPipeline } from "./mapping-pipeline-service.js";
 import {
   MappingService,
   type ClassApiMatrixInput as MappingClassApiMatrixInput,
@@ -57,19 +24,16 @@ import {
   type SymbolExistenceInput as MappingSymbolExistenceInput,
   type SymbolExistenceOutput as MappingSymbolExistenceOutput
 } from "./mapping-service.js";
-import { extractSymbolsFromSource } from "./symbols/symbol-extractor.js";
-import { detectFabricLikeInputNamespace, iterateJavaEntriesAsUtf8, listJavaEntries } from "./source-jar-reader.js";
 import { openDatabase } from "./storage/db.js";
 import { ArtifactsRepo } from "./storage/artifacts-repo.js";
 import { FilesRepo } from "./storage/files-repo.js";
-import { IndexMetaRepo, type ArtifactIndexMetaRow } from "./storage/index-meta-repo.js";
+import { IndexMetaRepo } from "./storage/index-meta-repo.js";
 import { SymbolsRepo } from "./storage/symbols-repo.js";
 import { RuntimeMetrics, type RuntimeMetricSnapshot } from "./observability.js";
 import { SourceServiceState } from "./source/state.js";
 import * as cacheMetrics from "./source/cache-metrics.js";
 import * as indexer from "./source/indexer.js";
 import * as search from "./source/search.js";
-import * as classSourceHelpers from "./source/class-source-helpers.js";
 import * as lifecycle from "./source/lifecycle.js";
 import * as workspaceTarget from "./source/workspace-target.js";
 import * as accessValidate from "./source/access-validate.js";
@@ -78,28 +42,14 @@ import * as artifactResolver from "./source/artifact-resolver.js";
 import * as classSource from "./source/class-source.js";
 import * as symbolResolver from "./source/symbol-resolver.js";
 import * as fileAccess from "./source/file-access.js";
-import { log } from "./logger.js";
-import { NOOP_STAGE_EMITTER, type StageEmitter } from "./stage-emitter.js";
-import { normalizePathForHost } from "./path-converter.js";
-import {
-  buildLoaderRuntimeSearchRoots,
-  buildVersionSourceSearchRoots,
-  normalizeOptionalProjectPath
-} from "./gradle-paths.js";
-import {
-  createSearchHitAccumulator,
-  decodeSearchCursor,
-  encodeSearchCursor
-} from "./search-hit-accumulator.js";
+import { type StageEmitter } from "./stage-emitter.js";
 import {
   WorkspaceMappingService,
-  isSafeMavenVersionToken,
   type WorkspaceCompileMappingOutput,
   type WorkspaceProjectLoader
 } from "./workspace-mapping-service.js";
 import {
   getProcessWorkspaceContextCache,
-  type WorkspaceContext,
   type WorkspaceContextCache
 } from "./workspace-context-cache.js";
 import type {
@@ -107,20 +57,12 @@ import type {
   ArtifactProvenance,
   ArtifactRow,
   ArtifactScope,
-  ArtifactTargetKind,
   Config,
-  DependencyResolutionProvenance,
-  DependencyTargetInput,
-  FileRow,
   MappingSourcePriority,
   ResolveArtifactTargetInput,
   ResolvedSourceArtifact,
   RuntimeValidationProvenance,
-  SourceMapping,
-  SourceTargetInput,
-  SymbolRow,
-  WorkspaceResolutionProvenance,
-  WorkspaceTargetInput
+  SourceMapping
 } from "./types.js";
 import {
   VersionService,
@@ -150,8 +92,6 @@ import {
   type SearchModSourceInput,
   type SearchModSourceOutput
 } from "./mod-search-service.js";
-
-const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
 
 export type ResolveArtifactInput = {
   target: ResolveArtifactTargetInput;
@@ -311,141 +251,6 @@ export type ResolveWorkspaceSymbolInput = {
 export type ResolveWorkspaceSymbolOutput = MappingSymbolResolutionOutput & {
   workspaceDetection: WorkspaceCompileMappingOutput;
 };
-
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
-const GLOB_REGEX_CACHE = new Map<string, RegExp>();
-const MAX_HELPER_REGEX_CACHE = 128;
-
-function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
-  if (cache.size >= MAX_HELPER_REGEX_CACHE) {
-    const oldestKey = cache.keys().next().value as string | undefined;
-    if (oldestKey) {
-      cache.delete(oldestKey);
-    }
-  }
-  cache.set(key, regex);
-  return regex;
-}
-
-function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
-  const encoded = Buffer.from(content, "utf8");
-  if (encoded.length <= maxBytes) {
-    return content;
-  }
-
-  let end = Math.max(0, Math.min(maxBytes, encoded.length));
-  while (end > 0) {
-    try {
-      const decoded = utf8Decoder.decode(encoded.subarray(0, end));
-      return decoded;
-    } catch {
-      end -= 1;
-    }
-  }
-
-  return "";
-}
-
-function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const qualityFlag of qualityFlags) {
-    if (seen.has(qualityFlag)) {
-      continue;
-    }
-    seen.add(qualityFlag);
-    deduped.push(qualityFlag);
-  }
-  return deduped;
-}
-
-function sameStringArray(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function sameScopeFallback(
-  left: MixinValidationProvenance["scopeFallback"] | undefined,
-  right: MixinValidationProvenance["scopeFallback"] | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return left.requested === right.requested && left.applied === right.applied && left.reason === right.reason;
-}
-
-function sameResolutionTrace(
-  left: MixinValidationProvenance["resolutionTrace"] | undefined,
-  right: MixinValidationProvenance["resolutionTrace"] | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftEntry = left[index];
-    const rightEntry = right[index];
-    if (!leftEntry || !rightEntry) {
-      return false;
-    }
-    if (
-      leftEntry.target !== rightEntry.target ||
-      leftEntry.step !== rightEntry.step ||
-      leftEntry.input !== rightEntry.input ||
-      leftEntry.output !== rightEntry.output ||
-      leftEntry.success !== rightEntry.success ||
-      leftEntry.detail !== rightEntry.detail
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function sameMixinValidationProvenance(
-  left: MixinValidationProvenance | undefined,
-  right: MixinValidationProvenance | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return (
-    left.version === right.version &&
-    left.jarPath === right.jarPath &&
-    left.requestedMapping === right.requestedMapping &&
-    left.mappingApplied === right.mappingApplied &&
-    left.requestedScope === right.requestedScope &&
-    left.appliedScope === right.appliedScope &&
-    left.requestedSourcePriority === right.requestedSourcePriority &&
-    left.appliedSourcePriority === right.appliedSourcePriority &&
-    sameStringArray(left.resolutionNotes, right.resolutionNotes) &&
-    left.jarType === right.jarType &&
-    sameStringArray(left.mappingChain, right.mappingChain) &&
-    left.remapFailures === right.remapFailures &&
-    left.mappingAutoDetected === right.mappingAutoDetected &&
-    sameScopeFallback(left.scopeFallback, right.scopeFallback) &&
-    sameResolutionTrace(left.resolutionTrace, right.resolutionTrace)
-  );
-}
 
 export type SourceMode = "metadata" | "snippet" | "full";
 
@@ -815,223 +620,6 @@ export type ValidateAccessTransformerInput = {
 
 export type ValidateAccessTransformerOutput = AccessTransformerValidationResult;
 
-function clampLimit(limit: number | undefined, fallback: number, max: number): number {
-  if (!Number.isFinite(limit) || limit == null) {
-    return fallback;
-  }
-  return Math.max(1, Math.min(max, Math.trunc(limit)));
-}
-
-type VersionSourceCandidate = {
-  jarPath: string;
-  javaEntryCount: number;
-  hasMinecraftNamespace: boolean;
-  looksLikeMinecraftArtifact: boolean;
-  score: number;
-};
-
-type VersionSourceDiscovery = {
-  searchedPaths: string[];
-  candidateArtifacts: string[];
-  selectedSourceJarPath?: string;
-  selectedHasMinecraftNamespace?: boolean;
-};
-
-type RuntimeJarCandidate = {
-  jarPath: string;
-  score: number;
-  appliedScope: ArtifactScope;
-  origin: RuntimeValidationProvenance["origin"];
-  namespaceHint?: "intermediary" | "mojang" | "named";
-};
-
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
-function escapeRegexLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hasExactVersionToken(path: string, version: string): boolean {
-  const normalizedPath = normalizePathStyle(path).toLowerCase();
-  const normalizedVersion = version.trim().toLowerCase();
-  if (!normalizedVersion) {
-    return false;
-  }
-  // Avoid prefix false-positives like "1.21.1" matching "1.21.10".
-  const cached = VERSION_TOKEN_REGEX_CACHE.get(normalizedVersion);
-  const pattern =
-    cached
-    ?? rememberCachedRegex(
-      VERSION_TOKEN_REGEX_CACHE,
-      normalizedVersion,
-      new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`, "i")
-    );
-  return pattern.test(normalizedPath);
-}
-
-function inferMergedRuntimeNamespaceHint(
-  path: string
-): RuntimeJarCandidate["namespaceHint"] {
-  const normalizedPath = normalizePathStyle(path).toLowerCase();
-  if (
-    normalizedPath.includes("merged-intermediary-v2") ||
-    normalizedPath.includes("merged-intermediary")
-  ) {
-    return "intermediary";
-  }
-  if (
-    normalizedPath.includes("minecraft-merged-mojang") ||
-    normalizedPath.includes("merged-mojang")
-  ) {
-    return "mojang";
-  }
-  if (normalizedPath.includes("merged-named")) {
-    return "named";
-  }
-  return undefined;
-}
-
-function runtimeJarNamespaceHintScore(hint: RuntimeJarCandidate["namespaceHint"]): number {
-  if (hint === "intermediary" || hint === "mojang") {
-    return 8_000;
-  }
-  if (hint === "named") {
-    return 1_000;
-  }
-  return 0;
-}
-
-function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: boolean): boolean {
-  if (hasMinecraftNamespace) {
-    return true;
-  }
-
-  const normalizedPath = normalizePathStyle(path).toLowerCase();
-  return (
-    normalizedPath.includes("/minecraftmaven/") ||
-    normalizedPath.includes("/net/minecraft/") ||
-    /(?:^|\/)minecraft(?:-[a-z0-9._+]+)*-sources\.jar$/i.test(normalizedPath) ||
-    normalizedPath.includes("minecraft-merged") ||
-    normalizedPath.includes("minecraft-common") ||
-    normalizedPath.includes("minecraft-clientonly") ||
-    normalizedPath.includes("minecraft-client") ||
-    normalizedPath.includes("minecraft-server")
-  );
-}
-
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeStrictPositiveInt(
-  value: number | undefined,
-  field: string
-): number | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: `${field} must be a positive integer.`,
-      details: {
-        field,
-        value
-      }
-    });
-  }
-  return value;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
-}
-
-function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceMapping | undefined {
-  const normalized = namespace?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "named") {
-    return "yarn";
-  }
-  if (
-    normalized === "obfuscated" ||
-    normalized === "mojang" ||
-    normalized === "intermediary" ||
-    normalized === "yarn"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
-function normalizeAccessTransformerNamespace(
-  namespace: AccessTransformerNamespace | string | undefined
-): AccessTransformerNamespace | undefined {
-  const normalized = namespace?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "srg" || normalized === "mojang" || normalized === "obfuscated") {
-    return normalized;
-  }
-  return undefined;
-}
-
-function isSourceMappingNamespace(
-  namespace: SourceMapping | AccessTransformerNamespace
-): namespace is SourceMapping {
-  return namespace === "obfuscated" || namespace === "mojang" || namespace === "intermediary" || namespace === "yarn";
-}
-
-function chunkArray<T>(items: T[], chunkSize: number): T[][] {
-  const size = Math.max(1, Math.trunc(chunkSize));
-  if (items.length === 0) {
-    return [];
-  }
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
-}
-
 export class SourceService {
   readonly config: Config;
   readonly db;
@@ -1310,45 +898,6 @@ export class SourceService {
     return indexer.indexArtifact(this, input);
   }
 
-  private extractClassMetadata(filePath: string, content: string): string {
-    return classSourceHelpers.extractClassMetadata(filePath, content);
-  }
-
-  private extractDecompiledMembers(
-    className: string,
-    filePath: string,
-    content: string
-  ): { constructors: DecompiledMember[]; fields: DecompiledMember[]; methods: DecompiledMember[] } {
-    return classSourceHelpers.extractDecompiledMembers(className, filePath, content);
-  }
-
-  private computeLineBraceDepths(lines: string[]): number[] {
-    return classSourceHelpers.computeLineBraceDepths(lines);
-  }
-
-  private computeBraceRange(
-    lines: string[],
-    symbols: Array<{ symbolKind: string; symbolName: string; line: number }>,
-    simpleName: string
-  ): { declarationLine: number; endLine: number } | undefined {
-    return classSourceHelpers.computeBraceRange(lines, symbols, simpleName);
-  }
-
-  private scanBraceRange(
-    lines: string[],
-    declarationLine: number
-  ): { declarationLine: number; endLine: number } {
-    return classSourceHelpers.scanBraceRange(lines, declarationLine);
-  }
-
-  private computeNestedTypeRanges(
-    lines: string[],
-    symbols: Array<{ symbolKind: string; line: number }>,
-    outerBody: { declarationLine: number; endLine: number }
-  ): Array<{ declarationLine: number; endLine: number }> {
-    return classSourceHelpers.computeNestedTypeRanges(lines, symbols, outerBody);
-  }
-
   async resolveClassNameForLookup(input: {
     className: string;
     version?: string;
@@ -1373,72 +922,6 @@ export class SourceService {
     return artifactResolver.resolveBinaryFallbackArtifact(this, input);
   }
 
-  private rejectLifecycleClassLikeInput(input: {
-    symbol: string;
-    className: string;
-    methodName: string;
-    mapping: SourceMapping;
-    version?: string;
-    sourcePriority?: MappingSourcePriority;
-  }): void {
-    lifecycle.rejectLifecycleClassLikeInput(this, input);
-  }
-
-  private releaseLifecycleMappingGraph(version: string, sourcePriority: MappingSourcePriority | undefined): void {
-    lifecycle.releaseLifecycleMappingGraph(this, version, sourcePriority);
-  }
-
-  private async resolveToObfuscatedClassName(
-    className: string,
-    version: string,
-    mapping: SourceMapping,
-    sourcePriority: MappingSourcePriority | undefined,
-    warnings: string[]
-  ): Promise<string> {
-    return lifecycle.resolveToObfuscatedClassName(this, className, version, mapping, sourcePriority, warnings);
-  }
-
-  private async resolveToObfuscatedMemberName(
-    name: string,
-    ownerInSourceMapping: string,
-    descriptor: string | undefined,
-    kind: "field" | "method",
-    version: string,
-    mapping: SourceMapping,
-    sourcePriority: MappingSourcePriority | undefined,
-    warnings: string[]
-  ): Promise<{ name: string; descriptor?: string }> {
-    return lifecycle.resolveToObfuscatedMemberName(this, name, ownerInSourceMapping, descriptor, kind, version, mapping, sourcePriority, warnings);
-  }
-
-  private fallbackArtifactSignature(artifactId: string): string {
-    return indexer.fallbackArtifactSignature(artifactId);
-  }
-
-  private resolveIndexRebuildReason(input: {
-    force: boolean;
-    expectedSignature: string;
-    hasFiles: boolean;
-    meta: ArtifactIndexMetaRow | undefined;
-  }) {
-    return indexer.resolveIndexRebuildReason(input);
-  }
-
-  private toResolvedArtifact(artifact: ArtifactRow): ResolvedSourceArtifact {
-    return indexer.toResolvedArtifact(this, artifact);
-  }
-
-  private async rebuildAndPersistArtifactIndex(
-    resolved: ResolvedSourceArtifact,
-    reason: Exclude<indexer.IndexRebuildReason, "already_current">
-  ): Promise<indexer.RebuiltArtifactData> {
-    return indexer.rebuildAndPersistArtifactIndex(this, resolved, reason);
-  }
-
-  private async buildRebuiltArtifactData(resolved: ResolvedSourceArtifact): Promise<indexer.RebuiltArtifactData> {
-    return indexer.buildRebuiltArtifactData(this, resolved);
-  }
-
   getArtifact(artifactId: string): ArtifactRow {
     return indexer.getArtifact(this, artifactId);
   }
@@ -1447,69 +930,8 @@ export class SourceService {
     return indexer.ingestIfNeeded(this, resolved);
   }
 
-  private async maybeRemapBinaryForMojang(resolved: ResolvedSourceArtifact): Promise<string> {
-    return indexer.maybeRemapBinaryForMojang(this, resolved);
-  }
-
-  private async recordRemappedJarBytesFromDisk(artifactId: string, path: string): Promise<void> {
-    return indexer.recordRemappedJarBytesFromDisk(this, artifactId, path);
-  }
-
-  private async isUsableJarFile(path: string): Promise<boolean> {
-    return indexer.isUsableJarFile(path);
-  }
-
-  private async runBinaryRemap(input: {
-    version: string;
-    inputJar: string;
-    remappedDir: string;
-    remappedJarPath: string;
-  }): Promise<string> {
-    return indexer.runBinaryRemap(this, input);
-  }
-
-  private async loadFromSourceJar(sourceJarPath: string): Promise<indexer.IndexedFileRecord[]> {
-    return indexer.loadFromSourceJar(this, sourceJarPath);
-  }
-
-  private hasAnyFiles(artifactId: string): boolean {
-    return cacheMetrics.hasAnyFiles(this, artifactId);
-  }
-
-  private unlinkRemappedJarForArtifact(artifactId: string): void {
-    cacheMetrics.unlinkRemappedJarForArtifact(this, artifactId);
-  }
-
-  private recordRemappedJarBytes(artifactId: string, sizeBytes: number): void {
-    cacheMetrics.recordRemappedJarBytes(this, artifactId, sizeBytes);
-  }
-
-  private releaseRemappedJarBytes(artifactId: string): void {
-    cacheMetrics.releaseRemappedJarBytes(this, artifactId);
-  }
-
-  private enforceCacheLimits(): void {
-    cacheMetrics.enforceCacheLimits(this);
-  }
-
   private refreshCacheMetrics(): void {
     cacheMetrics.refreshCacheMetrics(this);
-  }
-
-  private touchCacheMetrics(artifactId: string, updatedAt: string): void {
-    cacheMetrics.touchCacheMetrics(this, artifactId, updatedAt);
-  }
-
-  private upsertCacheMetrics(artifactId: string, totalContentBytes: number, updatedAt: string): void {
-    cacheMetrics.upsertCacheMetrics(this, artifactId, totalContentBytes, updatedAt);
-  }
-
-  private removeCacheMetrics(artifactId: string, publish = true): void {
-    cacheMetrics.removeCacheMetrics(this, artifactId, publish);
-  }
-
-  private publishCacheMetrics(): void {
-    cacheMetrics.publishCacheMetrics(this);
   }
 
   private snapshotLruAccounting(): void {
