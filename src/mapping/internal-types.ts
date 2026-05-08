@@ -33,3 +33,34 @@ export type PairRecord = {
   source: MappingLookupSource;
   mappingArtifact: string;
 };
+
+export const MATCH_RANK = {
+  exact: 3,
+  normalized: 2,
+  "simple-name": 1
+} as const;
+export const DESCRIPTOR_FALLBACK_CONFIDENCE = 0.85;
+export const MAX_CANDIDATES = 200;
+
+export type MatchRankKey = keyof typeof MATCH_RANK;
+
+export type GraphLoadMode = "full" | "obfuscated-mojang-only";
+
+export type CandidateAccumulator = {
+  key: string;
+  record: MappingSymbolRecord;
+  matchKind: import("./types.js").MappingMatchKind;
+  confidence: number;
+  rank: number;
+};
+
+export type LoadedGraph = {
+  version: string;
+  priority: import("../types.js").MappingSourcePriority;
+  mode: GraphLoadMode;
+  pairs: Map<PairKey, PairRecord>;
+  adjacency: Map<import("../types.js").SourceMapping, import("../types.js").SourceMapping[]>;
+  pathCache: Map<PairKey, import("../types.js").SourceMapping[] | undefined>;
+  recordsByTarget: Map<import("../types.js").SourceMapping, MappingSymbolRecord[]>;
+  warnings: string[];
+};
