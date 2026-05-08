@@ -72,6 +72,7 @@ import * as search from "./source/search.js";
 import * as classSourceHelpers from "./source/class-source-helpers.js";
 import * as lifecycle from "./source/lifecycle.js";
 import * as workspaceTarget from "./source/workspace-target.js";
+import * as accessValidate from "./source/access-validate.js";
 import { log } from "./logger.js";
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "./stage-emitter.js";
 import { normalizePathForHost } from "./path-converter.js";
@@ -1540,7 +1541,7 @@ export class SourceService {
     };
   }
 
-  private async resolveAccessWidenerRuntimeArtifact(input: {
+  async resolveAccessWidenerRuntimeArtifact(input: {
     version: string;
     awNamespace: SourceMapping;
     projectPath?: string;
@@ -1641,7 +1642,7 @@ export class SourceService {
     };
   }
 
-  private async resolveAccessTransformerNamespace(input: {
+  async resolveAccessTransformerNamespace(input: {
     atNamespace?: AccessTransformerNamespace;
     projectPath?: string;
   }): Promise<AccessTransformerNamespace> {
@@ -1681,7 +1682,7 @@ export class SourceService {
     });
   }
 
-  private async resolveAccessTransformerRuntimeArtifact(input: {
+  async resolveAccessTransformerRuntimeArtifact(input: {
     version: string;
     atNamespace: AccessTransformerNamespace;
     projectPath?: string;
@@ -5068,295 +5069,11 @@ export class SourceService {
   }
 
   async validateAccessWidener(input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {
-    const version = input.version.trim();
-    if (!version) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
-    }
-    const content = input.content;
-    if (!content.trim()) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "content must be non-empty." });
-    }
-
-    const warnings: string[] = [];
-    const parsed = parseAccessWidener(content);
-
-    const headerNamespaceRaw = normalizeOptionalString(parsed.namespace);
-    const overrideMapping = input.mapping ? normalizeMapping(input.mapping) : undefined;
-    const headerNamespace = normalizeAccessWidenerNamespace(headerNamespaceRaw);
-    if (!headerNamespace && headerNamespaceRaw && !overrideMapping) {
-      warnings.push(`Unsupported access widener namespace "${headerNamespaceRaw}". Assuming intermediary.`);
-    }
-
-    const awNamespace = overrideMapping ?? headerNamespace ?? "intermediary";
-    if (overrideMapping && headerNamespace && overrideMapping !== headerNamespace) {
-      warnings.push(
-        `Using mapping override "${overrideMapping}" instead of header namespace "${headerNamespaceRaw}".`
-      );
-    }
-    const runtimeAware = input.projectPath != null || input.scope != null || input.preferProjectVersion === true;
-    let resolvedVersion = version;
-    let jarPath: string;
-    let lookupMapping: SourceMapping = "obfuscated";
-    let provenance: RuntimeValidationProvenance<SourceMapping> | undefined;
-
-    if (runtimeAware) {
-      provenance = await this.resolveAccessWidenerRuntimeArtifact({
-        version,
-        awNamespace,
-        projectPath: input.projectPath,
-        scope: input.scope,
-        preferProjectVersion: input.preferProjectVersion
-      });
-      resolvedVersion = provenance.version;
-      jarPath = provenance.jarPath;
-      lookupMapping = provenance.mappingApplied;
-    } else {
-      ({ jarPath } = await this.versionService.resolveVersionJar(version));
-    }
-    const needsLookupMapping = awNamespace !== lookupMapping;
-
-    // Collect unique class FQNs from entries
-    const classFqns = new Set<string>();
-    for (const entry of parsed.entries) {
-      const fqn = entry.target.replace(/\//g, ".");
-      classFqns.add(fqn);
-    }
-
-    const membersByClass = new Map<string, ResolvedTargetMembers>();
-    for (const fqn of classFqns) {
-      let lookupFqn = fqn;
-
-      if (needsLookupMapping) {
-        try {
-          const mapped = await this.mappingService.findMapping({
-            version: resolvedVersion,
-            kind: "class",
-            name: fqn,
-            sourceMapping: awNamespace,
-            targetMapping: lookupMapping,
-            sourcePriority: input.sourcePriority,
-            projectPath: input.projectPath
-          });
-          if (mapped.resolved && mapped.resolvedSymbol) {
-            lookupFqn = mapped.resolvedSymbol.name;
-          } else {
-            warnings.push(`Could not map class "${fqn}" from ${awNamespace} to ${lookupMapping}.`);
-          }
-        } catch {
-          warnings.push(`Mapping lookup failed for class "${fqn}".`);
-        }
-      }
-
-      try {
-        const sig = await this.explorerService.getSignature({
-          fqn: lookupFqn,
-          jarPath,
-          access: "all"
-        });
-        warnings.push(...sig.warnings);
-        let constructors = sig.constructors;
-        let methods = sig.methods;
-        let fields = sig.fields;
-        if (needsLookupMapping) {
-          const [ctorResult, methodResult, fieldResult] = await Promise.all([
-            this.remapSignatureMembers(
-              sig.constructors,
-              "method",
-              resolvedVersion,
-              lookupMapping,
-              awNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            this.remapSignatureMembers(
-              sig.methods,
-              "method",
-              resolvedVersion,
-              lookupMapping,
-              awNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            this.remapSignatureMembers(
-              sig.fields,
-              "field",
-              resolvedVersion,
-              lookupMapping,
-              awNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            )
-          ]);
-          constructors = ctorResult.members;
-          methods = methodResult.members;
-          fields = fieldResult.members;
-        }
-        membersByClass.set(fqn, {
-          className: fqn,
-          classAccessFlags: sig.classAccessFlags,
-          constructors,
-          methods,
-          fields
-        });
-      } catch {
-        warnings.push(`Could not load signature for class "${lookupFqn}".`);
-      }
-    }
-
-    const result = validateParsedAccessWidener(parsed, membersByClass, warnings, {
-      includeRuntimeEvidence: runtimeAware
-    });
-    if (provenance) {
-      result.provenance = provenance;
-    }
-    return result;
+    return accessValidate.validateAccessWidener(this, input);
   }
 
   async validateAccessTransformer(input: ValidateAccessTransformerInput): Promise<ValidateAccessTransformerOutput> {
-    const version = input.version.trim();
-    if (!version) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "version must be non-empty." });
-    }
-    const content = input.content;
-    if (!content.trim()) {
-      throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "content must be non-empty." });
-    }
-
-    const warnings: string[] = [];
-    const parsed = parseAccessTransformer(content);
-    const atNamespace = await this.resolveAccessTransformerNamespace({
-      atNamespace: input.atNamespace,
-      projectPath: input.projectPath
-    });
-    const runtimeAware = input.projectPath != null || input.scope != null || input.preferProjectVersion === true;
-    let resolvedVersion = version;
-    let jarPath: string;
-    let lookupMapping: SourceMapping | AccessTransformerNamespace = "obfuscated";
-    let provenance: RuntimeValidationProvenance<AccessTransformerNamespace> | undefined;
-
-    if (runtimeAware) {
-      provenance = await this.resolveAccessTransformerRuntimeArtifact({
-        version,
-        atNamespace,
-        projectPath: input.projectPath,
-        scope: input.scope,
-        preferProjectVersion: input.preferProjectVersion
-      });
-      resolvedVersion = provenance.version;
-      jarPath = provenance.jarPath;
-      lookupMapping = provenance.mappingApplied;
-    } else {
-      if (atNamespace === "srg") {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: "atNamespace=srg requires projectPath and scope=loader so a Forge runtime jar can be resolved."
-        });
-      }
-      ({ jarPath } = await this.versionService.resolveVersionJar(version));
-    }
-
-    const needsLookupMapping = atNamespace !== lookupMapping;
-    const classFqns = new Set(parsed.entries.map((entry) => entry.owner));
-    const membersByClass = new Map<string, ResolvedTargetMembers>();
-
-    for (const fqn of classFqns) {
-      let lookupFqn = fqn;
-      if (needsLookupMapping) {
-        if (!isSourceMappingNamespace(atNamespace) || !isSourceMappingNamespace(lookupMapping)) {
-          warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
-        } else {
-          try {
-            const mapped = await this.mappingService.findMapping({
-              version: resolvedVersion,
-              kind: "class",
-              name: fqn,
-              sourceMapping: atNamespace,
-              targetMapping: lookupMapping,
-              sourcePriority: input.sourcePriority,
-              projectPath: input.projectPath
-            });
-            if (mapped.resolved && mapped.resolvedSymbol) {
-              lookupFqn = mapped.resolvedSymbol.name;
-            } else {
-              warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
-            }
-          } catch {
-            warnings.push(`Mapping lookup failed for class "${fqn}".`);
-          }
-        }
-      }
-
-      try {
-        const sig = await this.explorerService.getSignature({
-          fqn: lookupFqn,
-          jarPath,
-          access: "all"
-        });
-        warnings.push(...sig.warnings);
-        let constructors = sig.constructors;
-        let methods = sig.methods;
-        let fields = sig.fields;
-
-        if (needsLookupMapping && isSourceMappingNamespace(atNamespace) && isSourceMappingNamespace(lookupMapping)) {
-          const [ctorResult, methodResult, fieldResult] = await Promise.all([
-            this.remapSignatureMembers(
-              sig.constructors,
-              "method",
-              resolvedVersion,
-              lookupMapping,
-              atNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            this.remapSignatureMembers(
-              sig.methods,
-              "method",
-              resolvedVersion,
-              lookupMapping,
-              atNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            ),
-            this.remapSignatureMembers(
-              sig.fields,
-              "field",
-              resolvedVersion,
-              lookupMapping,
-              atNamespace,
-              input.sourcePriority,
-              warnings,
-              input.projectPath
-            )
-          ]);
-          constructors = ctorResult.members;
-          methods = methodResult.members;
-          fields = fieldResult.members;
-        }
-
-        membersByClass.set(fqn, {
-          className: fqn,
-          classAccessFlags: sig.classAccessFlags,
-          constructors,
-          methods,
-          fields
-        });
-      } catch {
-        warnings.push(`Could not load signature for class "${lookupFqn}".`);
-      }
-    }
-
-    const result = validateParsedAccessTransformer(parsed, membersByClass, warnings, {
-      includeRuntimeEvidence: runtimeAware
-    });
-    if (provenance) {
-      result.provenance = provenance;
-    }
-    return result;
+    return accessValidate.validateAccessTransformer(this, input);
   }
 
   recordToolCall(tool: string, durationMs: number): void {
