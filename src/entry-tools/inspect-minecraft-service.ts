@@ -24,7 +24,15 @@ import {
   type NextAction,
   type Summary
 } from "./response-contract.js";
-import { capArray, nextActionsOrUndefined, resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { handleVersions } from "./inspect-minecraft/handlers/versions.js";
+import { handleArtifact } from "./inspect-minecraft/handlers/artifact.js";
+import { handleClassOverview } from "./inspect-minecraft/handlers/class-overview.js";
+import { handleClassSource } from "./inspect-minecraft/handlers/class-source.js";
+import { handleClassMembers } from "./inspect-minecraft/handlers/class-members.js";
+import { handleSearch } from "./inspect-minecraft/handlers/search.js";
+import { handleFile } from "./inspect-minecraft/handlers/file.js";
+import { handleListFiles } from "./inspect-minecraft/handlers/list-files.js";
 
 const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "source", "files", "samples", "artifact", "timings"] as const;
 const TASKS = ["auto", "versions", "artifact", "class-overview", "class-source", "class-members", "search", "file", "list-files"] as const;
@@ -157,22 +165,22 @@ export const inspectMinecraftSchema = z.object(inspectMinecraftShape).superRefin
 
 export type InspectMinecraftInput = z.infer<typeof inspectMinecraftSchema>;
 
-type ArtifactRef = z.infer<typeof artifactRefSchema>;
-type Subject = z.infer<typeof subjectSchema>;
-type WorkspaceSubject = Extract<Subject, { kind: "workspace" }>;
-type WorkspaceClassFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "class" }>;
-type WorkspaceSearchFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "search" }>;
-type WorkspaceFileFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "file" }>;
+export type ArtifactRef = z.infer<typeof artifactRefSchema>;
+export type Subject = z.infer<typeof subjectSchema>;
+export type WorkspaceSubject = Extract<Subject, { kind: "workspace" }>;
+export type WorkspaceClassFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "class" }>;
+export type WorkspaceSearchFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "search" }>;
+export type WorkspaceFileFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "file" }>;
 type InspectMinecraftTask = typeof TASKS[number];
-type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
-type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
+export type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
+export type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
 
-function hasPartialVanillaCoverage(artifact: ResolveArtifactOutput | undefined): boolean {
+export function hasPartialVanillaCoverage(artifact: ResolveArtifactOutput | undefined): boolean {
   return artifact?.qualityFlags.includes("partial-source-no-net-minecraft") === true
     || artifact?.artifactContents.sourceCoverage === "partial";
 }
 
-function looksLikeClassQuery(query: string): boolean {
+export function looksLikeClassQuery(query: string): boolean {
   const trimmed = query.trim();
   if (!/^[A-Za-z_$][A-Za-z0-9_$.]*$/.test(trimmed)) {
     return false;
@@ -181,7 +189,7 @@ function looksLikeClassQuery(query: string): boolean {
   return /^[A-Z_$]/.test(simpleName) || /^class_\d+(?:\$class_\d+)*$/.test(simpleName);
 }
 
-function classNameToFilePath(className: string): string {
+export function classNameToFilePath(className: string): string {
   const topLevelClassName = className.split("$")[0] ?? className;
   return `${topLevelClassName.replace(/\./g, "/")}.java`;
 }
@@ -190,7 +198,7 @@ function isVanillaNamespacePath(filePath: string): boolean {
   return filePath.startsWith("net/minecraft/") || filePath.startsWith("com/mojang/");
 }
 
-function hitTargetsVanillaNamespace(hit: SearchClassSourceOutput["hits"][number]): boolean {
+export function hitTargetsVanillaNamespace(hit: SearchClassSourceOutput["hits"][number]): boolean {
   if (isVanillaNamespacePath(hit.filePath)) {
     return true;
   }
@@ -198,7 +206,7 @@ function hitTargetsVanillaNamespace(hit: SearchClassSourceOutput["hits"][number]
   return qualifiedName?.startsWith("net.minecraft.") === true || qualifiedName?.startsWith("com.mojang.") === true;
 }
 
-type InspectMinecraftDeps = {
+export type InspectMinecraftDeps = {
   listVersions: (input: { includeSnapshots?: boolean; limit?: number }) => Promise<ListVersionsOutput>;
   resolveArtifact: (input: {
     target: { kind: "version" | "jar" | "coordinate"; value: string };
@@ -274,7 +282,11 @@ type InspectMinecraftDeps = {
 };
 
 export class InspectMinecraftService {
-  constructor(private readonly deps: InspectMinecraftDeps) {}
+  readonly deps: InspectMinecraftDeps;
+
+  constructor(deps: InspectMinecraftDeps) {
+    this.deps = deps;
+  }
 
   async execute(input: InspectMinecraftInput): Promise<Record<string, unknown> & { warnings?: string[] }> {
     const detail = resolveDetail(input.detail);
@@ -306,7 +318,7 @@ export class InspectMinecraftService {
     }
   }
 
-  private requireWorkspaceClassFocus(subject: Subject): WorkspaceClassFocus {
+  requireWorkspaceClassFocus(subject: Subject): WorkspaceClassFocus {
     if (subject.kind !== "workspace" || subject.focus?.kind !== "class") {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -316,7 +328,7 @@ export class InspectMinecraftService {
     return subject.focus;
   }
 
-  private requireWorkspaceSearchFocus(subject: Subject): WorkspaceSearchFocus {
+  requireWorkspaceSearchFocus(subject: Subject): WorkspaceSearchFocus {
     if (subject.kind !== "workspace" || subject.focus?.kind !== "search") {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -326,7 +338,7 @@ export class InspectMinecraftService {
     return subject.focus;
   }
 
-  private requireWorkspaceFileFocus(subject: Subject): WorkspaceFileFocus {
+  requireWorkspaceFileFocus(subject: Subject): WorkspaceFileFocus {
     if (subject.kind !== "workspace" || subject.focus?.kind !== "file") {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -336,7 +348,7 @@ export class InspectMinecraftService {
     return subject.focus;
   }
 
-  private buildClassSubject(
+  buildClassSubject(
     subject: Extract<Subject, { kind: "class" }> | WorkspaceSubject
   ): Extract<Subject, { kind: "class" }> {
     if (subject.kind === "class") {
@@ -356,7 +368,7 @@ export class InspectMinecraftService {
     };
   }
 
-  private async resolveClassArtifactReference(
+  async resolveClassArtifactReference(
     subject: Extract<Subject, { kind: "class" }> | WorkspaceSubject,
     classSubject: Extract<Subject, { kind: "class" }>,
     task: Extract<ArtifactContextTask, "class-overview" | "class-source" | "class-members">
@@ -367,7 +379,7 @@ export class InspectMinecraftService {
     return this.resolveArtifactReference(classSubject, task);
   }
 
-  private async resolveWorkspaceArtifactReference(
+  async resolveWorkspaceArtifactReference(
     subject: WorkspaceSubject,
     artifactRef: ArtifactRef | undefined
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
@@ -395,7 +407,7 @@ export class InspectMinecraftService {
     };
   }
 
-  private resolveTask(task: InspectMinecraftInput["task"], subject: Subject | undefined) {
+  resolveTask(task: InspectMinecraftInput["task"], subject: Subject | undefined) {
     if (task && task !== "auto") {
       return task;
     }
@@ -426,7 +438,7 @@ export class InspectMinecraftService {
     }
   }
 
-  private summarizeRequestedSubject(subject: Subject): Record<string, unknown> {
+  summarizeRequestedSubject(subject: Subject): Record<string, unknown> {
     if (subject.kind === "search") {
       if (subject.queryMode !== "auto") {
         return subject;
@@ -447,7 +459,7 @@ export class InspectMinecraftService {
     return subject;
   }
 
-  private async exampleVersionForSubject(
+  async exampleVersionForSubject(
     subject: Extract<Subject, { kind: "class" | "search" | "file" }>
   ): Promise<string> {
     if ("projectPath" in subject && typeof subject.projectPath === "string") {
@@ -459,7 +471,7 @@ export class InspectMinecraftService {
     return "<version>";
   }
 
-  private async buildArtifactContextSuggestedCall(
+  async buildArtifactContextSuggestedCall(
     task: ArtifactContextTask,
     subject: Extract<Subject, { kind: "class" | "search" | "file" }>
   ): Promise<ReturnType<typeof buildSuggestedCall>> {
@@ -481,11 +493,11 @@ export class InspectMinecraftService {
     });
   }
 
-  private taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
+  taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
     return this.resolveTask(undefined, subject) as ConcreteInspectMinecraftTask;
   }
 
-  private invalidTaskSubjectError(task: ConcreteInspectMinecraftTask, subject: Subject): never {
+  invalidTaskSubjectError(task: ConcreteInspectMinecraftTask, subject: Subject): never {
     if (task === "class-source" && subject.kind === "version") {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -532,7 +544,7 @@ export class InspectMinecraftService {
     });
   }
 
-  private async resolveBinaryBackedClass(
+  async resolveBinaryBackedClass(
     className: string,
     input: {
       version?: string;
@@ -568,7 +580,7 @@ export class InspectMinecraftService {
     };
   }
 
-  private async resolveArtifactReference(
+  async resolveArtifactReference(
     subject: Subject,
     task?: ArtifactContextTask
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
@@ -634,7 +646,7 @@ export class InspectMinecraftService {
     };
   }
 
-  private async resolveArtifactRef(
+  async resolveArtifactRef(
     ref: ArtifactRef,
     subject: Extract<Subject, { kind: "artifact" | "class" | "file" | "search" }>
   ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; warnings: string[] }> {
@@ -660,867 +672,35 @@ export class InspectMinecraftService {
     };
   }
 
-  private async handleVersions(
-    input: InspectMinecraftInput,
-    detail: DetailLevel,
-    include: string[]
-  ) {
-    const versions = await this.deps.listVersions({
-      includeSnapshots: input.includeSnapshots,
-      limit: input.limit
-    });
-    const summary: Summary = {
-      status: "ok",
-      headline: `Found ${versions.totalAvailable} Minecraft versions.`,
-      subject: createSummarySubject({
-        task: "versions",
-        kind: "versions",
-        includeSnapshots: input.includeSnapshots === false ? undefined : input.includeSnapshots,
-        limit: input.limit
-      }),
-      counts: {
-        releases: versions.releases.length,
-        snapshots: versions.snapshots?.length ?? 0
-      },
-      nextActions: nextActionsOrUndefined([
-        createNextAction("inspect-minecraft", {
-          task: "artifact",
-          subject: {
-            kind: "version",
-            version: versions.latest.release ?? versions.releases[0]?.id
-          }
-        })
-      ])
-    };
-
-    return {
-      ...buildEntryToolResult({
-        task: "versions",
-        summary,
-        detail,
-        include,
-        blocks: {
-          versions: {
-            latest: versions.latest,
-            releases: detail === "summary" ? versions.releases.slice(0, 5) : versions.releases,
-            snapshots: input.includeSnapshots ? versions.snapshots : undefined,
-            cached: versions.cached
-          }
-        }
-      }),
-      warnings: []
-    };
+  private handleVersions(input: InspectMinecraftInput, detail: DetailLevel, include: string[]) {
+    return handleVersions(this, input, detail, include);
   }
 
-  private async handleArtifact(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[]
-  ) {
-    const resolved = await this.resolveArtifactReference(subject);
-    if (!resolved.artifactId) {
-      const summary: Summary = {
-        status: "blocked",
-        headline: "Could not resolve an artifact without a Minecraft version.",
-        subject: createSummarySubject({
-          task: "artifact",
-          requested: subject
-        }),
-        nextActions: nextActionsOrUndefined([
-          createNextAction("inspect-minecraft", {
-            task: "artifact",
-            subject: {
-              kind: "version",
-              version: "1.21.10"
-            }
-          })
-        ])
-      };
-      return {
-        ...buildEntryToolResult({
-          task: "artifact",
-          summary,
-          detail,
-          include,
-          blocks: {
-            subject: {
-              requested: subject
-            }
-          },
-          alwaysBlocks: ["subject"]
-        }),
-        warnings: resolved.warnings
-      };
-    }
-
-    const summary: Summary = {
-      status: "ok",
-      headline: `Resolved artifact ${resolved.artifactId}.`,
-      subject: createSummarySubject({
-        task: "artifact",
-        requested: subject,
-        artifactId: resolved.artifactId,
-        version: resolved.version
-      }),
-      counts: {
-        warnings: resolved.warnings.length
-      }
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "artifact",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: resolved.artifactId,
-              version: resolved.version
-            }
-          },
-          artifact: resolved.artifact
-            ? {
-                artifactId: resolved.artifact.artifactId,
-                artifactAlias: resolved.artifact.artifactAlias,
-                origin: resolved.artifact.origin,
-                mappingApplied: resolved.artifact.mappingApplied,
-                version: resolved.artifact.version,
-                artifactContents: resolved.artifact.artifactContents
-              }
-            : { artifactId: resolved.artifactId }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: resolved.warnings
-    };
+  private handleArtifact(subject: Subject, detail: DetailLevel, include: string[]) {
+    return handleArtifact(this, subject, detail, include);
   }
 
-  private async handleClassOverview(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[]
-  ) {
-    if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      this.invalidTaskSubjectError("class-overview", subject);
-    }
-
-    const classSubject = this.buildClassSubject(subject);
-    const className = classSubject.className;
-    const artifact = await this.resolveClassArtifactReference(subject, classSubject, "class-overview");
-
-    if (!artifact.artifactId) {
-      const summary: Summary = {
-        status: "blocked",
-        headline: `Could not resolve artifact context for ${className}.`,
-        subject: createSummarySubject({
-          task: "class-overview",
-          requested: subject,
-          className
-        })
-      };
-      return {
-        ...buildEntryToolResult({
-          task: "class-overview",
-          summary,
-          detail,
-          include,
-          blocks: {
-            subject: {
-              requested: subject
-            }
-          },
-          alwaysBlocks: ["subject"]
-        }),
-        warnings: artifact.warnings
-      };
-    }
-
-    const matches = await this.deps.findClass({
-      artifactId: artifact.artifactId,
-      className,
-      limit: 10
-    });
-
-    if (matches.total === 0) {
-      const partialSourceFallback =
-        subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact)
-          ? await this.resolveBinaryBackedClass(className, {
-              version: artifact.version,
-              mapping: classSubject.mapping
-            })
-          : undefined;
-      if (partialSourceFallback) {
-        const metadata = await this.deps.getClassSource({
-          className: partialSourceFallback.className,
-          artifactId: artifact.artifactId,
-          mapping: classSubject.mapping,
-          scope: classSubject.scope,
-          projectPath: classSubject.projectPath,
-          preferProjectVersion: classSubject.preferProjectVersion,
-          strictVersion: classSubject.strictVersion,
-          mode: "metadata"
-        });
-        const summary: Summary = {
-          status: "ok",
-          headline: `Resolved class overview for ${partialSourceFallback.className}.`,
-          subject: createSummarySubject({
-            task: "class-overview",
-            requested: subject,
-            className: partialSourceFallback.className,
-            artifactId: metadata.artifactId
-          }),
-          counts: {
-            totalLines: metadata.totalLines
-          },
-          notes: [
-            "Source coverage was partial, so inspect-minecraft confirmed the vanilla class through binary-backed symbol lookup."
-          ]
-        };
-        return {
-          ...buildEntryToolResult({
-            task: "class-overview",
-            summary,
-            detail,
-            include,
-            blocks: {
-              subject: {
-                requested: subject,
-                resolved: {
-                  artifactId: metadata.artifactId,
-                  className: partialSourceFallback.className
-                }
-              },
-              class: {
-                className: partialSourceFallback.className,
-                totalLines: metadata.totalLines,
-                returnedNamespace: metadata.returnedNamespace
-              }
-            },
-            alwaysBlocks: ["subject"]
-          }),
-          warnings: [
-            ...artifact.warnings,
-            ...matches.warnings,
-            ...partialSourceFallback.warnings,
-            ...metadata.warnings
-          ]
-        };
-      }
-
-      const summary: Summary = {
-        status: "not_found",
-        headline: `No class match was found for ${className}.`,
-        subject: createSummarySubject({
-          task: "class-overview",
-          requested: subject,
-          className,
-          artifactId: artifact.artifactId
-        })
-      };
-      return {
-        ...buildEntryToolResult({
-          task: "class-overview",
-          summary,
-          detail,
-          include,
-          blocks: {
-            subject: {
-              requested: subject,
-              resolved: {
-                artifactId: artifact.artifactId
-              }
-            }
-          },
-          alwaysBlocks: ["subject"]
-        }),
-        warnings: [...artifact.warnings, ...matches.warnings]
-      };
-    }
-
-    if (matches.total > 1) {
-      const candidateActions: NextAction[] = matches.matches.slice(0, 3).map((match) =>
-        createNextAction("inspect-minecraft", {
-          task: "class-source",
-          subject: {
-            kind: "class",
-            className: match.qualifiedName,
-            artifact: {
-              type: "resolved-id",
-              artifactId: artifact.artifactId
-            }
-          },
-          include: ["source"]
-        })
-      );
-      const summary: Summary = {
-        status: "ambiguous",
-        headline: `Found ${matches.total} class matches for ${className}.`,
-        subject: createSummarySubject({
-          task: "class-overview",
-          requested: subject,
-          className,
-          artifactId: artifact.artifactId
-        }),
-        counts: {
-          matches: matches.total
-        },
-        nextActions: nextActionsOrUndefined(candidateActions)
-      };
-      return {
-        ...buildEntryToolResult({
-          task: "class-overview",
-          summary,
-          detail,
-          include,
-          blocks: {
-            subject: {
-              requested: subject,
-              resolved: {
-                artifactId: artifact.artifactId
-              }
-            },
-            candidates: matches.matches
-          },
-          alwaysBlocks: ["subject"]
-        }),
-        warnings: [...artifact.warnings, ...matches.warnings]
-      };
-    }
-
-    const match = matches.matches[0]!;
-    const metadata = await this.deps.getClassSource({
-      className: match.qualifiedName,
-      artifactId: artifact.artifactId,
-      mode: "metadata"
-    });
-    const summary: Summary = {
-      status: "ok",
-      headline: `Resolved class overview for ${match.qualifiedName}.`,
-      subject: createSummarySubject({
-        task: "class-overview",
-        requested: subject,
-        className: match.qualifiedName,
-        artifactId: artifact.artifactId
-      }),
-      counts: {
-        totalLines: metadata.totalLines
-      },
-      nextActions: nextActionsOrUndefined([
-        createNextAction("inspect-minecraft", {
-          task: "class-source",
-          subject: {
-            kind: "class",
-            className: match.qualifiedName,
-            artifact: {
-              type: "resolved-id",
-              artifactId: artifact.artifactId
-            }
-          },
-          include: ["source"]
-        })
-      ])
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "class-overview",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: artifact.artifactId,
-              className: match.qualifiedName
-            }
-          },
-          artifact: artifact.artifact
-            ? {
-                artifactId: artifact.artifact.artifactId,
-                version: artifact.artifact.version,
-                origin: artifact.artifact.origin
-              }
-            : { artifactId: artifact.artifactId },
-          class: {
-            className: match.qualifiedName,
-            filePath: match.filePath,
-            totalLines: metadata.totalLines,
-            returnedNamespace: metadata.returnedNamespace
-          }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifact.warnings, ...matches.warnings, ...metadata.warnings]
-    };
+  private handleClassOverview(subject: Subject, detail: DetailLevel, include: string[]) {
+    return handleClassOverview(this, subject, detail, include);
   }
 
-  private async handleClassSource(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[]
-  ) {
-    if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      this.invalidTaskSubjectError("class-source", subject);
-    }
-    const classSubject = this.buildClassSubject(subject);
-    const className = classSubject.className;
-    const artifactContext = await this.resolveClassArtifactReference(subject, classSubject, "class-source");
-    const source = await this.deps.getClassSource({
-      className,
-      artifactId: artifactContext.artifactId || undefined,
-      mapping: classSubject.mapping,
-      scope: classSubject.scope,
-      projectPath: classSubject.projectPath,
-      preferProjectVersion: classSubject.preferProjectVersion,
-      strictVersion: classSubject.strictVersion,
-      mode: include.includes("source") || detail === "full" ? "snippet" : "metadata"
-    });
-    const summary: Summary = {
-      status: "ok",
-      headline: `Resolved source for ${source.className}.`,
-      subject: createSummarySubject({
-        task: "class-source",
-        requested: subject,
-        className: source.className,
-        artifactId: source.artifactId
-      }),
-      counts: {
-        totalLines: source.totalLines
-      }
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "class-source",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: source.artifactId,
-              className: source.className
-            }
-          },
-          source: {
-            className: source.className,
-            mode: source.mode,
-            returnedRange: source.returnedRange,
-            totalLines: source.totalLines,
-            sourceText: source.sourceText
-          }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifactContext.warnings, ...source.warnings]
-    };
+  private handleClassSource(subject: Subject, detail: DetailLevel, include: string[]) {
+    return handleClassSource(this, subject, detail, include);
   }
 
-  private async handleClassMembers(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[],
-    limit: number | undefined
-  ) {
-    if (subject.kind !== "class" && !(subject.kind === "workspace" && subject.focus?.kind === "class")) {
-      this.invalidTaskSubjectError("class-members", subject);
-    }
-    const classSubject = this.buildClassSubject(subject);
-    const artifact = await this.resolveClassArtifactReference(subject, classSubject, "class-members");
-    const members = await this.deps.getClassMembers({
-      className: classSubject.className,
-      artifactId: artifact.artifactId || undefined,
-      mapping: classSubject.mapping,
-      scope: classSubject.scope,
-      projectPath: classSubject.projectPath,
-      preferProjectVersion: classSubject.preferProjectVersion,
-      strictVersion: classSubject.strictVersion,
-      maxMembers: limit
-    });
-    const summary: Summary = {
-      status: members.truncated ? "partial" : "ok",
-      headline: `Collected ${members.counts.total} members for ${members.className}.`,
-      subject: createSummarySubject({
-        task: "class-members",
-        requested: subject,
-        className: members.className,
-        artifactId: members.artifactId
-      }),
-      counts: members.counts
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "class-members",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: members.artifactId,
-              className: members.className
-            }
-          },
-          members: include.includes("members") || detail !== "summary"
-            ? {
-                ...members.members,
-                ...(members.decompiledFallback ? { decompiledFallback: members.decompiledFallback } : {}),
-                ...(members.decompiledMemberCounts ? { decompiledMemberCounts: members.decompiledMemberCounts } : {})
-              }
-            : {
-                counts: members.counts,
-                ...(members.decompiledMemberCounts ? { decompiledMemberCounts: members.decompiledMemberCounts } : {})
-              }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifact.warnings, ...members.warnings],
-      ...(members.truncated
-        ? {
-            meta: buildEntryToolMeta({
-              detail,
-              include,
-              warnings: [...artifact.warnings, ...members.warnings],
-              truncated: createTruncationMeta({
-                omittedGroups: ["members"],
-                nextActions: [
-                  createNextAction("inspect-minecraft", {
-                    task: "class-members",
-                    detail: "full",
-                    include: ["members"],
-                    subject
-                  })
-                ]
-              })
-            })
-          }
-        : {})
-    };
+  private handleClassMembers(subject: Subject, detail: DetailLevel, include: string[], limit: number | undefined) {
+    return handleClassMembers(this, subject, detail, include, limit);
   }
 
-  private async handleSearch(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[],
-    limit: number | undefined,
-    cursor: string | undefined
-  ) {
-    if (subject.kind !== "search" && !(subject.kind === "workspace" && subject.focus?.kind === "search")) {
-      this.invalidTaskSubjectError("search", subject);
-    }
-
-    const searchSubject = subject.kind === "search" ? subject : this.requireWorkspaceSearchFocus(subject);
-    const requestedSubject = this.summarizeRequestedSubject(subject);
-    const queryMode = searchSubject.queryMode ?? "auto";
-    const artifact = subject.kind === "search"
-      ? await this.resolveArtifactReference(subject, "search")
-      : await this.resolveWorkspaceArtifactReference(subject, searchSubject.artifact);
-    const search = await this.deps.searchClassSource({
-      artifactId: artifact.artifactId,
-      query: searchSubject.query,
-      intent: searchSubject.intent,
-      match: searchSubject.match,
-      queryMode,
-      limit,
-      cursor,
-      scope: searchSubject.packagePrefix || searchSubject.fileGlob || searchSubject.symbolKind
-        ? {
-            packagePrefix: searchSubject.packagePrefix,
-            fileGlob: searchSubject.fileGlob,
-            symbolKind: searchSubject.symbolKind
-          }
-        : undefined
-    });
-
-    const needsBinaryBackedClassHit =
-      subject.kind === "workspace" &&
-      hasPartialVanillaCoverage(artifact.artifact) &&
-      looksLikeClassQuery(searchSubject.query) &&
-      !search.hits.some((hit) => hitTargetsVanillaNamespace(hit));
-    const binaryBackedClassHit = needsBinaryBackedClassHit
-      ? await this.resolveBinaryBackedClass(searchSubject.query, {
-          version: artifact.version,
-          mapping: subject.mapping
-        })
-      : undefined;
-    const binaryBackedHitRecord = binaryBackedClassHit == null
-      ? undefined
-      : {
-          filePath: classNameToFilePath(binaryBackedClassHit.className),
-          score: 100,
-          matchedIn: "symbol" as const,
-          reasonCodes: ["binary-class-lookup"],
-          symbol: {
-            symbolKind: "class" as const,
-            symbolName: binaryBackedClassHit.className.split(".").at(-1) ?? binaryBackedClassHit.className,
-            qualifiedName: binaryBackedClassHit.className,
-            line: 1
-          }
-        };
-    const effectiveHits =
-      binaryBackedHitRecord == null
-        ? search.hits
-        : [
-            binaryBackedHitRecord,
-            ...search.hits.filter((hit) => hit.filePath !== binaryBackedHitRecord.filePath)
-          ];
-
-    const sampledHits = capArray(effectiveHits, 5);
-    const isAutoSeparatorMiss =
-      effectiveHits.length === 0 &&
-      queryMode === "auto" &&
-      /[._$]/.test(searchSubject.query);
-    const literalRetrySubject = subject.kind === "search"
-      ? {
-          ...subject,
-          queryMode: "literal" as const
-        }
-      : {
-          ...subject,
-          focus: {
-            ...searchSubject,
-            kind: "search" as const,
-            queryMode: "literal" as const
-          }
-        };
-    const summary: Summary = {
-      status: effectiveHits.length > 0 ? "ok" : "not_found",
-      headline: effectiveHits.length > 0
-        ? `Found ${effectiveHits.length} source hits for ${searchSubject.query}.`
-        : `No source hits were found for ${searchSubject.query}.`,
-      subject: createSummarySubject({
-        task: "search",
-        requested: requestedSubject,
-        query: searchSubject.query,
-        artifactId: artifact.artifactId
-      }),
-      counts: {
-        hits: effectiveHits.length
-      },
-      nextActions: nextActionsOrUndefined([
-        ...(effectiveHits.length > 0
-          ? [
-              createNextAction("inspect-minecraft", {
-                task: "file",
-                subject: {
-                  kind: "file",
-                  filePath: effectiveHits[0]!.filePath,
-                  artifact: {
-                    type: "resolved-id",
-                    artifactId: artifact.artifactId
-                  }
-                },
-                include: ["source"]
-              })
-            ]
-          : []),
-        ...(isAutoSeparatorMiss
-          ? [
-              createNextAction("inspect-minecraft", {
-                task: "search",
-                subject: literalRetrySubject
-              })
-            ]
-          : [])
-      ]),
-      ...(isAutoSeparatorMiss
-        ? {
-            notes: [
-              "Separator query returned no indexed hits. Retry with queryMode=\"literal\" for an explicit full substring scan."
-            ]
-          }
-        : binaryBackedClassHit
-          ? {
-              notes: [
-                "Source coverage was partial, so inspect-minecraft returned a binary-backed class match for the vanilla symbol."
-              ]
-            }
-          : {})
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "search",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: requestedSubject,
-            resolved: {
-              artifactId: artifact.artifactId
-            }
-          },
-          search: {
-            query: searchSubject.query,
-            hits: detail === "summary" ? sampledHits.items : effectiveHits,
-            nextCursor: search.nextCursor
-          }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])]
-    };
+  private handleSearch(subject: Subject, detail: DetailLevel, include: string[], limit: number | undefined, cursor: string | undefined) {
+    return handleSearch(this, subject, detail, include, limit, cursor);
   }
 
-  private async handleFile(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[]
-  ) {
-    if (subject.kind !== "file" && !(subject.kind === "workspace" && subject.focus?.kind === "file")) {
-      this.invalidTaskSubjectError("file", subject);
-    }
-    const fileSubject = subject.kind === "file" ? subject : this.requireWorkspaceFileFocus(subject);
-    const artifact = subject.kind === "file"
-      ? await this.resolveArtifactReference(subject, "file")
-      : await this.resolveWorkspaceArtifactReference(subject, fileSubject.artifact);
-    const file = await this.deps.getArtifactFile({
-      artifactId: artifact.artifactId,
-      filePath: fileSubject.filePath
-    });
-    const summary: Summary = {
-      status: "ok",
-      headline: `Read ${file.filePath}.`,
-      subject: createSummarySubject({
-        task: "file",
-        requested: subject,
-        filePath: file.filePath,
-        artifactId: artifact.artifactId
-      }),
-      counts: {
-        bytes: file.contentBytes
-      }
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "file",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: artifact.artifactId,
-              filePath: file.filePath
-            }
-          },
-          file: {
-            filePath: file.filePath,
-            contentBytes: file.contentBytes,
-            truncated: file.truncated,
-            content: include.includes("source") || detail !== "summary" ? file.content : undefined
-          }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifact.warnings]
-    };
+  private handleFile(subject: Subject, detail: DetailLevel, include: string[]) {
+    return handleFile(this, subject, detail, include);
   }
 
-  private async handleListFiles(
-    subject: Subject,
-    detail: DetailLevel,
-    include: string[],
-    limit: number | undefined,
-    cursor: string | undefined
-  ) {
-    const artifact = await this.resolveArtifactReference(subject, "list-files");
-    const files = await this.deps.listArtifactFiles({
-      artifactId: artifact.artifactId,
-      limit,
-      cursor
-    });
-    const sampled = capArray(files.items, 10);
-    const partialCoverage = subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact);
-    const nextActions = [
-      ...(files.items.length > 0
-        ? [
-            createNextAction("inspect-minecraft", {
-              task: "file",
-              subject: {
-                kind: "file",
-                filePath: files.items[0],
-                artifact: {
-                  type: "resolved-id",
-                  artifactId: artifact.artifactId
-                }
-              }
-            })
-          ]
-        : []),
-      ...(partialCoverage
-        ? [
-            createNextAction("inspect-minecraft", {
-              task: "class-source",
-              subject: {
-                kind: "workspace",
-                projectPath: subject.projectPath,
-                mapping: subject.mapping,
-                scope: subject.scope,
-                preferProjectVersion: subject.preferProjectVersion,
-                strictVersion: subject.strictVersion,
-                focus: {
-                  kind: "class",
-                  className: "net.minecraft.world.item.Item"
-                }
-              }
-            })
-          ]
-        : [])
-    ];
-    const summary: Summary = {
-      status: partialCoverage ? "partial" : "ok",
-      headline: `Listed ${files.items.length} files for ${artifact.artifactId}.`,
-      subject: createSummarySubject({
-        task: "list-files",
-        requested: subject,
-        artifactId: artifact.artifactId
-      }),
-      counts: {
-        files: files.items.length
-      },
-      nextActions: nextActionsOrUndefined(nextActions),
-      ...(partialCoverage
-        ? {
-            notes: [
-              "This listing is partial because the resolved source artifact does not contain net.minecraft entries."
-            ]
-          }
-        : {})
-    };
-    return {
-      ...buildEntryToolResult({
-        task: "list-files",
-        summary,
-        detail,
-        include,
-        blocks: {
-          subject: {
-            requested: subject,
-            resolved: {
-              artifactId: artifact.artifactId
-            }
-          },
-          files: {
-            items: detail === "summary" ? sampled.items : files.items,
-            nextCursor: files.nextCursor,
-            ...(partialCoverage
-              ? {
-                  coverage: {
-                    sourceCoverage: "partial",
-                    missingNamespaces: ["net.minecraft"]
-                  }
-                }
-              : {})
-          }
-        },
-        alwaysBlocks: ["subject"]
-      }),
-      warnings: [...artifact.warnings, ...files.warnings]
-    };
+  private handleListFiles(subject: Subject, detail: DetailLevel, include: string[], limit: number | undefined, cursor: string | undefined) {
+    return handleListFiles(this, subject, detail, include, limit, cursor);
   }
 }
