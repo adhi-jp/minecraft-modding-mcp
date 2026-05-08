@@ -33,18 +33,11 @@ import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit } from "./class-source/members-builder.js";
+import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
 
 type MemberAccess = "public" | "all";
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function normalizeStrictPositiveInt(
   value: number | undefined,
@@ -63,29 +56,6 @@ function normalizeStrictPositiveInt(
   return value;
 }
 
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
-}
-
 function normalizeMemberAccess(access: MemberAccess | undefined): MemberAccess {
   if (access == null) {
     return "public";
@@ -98,22 +68,6 @@ function normalizeMemberAccess(access: MemberAccess | undefined): MemberAccess {
     message: `access must be "public" or "all".`,
     details: { access }
   });
-}
-
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
-function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const flag of qualityFlags) {
-    if (!seen.has(flag)) {
-      seen.add(flag);
-      deduped.push(flag);
-    }
-  }
-  return deduped;
 }
 
 function buildResolveArtifactParams(

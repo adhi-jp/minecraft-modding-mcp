@@ -13,33 +13,11 @@ import type {
 import { isSafeMavenVersionToken } from "../workspace-mapping-service.js";
 import type { WorkspaceContext } from "../workspace-context-cache.js";
 import type { ResolveArtifactInput } from "../source-service.js";
+import { normalizeMapping } from "./shared-utils.js";
 
 // Env toggles are read at call time, not at module load: tests dynamically
 // re-import source-service.ts with a cache-busting query to flip the flag,
 // but cannot bust this module's cache through that path.
-
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
-}
 
 export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPath: string): Promise<WorkspaceContext> {
   const cached = svc.workspaceContextCache.read(projectPath);

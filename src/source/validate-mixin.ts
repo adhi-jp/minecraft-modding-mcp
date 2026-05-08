@@ -36,6 +36,7 @@ import { runResolveStage } from "./validate-mixin/pipeline/resolve.js";
 import { runMappingHealthStage } from "./validate-mixin/pipeline/mapping-health.js";
 import { runParseStage } from "./validate-mixin/pipeline/parse.js";
 import { runTargetLookupStage } from "./validate-mixin/pipeline/target-lookup.js";
+import { normalizePathStyle, pathExists } from "./shared-utils.js";
 /* remapSignatureMembers reached via svc.remapSignatureMembers so tests can monkey-patch */
 
 export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
@@ -106,10 +107,6 @@ function annotateValidateMixinError(err: unknown, stage: ValidateMixinStage): Ap
   });
 }
 
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
 function normalizeRequestedArtifactScope(scope: ArtifactScope | undefined): ArtifactScope {
   return scope ?? "vanilla";
 }
@@ -142,15 +139,6 @@ function scopeToJarType(scope: ArtifactScope): "vanilla-client" | "merged" | "lo
     return "vanilla-client";
   }
   return scope;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function sameStringArray(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {

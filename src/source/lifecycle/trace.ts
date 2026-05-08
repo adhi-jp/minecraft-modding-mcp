@@ -7,6 +7,7 @@ import type {
   TraceSymbolLifecycleOutput,
   TraceSymbolLifecycleTimelineEntry
 } from "../../source-service.js";
+import { normalizeOptionalString } from "../shared-utils.js";
 import {
   normalizeMapping,
   rejectLifecycleClassLikeInput,
@@ -29,14 +30,6 @@ function clampLimit(limit: number | undefined, fallback: number, max: number): n
     return fallback;
   }
   return Math.max(1, Math.min(max, Math.trunc(limit)));
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function looksLikeJvmMethodDescriptor(descriptor: string | undefined): boolean {

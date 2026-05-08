@@ -14,6 +14,7 @@ import type {
   SearchSourceHit,
   SymbolKind
 } from "../source-service.js";
+import { normalizePathStyle } from "./shared-utils.js";
 
 type SearchIntent = "symbol" | "text" | "path";
 type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -58,10 +59,6 @@ function clampLimit(limit: number | undefined, fallback: number, max: number): n
     return fallback;
   }
   return Math.max(1, Math.min(max, Math.trunc(limit)));
-}
-
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
 }
 
 export function normalizeIntent(intent: SearchIntent | undefined): SearchIntent {

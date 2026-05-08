@@ -43,6 +43,7 @@ import type {
 import { isUnobfuscatedVersion } from "../version-service.js";
 import type { WorkspaceProjectLoader } from "../workspace-mapping-service.js";
 import * as indexer from "./indexer.js";
+import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
 type VersionSourceCandidate = {
   jarPath: string;
@@ -90,53 +91,6 @@ function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: Reg
 
 function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
-}
-
-function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const flag of qualityFlags) {
-    if (!seen.has(flag)) {
-      seen.add(flag);
-      deduped.push(flag);
-    }
-  }
-  return deduped;
 }
 
 function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {

@@ -13,6 +13,7 @@ import type {
 } from "../mixin-validator.js";
 import type { SourceService } from "../source-service.js";
 import { remapSignatureMembers } from "./lifecycle.js";
+import { normalizeMapping, normalizeOptionalString } from "./shared-utils.js";
 import type {
   ValidateAccessTransformerInput,
   ValidateAccessTransformerOutput,
@@ -24,37 +25,6 @@ import type {
   RuntimeValidationProvenance,
   SourceMapping
 } from "../types.js";
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
-}
 
 function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceMapping | undefined {
   const normalized = namespace?.trim().toLowerCase();

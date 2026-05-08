@@ -23,6 +23,7 @@ import {
   touchCacheMetrics,
   upsertCacheMetrics
 } from "./cache-metrics.js";
+import { normalizePathStyle } from "./shared-utils.js";
 
 export const INDEX_SCHEMA_VERSION = 1;
 
@@ -72,10 +73,6 @@ export type IndexArtifactOutput = {
   durationMs: number;
   mappingApplied: import("../types.js").SourceMapping;
 };
-
-function normalizePathStyle(path: string): string {
-  return path.replaceAll("\\", "/");
-}
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   const size = Math.max(1, Math.trunc(chunkSize));

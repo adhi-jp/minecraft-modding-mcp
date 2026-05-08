@@ -7,6 +7,7 @@ import type {
   ListArtifactFilesInput,
   ListArtifactFilesOutput
 } from "../source-service.js";
+import { normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
 function clampLimit(limit: number | undefined, fallback: number, max: number): number {
   if (limit === undefined || limit === null) {
@@ -28,18 +29,6 @@ function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
     cut -= 1;
   }
   return buffer.slice(0, cut).toString("utf8");
-}
-
-function normalizePathStyle(path: string): string {
-  return path.replace(/\\/g, "/");
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 export async function getArtifactFile(svc: SourceService, input: GetArtifactFileInput): Promise<GetArtifactFileOutput> {
