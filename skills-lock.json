@@ -11,7 +11,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/codex-review-cycle/SKILL.md",
-      "computedHash": "aac7a490dbdda4681e1714ac9ae9cf8bad0ab57ba4994861e233086cc97e7306"
+      "computedHash": "b8fc923402f97ee624809a8089312e58a6d45d6e74f2ccaa6aa79cd9cf4b8d9c"
     },
     "create-readme": {
       "source": "github/awesome-copilot",
@@ -59,7 +59,7 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/systematic-debugging/SKILL.md",
-      "computedHash": "72e9ab72627e4fd8ed26a582e82309a98ecdc4f6e1c99418430ac05682c9e91d"
+      "computedHash": "7246fdd3a795fc3daff0af72044ca99bf836e4e6a46844742858786fdfb86488"
     },
     "test-driven-development": {
       "source": "obra/superpowers",
@@ -95,7 +95,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-planning/SKILL.md",
-      "computedHash": "31d74908f55ff34910273192fa4bb74bf7934c4e8adf6a07c782ac2cb0c203d5"
+      "computedHash": "b805fa6492488d66b4fba08bf9b9c9c5057d845043e2043cba36aa0c850b13a7"
     },
     "writing-style-guide": {
       "source": "adhi-jp/agent-skills",

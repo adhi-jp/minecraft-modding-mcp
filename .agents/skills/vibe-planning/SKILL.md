@@ -1,5 +1,5 @@
 ---
-version: 2.0.0
+version: 2.1.0
 name: vibe-planning
 description: >
   Use when the user wants planning before coding: plan mode, create a plan,
@@ -19,8 +19,11 @@ agent can execute without inventing missing behavior. Treat the user's request
 as valuable intent, not verified fact: preserve what they want, prove what can
 be proven, and make uncertainty visible.
 
-This skill is independent. Do not assume another planning skill or guard is
-available.
+This skill is independent. Do not assume another planning skill, guard,
+execution skill, commit-message skill, or other companion skill is available.
+When skill metadata is visible in the current environment, use it only to plan
+availability-driven skill usage in the generated artifact; do not make an
+unavailable skill a requirement.
 
 ## Output Language and Artifact
 
@@ -92,6 +95,10 @@ complete plan artifact in the reply using the same English artifact structure.
   fact. Mark them as `Unproven`.
 - Do not accept user claims blindly. If a claim is false, stale, unsupported, or
   infeasible, state the evidence and propose the closest viable alternative.
+- Do not invent unavailable skills or assume a fixed companion skill set. A plan
+  may name a specific skill only after its availability was verified from the
+  current environment, user-provided material, project instructions, or local
+  metadata.
 - Respect the user's requested outcome as far as reality allows. When a request
   cannot be implemented literally, preserve the intent and adjust the mechanism.
 - When the user asks for broad UX improvements, make the first slice complete
@@ -199,30 +206,62 @@ localized work.
    - For refactors, include equivalence checks that prove behavior is preserved.
    - For UI, include interaction, state, responsive layout, and accessibility
      checks when relevant.
-7. **Plan implementation**
+7. **Plan available skill usage**
+   - Inspect available skill metadata at plan creation time when it is already
+     exposed in the runtime, supplied by the user, documented in project
+     instructions, or cheaply discoverable from local skill metadata.
+   - Do not perform broad filesystem, network, package-manager, or marketplace
+     discovery solely to find optional skills. If skill metadata is not visible
+     or cannot be read cheaply, say that no matching optional skill was verified
+     and continue with the normal plan.
+   - Select only skills whose descriptions match the planned work, method,
+     stack, artifact, or workflow checkpoint. Do not include a skill just because
+     it is installed.
+   - For each selected skill, state when to use it, why its description matches,
+     the availability source, and the fallback if that skill is unavailable
+     when the plan is executed.
+   - If no optional skill is verified as matching, still include one
+     `Skill usage plan` entry using the same fields:
+     `Skill: No matching optional skill verified`, `Availability source`,
+     `Use when: Not applicable`, `Matching reason: Not applicable`, and
+     `Fallback if unavailable`. The fallback should say to continue with the
+     normal plan, repository rules, and any proposed checkpoint messages.
+   - When the plan includes commit checkpoints and a commit-message-writing
+     skill is verified available, schedule that skill after checkpoint
+     verification and before finalizing each commit message. If no matching
+     commit-message skill is verified, fall back to the repository's commit
+     rules, recent local history, and the proposed standalone Conventional
+     Commit message in the checkpoint.
+   - Do not let optional skill usage weaken the core plan contract: acceptance
+     criteria, tests, evidence labels, proceed conditions, and user decisions
+     still control the work.
+8. **Plan implementation**
    - Use only steps supported by `Primary source`, `Local investigation`, or
      explicit `Accepted risk`.
    - Preserve local conventions and existing architecture unless evidence shows
      they are the source of the problem.
    - Put proof-gathering steps before implementation steps when feasibility is
      still unproven.
-8. **Plan verification and review**
+9. **Plan verification and review**
    - Include test, lint, type-check, build, manual smoke, screenshot, diff review,
      or rollout checks appropriate to the stack.
    - Include a final diff-review step that checks the result against the
      specification and acceptance criteria.
-   - For multi-slice plans, include commit checkpoints after each independently
-     verifiable phase or slice. Each checkpoint states the intended scope,
-     required verification, and a proposed standalone Conventional Commit
-     message that names the concrete change. Do not plan commits for
-     discovery-only, unverified, or work-in-progress states.
-9. **Prepare the implementation handoff**
+   - For multi-slice implementation plans with code-producing slices,
+     include commit checkpoints after each independently verifiable phase or
+     slice. Each checkpoint states the intended scope, required verification,
+     and a proposed standalone Conventional Commit message that names the
+     concrete change.
+   - Do not plan commits for discovery-only, blocked, unverified, destructive,
+     or work-in-progress states. For discovery-first or blocked plans, say that
+     commit checkpoints are omitted until a code-producing slice is verified.
+10. **Prepare the implementation handoff**
    - Include a short handoff that starts with "When implementing this plan" so
      pasted plans remain self-contained execution requests.
    - Tell the implementer to treat the document as authoritative, re-check local
-     facts before editing, follow the acceptance criteria and test plan,
-     implement only the current in-scope slice, and stop on a blocked
-     `Proceed condition` or contradictory local evidence.
+     facts before editing, follow the acceptance criteria, test plan, and skill
+     usage plan, implement only the current in-scope slice, and stop on a
+     blocked `Proceed condition` or contradictory local evidence.
 
 ## Handling Incorrect or Impossible Requests
 
@@ -290,15 +329,27 @@ implementation.
 - Negative and edge cases:
 - Manual or visual checks:
 
+## Skill usage plan
+- Skill:
+- Availability source:
+- Use when:
+- Matching reason:
+- Fallback if unavailable:
+- [If no optional skill was verified, include the same fields with
+  `Skill: No matching optional skill verified`, `Use when: Not applicable`, and
+  `Matching reason: Not applicable`.]
+
 ## Implementation plan
 1. [Proof or setup step, if needed]
 2. [Implementation step]
 3. [Verification and diff-review step]
 
 ## Commit checkpoints
-- [For multi-slice plans only: checkpoint scope, required verification, and
-  proposed standalone Conventional Commit message. Omit this section for
-  single-slice or discovery-only plans.]
+- [For multi-slice implementation plans with code-producing slices: checkpoint
+  scope, required verification, and proposed standalone Conventional Commit
+  message. Omit this section for single-slice, blocked, or discovery-only plans,
+  or state that commit checkpoints are omitted until a code-producing slice is
+  verified.]
 
 ## Risks and unproven items
 - Item:
@@ -309,9 +360,9 @@ implementation.
 
 ## Implementation handoff
 - When implementing this plan, treat this document as authoritative. Re-check
-  local facts before editing, follow the acceptance criteria and test plan,
-  implement only the current in-scope slice, and stop if the `Proceed condition`
-  is blocked or local evidence contradicts the plan.
+  local facts before editing, follow the acceptance criteria, test plan, and
+  skill usage plan, implement only the current in-scope slice, and stop if the
+  `Proceed condition` is blocked or local evidence contradicts the plan.
 
 ## Proceed condition
 - [State whether implementation is ready, conditional on accepted risk, or
@@ -338,8 +389,11 @@ Before finalizing the plan, check that:
 - False or infeasible requirements are challenged with evidence and alternatives.
 - Acceptance criteria are observable.
 - Tests come before implementation steps.
+- The skill usage plan names only verified available skills with timing and
+  fallback, or records `No matching optional skill verified` with the same
+  availability source, timing, matching reason, and fallback fields.
 - Implementation steps do not rely on unlabeled assumptions.
-- The implementation handoff is present, self-contained, and does not name
-  another skill.
+- The implementation handoff is present, self-contained, and does not require
+  unverified or unavailable skills.
 - Accepted risks are explicit, scoped, and revisitable.
 - The user-facing summary language follows the configured precedence.
