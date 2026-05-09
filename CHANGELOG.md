@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+- `package.json` `description` and `keywords` now mirror the GitHub repository's `description` and topics. `description` summarizes the actual feature surface (source inspection, Mojang/Yarn/Intermediary mappings, version diffs, Fabric/Forge/NeoForge mod JAR analysis, Mixin/Access Widener/Access Transformer validation); `keywords` expands from three entries to the published 15-topic set.
+
 ## [4.1.0] - 2026-05-09
 
 ### Documentation

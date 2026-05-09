@@ -1,7 +1,7 @@
 {
   "name": "@adhisang/minecraft-modding-mcp",
   "version": "4.1.0",
-  "description": "MCP server with utilities for Minecraft modding workflows",
+  "description": "MCP server for AI-assisted Minecraft modding: inspect decompiled source, resolve Mojang/Yarn/Intermediary mappings, diff versions, analyze Fabric/Forge/NeoForge mod JARs, and validate Mixin, Access Widener, and Access Transformer files.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -36,9 +36,21 @@
     "validate": "npm run check && npm test && npm run test:coverage && npm run test:perf"
   },
   "keywords": [
+    "claude",
+    "fabric",
+    "forge",
     "mcp",
+    "mcp-server",
     "minecraft",
-    "modding"
+    "minecraft-modding",
+    "mixin",
+    "modding",
+    "model-context-protocol",
+    "mojang-mappings",
+    "neoforge",
+    "nodejs",
+    "typescript",
+    "yarn-mappings"
   ],
   "author": "adhi-jp",
   "license": "MIT",
