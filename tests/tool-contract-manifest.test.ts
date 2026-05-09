@@ -65,10 +65,19 @@ test("tool contract manifest reflects current entry-tool purpose summaries", () 
 
 test("tool contract manifest keeps Japanese purpose rows localized", () => {
   const diagnosticsTable = renderToolSurfaceSection("ja", "registry-diagnostics");
+  const validationTable = renderToolSurfaceSection("ja", "validation");
+  const batchTable = renderToolSurfaceSection("ja", "batch-lookup");
 
   assert.match(
     diagnosticsTable,
     /\| `get-runtime-metrics` \| ランタイムメトリクスとレイテンシスナップショットを確認する \|/
   );
+  assert.match(validationTable, /段階別予算/);
+  assert.match(validationTable, /ランタイムアーティファクト/);
+  assert.match(validationTable, /1 回の確認で返す/);
+  assert.match(batchTable, /最大 50 件/);
+  assert.match(batchTable, /ワークスペースまたはバージョン対象のみ/);
   assert.doesNotMatch(diagnosticsTable, /runtime metrics|meta envelope/);
+  assert.doesNotMatch(validationTable, /stage budget|runtime artifact|1 call/);
+  assert.doesNotMatch(batchTable, /1 call|entries|workspace \/ version target/);
 });

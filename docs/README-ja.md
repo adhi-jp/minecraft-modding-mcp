@@ -11,19 +11,20 @@
 
 ---
 
-`@adhisang/minecraft-modding-mcp` は、AI アシスタントに Minecraft のソースコード、マッピング、Mod JAR、レジストリデータ、バリデーションワークフローへの構造化アクセスを提供する [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) サーバーです。Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントで利用できます。
+`@adhisang/minecraft-modding-mcp` は、AI 支援の Minecraft Modding ワークフロー向け MCP サーバーです。エージェントが Minecraft ソースを調査し、マッピングを解決し、バージョン差分を比較し、Mod JAR を解析し、Mixin / Access Widener / Access Transformer ファイルを検証し、NBT やレジストリデータを扱う場面で使えます。
+
+stdio で動作し、Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントから利用できます。
 
 **37 ツール**（6 エントリー + 31 エキスパート） | **7 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
 
 ## 特長
 
-- **ソース探索**: デコンパイルされた Minecraft ソースコードを、行単位の精度とカーソルページネーション付きファイル一覧で閲覧・検索
-- **マルチマッピング変換**: クラス、フィールド、メソッド名を `obfuscated`、`mojang`、`intermediary`、`yarn` の間で変換
-- **バージョン比較**: Minecraft バージョン間でクラスシグネチャとレジストリエントリを比較
-- **Mod JAR 解析**: Fabric、Forge、NeoForge の Mod JAR からメタデータ、依存関係、エントリポイント、Mixin 設定、同梱 Access Transformer パスを抽出
-- **Mixin / Access Widener / Access Transformer 検証**: ソース、`.accesswidener`、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証
-- **NBT ラウンドトリップ**: NBT バイナリを型付き JSON にデコードし、RFC 6902 パッチを適用して、再び NBT にエンコード
-- **レジストリデータとランタイムメトリクス**: 生成済みレジストリスナップショットの参照と、キャッシュやレイテンシカウンターの確認
+- **ソース探索**: デコンパイル済み Minecraft ソースを、行単位の文脈付きで閲覧・一覧・検索
+- **マッピング対応のシンボル操作**: クラス、フィールド、メソッド名を `obfuscated`、`mojang`、`intermediary`、`yarn` の間で変換
+- **バージョン比較**: Minecraft バージョン間のクラスシグネチャ、レジストリ項目、移行向け概要を比較
+- **Mod JAR 解析**: Fabric、Forge、NeoForge のメタデータ、エントリポイント、Mixin 設定、依存関係、ソース、リマップのプレビューを確認
+- **プロジェクト検証**: Mixin ソース、`.accesswidener` ファイル、Forge / NeoForge の Access Transformer ファイルを対象バージョンに対して検証
+- **NBT、レジストリ、キャッシュ、診断**: NBT ペイロードのパッチ適用、生成済みレジストリデータの確認、キャッシュや実行時状態の管理
 - **MCP リソース**: バージョン、クラスソース、アーティファクトメタデータ、マッピングを URI ベースのリソースとして公開
 
 ## クイックスタート
@@ -41,11 +42,11 @@
 npx -y @adhisang/minecraft-modding-mcp
 ```
 
-環境によって自動 JAR ダウンロードがブロックされる場合は、クライアント設定で `MCP_VINEFLOWER_JAR_PATH` と `MCP_TINY_REMAPPER_JAR_PATH` を設定してください。
+各 MCP クライアント設定でも同じコマンドを使います。環境によって自動 JAR ダウンロードがブロックされる場合は、その設定内で `MCP_VINEFLOWER_JAR_PATH` と `MCP_TINY_REMAPPER_JAR_PATH` を指定してください。
 
 ### クライアント設定
 
-CLI クライアント:
+CLI クライアントでは、パッケージ起動コマンドをそのまま登録できます。
 
 Claude Code:
 
@@ -61,7 +62,7 @@ codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
 
 登録後に `claude mcp list` または `codex mcp list` を実行し、サーバーが利用可能になっていることを確認します。
 
-stdio トランスポートは、改行区切り形式と `Content-Length` フレーミングの両方を自動判別するため、Codex と標準的な MCP クライアントの両方で同じサーバー起動コマンドを利用できます。
+stdio トランスポートは、改行区切り形式と `Content-Length` フレーミングの両方を自動判別します。そのため、Codex と標準的な MCP クライアントで同じサーバー起動コマンドを利用できます。
 
 #### Claude Desktop
 
@@ -135,9 +136,9 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 ## まずここから
 
-以下の 6 つのトップレベルワークフローツールは、一般的な作業をカバーし、要約優先の結果を返します。エージェントや MCP クライアントが最初に使う既定の入口として最適です。
+以下の 6 つのトップレベルワークフローツールは、よく使う作業をカバーし、要約優先の結果を返します。エージェントや MCP クライアントの既定の入口として使ってください。
 
-すべて `result.summary` を先に返し、次の一手が明確な場合は `summary.nextActions` も含めます。個別の選び分けは表と下の例から始め、細かな契約は英語の `tool-reference.md` を参照してください。
+すべて `result.summary` を先に返し、次の一手が明確な場合は `summary.nextActions` も含めます。表でツールを選び、下の例と英語リファレンスで正確なペイロードを確認してください。
 
 | ツール | 主な用途 |
 | --- | --- |
@@ -150,13 +151,13 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 ### ワークフローノート
 
-ここでは高頻度の注意点だけを扱います。完全な落とし穴一覧、詳細な契約、移行メモ、環境変数は [tool-reference.md](tool-reference.md) を参照してください。
+ここでは、オンボーディング中によく迷う判断だけを扱います。完全な注意点一覧、正確な契約、移行メモ、環境変数は [tool-reference.md](tool-reference.md) を参照してください。
 
 - `search-class-source` は既定で `queryMode="auto"` を使い、`foo.bar`、`foo_bar`、`foo$bar` のような区切り文字付きクエリもインデックス経路のまま扱います。明示的な全文部分文字列スキャンが必要な場合は `queryMode="literal"` を使ってください。
-- アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の task を維持したまま返ります。
-- `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密な overload 指定は別フィールドの `descriptor` を使ってください。
+- アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の `task` を維持したまま返ります。
+- `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密なオーバーロード指定は別フィールドの `descriptor` を使ってください。
 - ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
-- `analyze-mod` と `validate-project` は、構造化された `subject` と正規の `include` を要求します。古い string-subject / domain-include payload には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
+- `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
 
 ### あるバージョンの Minecraft ソースを確認する
 
@@ -304,7 +305,7 @@ Minecraft バージョン間でのクラス / レジストリ変更比較と、�
 | `check-symbol-exists` | 名前空間内でクラス、フィールド、メソッドが存在するかを確認する |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`、`find-mapping`、`resolve-method-mapping-exact`、`resolve-workspace-symbol`、`check-symbol-exists` はオプションの `compact` パラメータ（デフォルト `true`）を受け付けます。有効時は空配列・null・空オブジェクトがトップレベルのレスポンスから除去され、トークン消費を抑えられます。完全な診断出力が必要な場合は `compact: false` を指定してください。`resolve-artifact` の compact モードでは `provenance` 等の診断フィールドも省略し、後続ツール呼び出しに必要な最小限のフィールドのみを返します。マッピングツールの compact モードでは、完全一致の単一候補が返る場合に冗長な `candidates` 配列を省略します。
+複数の参照系ツールは、短いレスポンスを返すための `compact` 出力に対応しています。既定値とツールごとのフィールド一覧は [tool-reference.md](tool-reference.md) を参照してください。
 
 ### NBT ユーティリティ
 
@@ -334,17 +335,15 @@ Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mo
 
 ### バリデーション
 
-Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証するツール群です。
-`validate-access-widener` は既定では従来どおり vanilla bytecode を検証し、`projectPath` / `scope` / `preferProjectVersion` を指定した場合は runtime-aware 検証に切り替わって `provenance` と各 entry の `resolvedRuntimeAccess` を返します。
-`validate-access-transformer` は `projectPath` がある場合に Forge / NeoForge ワークスペースから `atNamespace` を推定し、`scope="loader"` では loader runtime artifact を優先して Access Transformer の対象を検証します。
+Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証するツール群です。プロジェクトパスがある場合は、ワークスペースやローダーの実行時文脈を使った検証もできます。
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | ツール | 役割 |
 | --- | --- |
-| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (stage budget が部分結果を返す場合は `validationStatus: "partial"` と `targetOutcomes` を含む) |
-| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |
-| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |
-| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 call で返す |
+| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (段階別予算で一部作業を後回しにした場合は `validationStatus: "partial"` と `targetOutcomes` を含む) |
+| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom ランタイムアーティファクトも使う |
+| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge ランタイムアーティファクトも使う |
+| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 回の確認で返す |
 <!-- END GENERATED TOOL TABLE: validation -->
 
 ### レジストリと診断
@@ -360,15 +359,15 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 
 ### バッチ参照
 
-固定ショートリスト (1..50 entries) に対して 1 つの解決済みアーティファクト (または 1 つの Minecraft バージョン) を共有するツール群です。エントリごとに `{ status, result?, error? }` を返し、最後に集計用の `summary` を付けます。共有 envelope、`failFast` のセマンティクス、エントリごとのリトライマッピングは `docs/tool-reference.md` の `Batch lookup contract` に詳述しています。
+固定の短いリストに対して、1 つの解決済みアーティファクトまたは Minecraft バージョンを共有するツール群です。項目ごとの状態と集計用の `summary` を返します。失敗時の扱いとリトライマッピングは [Batch lookup contract](tool-reference.md#batch-lookup-contract) を参照してください。
 
 <!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
 | ツール | 役割 |
 | --- | --- |
-| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して複数クラスのソースを 1 call で読み取る (1..50 entries) |
-| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して複数クラスのメンバーを 1 call で列挙する (1..50 entries) |
-| `batch-symbol-exists` | 共有解決した 1 つの Minecraft-version アーティファクトに対して複数シンボルの存在確認を 1 call で行う (workspace / version target のみ) |
-| `batch-mappings` | 共有 Minecraft バージョンの下で複数シンボルを名前空間横断にマッピング翻訳する (共有アーティファクトなし) |
+| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスソースを読み取る |
+| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスメンバーを列挙する |
+| `batch-symbol-exists` | 共有解決した 1 つの Minecraft バージョンアーティファクトに対して最大 50 件のシンボル存在確認を行う (ワークスペースまたはバージョン対象のみ) |
+| `batch-mappings` | 1 つの Minecraft バージョンで最大 50 件のシンボルを名前空間横断で変換する (共有アーティファクトなし) |
 <!-- END GENERATED TOOL TABLE: batch-lookup -->
 
 詳細なパラメータ制約、移行メモ、リソースの挙動、環境変数の完全な一覧は [tool-reference.md](tool-reference.md) を参照してください。

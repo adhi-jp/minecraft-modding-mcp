@@ -11,7 +11,13 @@ import { findPackedTarball } from "../helpers/package-smoke.ts";
 
 const execFileAsync = promisify(execFile);
 const STARTUP_STABILITY_MS = 2_000;
+const CLI_SHUTDOWN_TIMEOUT_MS = 2_000;
 const FORBIDDEN_PREFIXES = ["package/src/", "package/tests/", "package/.plans/", "package/.reference/", "package/.agents/"] as const;
+const REQUIRED_DOC_ENTRIES = [
+  "package/docs/README-ja.md",
+  "package/docs/examples.md",
+  "package/docs/tool-reference.md"
+] as const;
 
 type PackageJson = {
   name: string;
@@ -79,6 +85,37 @@ async function waitForStartupStability(child: ReturnType<typeof spawn>): Promise
   }
 }
 
+async function stopCliChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) {
+    return;
+  }
+
+  const exitPromise = once(child, "exit");
+  if (!child.stdin.destroyed) {
+    child.stdin.end();
+  }
+
+  const stdioResult = await Promise.race([
+    exitPromise.then(() => "exit" as const),
+    delay(CLI_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const)
+  ]);
+  if (stdioResult === "exit") {
+    return;
+  }
+
+  child.kill("SIGTERM");
+  const sigtermResult = await Promise.race([
+    exitPromise.then(() => "exit" as const),
+    delay(CLI_SHUTDOWN_TIMEOUT_MS).then(() => "timeout" as const)
+  ]);
+  if (sigtermResult === "exit") {
+    return;
+  }
+
+  child.kill("SIGKILL");
+  await exitPromise;
+}
+
 async function main(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "package-smoke-"));
   const npmCache = join(root, "npm-cache");
@@ -97,6 +134,12 @@ async function main(): Promise<void> {
       cwd: process.cwd()
     });
     const tarEntries = tarListRaw.split(/\r?\n/).filter((entry) => entry.trim().length > 0);
+    const missingDocEntries = REQUIRED_DOC_ENTRIES.filter((entry) => !tarEntries.includes(entry));
+    assert.deepEqual(
+      missingDocEntries,
+      [],
+      `Packaged tarball is missing required docs: ${missingDocEntries.join(", ")}`
+    );
     const forbiddenEntries = tarEntries.filter((entry) =>
       FORBIDDEN_PREFIXES.some((prefix) => entry.startsWith(prefix))
     );
@@ -140,8 +183,7 @@ async function main(): Promise<void> {
     });
 
     await waitForStartupStability(child);
-    child.kill("SIGTERM");
-    await once(child, "exit");
+    await stopCliChild(child);
 
     console.log("Package distribution smoke passed: tarball contents and CLI startup validated.");
   } finally {

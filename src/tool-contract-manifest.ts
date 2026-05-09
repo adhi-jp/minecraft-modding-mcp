@@ -125,10 +125,10 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `verify-mixin-target` | Single-call probe for owner / member existence with `@Shadow` / `@Accessor` / `@Invoker` advice |"
     ],
     ja: [
-      "| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (stage budget が部分結果を返す場合は `validationStatus: \"partial\"` と `targetOutcomes` を含む) |",
-      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom runtime artifact も使う |",
-      "| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge runtime artifact も使う |",
-      "| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 call で返す |"
+      "| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (段階別予算で一部作業を後回しにした場合は `validationStatus: \"partial\"` と `targetOutcomes` を含む) |",
+      "| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom ランタイムアーティファクトも使う |",
+      "| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge ランタイムアーティファクトも使う |",
+      "| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 回の確認で返す |"
     ]
   },
   "registry-diagnostics": {
@@ -149,10 +149,10 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `batch-mappings` | Translate many symbols across mapping namespaces with one shared Minecraft version (no shared artifact) |"
     ],
     ja: [
-      "| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して複数クラスのソースを 1 call で読み取る (1..50 entries) |",
-      "| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して複数クラスのメンバーを 1 call で列挙する (1..50 entries) |",
-      "| `batch-symbol-exists` | 共有解決した 1 つの Minecraft-version アーティファクトに対して複数シンボルの存在確認を 1 call で行う (workspace / version target のみ) |",
-      "| `batch-mappings` | 共有 Minecraft バージョンの下で複数シンボルを名前空間横断にマッピング翻訳する (共有アーティファクトなし) |"
+      "| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスソースを読み取る |",
+      "| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスメンバーを列挙する |",
+      "| `batch-symbol-exists` | 共有解決した 1 つの Minecraft バージョンアーティファクトに対して最大 50 件のシンボル存在確認を行う (ワークスペースまたはバージョン対象のみ) |",
+      "| `batch-mappings` | 1 つの Minecraft バージョンで最大 50 件のシンボルを名前空間横断で変換する (共有アーティファクトなし) |"
     ]
   }
 };

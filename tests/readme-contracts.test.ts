@@ -7,6 +7,8 @@ test("README keeps Start Here section with summary-first guidance before the too
   const startHereSummaryIndex = readme.indexOf("result.summary");
   const startHereTableIndex = readme.indexOf("| Tool | Start here for |");
 
+  assert.match(readme, /MCP server for AI-assisted Minecraft modding workflows/);
+  assert.match(readme, /Use it when an agent needs to inspect Minecraft source/);
   assert.match(readme, /## Start Here/);
   assert.match(readme, /`summary\.nextActions`/);
   assert.ok(
@@ -61,6 +63,8 @@ test("Japanese README stays overview-first with summary-first guidance and natur
   const startHereSummaryIndex = readme.indexOf("result.summary");
   const startHereTableIndex = readme.indexOf("| ツール | 主な用途 |");
 
+  assert.match(readme, /AI 支援の Minecraft Modding ワークフロー向け MCP サーバー/);
+  assert.match(readme, /エージェントが Minecraft ソースを調査/);
   assert.match(readme, /## まずここから/);
   assert.match(readme, /`summary\.nextActions`/);
   assert.ok(
@@ -74,6 +78,14 @@ test("Japanese README stays overview-first with summary-first guidance and natur
   assert.doesNotMatch(readme, /partial 結果/);
   assert.doesNotMatch(readme, /structured な/);
   assert.doesNotMatch(readme, /canonical な/);
+  assert.doesNotMatch(readme, /stage budget/);
+  assert.doesNotMatch(readme, /runtime artifact/);
+  assert.doesNotMatch(readme, /runtime-aware/);
+  assert.doesNotMatch(readme, /vanilla bytecode/);
+  assert.doesNotMatch(readme, /1 call/);
+  assert.doesNotMatch(readme, /1\.\.50 entries/);
+  assert.doesNotMatch(readme, /workspace \/ version target/);
+  assert.doesNotMatch(readme, /shared envelope/);
   // Links to English detailed docs must exist
   assert.match(readme, /examples\.md/);
   assert.match(readme, /tool-reference\.md/);

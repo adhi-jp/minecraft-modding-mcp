@@ -11,20 +11,21 @@
 
 ---
 
-`@adhisang/minecraft-modding-mcp` is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that gives AI assistants structured access to Minecraft source code, mappings, mod JARs, registry data, and validation workflows. It works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
+`@adhisang/minecraft-modding-mcp` is an MCP server for AI-assisted Minecraft modding workflows, built on the [Model Context Protocol](https://modelcontextprotocol.io/). Use it when an agent needs to inspect Minecraft source, resolve mappings, compare versions, analyze mod JARs, validate Mixin, Access Widener, or Access Transformer files, or work with NBT and registry data from an MCP client.
+
+It runs over stdio and works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
 **37 tools** (6 entry + 31 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 
-- **Source Exploration**: browse and search decompiled Minecraft source code with line-level precision and cursor-paginated file listing
-- **Multi-Mapping Conversion**: translate class, field, and method names between `obfuscated`, `mojang`, `intermediary`, and `yarn`
-- **Version Comparison**: diff class signatures and registry entries between Minecraft versions
-- **Mod JAR Analysis**: extract metadata, dependencies, entrypoints, Mixin configs, and packaged Access Transformer paths from Fabric, Forge, and NeoForge mod JARs
-- **Mixin, Access Widener, and Access Transformer Validation**: validate source, `.accesswidener`, and Forge/NeoForge access transformer files against a target Minecraft version
-- **NBT Round-Trip**: decode NBT binary to typed JSON, apply RFC 6902 patches, and encode it back to NBT
-- **Registry Data and Runtime Metrics**: query generated registry snapshots and inspect cache and latency counters
-- **MCP Resources**: expose versions, class source, artifact metadata, and mappings through URI-based resources
+- **Source exploration**: browse, list, and search decompiled Minecraft source with line-level context
+- **Mapping-aware symbol work**: convert class, field, and method names between `obfuscated`, `mojang`, `intermediary`, and `yarn`
+- **Version comparison**: compare class signatures, registry entries, and migration-oriented summaries across Minecraft versions
+- **Mod JAR analysis**: read Fabric, Forge, and NeoForge metadata, entrypoints, Mixin configs, dependencies, source, and remap previews
+- **Project validation**: validate Mixin source, `.accesswidener` files, and Forge/NeoForge Access Transformer files against the target version
+- **NBT, registry, cache, and diagnostics**: patch NBT payloads, inspect generated registry data, and manage cache/runtime state
+- **MCP resources**: expose versions, class source, artifact metadata, and mappings through URI-based resources
 
 ## Quick Start
 
@@ -41,11 +42,11 @@ Start the server locally:
 npx -y @adhisang/minecraft-modding-mcp
 ```
 
-If automatic JAR downloads are blocked in your environment, set `MCP_VINEFLOWER_JAR_PATH` and `MCP_TINY_REMAPPER_JAR_PATH` in the client configuration.
+Use this same command in MCP client configs. If automatic JAR downloads are blocked in your environment, set `MCP_VINEFLOWER_JAR_PATH` and `MCP_TINY_REMAPPER_JAR_PATH` there.
 
 ### Client Setup
 
-CLI clients:
+CLI clients can register the package command directly.
 
 Claude Code:
 
@@ -61,7 +62,7 @@ codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
 
 Run `claude mcp list` or `codex mcp list` after registration to verify the server is available.
 
-The stdio transport auto-detects both newline-delimited and `Content-Length` framing, so the same server command works across Codex and standard MCP clients.
+The stdio transport auto-detects newline-delimited and `Content-Length` framing, so the same server command works across Codex and standard MCP clients.
 
 #### Claude Desktop
 
@@ -135,9 +136,9 @@ Pass environment variables to override defaults:
 
 ## Start Here
 
-These six top-level workflow tools cover the common workflows and return summary-first results, so they are the best default starting points for agents and MCP clients.
+These six top-level workflow tools cover the common paths and return summary-first results. They are the best default starting points for agents and MCP clients.
 
-All six return `result.summary` first, and can include `summary.nextActions` when there is a clear follow-up step. Use the table for tool selection, then use the examples and reference docs for exact payloads.
+All six return `result.summary` first and can include `summary.nextActions` when there is a clear follow-up step. Pick the tool from the table, then use the examples and reference docs for exact payloads.
 
 | Tool | Start here for |
 | --- | --- |
@@ -150,14 +151,14 @@ All six return `result.summary` first, and can include `summary.nextActions` whe
 
 ### Workflow Notes
 
-Keep only the high-frequency notes here. For the full pitfall list, exact contract details, migration notes, and environment variables, see [docs/tool-reference.md](docs/tool-reference.md).
+These notes cover high-frequency decisions during onboarding. For the full pitfall list, exact contracts, migration notes, and environment variables, see [docs/tool-reference.md](docs/tool-reference.md).
 
 - `search-class-source` defaults to `queryMode="auto"` and keeps separator queries such as `foo.bar`, `foo_bar`, and `foo$bar` on the indexed path. Use `queryMode="literal"` for an explicit full substring scan.
 - If you do not already have an artifact, prefer `subject.kind="workspace"` for `inspect-minecraft` instead of guessing artifact details. When artifact context is the only missing input, a retryable `suggestedCall` preserves the requested task.
 - `trace-symbol-lifecycle` expects `Class.method` in `symbol`. Keep exact overload matching in the separate `descriptor` field.
 - For unobfuscated releases such as `26.1+`, `check-symbol-exists` and `analyze-symbol task="exists"` validate `mojang` lookups against runtime bytecode when no mapping graph exists, and return `mapping_unavailable` when the runtime JAR itself is unreachable.
 - `analyze-mod` and `validate-project` require structured `subject` objects and canonical `include` groups; stale string-subject or domain-include payloads return `ERR_INVALID_INPUT` with a retryable `suggestedCall`.
-- `validate-project task="project-summary"` propagates `preferProjectVersion=true` across discovered Mixin, Access Widener, and Access Transformer checks. When no version can be resolved from the request or `gradle.properties`, the summary blocks with version-agnostic recovery guidance.
+- `validate-project task="project-summary"` propagates `preferProjectVersion=true` across discovered Mixin, Access Widener, and Access Transformer checks. If no version can be resolved from the request or `gradle.properties`, the summary returns recovery guidance instead of guessing.
 
 ### Inspect Minecraft source from a version
 
@@ -239,7 +240,7 @@ Workspace summaries still default to discovering mixins and access wideners. Add
 ## Documentation
 
 - [Detailed example requests](docs/examples.md) for copyable payloads and common workflows
-- [Tool and configuration reference](docs/tool-reference.md) for exact inputs, outputs, resource behavior, environment variables, and migration notes — start with the [Which Tool for Which Question](docs/tool-reference.md#which-tool-for-which-question) decision table when you are not sure which tool to call
+- [Tool and configuration reference](docs/tool-reference.md) for exact inputs, outputs, resource behavior, environment variables, and migration notes. Start with the [Which Tool for Which Question](docs/tool-reference.md#which-tool-for-which-question) decision table when you are not sure which tool to call.
 - [日本語 README](docs/README-ja.md) for a Japanese onboarding overview
 
 ## Tool Surface
@@ -305,9 +306,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-`resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, and `check-symbol-exists` default `compact` to `true`: empty fields are stripped, `resolve-artifact` omits diagnostic fields (`provenance`, `artifactContents`, etc.), and mapping tools omit the redundant `candidates` array on full-confidence exact matches and slim the tail to `{kind, symbol, owner, name, descriptor, confidence, matchKind}` (signalled by `candidateDetailsTruncated`) for unresolved results with more than three candidates. Pass `compact: false` for the full diagnostic shape.
-
-`get-class-source`, `get-class-members`, `search-class-source`, and `list-artifact-files` accept the same `compact` parameter as opt-in (default `false`). When enabled it strips `provenance`, `artifactContents`, `qualityFlags`, and (for `get-class-members`) `context`, while preserving primary payloads (`sourceText`, `members`/`counts`, `hits`, `items`). See [docs/tool-reference.md](docs/tool-reference.md) for the full per-tool field list.
+Several lookup tools support `compact` result shaping for shorter responses. See [docs/tool-reference.md](docs/tool-reference.md) for defaults and the full per-tool field list.
 
 ### NBT Utilities
 
@@ -337,7 +336,7 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 
 ### Validation
 
-Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version. `validate-access-widener` defaults to vanilla bytecode validation; pass `projectPath`, `scope`, and `preferProjectVersion` for runtime-aware mode, which returns runtime `provenance` plus per-entry `resolvedRuntimeAccess` evidence. `validate-access-transformer` infers `atNamespace` from Forge/NeoForge workspace context when `projectPath` is provided and uses loader runtime artifacts for `scope="loader"`.
+Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version. Workspace options let validation use loader/runtime context when a project path is available.
 
 <!-- BEGIN GENERATED TOOL TABLE: validation -->
 | Tool | Purpose |
@@ -361,7 +360,7 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 ### Batch Lookup
 
-Tools that share one resolved artifact (or one Minecraft version) across a fixed shortlist of entries (1..50 per call). Per-entry results are returned with `{ status, result?, error? }` plus an aggregate `summary`. See `docs/tool-reference.md` → `Batch lookup contract` for the shared envelope, `failFast` semantics, and per-entry retry mapping.
+Tools that share one resolved artifact or Minecraft version across a fixed shortlist. Results include one status per item plus an aggregate `summary`. See [Batch lookup contract](docs/tool-reference.md#batch-lookup-contract) for failure handling and retry mapping.
 
 <!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
 | Tool | Purpose |
