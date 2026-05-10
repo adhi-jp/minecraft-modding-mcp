@@ -149,6 +149,8 @@ Common input fields:
 - `compact: boolean` (default `true`) — applies the same per-tool projection that the corresponding single tool's `compact: true` mode applies. When `false`, per-entry `result` is byte-identical to the single tool's `compact: false` output.
 - Per-tool shared inputs (`target`, `mapping`, `projectPath`, `version`, etc.) follow the same shape as the matching single tool.
 
+Resource behavior: `concurrency` limits per-entry dispatch for one batch call. Within one MCP server process, entries or calls that need the same artifact index or decompiled fallback share the in-flight rebuild by `artifactId`. Separate MCP server processes sharing the same cache are not coordinated by this process-local guard.
+
 Common output:
 
 ```json

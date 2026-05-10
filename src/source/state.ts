@@ -16,5 +16,10 @@ export class SourceServiceState {
    * tiny-remapper run.
    */
   readonly inflightRemaps = new Map<string, Promise<string>>();
+  /**
+   * Process-local artifact ingest jobs keyed by artifactId. This collapses
+   * concurrent class source/member lookups inside one MCP server process.
+   */
+  readonly inflightArtifactIngests = new Map<string, Promise<void>>();
   readonly lru = new LruList<{ totalContentBytes: number; updatedAt: string }>();
 }

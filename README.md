@@ -364,6 +364,8 @@ Tools for querying generated registry data and inspecting server runtime state.
 
 Tools that share one resolved artifact or Minecraft version across a fixed shortlist. Results include one status per item plus an aggregate `summary`. See [Batch lookup contract](docs/tool-reference.md#batch-lookup-contract) for failure handling and retry mapping.
 
+Within one MCP server process, batch class lookups that need the same binary fallback share one in-flight source indexing/decompile rebuild for that artifact.
+
 <!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
 | Tool | Purpose |
 | --- | --- |

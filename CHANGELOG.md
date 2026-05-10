@@ -11,6 +11,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `package.json` `description` and `keywords` now mirror the GitHub repository's `description` and topics. `description` summarizes the actual feature surface (source inspection, Mojang/Yarn/Intermediary mappings, version diffs, Fabric/Forge/NeoForge mod JAR analysis, Mixin/Access Widener/Access Transformer validation); `keywords` expands from three entries to the published 15-topic set.
 
 ### Fixed
+- Concurrent class source/member lookups in the same MCP server process now share one in-flight source indexing/decompile rebuild for the same binary fallback artifact.
 - `validate-project task="project-summary"` no longer performs heavyweight source indexing for its `minecraft.artifact.resolved` task probe. The probe now uses lightweight artifact metadata while preserving the public `tasks` response shape.
 - `validate-mixin` mapping-health checks no longer load the full Tiny mapping graph for `obfuscated` or `mojang` requests, preventing `validate-project task="project-summary"` worker restarts on large Mojang-mapped workspaces.
 - `validate-project task="project-summary"` task report no longer marks executed validators as `skipped` when the lightweight `minecraft.artifact.resolved` probe fails. Mixin / access-widener / access-transformer entries now reflect their real outcome (`ok` with `counts`, or `error`).

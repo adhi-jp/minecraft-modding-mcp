@@ -411,6 +411,28 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
     return;
   }
 
+  const inflight = svc.state.inflightArtifactIngests.get(resolved.artifactId);
+  if (inflight) {
+    await inflight;
+    return;
+  }
+
+  const ingestPromise = rebuildMissingArtifactIndex(svc, resolved, reason);
+  svc.state.inflightArtifactIngests.set(resolved.artifactId, ingestPromise);
+  try {
+    await ingestPromise;
+  } finally {
+    if (svc.state.inflightArtifactIngests.get(resolved.artifactId) === ingestPromise) {
+      svc.state.inflightArtifactIngests.delete(resolved.artifactId);
+    }
+  }
+}
+
+async function rebuildMissingArtifactIndex(
+  svc: SourceService,
+  resolved: ResolvedSourceArtifact,
+  reason: IndexRebuildReason
+): Promise<void> {
   svc.metrics.recordArtifactCacheMiss();
   svc.metrics.recordReindex();
   log("info", "index.rebuild.start", {
