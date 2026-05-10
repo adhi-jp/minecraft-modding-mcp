@@ -177,7 +177,7 @@ function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): stri
 
 export type { MappingVariant } from "./types.js";
 
-function artifactIdForJar(
+export function artifactIdForJar(
   inputKind: string,
   artifactPath: string,
   signature: string,

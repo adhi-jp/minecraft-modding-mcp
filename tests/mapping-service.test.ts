@@ -2465,7 +2465,7 @@ test("MappingService checkMappingHealth treats unobfuscated mojang runtime names
 
     assert.deepEqual(mojangHealth, {
       mojangMappingsAvailable: true,
-      tinyMappingsAvailable: false,
+      tinyMappingsAvailable: true,
       memberRemapAvailable: true,
       degradations: []
     });
@@ -2478,6 +2478,71 @@ test("MappingService checkMappingHealth treats unobfuscated mojang runtime names
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("MappingService checkMappingHealth skips tiny namespace loading for mojang and obfuscated requests", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+
+  async function assertHealthSkipsTiny(requestedMapping: "mojang" | "obfuscated") {
+    const root = await mkdtemp(join(tmpdir(), `mapping-service-health-${requestedMapping}-`));
+    try {
+      const config = buildTestConfig(root);
+      const fetchStub = (async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === "https://example.test/mappings/client.txt") {
+          return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+
+      const service = new MappingService(
+        config,
+        createVersionServiceStub("https://example.test/mappings/client.txt"),
+        fetchStub
+      );
+
+      let loomTinyLoads = 0;
+      let mavenTinyLoads = 0;
+      (service as unknown as {
+        loadTinyPairsFromLoom: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+        loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+      }).loadTinyPairsFromLoom = async () => {
+        loomTinyLoads += 1;
+        return {
+          pairs: new Map(),
+          warnings: ["unexpected loom tiny load"],
+          mappingArtifact: "loom-cache:none"
+        };
+      };
+      (service as unknown as {
+        loadTinyPairsFromMaven: (version: string) => Promise<{ pairs: Map<unknown, unknown>; warnings: string[]; mappingArtifact: string }>;
+      }).loadTinyPairsFromMaven = async () => {
+        mavenTinyLoads += 1;
+        return {
+          pairs: new Map(),
+          warnings: ["unexpected maven tiny load"],
+          mappingArtifact: "maven:none"
+        };
+      };
+
+      const health = await service.checkMappingHealth({
+        version: "1.21.10",
+        requestedMapping
+      });
+
+      assert.equal(health.mojangMappingsAvailable, true);
+      assert.equal(health.tinyMappingsAvailable, true);
+      assert.equal(health.memberRemapAvailable, true);
+      assert.equal(loomTinyLoads, 0);
+      assert.equal(mavenTinyLoads, 0);
+      assert.deepEqual(health.degradations, []);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  await assertHealthSkipsTiny("mojang");
+  await assertHealthSkipsTiny("obfuscated");
 });
 
 const TEST_TINY_V1 = [

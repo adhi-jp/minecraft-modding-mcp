@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { isAppError } from "../../errors.js";
 import { buildVersionSourceSearchRoots } from "../../gradle-paths.js";
+import type { StageEmitter } from "../../stage-emitter.js";
 import type { SourceMapping } from "../../types.js";
 
 const VALIDATE_PROJECT_TASKS_OFF = process.env.VALIDATE_PROJECT_TASKS_OFF === "1";
@@ -26,6 +27,21 @@ type TaskStatusReport = {
   "accessTransformers.validated": TaskEntryBase & { counts?: { ok: number; invalid: number } };
 };
 
+type MinecraftArtifactProbeInput = {
+  target: { kind: "version"; value: string };
+  mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+  sourcePriority?: "loom-first" | "maven-first";
+  projectPath?: string;
+  scope?: "vanilla" | "merged" | "loader";
+  preferProjectVersion?: boolean;
+};
+
+type MinecraftArtifactProbeOutput = {
+  artifactId: string;
+  mappingApplied: SourceMapping;
+  warnings?: string[];
+};
+
 const TASK_KEYS = [
   "workspace.detected",
   "gradle.readable",
@@ -37,7 +53,10 @@ const TASK_KEYS = [
 ] as const satisfies ReadonlyArray<keyof TaskStatusReport>;
 
 export type ValidateProjectDeps = {
-  validateMixin: (input: Record<string, unknown>) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  validateMixin: (
+    input: Record<string, unknown>,
+    options?: { stageEmitter?: StageEmitter }
+  ) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   validateAccessWidener: (input: {
     content: string;
     version: string;
@@ -60,18 +79,8 @@ export type ValidateProjectDeps = {
   discoverAccessWideners: (projectPath: string) => Promise<string[]>;
   discoverAccessTransformers?: (projectPath: string) => Promise<string[]>;
   detectProjectMinecraftVersion?: (projectPath: string) => Promise<string | undefined>;
-  resolveArtifact?: (input: {
-    target: { kind: "version"; value: string };
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    sourcePriority?: "loom-first" | "maven-first";
-    projectPath?: string;
-    scope?: "vanilla" | "merged" | "loader";
-    preferProjectVersion?: boolean;
-  }) => Promise<{
-    artifactId: string;
-    mappingApplied: SourceMapping;
-    warnings?: string[];
-  }>;
+  probeMinecraftArtifact?: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>;
+  resolveArtifact?: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>;
 };
 
 // Helpers live as free functions so ValidateProjectService keeps its baseline
@@ -190,7 +199,7 @@ async function probeLoomCacheFound(projectPath: string): Promise<TaskStatusRepor
 }
 
 async function probeMinecraftArtifactResolved(
-  resolveArtifact: NonNullable<ValidateProjectDeps["resolveArtifact"]>,
+  artifactProbe: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>,
   args: {
     version: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
@@ -198,11 +207,24 @@ async function probeMinecraftArtifactResolved(
     projectPath: string;
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
-  }
+  },
+  stageEmitter?: StageEmitter
 ): Promise<TaskStatusReport["minecraft.artifact.resolved"]> {
   const startedAt = Date.now();
+  // Stage notification kept outside the probe's try block: a telemetry
+  // failure must not be classified as ERR_ARTIFACT_PROBE_FAILED.
   try {
-    const output = await resolveArtifact({
+    await stageEmitter?.("validate-project:artifact-probe", {
+      version: args.version,
+      mapping: args.mapping ?? "obfuscated",
+      projectPath: args.projectPath,
+      scope: args.scope ?? null
+    });
+  } catch {
+    // swallow telemetry failure
+  }
+  try {
+    const output = await artifactProbe({
       target: { kind: "version", value: args.version },
       mapping: args.mapping,
       sourcePriority: args.sourcePriority,
@@ -251,16 +273,18 @@ function buildValidationEntryWithCounts<T extends { ok: number; invalid: number 
   counts: T,
   durationMs: number
 ): TaskEntryBase & { counts?: T } {
+  // Real validator outcomes win over upstream skip when validators ran.
+  // The artifact probe is informational; its failure must not erase real counts.
+  if (discoveredCount > 0 || errorCount > 0) {
+    if (errorCount > 0) {
+      return { status: "error", durationMs, counts };
+    }
+    return { status: "ok", durationMs, counts };
+  }
   if (upstream) {
     return upstream;
   }
-  if (discoveredCount === 0) {
-    return { status: "missing", durationMs };
-  }
-  if (errorCount > 0) {
-    return { status: "error", durationMs, counts };
-  }
-  return { status: "ok", durationMs, counts };
+  return { status: "missing", durationMs };
 }
 
 function projectTaskEntry<T extends TaskEntryBase>(
@@ -376,6 +400,7 @@ export async function buildFullTaskStatusReport(
     atCaughtErrors: number;
     atCounts: { ok: number; invalid: number };
     atDurationMs: number;
+    stageEmitter?: StageEmitter;
   }
 ): Promise<TaskStatusReport | undefined> {
   if (VALIDATE_PROJECT_TASKS_OFF) {
@@ -385,15 +410,16 @@ export async function buildFullTaskStatusReport(
   let minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"];
   if (workspace.status !== "ok" || gradle.status !== "ok") {
     minecraftArtifactResolved = { status: "skipped" };
-  } else if (deps.resolveArtifact) {
-    minecraftArtifactResolved = await probeMinecraftArtifactResolved(deps.resolveArtifact, {
+  } else if (deps.probeMinecraftArtifact ?? deps.resolveArtifact) {
+    const artifactProbe = deps.probeMinecraftArtifact ?? deps.resolveArtifact!;
+    minecraftArtifactResolved = await probeMinecraftArtifactResolved(artifactProbe, {
       version: args.resolvedVersion,
       mapping: args.mapping,
       sourcePriority: args.sourcePriority,
       projectPath: args.projectPath,
       scope: args.scope,
       preferProjectVersion: args.preferProjectVersion
-    });
+    }, args.stageEmitter);
   } else {
     minecraftArtifactResolved = { status: "skipped" };
   }

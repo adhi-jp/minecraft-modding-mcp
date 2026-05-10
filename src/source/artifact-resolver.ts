@@ -12,17 +12,21 @@ import { log } from "../logger.js";
 import { applyMappingPipeline } from "../mapping-pipeline-service.js";
 import { parseCoordinate } from "../maven-resolver.js";
 import { resolveMojangTinyFile } from "../mojang-tiny-mapping-service.js";
+import { artifactSignatureFromFile } from "../path-resolver.js";
 import {
   detectFabricLikeInputNamespace,
   listJavaEntries
 } from "../source-jar-reader.js";
 import {
+  artifactIdForJar,
   type MappingVariant,
   resolveSourceTarget as resolveSourceTargetInternal
 } from "../source-resolver.js";
 import type { SourceService } from "../source-service.js";
 import type {
   ArtifactContentsSummary,
+  ProbeMinecraftArtifactInput,
+  ProbeMinecraftArtifactOutput,
   ResolveArtifactInput,
   ResolveArtifactOutput
 } from "../source-service.js";
@@ -321,6 +325,131 @@ export async function discoverVersionSourceJar(_svc: SourceService, input: {
     candidateArtifacts,
     selectedSourceJarPath: selected?.jarPath,
     selectedHasMinecraftNamespace: selected?.hasMinecraftNamespace
+  };
+}
+
+export async function probeMinecraftArtifact(
+  svc: SourceService,
+  input: ProbeMinecraftArtifactInput
+): Promise<ProbeMinecraftArtifactOutput> {
+  let value = input.target.value.trim();
+  const warnings: string[] = [];
+  const requestedMapping = normalizeMapping(input.mapping);
+
+  if (input.preferProjectVersion && input.projectPath) {
+    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+    if (detected && detected !== value) {
+      warnings.push(`Overriding version "${value}" with project version "${detected}" from gradle.properties.`);
+    }
+    value = detected ?? value;
+  }
+  if (!value) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "target.value must be non-empty.",
+      details: { target: input.target }
+    });
+  }
+
+  const versionJar = await svc.versionService.resolveVersionJar(value);
+  const resolvedVersion = versionJar.version;
+  const runtimeNamesUnobfuscated = isUnobfuscatedVersion(resolvedVersion);
+  warnings.push(`Resolved Minecraft ${versionJar.version} from ${versionJar.clientJarUrl}.`);
+
+  let effectiveMapping: SourceMapping = requestedMapping;
+  if (
+    (requestedMapping === "intermediary" || requestedMapping === "yarn") &&
+    runtimeNamesUnobfuscated
+  ) {
+    warnings.push(
+      `Version ${resolvedVersion} is unobfuscated; ${requestedMapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
+    );
+    effectiveMapping = "obfuscated";
+  }
+
+  if (
+    (effectiveMapping === "intermediary" || effectiveMapping === "yarn") &&
+    !runtimeNamesUnobfuscated
+  ) {
+    throw createError({
+      code: ERROR_CODES.MAPPING_NOT_APPLIED,
+      message:
+        `Lightweight artifact probe cannot verify ${effectiveMapping} mapping availability without running the full resolver.`,
+      details: {
+        requestedMapping: effectiveMapping,
+        version: resolvedVersion,
+        nextAction:
+          "Use a direct validation task for mapping-sensitive checks, or use mapping=obfuscated for the project-summary artifact probe."
+      }
+    });
+  }
+
+  if (effectiveMapping === "mojang" && !runtimeNamesUnobfuscated) {
+    // Match validate-mixin's resolve stage: omitted scope defaults to vanilla,
+    // avoiding a workspace-wide source-jar scan that validate-mixin would skip.
+    const effectiveScope = input.scope ?? "vanilla";
+    if (effectiveScope === "vanilla") {
+      throw createError({
+        code: ERROR_CODES.MAPPING_NOT_APPLIED,
+        message:
+          "Lightweight artifact probe cannot verify mojang mapping with scope=vanilla on obfuscated runtime versions.",
+        details: {
+          requestedMapping: effectiveMapping,
+          version: resolvedVersion,
+          nextAction:
+            "Retry with scope=merged and projectPath so the probe can use a Loom source jar, or use mapping=obfuscated."
+        }
+      });
+    }
+
+    const versionSourceDiscovery = await svc.discoverVersionSourceJar({
+      version: resolvedVersion,
+      projectPath: input.projectPath
+    });
+    if (!versionSourceDiscovery.selectedSourceJarPath) {
+      throw createError({
+        code: ERROR_CODES.MAPPING_NOT_APPLIED,
+        message:
+          "Lightweight artifact probe cannot verify mojang mapping without a source-backed Loom artifact.",
+        details: {
+          requestedMapping: effectiveMapping,
+          version: resolvedVersion,
+          searchedPaths: versionSourceDiscovery.searchedPaths,
+          candidateArtifacts: versionSourceDiscovery.candidateArtifacts,
+          nextAction:
+            "Use mapping=obfuscated for project-summary, or run a direct validation task when full source resolution is required."
+        }
+      });
+    }
+
+    const selectedSourceJarPath = versionSourceDiscovery.selectedSourceJarPath;
+    const sourceSignature = artifactSignatureFromFile(selectedSourceJarPath).signature;
+    const artifactId = artifactIdForJar("jar", selectedSourceJarPath, sourceSignature);
+    warnings.push(`Resolved source-backed artifact from Loom cache candidate: ${selectedSourceJarPath}.`);
+    if (versionSourceDiscovery.selectedHasMinecraftNamespace === false) {
+      warnings.push(
+        `Source coverage does not include net.minecraft for ${selectedSourceJarPath}; class lookups may fall back to the binary artifact.`
+      );
+    }
+    if (!hasExactVersionToken(selectedSourceJarPath, value)) {
+      warnings.push(
+        `Requested version "${value}" but resolved source jar does not contain exact version string: ${selectedSourceJarPath}`
+      );
+    }
+
+    return {
+      artifactId,
+      mappingApplied: "mojang",
+      ...(warnings.length > 0 ? { warnings } : {})
+    };
+  }
+
+  const binarySignature = artifactSignatureFromFile(versionJar.jarPath).signature;
+  const artifactId = artifactIdForJar("jar", versionJar.jarPath, `${binarySignature}:decompile`);
+  return {
+    artifactId,
+    mappingApplied: effectiveMapping,
+    ...(warnings.length > 0 ? { warnings } : {})
   };
 }
 

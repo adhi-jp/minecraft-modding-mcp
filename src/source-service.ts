@@ -125,6 +125,21 @@ export type ResolveArtifactOutput = {
   sampleEntries?: string[];
 };
 
+export type ProbeMinecraftArtifactInput = {
+  target: { kind: "version"; value: string };
+  mapping?: SourceMapping;
+  sourcePriority?: MappingSourcePriority;
+  projectPath?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
+};
+
+export type ProbeMinecraftArtifactOutput = {
+  artifactId: string;
+  mappingApplied: SourceMapping;
+  warnings?: string[];
+};
+
 export type ArtifactContentsSummary = {
   sourceKind: "source-jar" | "decompiled-binary";
   indexedContentKinds: string[];
@@ -666,6 +681,10 @@ export class SourceService {
 
   async resolveArtifact(input: ResolveArtifactInput): Promise<ResolveArtifactOutput> {
     return artifactResolver.resolveArtifact(this, input);
+  }
+
+  async probeMinecraftArtifact(input: ProbeMinecraftArtifactInput): Promise<ProbeMinecraftArtifactOutput> {
+    return artifactResolver.probeMinecraftArtifact(this, input);
   }
 
   async synthesizeWorkspaceTarget(

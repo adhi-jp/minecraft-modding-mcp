@@ -51,6 +51,49 @@ test("validate-project tasks A1: all probes ok when workspace, gradle, artifact,
   assert.equal(result.summary.status, "ok");
 });
 
+test("validate-project tasks A1b: project summary uses lightweight artifact probe before heavy resolve", async () => {
+  const root = await makeWorkspace("validate-project-tasks-a1b-");
+  await writeBareGradleWorkspace(root);
+
+  let lightweightProbeCalls = 0;
+  let heavyResolveCalls = 0;
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
+    validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [],
+    probeMinecraftArtifact: async (input: { target: { kind: "version"; value: string } }) => {
+      lightweightProbeCalls += 1;
+      assert.deepEqual(input.target, { kind: "version", value: "1.21.10" });
+      return {
+        artifactId: "probe-only-minecraft-1.21.10",
+        mappingApplied: "obfuscated" as const,
+        warnings: ["lightweight probe"]
+      };
+    },
+    resolveArtifact: async () => {
+      heavyResolveCalls += 1;
+      throw new Error("heavy resolve should not be used for project-summary task probes");
+    }
+  } as any);
+
+  const result = (await service.execute({
+    task: "project-summary",
+    detail: "full",
+    include: ["workspace"],
+    version: "1.21.10",
+    subject: { kind: "workspace", projectPath: root }
+  })) as Result;
+
+  const artifactTask = result.tasks!["minecraft.artifact.resolved"];
+  assert.equal(artifactTask.status, "ok");
+  assert.equal(artifactTask.artifactId, "probe-only-minecraft-1.21.10");
+  assert.deepEqual(artifactTask.warnings, ["lightweight probe"]);
+  assert.equal(lightweightProbeCalls, 1);
+  assert.equal(heavyResolveCalls, 0);
+});
+
 test("validate-project tasks A2: workspace.detected missing causes downstream skipped, headline blocked preserved", async () => {
   const empty = await makeWorkspace("validate-project-tasks-a2-");
   const service = new ValidateProjectService({
@@ -82,7 +125,7 @@ test("validate-project tasks A2: workspace.detected missing causes downstream sk
   assert.equal(result.summary.status, "ok");
 });
 
-test("validate-project tasks A3: minecraft.artifact.resolved error causes validators skipped, loom independent", async () => {
+test("validate-project tasks A3: minecraft.artifact.resolved error preserves actual validator outcomes, loom independent", async () => {
   const root = await makeWorkspace("validate-project-tasks-a3-");
   await writeBareGradleWorkspace(root);
   const mixinPath = join(root, "demo.mixins.json");
@@ -110,10 +153,48 @@ test("validate-project tasks A3: minecraft.artifact.resolved error causes valida
   assert.ok(result.tasks);
   const tasks = result.tasks!;
   assert.equal(tasks["minecraft.artifact.resolved"].status, "error");
-  assert.equal(tasks["mixins.validated"].status, "skipped");
+  // Validators actually ran (mixin discovery returned 1 path and validateMixin
+  // succeeded). The lightweight artifact probe is informational; its failure
+  // must not silently overwrite real validator counts with `skipped`.
+  assert.equal(tasks["mixins.validated"].status, "ok");
+  assert.deepEqual(tasks["mixins.validated"].counts, { ok: 1, partial: 0, invalid: 0 });
+  // Validators with no discovered inputs still surface upstream skip when the
+  // probe failed; that is unchanged by this fix.
   assert.equal(tasks["accessWideners.validated"].status, "skipped");
   assert.equal(tasks["accessTransformers.validated"].status, "skipped");
   assert.notEqual(tasks["loom.cache.found"].status, "skipped");
+});
+
+test("validate-project tasks A3b: lightweight artifact probe failure returns task error", async () => {
+  const root = await makeWorkspace("validate-project-tasks-a3b-");
+  await writeBareGradleWorkspace(root);
+
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
+    validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [],
+    probeMinecraftArtifact: async () => {
+      throw new Error("metadata proof unavailable");
+    }
+  } as any);
+
+  const result = (await service.execute({
+    task: "project-summary",
+    detail: "full",
+    include: ["workspace"],
+    version: "1.21.10",
+    subject: { kind: "workspace", projectPath: root }
+  })) as Result;
+
+  assert.equal(result.summary.status, "ok");
+  const tasks = result.tasks!;
+  assert.equal(tasks["minecraft.artifact.resolved"].status, "error");
+  assert.equal(tasks["minecraft.artifact.resolved"].error?.code, "ERR_ARTIFACT_PROBE_FAILED");
+  assert.equal(tasks["mixins.validated"].status, "skipped");
+  assert.equal(tasks["accessWideners.validated"].status, "skipped");
+  assert.equal(tasks["accessTransformers.validated"].status, "skipped");
 });
 
 test("validate-project tasks A4: discovery 0 paths sets corresponding entry to missing", async () => {
@@ -247,4 +328,35 @@ test("validate-project tasks A7: callers ignoring tasks see byte-identical other
   assert.deepEqual(Object.keys(stripped.summary).sort(), ["counts", "headline", "status", "subject"]);
   assert.equal(stripped.summary.counts.valid, 0);
   assert.equal(stripped.summary.counts.invalid, 0);
+});
+
+test("validate-project task stages: project summary emits task-report and artifact-probe stages", async () => {
+  const root = await makeWorkspace("validate-project-tasks-stages-");
+  await writeBareGradleWorkspace(root);
+
+  const stages: Array<{ stage: string; meta?: Record<string, unknown> }> = [];
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
+    validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [],
+    probeMinecraftArtifact: async () => ({ artifactId: "probe-only", mappingApplied: "obfuscated" as const })
+  } as any);
+
+  await (service.execute as any)({
+    task: "project-summary",
+    detail: "full",
+    include: ["workspace"],
+    version: "1.21.10",
+    subject: { kind: "workspace", projectPath: root }
+  }, {
+    stageEmitter: async (stage: string, meta?: Record<string, unknown>) => {
+      stages.push({ stage, meta });
+    }
+  });
+
+  assert.ok(stages.some((entry) => entry.stage === "validate-project:workspace-discovery"));
+  assert.ok(stages.some((entry) => entry.stage === "validate-project:task-report"));
+  assert.ok(stages.some((entry) => entry.stage === "validate-project:artifact-probe"));
 });

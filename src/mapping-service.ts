@@ -1284,7 +1284,11 @@ export class MappingService {
 
   /**
    * Probe the mapping graph health for a given version.
-   * Returns availability of mojang mappings, tiny mappings, and member remap paths.
+   *
+   * `tinyMappingsAvailable` reports whether Tiny is sufficient for the
+   * request: `true` when Tiny is not required (obfuscated/mojang) or is
+   * loaded, `false` only when intermediary/yarn was requested and Tiny is
+   * unavailable.
    */
   async checkMappingHealth(input: {
     version: string;
@@ -1299,6 +1303,8 @@ export class MappingService {
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
     const degradations: string[] = [];
 
+    const needsTinyMappings = input.requestedMapping === "intermediary" || input.requestedMapping === "yarn";
+
     if (isUnobfuscatedVersion(input.version)) {
       const requestFulfillable =
         input.requestedMapping === "obfuscated" || input.requestedMapping === "mojang";
@@ -1309,7 +1315,7 @@ export class MappingService {
       }
       return {
         mojangMappingsAvailable: true,
-        tinyMappingsAvailable: false,
+        tinyMappingsAvailable: !needsTinyMappings,
         memberRemapAvailable: requestFulfillable,
         degradations
       };
@@ -1317,11 +1323,15 @@ export class MappingService {
 
     let graph: LoadedGraph;
     try {
-      graph = await this.loadGraph(input.version, priority, "full");
+      graph = await this.loadGraph(
+        input.version,
+        priority,
+        needsTinyMappings ? "full" : "obfuscated-mojang-only"
+      );
     } catch {
       return {
         mojangMappingsAvailable: false,
-        tinyMappingsAvailable: false,
+        tinyMappingsAvailable: !needsTinyMappings,
         memberRemapAvailable: false,
         degradations: ["Mapping graph could not be loaded."]
       };
@@ -1338,7 +1348,7 @@ export class MappingService {
     if (!mojangAvailable) {
       degradations.push("Mojang client mappings are not available for this version.");
     }
-    if (!tinyAvailable) {
+    if (needsTinyMappings && !tinyAvailable) {
       degradations.push("No intermediary/yarn tiny mappings were found for this version.");
     }
 
@@ -1356,7 +1366,7 @@ export class MappingService {
 
     return {
       mojangMappingsAvailable: mojangAvailable,
-      tinyMappingsAvailable: tinyAvailable,
+      tinyMappingsAvailable: needsTinyMappings ? tinyAvailable : true,
       memberRemapAvailable,
       degradations
     };

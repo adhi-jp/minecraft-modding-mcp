@@ -158,6 +158,8 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 - `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密なオーバーロード指定は別フィールドの `descriptor` を使ってください。
 - ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
 - `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
+- `validate-mixin` と `validate-project` は、`obfuscated` / `mojang` 検証では `mapping-health` を軽量に保ちます。`intermediary` / `yarn` 名前空間を要求しない限り、完全な Tiny マッピンググラフは読み込みません。
+- `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。追加の `tasks` フィールドを省きたい場合は `VALIDATE_PROJECT_TASKS_OFF=1` を使います。
 
 ### あるバージョンの Minecraft ソースを確認する
 

@@ -2,15 +2,41 @@ import { readFile } from "node:fs/promises";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
+import type { StageEmitter } from "../../../stage-emitter.js";
 import type { ValidateProjectInput } from "../../validate-project-service.js";
 import { buildEarlyTasksForBlocked, buildFullTaskStatusReport, type ValidateProjectDeps } from "../internal.js";
+
+type ProjectSummaryOptions = {
+  stageEmitter?: StageEmitter;
+};
+
+// Telemetry failures must not change validation outcomes; swallow rejections
+// so a broken emitter does not abort the summary or count as a validation error.
+async function safeEmit(
+  emitter: StageEmitter | undefined,
+  stage: string,
+  payload?: Record<string, unknown>
+): Promise<void> {
+  if (!emitter) return;
+  try {
+    await emitter(stage, payload);
+  } catch {
+    // swallow telemetry failure
+  }
+}
 
 export async function handleProjectSummary(
   deps: ValidateProjectDeps,
   input: ValidateProjectInput,
   detail: DetailLevel,
-  include: string[]
+  include: string[],
+  options: ProjectSummaryOptions = {}
 ) {
+// Forwarded emitter for nested validators and probes; same swallow contract
+// as safeEmit so a rejecting raw emitter cannot leak into their outcomes.
+const wrappedEmitter: StageEmitter | undefined = options.stageEmitter
+  ? (stage, meta) => safeEmit(options.stageEmitter, stage, meta)
+  : undefined;
 if (input.subject.kind !== "workspace") {
   throw createError({
     code: ERROR_CODES.INVALID_INPUT,
@@ -50,6 +76,10 @@ if (!input.version && !input.preferProjectVersion) {
       }
     }
   });
+  await safeEmit(options.stageEmitter,"validate-project:task-report", {
+    projectPath: input.subject.projectPath,
+    reason: "missing-version"
+  });
   const tasks = await buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
   return {
     ...baseResult,
@@ -59,11 +89,15 @@ if (!input.version && !input.preferProjectVersion) {
 }
 
 const projectPath = input.subject.projectPath;
+const discover = input.subject.discover ?? ["mixins", "access-wideners"];
+await safeEmit(options.stageEmitter,"validate-project:workspace-discovery", {
+  projectPath,
+  discover
+});
 const detectedProjectVersion = input.preferProjectVersion
   ? await deps.detectProjectMinecraftVersion?.(projectPath)
   : undefined;
 const resolvedVersion = detectedProjectVersion ?? input.version;
-const discover = input.subject.discover ?? ["mixins", "access-wideners"];
 const [mixinConfigs, accessWideners, accessTransformers] = await Promise.all([
   discover.includes("mixins")
     ? deps.discoverMixins(projectPath, input.configPaths)
@@ -112,6 +146,13 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
       }
     }
   });
+  await safeEmit(options.stageEmitter,"validate-project:task-report", {
+    projectPath,
+    reason: "version-unresolved",
+    mixinDiscoveryCount: mixinConfigs.length,
+    awDiscoveryCount: accessWideners.length,
+    atDiscoveryCount: accessTransformers.length
+  });
   const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, {
     mixinDiscoveryCount: mixinConfigs.length,
     awDiscoveryCount: accessWideners.length,
@@ -155,6 +196,10 @@ if (!resolvedVersion) {
       }
     }
   });
+  await safeEmit(options.stageEmitter,"validate-project:task-report", {
+    projectPath,
+    reason: "version-not-required"
+  });
   const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include);
   return {
     ...baseResult,
@@ -170,8 +215,16 @@ let validMixins = 0;
 let partialMixins = 0;
 let invalidMixins = 0;
 let mixinCaughtErrors = 0;
-for (const configPath of mixinConfigs) {
+await safeEmit(options.stageEmitter,"validate-project:mixin-validation", {
+  targetTotal: mixinConfigs.length
+});
+for (const [mixinIndex, configPath] of mixinConfigs.entries()) {
   try {
+    await safeEmit(options.stageEmitter,"validate-project:mixin-validation", {
+      targetIndex: mixinIndex + 1,
+      targetTotal: mixinConfigs.length,
+      configPath
+    });
     const mixinResult = await deps.validateMixin({
       input: {
         mode: "config",
@@ -192,6 +245,8 @@ for (const configPath of mixinConfigs) {
       warningCategoryFilter: input.warningCategoryFilter,
       treatInfoAsWarning: input.treatInfoAsWarning,
       includeIssues: input.includeIssues
+    }, {
+      stageEmitter: wrappedEmitter
     });
     const summary = mixinResult.summary as {
       valid?: number;
@@ -218,8 +273,16 @@ const awDurationStart = Date.now();
 let validAw = 0;
 let invalidAw = 0;
 let awCaughtErrors = 0;
-for (const awPath of accessWideners) {
+await safeEmit(options.stageEmitter,"validate-project:access-widener-validation", {
+  targetTotal: accessWideners.length
+});
+for (const [awIndex, awPath] of accessWideners.entries()) {
   try {
+    await safeEmit(options.stageEmitter,"validate-project:access-widener-validation", {
+      targetIndex: awIndex + 1,
+      targetTotal: accessWideners.length,
+      filePath: awPath
+    });
     const output = await deps.validateAccessWidener({
       content: await readFile(awPath, "utf8"),
       version: validationVersion,
@@ -251,8 +314,16 @@ const atDurationStart = Date.now();
 let validAt = 0;
 let invalidAt = 0;
 let atCaughtErrors = 0;
-for (const atPath of accessTransformers) {
+await safeEmit(options.stageEmitter,"validate-project:access-transformer-validation", {
+  targetTotal: accessTransformers.length
+});
+for (const [atIndex, atPath] of accessTransformers.entries()) {
   try {
+    await safeEmit(options.stageEmitter,"validate-project:access-transformer-validation", {
+      targetIndex: atIndex + 1,
+      targetTotal: accessTransformers.length,
+      filePath: atPath
+    });
     if (!deps.validateAccessTransformer) {
       throw createError({
         code: ERROR_CODES.CONTEXT_UNRESOLVED,
@@ -330,6 +401,12 @@ const baseResult = buildEntryToolResult({
   },
   alwaysBlocks: ["project"]
 });
+await safeEmit(options.stageEmitter,"validate-project:task-report", {
+  projectPath,
+  mixinDiscoveryCount: mixinConfigs.length,
+  awDiscoveryCount: accessWideners.length,
+  atDiscoveryCount: accessTransformers.length
+});
 const tasks = await buildFullTaskStatusReport(deps, {
   projectPath,
   detail,
@@ -350,7 +427,8 @@ const tasks = await buildFullTaskStatusReport(deps, {
   atDiscoveryCount: accessTransformers.length,
   atCaughtErrors,
   atCounts: { ok: validAt, invalid: invalidAt },
-  atDurationMs
+  atDurationMs,
+  stageEmitter: wrappedEmitter
 });
 return {
   ...baseResult,

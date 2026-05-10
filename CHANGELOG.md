@@ -10,6 +10,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Documentation
 - `package.json` `description` and `keywords` now mirror the GitHub repository's `description` and topics. `description` summarizes the actual feature surface (source inspection, Mojang/Yarn/Intermediary mappings, version diffs, Fabric/Forge/NeoForge mod JAR analysis, Mixin/Access Widener/Access Transformer validation); `keywords` expands from three entries to the published 15-topic set.
 
+### Fixed
+- `validate-project task="project-summary"` no longer performs heavyweight source indexing for its `minecraft.artifact.resolved` task probe. The probe now uses lightweight artifact metadata while preserving the public `tasks` response shape.
+- `validate-mixin` mapping-health checks no longer load the full Tiny mapping graph for `obfuscated` or `mojang` requests, preventing `validate-project task="project-summary"` worker restarts on large Mojang-mapped workspaces.
+- `validate-project task="project-summary"` task report no longer marks executed validators as `skipped` when the lightweight `minecraft.artifact.resolved` probe fails. Mixin / access-widener / access-transformer entries now reflect their real outcome (`ok` with `counts`, or `error`).
+- `validate-mixin` `toolHealth.tinyMappingsAvailable` now means "Tiny is sufficient for the request": `true` when Tiny is not required (`obfuscated` / `mojang`) or is loaded, `false` only when `intermediary` / `yarn` was requested and Tiny is unavailable. `confidenceScore` is no longer penalized when Tiny is intentionally skipped, including on graph-load failure.
+- `validate-project task="project-summary"` lightweight artifact probe defaults omitted `scope` to `"vanilla"` to match `validate-mixin`'s resolve stage, skipping workspace-wide source-jar discovery unless the caller explicitly requests `scope="merged"` or `scope="loader"`.
+- `validate-project task="project-summary"` stage notifications are now best-effort. Telemetry/transport failures no longer abort the summary, count as validation errors, hide nested `validate-mixin` work behind zero-count summaries, or surface as `ERR_ARTIFACT_PROBE_FAILED` in `tasks["minecraft.artifact.resolved"]`.
+
 ## [4.1.0] - 2026-05-09
 
 ### Documentation

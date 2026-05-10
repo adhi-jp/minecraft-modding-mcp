@@ -282,7 +282,8 @@ const analyzeModService = new AnalyzeModService({
   remapModJar: (input) => remapModJar(input, config) as unknown as Promise<Record<string, unknown> & { warnings?: string[] }>
 });
 const validateProjectService = new ValidateProjectService({
-  validateMixin: (input) => sourceService.validateMixin(input as any) as Promise<Record<string, unknown> & { warnings?: string[] }>,
+  validateMixin: (input, options) =>
+    sourceService.validateMixin(input as any, options) as Promise<Record<string, unknown> & { warnings?: string[] }>,
   validateAccessWidener: (input) => sourceService.validateAccessWidener(input),
   validateAccessTransformer: (input) => sourceService.validateAccessTransformer(input),
   discoverMixins: discoverWorkspaceMixins,
@@ -304,7 +305,8 @@ const validateProjectService = new ValidateProjectService({
       mappingApplied: output.mappingApplied,
       warnings: output.warnings
     };
-  }
+  },
+  probeMinecraftArtifact: (input) => sourceService.probeMinecraftArtifact(input)
 });
 const manageCacheService = new ManageCacheService({
   registry: createCacheRegistry({
@@ -698,8 +700,10 @@ server.tool("validate-project",
   "High-level v3 entry tool for project summary, direct mixin validation, and access widener/access transformer validation.",
   validateProjectShape,
   { readOnlyHint: true },
-  async (args) => runTool("validate-project", args, validateProjectSchema, async (input) =>
-    validateProjectService.execute(input as z.infer<typeof validateProjectSchema>) as Promise<Record<string, unknown>>
+  async (args, extra) => runTool("validate-project", args, validateProjectSchema, async (input) =>
+    validateProjectService.execute(input as z.infer<typeof validateProjectSchema>, {
+      stageEmitter: makeStageEmitter(extra as unknown as StageEmitterExtra)
+    }) as Promise<Record<string, unknown>>
   )
 );
 registerToolSchema("validate-project", validateProjectSchema);

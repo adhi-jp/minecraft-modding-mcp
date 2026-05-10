@@ -5,6 +5,7 @@ import fastGlob from "fast-glob";
 import { z } from "zod";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
+import type { StageEmitter } from "../stage-emitter.js";
 import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
@@ -143,6 +144,9 @@ export const validateProjectSchema = z.object(validateProjectShape).superRefine(
 
 export type ValidateProjectInput = z.infer<typeof validateProjectSchema>;
 
+export type ValidateProjectExecuteOptions = {
+  stageEmitter?: StageEmitter;
+};
 
 export async function discoverWorkspaceMixins(projectPath: string, configPaths?: string[]): Promise<string[]> {
   if (configPaths?.length) {
@@ -340,7 +344,10 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
 export class ValidateProjectService {
   constructor(private readonly deps: ValidateProjectDeps) {}
 
-  async execute(input: ValidateProjectInput): Promise<Record<string, unknown> & { warnings?: string[] }> {
+  async execute(
+    input: ValidateProjectInput,
+    options: ValidateProjectExecuteOptions = {}
+  ): Promise<Record<string, unknown> & { warnings?: string[] }> {
     const detail = resolveDetail(input.detail);
     const include = resolveInclude(input.include);
 
@@ -352,7 +359,7 @@ export class ValidateProjectService {
       case "access-transformer":
         return handleAccessTransformer(this.deps, input, detail, include);
       case "project-summary":
-        return handleProjectSummary(this.deps, input, detail, include);
+        return handleProjectSummary(this.deps, input, detail, include, options);
     }
   }
 }
