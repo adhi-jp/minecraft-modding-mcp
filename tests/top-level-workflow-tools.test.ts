@@ -18,7 +18,7 @@ import {
   ValidateProjectService
 } from "../src/entry-tools/validate-project-service.ts";
 
-test("entry tool schemas expose explicit defaults on safe public parameters", async () => {
+test("top-level workflow tool schemas expose explicit defaults on safe public parameters", async () => {
   const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
   const inspectMinecraftInternalSource = await readFile("src/entry-tools/inspect-minecraft/internal.ts", "utf8");
   const validateProjectSource = await readFile("src/entry-tools/validate-project-service.ts", "utf8");

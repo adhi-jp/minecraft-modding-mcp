@@ -252,7 +252,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 ### トップレベルワークフローツール
 
-<!-- BEGIN GENERATED TOOL TABLE: v3-entry-tools -->
+<!-- BEGIN GENERATED TOOL TABLE: top-level-workflow-tools -->
 | ツール | 役割 |
 | --- | --- |
 | `inspect-minecraft` | バージョン、アーティファクト、クラス、ファイル、ソース本文、ワークスペース文脈の調査フローをまとめて扱う |
@@ -261,7 +261,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 | `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |
 | `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |
 | `manage-cache` | キャッシュの一覧、検証、クリーンアップ / 再構築のプレビュー / 実行を行う |
-<!-- END GENERATED TOOL TABLE: v3-entry-tools -->
+<!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->
 
 ### ソース探索
 

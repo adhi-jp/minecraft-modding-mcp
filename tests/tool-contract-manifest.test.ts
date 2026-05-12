@@ -37,8 +37,8 @@ test("Japanese README tool surface tables are generated from the contract manife
 });
 
 test("tool contract manifest renders compact two-column tables", () => {
-  const entryTable = renderToolSurfaceSection("en", "v3-entry-tools");
-  const japaneseEntryTable = renderToolSurfaceSection("ja", "v3-entry-tools");
+  const entryTable = renderToolSurfaceSection("en", "top-level-workflow-tools");
+  const japaneseEntryTable = renderToolSurfaceSection("ja", "top-level-workflow-tools");
 
   assert.match(entryTable, /^\| Tool \| Purpose \|\n\| --- \| --- \|/);
   assert.match(japaneseEntryTable, /^\| ツール \| 役割 \|\n\| --- \| --- \|/);
@@ -46,8 +46,8 @@ test("tool contract manifest renders compact two-column tables", () => {
   assert.doesNotMatch(japaneseEntryTable, /主な入力|主な出力/);
 });
 
-test("tool contract manifest reflects current entry-tool purpose summaries", () => {
-  const entryTable = renderToolSurfaceSection("en", "v3-entry-tools");
+test("tool contract manifest reflects current top-level workflow tool purpose summaries", () => {
+  const entryTable = renderToolSurfaceSection("en", "top-level-workflow-tools");
 
   assert.match(
     entryTable,

@@ -160,8 +160,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ## [3.0.0] - 2026-03-09
 
 ### Added
-- v3 entry tools: `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` now provide summary-first starting points for the main Minecraft, symbol, mod, validation, and cache workflows while keeping expert tools available for follow-up work.
-- The new v3 entry tools share `detail` / `include` response shaping and always return `result.summary` inside the standard `{ result?, error?, meta }` envelope, reducing default payload size and making next actions explicit.
+- Top-level workflow tools: `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` now provide summary-first starting points for the main Minecraft, symbol, mod, validation, and cache workflows while keeping expert tools available for follow-up work.
+- The new top-level workflow tools share `detail` / `include` response shaping and always return `result.summary` inside the standard `{ result?, error?, meta }` envelope, reducing default payload size and making next actions explicit.
 - `analyze-mod` now exposes `executionMode="preview" | "apply"` for safe remap planning and execution, and `manage-cache` now exposes the same preview/apply model for cache deletion, pruning, and rebuild workflows.
 
 ### Fixed

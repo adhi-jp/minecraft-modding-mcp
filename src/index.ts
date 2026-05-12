@@ -657,7 +657,7 @@ server.tool("list-versions",
 registerToolSchema("list-versions", listVersionsSchema);
 
 server.tool("inspect-minecraft",
-  "High-level v3 entry tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings.",
+  "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings.",
   inspectMinecraftShape,
   { readOnlyHint: true },
   async (args) => runTool("inspect-minecraft", args, inspectMinecraftSchema, async (input) =>
@@ -667,7 +667,7 @@ server.tool("inspect-minecraft",
 registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
 server.tool("analyze-symbol",
-  "High-level v3 entry tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview.",
+  "Top-level workflow tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview.",
   analyzeSymbolShape,
   { readOnlyHint: true },
   async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>
@@ -677,7 +677,7 @@ server.tool("analyze-symbol",
 registerToolSchema("analyze-symbol", analyzeSymbolSchema);
 
 server.tool("compare-minecraft",
-  "High-level v3 entry tool for version comparisons, class diffs, registry diffs, and migration overviews.",
+  "Top-level workflow tool for version comparisons, class diffs, registry diffs, and migration overviews.",
   compareMinecraftShape,
   { readOnlyHint: true },
   async (args) => runTool("compare-minecraft", args, compareMinecraftSchema, async (input) =>
@@ -687,7 +687,7 @@ server.tool("compare-minecraft",
 registerToolSchema("compare-minecraft", compareMinecraftSchema);
 
 server.tool("analyze-mod",
-  "High-level v3 entry tool for mod metadata inspection, decompile/search flows, class source, and safe remap previews/applies.",
+  "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, and safe remap previews/applies.",
   analyzeModShape,
   { readOnlyHint: false },
   async (args) => runTool("analyze-mod", args, analyzeModSchema, async (input) =>
@@ -697,7 +697,7 @@ server.tool("analyze-mod",
 registerToolSchema("analyze-mod", analyzeModSchema);
 
 server.tool("validate-project",
-  "High-level v3 entry tool for project summary, direct mixin validation, and access widener/access transformer validation.",
+  "Top-level workflow tool for project summary, direct mixin validation, and access widener/access transformer validation.",
   validateProjectShape,
   { readOnlyHint: true },
   async (args, extra) => runTool("validate-project", args, validateProjectSchema, async (input) =>
@@ -709,7 +709,7 @@ server.tool("validate-project",
 registerToolSchema("validate-project", validateProjectSchema);
 
 server.tool("manage-cache",
-  "High-level v3 entry tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
+  "Top-level workflow tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
   manageCacheShape,
   { readOnlyHint: false },
   async (args) => runTool("manage-cache", args, manageCacheSchema, async (input) =>

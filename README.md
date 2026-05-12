@@ -251,7 +251,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 
 ### Top-Level Workflow Tools
 
-<!-- BEGIN GENERATED TOOL TABLE: v3-entry-tools -->
+<!-- BEGIN GENERATED TOOL TABLE: top-level-workflow-tools -->
 | Tool | Purpose |
 | --- | --- |
 | `inspect-minecraft` | Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows |
@@ -260,7 +260,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 | `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, and preview or apply remaps |
 | `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |
 | `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |
-<!-- END GENERATED TOOL TABLE: v3-entry-tools -->
+<!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->
 
 ### Source Exploration
 

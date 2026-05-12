@@ -1,5 +1,5 @@
 export const TOOL_SURFACE_SECTION_IDS = [
-  "v3-entry-tools",
+  "top-level-workflow-tools",
   "source-exploration",
   "version-comparison-symbol-tracking",
   "mapping-symbols",
@@ -19,7 +19,7 @@ type ToolSurfaceRows = {
 };
 
 const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
-  "v3-entry-tools": {
+  "top-level-workflow-tools": {
     en: [
       "| `inspect-minecraft` | Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows |",
       "| `analyze-symbol` | Handle symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol resolution, and API overviews |",

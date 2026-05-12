@@ -1,7 +1,7 @@
 /**
  * Public barrel for the mixin validation engine. The implementation lives
  * under `src/mixin/`; this file preserves the historical entry point used
- * by source-service, entry tools, and tests.
+ * by source-service, top-level workflow tools, and tests.
  */
 
 export type {
