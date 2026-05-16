@@ -241,9 +241,13 @@ function buildProvenance(input: {
 export async function discoverVersionSourceJar(_svc: SourceService, input: {
   version: string;
   projectPath?: string;
+  gradleUserHome?: string;
 }): Promise<VersionSourceDiscovery> {
   const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
-  const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
+  const searchRoots = buildVersionSourceSearchRoots({
+    projectPath: normalizedProjectPath,
+    gradleUserHome: input.gradleUserHome
+  });
   const searchedPaths: string[] = [];
   const candidates: VersionSourceCandidate[] = [];
   const seen = new Set<string>();
@@ -404,7 +408,8 @@ export async function probeMinecraftArtifact(
 
     const versionSourceDiscovery = await svc.discoverVersionSourceJar({
       version: resolvedVersion,
-      projectPath: input.projectPath
+      projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome
     });
     if (!versionSourceDiscovery.selectedSourceJarPath) {
       throw createError({
@@ -456,13 +461,17 @@ export async function probeMinecraftArtifact(
 export async function discoverAccessWidenerRuntimeCandidates(_svc: SourceService, input: {
   version: string;
   projectPath?: string;
+  gradleUserHome?: string;
   requestedScope: ArtifactScope;
 }): Promise<{ searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate }> {
   const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
   const normalizedProjectPathLower = normalizedProjectPath
     ? normalizePathStyle(normalizedProjectPath).toLowerCase()
     : undefined;
-  const searchRoots = buildVersionSourceSearchRoots(normalizedProjectPath);
+  const searchRoots = buildVersionSourceSearchRoots({
+    projectPath: normalizedProjectPath,
+    gradleUserHome: input.gradleUserHome
+  });
   const searchedPaths: string[] = [];
   const candidates: RuntimeJarCandidate[] = [];
   const seen = new Set<string>();
@@ -541,6 +550,7 @@ export async function discoverAccessWidenerRuntimeCandidates(_svc: SourceService
 export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceService, input: {
   version: string;
   projectPath?: string;
+  gradleUserHome?: string;
   requestedScope: ArtifactScope;
   atNamespace: AccessTransformerNamespace;
   loader: WorkspaceProjectLoader | "unknown";
@@ -549,7 +559,10 @@ export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceSer
   const normalizedProjectPathLower = normalizedProjectPath
     ? normalizePathStyle(normalizedProjectPath).toLowerCase()
     : undefined;
-  const searchRoots = buildLoaderRuntimeSearchRoots(normalizedProjectPath);
+  const searchRoots = buildLoaderRuntimeSearchRoots({
+    projectPath: normalizedProjectPath,
+    gradleUserHome: input.gradleUserHome
+  });
   const searchedPaths: string[] = [];
   const candidates: RuntimeJarCandidate[] = [];
   const seen = new Set<string>();
@@ -652,6 +665,7 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
   version: string;
   awNamespace: SourceMapping;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 }): Promise<RuntimeValidationProvenance<SourceMapping>> {
@@ -679,6 +693,7 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
   const discovery = await svc.discoverAccessWidenerRuntimeCandidates({
     version,
     projectPath: normalizedProjectPath,
+    gradleUserHome: input.gradleUserHome,
     requestedScope
   });
   if (!discovery.selected) {
@@ -793,6 +808,7 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
   version: string;
   atNamespace: AccessTransformerNamespace;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
@@ -830,6 +846,7 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
   const discovery = await svc.discoverAccessTransformerRuntimeCandidates({
     version,
     projectPath: normalizedProjectPath,
+    gradleUserHome: input.gradleUserHome,
     requestedScope,
     atNamespace: input.atNamespace,
     loader
@@ -996,6 +1013,7 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
   version: string | undefined;
   targetKind: ArtifactTargetKind;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   forceBinaryRemapDisabled?: boolean;
 }): Promise<{
   allowBinaryRemap: boolean;
@@ -1063,7 +1081,8 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
     const health = await svc.mappingService.checkMappingHealth({
       version: input.version,
       requestedMapping: "mojang",
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome
     });
     mojangAvailable = health.mojangMappingsAvailable;
   } catch (caughtError) {
@@ -1351,7 +1370,8 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     ) {
       versionSourceDiscovery = await svc.discoverVersionSourceJar({
         version: resolvedVersion,
-        projectPath: input.projectPath
+        projectPath: input.projectPath,
+        gradleUserHome: input.gradleUserHome
       });
       if (versionSourceDiscovery.selectedSourceJarPath) {
         resolvedTarget = {
@@ -1373,6 +1393,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
           version: resolvedVersion,
           targetKind: kind,
           sourcePriority: input.sourcePriority,
+          gradleUserHome: input.gradleUserHome,
           forceBinaryRemapDisabled: dependencyOrigin
         });
     if (binaryRemapGate.warnings.length > 0) {
@@ -1483,7 +1504,8 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
         version: resolved.version,
         sourceMapping: "obfuscated",
         targetMapping: effectiveMapping,
-        sourcePriority: input.sourcePriority
+        sourcePriority: input.sourcePriority,
+        gradleUserHome: input.gradleUserHome
       });
       additionalTransformChain.push(...mappingAvailability.transformChain);
       if (mappingAvailability.warnings.length > 0) {

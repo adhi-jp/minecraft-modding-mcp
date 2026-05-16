@@ -331,6 +331,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
             sourceMapping: input.queryNamespace,
             targetMapping: artifactMapping,
             sourcePriority: input.sourcePriority,
+            gradleUserHome: input.gradleUserHome,
             signatureMode: "name-only",
             maxCandidates: 5
           });

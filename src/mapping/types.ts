@@ -72,6 +72,7 @@ export type FindMappingInput = {
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   disambiguation?: {
     ownerHint?: string;
     descriptorHint?: string;
@@ -87,6 +88,7 @@ export type EnsureMappingAvailableInput = {
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
 };
 
 export type EnsureMappingAvailableOutput = {
@@ -104,6 +106,7 @@ export type ResolveMethodMappingExactInput = {
   targetMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   maxCandidates?: number;
 };
 
@@ -116,6 +119,7 @@ export type ClassApiMatrixInput = {
   className: string;
   classNameMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   includeKinds?: ClassApiMatrixKind[];
   maxRows?: number;
 };
@@ -157,6 +161,7 @@ export type SymbolExistenceInput = {
   descriptor?: string;
   sourceMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   nameMode?: "fqcn" | "auto";
   signatureMode?: "exact" | "name-only";
   maxCandidates?: number;

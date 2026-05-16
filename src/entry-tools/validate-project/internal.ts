@@ -32,6 +32,7 @@ type MinecraftArtifactProbeInput = {
   mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
   sourcePriority?: "loom-first" | "maven-first";
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: "vanilla" | "merged" | "loader";
   preferProjectVersion?: boolean;
 };
@@ -63,6 +64,7 @@ export type ValidateProjectDeps = {
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
     projectPath?: string;
+    gradleUserHome?: string;
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
@@ -72,6 +74,7 @@ export type ValidateProjectDeps = {
     atNamespace?: "srg" | "mojang" | "obfuscated";
     sourcePriority?: "loom-first" | "maven-first";
     projectPath?: string;
+    gradleUserHome?: string;
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
@@ -172,10 +175,13 @@ async function probeGradleReadable(projectPath: string): Promise<TaskStatusRepor
   }
 }
 
-async function probeLoomCacheFound(projectPath: string): Promise<TaskStatusReport["loom.cache.found"]> {
+async function probeLoomCacheFound(
+  projectPath: string,
+  gradleUserHome?: string
+): Promise<TaskStatusReport["loom.cache.found"]> {
   const startedAt = Date.now();
   try {
-    const roots = buildVersionSourceSearchRoots(projectPath);
+    const roots = buildVersionSourceSearchRoots({ projectPath, gradleUserHome });
     for (const root of roots) {
       if (await pathExists(root)) {
         return {
@@ -205,6 +211,7 @@ async function probeMinecraftArtifactResolved(
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
     projectPath: string;
+    gradleUserHome?: string;
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
   },
@@ -229,6 +236,7 @@ async function probeMinecraftArtifactResolved(
       mapping: args.mapping,
       sourcePriority: args.sourcePriority,
       projectPath: args.projectPath,
+      gradleUserHome: args.gradleUserHome,
       scope: args.scope,
       preferProjectVersion: args.preferProjectVersion
     });
@@ -318,13 +326,13 @@ function projectTaskStatusReport(
   return projected as TaskStatusReport;
 }
 
-export async function runUpstreamProbes(projectPath: string): Promise<{
+export async function runUpstreamProbes(projectPath: string, gradleUserHome?: string): Promise<{
   workspace: TaskStatusReport["workspace.detected"];
   gradle: TaskStatusReport["gradle.readable"];
   loom: TaskStatusReport["loom.cache.found"];
 }> {
   const workspace = await probeWorkspaceDetected(projectPath);
-  const loom = await probeLoomCacheFound(projectPath);
+  const loom = await probeLoomCacheFound(projectPath, gradleUserHome);
   let gradle: TaskStatusReport["gradle.readable"];
   if (workspace.status !== "ok") {
     gradle = { status: "skipped" };
@@ -342,12 +350,13 @@ export async function buildEarlyTasksForBlocked(
     mixinDiscoveryCount: number;
     awDiscoveryCount: number;
     atDiscoveryCount: number;
-  }
+  },
+  gradleUserHome?: string
 ): Promise<TaskStatusReport | undefined> {
   if (VALIDATE_PROJECT_TASKS_OFF) {
     return undefined;
   }
-  const { workspace, gradle, loom } = await runUpstreamProbes(projectPath);
+  const { workspace, gradle, loom } = await runUpstreamProbes(projectPath, gradleUserHome);
   const minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"] = {
     status: "skipped"
   };
@@ -386,6 +395,7 @@ export async function buildFullTaskStatusReport(
     resolvedVersion: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
+    gradleUserHome?: string;
     scope?: "vanilla" | "merged" | "loader";
     preferProjectVersion?: boolean;
     mixinDiscoveryCount: number;
@@ -406,7 +416,7 @@ export async function buildFullTaskStatusReport(
   if (VALIDATE_PROJECT_TASKS_OFF) {
     return undefined;
   }
-  const { workspace, gradle, loom } = await runUpstreamProbes(args.projectPath);
+  const { workspace, gradle, loom } = await runUpstreamProbes(args.projectPath, args.gradleUserHome);
   let minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"];
   if (workspace.status !== "ok" || gradle.status !== "ok") {
     minecraftArtifactResolved = { status: "skipped" };
@@ -417,6 +427,7 @@ export async function buildFullTaskStatusReport(
       mapping: args.mapping,
       sourcePriority: args.sourcePriority,
       projectPath: args.projectPath,
+      gradleUserHome: args.gradleUserHome,
       scope: args.scope,
       preferProjectVersion: args.preferProjectVersion
     }, args.stageEmitter);

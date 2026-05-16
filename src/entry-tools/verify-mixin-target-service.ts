@@ -24,6 +24,7 @@ export type VerifyMixinTargetInput = {
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   target?: ResolveArtifactTargetInput;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
@@ -95,6 +96,7 @@ export type VerifyMixinTargetDeps = {
     mapping?: SourceMapping;
     sourcePriority?: MappingSourcePriority;
     projectPath?: string;
+    gradleUserHome?: string;
     scope?: ArtifactScope;
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
@@ -294,6 +296,7 @@ export class VerifyMixinTargetService {
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion

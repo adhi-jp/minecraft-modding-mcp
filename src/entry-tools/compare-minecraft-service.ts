@@ -31,7 +31,8 @@ const subjectSchema = z.discriminatedUnion("kind", [
     fromVersion: nonEmptyString,
     toVersion: nonEmptyString,
     mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
-    sourcePriority: z.enum(["loom-first", "maven-first"]).optional()
+    sourcePriority: z.enum(["loom-first", "maven-first"]).optional(),
+    gradleUserHome: nonEmptyString.optional()
   }),
   z.object({
     kind: z.literal("registry"),
@@ -70,6 +71,7 @@ type CompareMinecraftDeps = {
     toVersion: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
+    gradleUserHome?: string;
     includeFullDiff?: boolean;
   }) => Promise<DiffClassSignaturesOutput>;
   getRegistryData: (input: {
@@ -218,6 +220,7 @@ export class CompareMinecraftService {
           toVersion: input.subject.toVersion,
           mapping: input.subject.mapping,
           sourcePriority: input.subject.sourcePriority,
+          ...(input.subject.gradleUserHome !== undefined ? { gradleUserHome: input.subject.gradleUserHome } : {}),
           includeFullDiff: input.includeFullDiff
         });
         const changedCount =

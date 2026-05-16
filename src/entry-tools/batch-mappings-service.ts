@@ -40,6 +40,7 @@ export type BatchMappingsInput = {
   version: string;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   concurrency?: number;
   failFast?: boolean;
   compact?: boolean;
@@ -70,6 +71,7 @@ export class BatchMappingsService {
           targetMapping: entry.targetMapping,
           sourcePriority: input.sourcePriority,
           projectPath: input.projectPath,
+          gradleUserHome: input.gradleUserHome,
           signatureMode: entry.signatureMode,
           disambiguation: entry.disambiguation,
           maxCandidates: entry.maxCandidates

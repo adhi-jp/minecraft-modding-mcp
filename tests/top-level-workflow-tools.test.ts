@@ -108,6 +108,61 @@ test("inspectMinecraftSchema applies defaults while keeping non-version includeS
   );
 });
 
+test("InspectMinecraftService preserves gradleUserHome through schema parsing and artifact resolution", async () => {
+  let seenGradleUserHome: string | undefined;
+  const service = new InspectMinecraftService({
+    listVersions: async () => ({ versions: [], cached: false }),
+    resolveArtifact: async (input: { gradleUserHome?: string }) => {
+      seenGradleUserHome = input.gradleUserHome;
+      return {
+        artifactId: "minecraft-1.21.10",
+        artifactAlias: "minecraft-1.21.10",
+        origin: "local-jar",
+        isDecompiled: false,
+        version: "1.21.10",
+        requestedMapping: "mojang",
+        mappingApplied: "mojang",
+        provenance: {
+          target: { kind: "version", value: "1.21.10" },
+          resolvedAt: new Date().toISOString(),
+          resolvedFrom: { origin: "local-jar", version: "1.21.10" },
+          transformChain: []
+        },
+        qualityFlags: [],
+        artifactContents: {
+          sourceKind: "source-jar",
+          indexedContentKinds: ["java"],
+          resourcesIncluded: false,
+          sourceCoverage: "full"
+        },
+        warnings: []
+      } as any;
+    },
+    findClass: async () => ({ matches: [], total: 0, warnings: [] }),
+    getClassSource: async () => ({} as any),
+    getClassMembers: async () => ({} as any),
+    searchClassSource: async () => ({} as any),
+    getArtifactFile: async () => ({} as any),
+    listArtifactFiles: async () => ({} as any),
+    detectProjectMinecraftVersion: async () => undefined
+  } as any);
+
+  const parsed = inspectMinecraftSchema.parse({
+    task: "artifact",
+    subject: {
+      kind: "version",
+      version: "1.21.10",
+      mapping: "mojang",
+      scope: "merged",
+      gradleUserHome: "/tmp/explicit-gradle-home"
+    }
+  });
+
+  await service.execute(parsed as any);
+
+  assert.equal(seenGradleUserHome, "/tmp/explicit-gradle-home");
+});
+
 test("InspectMinecraftService returns ambiguous class overview with follow-up candidates", async () => {
   const service = new InspectMinecraftService({
     listVersions: async () => {

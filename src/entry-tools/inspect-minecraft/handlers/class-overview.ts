@@ -54,7 +54,8 @@ deps: InspectMinecraftDeps,
       subject.kind === "workspace" && hasPartialVanillaCoverage(artifact.artifact)
         ? await resolveBinaryBackedClass(deps, className, {
             version: artifact.version,
-            mapping: classSubject.mapping
+            mapping: classSubject.mapping,
+            gradleUserHome: classSubject.gradleUserHome
           })
         : undefined;
     if (partialSourceFallback) {
@@ -64,6 +65,7 @@ deps: InspectMinecraftDeps,
         mapping: classSubject.mapping,
         scope: classSubject.scope,
         projectPath: classSubject.projectPath,
+        gradleUserHome: classSubject.gradleUserHome,
         preferProjectVersion: classSubject.preferProjectVersion,
         strictVersion: classSubject.strictVersion,
         mode: "metadata"

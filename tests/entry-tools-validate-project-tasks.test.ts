@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ValidateProjectService } from "../src/entry-tools/validate-project-service.ts";
+import {
+  ValidateProjectService,
+  validateProjectSchema
+} from "../src/entry-tools/validate-project-service.ts";
+import { withGradleUserHome } from "./helpers/env.ts";
 
 type Result = Record<string, unknown> & { warnings?: string[]; tasks?: Record<string, Record<string, unknown>> };
 
@@ -49,6 +53,47 @@ test("validate-project tasks A1: all probes ok when workspace, gradle, artifact,
   assert.equal(tasks["accessWideners.validated"].status, "missing");
   assert.equal(tasks["accessTransformers.validated"].status, "missing");
   assert.equal(result.summary.status, "ok");
+});
+
+test("validate-project tasks reports explicit gradleUserHome Loom cache after schema parsing", async () => {
+  const root = await makeWorkspace("validate-project-explicit-gradle-home-");
+  await writeBareGradleWorkspace(root);
+  const defaultGradleUserHome = join(root, "default-gradle-home");
+  const explicitGradleUserHome = join(root, "explicit-gradle-home");
+  const explicitFabricLoom = join(explicitGradleUserHome, "caches", "fabric-loom");
+  await mkdir(explicitFabricLoom, { recursive: true });
+
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
+    validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [],
+    probeMinecraftArtifact: async () => ({
+      artifactId: "probe-only-minecraft-1.21.10",
+      mappingApplied: "obfuscated" as const,
+      warnings: []
+    })
+  });
+
+  const parsed = validateProjectSchema.parse({
+    task: "project-summary",
+    detail: "full",
+    include: ["workspace"],
+    version: "1.21.10",
+    subject: {
+      kind: "workspace",
+      projectPath: root,
+      gradleUserHome: explicitGradleUserHome
+    }
+  });
+
+  const result = await withGradleUserHome(defaultGradleUserHome, () =>
+    service.execute(parsed as any)
+  ) as Result;
+
+  assert.equal(result.tasks!["loom.cache.found"].status, "ok");
+  assert.equal(result.tasks!["loom.cache.found"].cachePath, explicitFabricLoom);
 });
 
 test("validate-project tasks A1b: project summary uses lightweight artifact probe before heavy resolve", async () => {

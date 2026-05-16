@@ -84,7 +84,8 @@ export async function resolveToObfuscatedClassName(
   version: string,
   mapping: SourceMapping,
   sourcePriority: MappingSourcePriority | undefined,
-  warnings: string[]
+  warnings: string[],
+  gradleUserHome?: string
 ): Promise<string> {
   return svc.resolveClassNameForLookup({
     className,
@@ -92,6 +93,7 @@ export async function resolveToObfuscatedClassName(
     sourceMapping: mapping,
     targetMapping: "obfuscated",
     sourcePriority,
+    gradleUserHome,
     warnings,
     context: "bytecode lookup"
   });
@@ -106,7 +108,8 @@ export async function resolveToObfuscatedMemberName(
   version: string,
   mapping: SourceMapping,
   sourcePriority: MappingSourcePriority | undefined,
-  warnings: string[]
+  warnings: string[],
+  gradleUserHome?: string
 ): Promise<{ name: string; descriptor?: string }> {
   if (mapping === "obfuscated") {
     return {
@@ -128,7 +131,8 @@ export async function resolveToObfuscatedMemberName(
           descriptor,
           sourceMapping: mapping,
           targetMapping: "obfuscated",
-          sourcePriority
+          sourcePriority,
+          gradleUserHome
         })
       : await svc.mappingService.findMapping({
           version,
@@ -148,7 +152,8 @@ export async function resolveToObfuscatedMemberName(
               : undefined,
           sourceMapping: mapping,
           targetMapping: "obfuscated",
-          sourcePriority
+          sourcePriority,
+          gradleUserHome
         });
     warnings.push(...mapped.warnings);
     if (mapped.resolved && mapped.resolvedSymbol) {
@@ -167,7 +172,8 @@ export async function resolveToObfuscatedMemberName(
         signatureMode: "exact",
         sourceMapping: mapping,
         targetMapping: "obfuscated",
-        sourcePriority
+        sourcePriority,
+        gradleUserHome
       });
       warnings.push(...fallbackMapped.warnings);
       if (fallbackMapped.resolved && fallbackMapped.resolvedSymbol) {
@@ -198,7 +204,8 @@ export async function remapSignatureMembers(
   targetMapping: SourceMapping,
   sourcePriority: MappingSourcePriority | undefined,
   warnings: string[],
-  projectPath?: string
+  projectPath?: string,
+  gradleUserHome?: string
 ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
   const failedNames = new Set<string>();
   if (sourceMapping === targetMapping) {
@@ -230,7 +237,8 @@ export async function remapSignatureMembers(
           sourceMapping,
           targetMapping,
           sourcePriority,
-          projectPath
+          projectPath,
+          gradleUserHome
         });
         if (mapped.resolved && mapped.resolvedSymbol) {
           ownerToRemapped.set(obfuscatedFqn, mapped.resolvedSymbol.name);
@@ -265,7 +273,8 @@ export async function remapSignatureMembers(
             sourceMapping,
             targetMapping,
             sourcePriority,
-            projectPath
+            projectPath,
+            gradleUserHome
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             ownerToRemapped.set(dotFqn, mapped.resolvedSymbol.name);
@@ -306,7 +315,8 @@ export async function remapSignatureMembers(
               sourceMapping,
               targetMapping,
               sourcePriority,
-              projectPath
+              projectPath,
+              gradleUserHome
             });
             if (exactResult.resolved && exactResult.resolvedSymbol) {
               memberKeyToRemapped.set(key, exactResult.resolvedSymbol.name);
@@ -337,6 +347,7 @@ export async function remapSignatureMembers(
           targetMapping,
           sourcePriority,
           projectPath,
+          gradleUserHome,
           disambiguation: {
             ownerHint: targetOwner,
             descriptorHint: remappedDescriptorHint

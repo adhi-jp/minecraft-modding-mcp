@@ -65,6 +65,7 @@ const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),
     projectPath: nonEmptyString,
+    gradleUserHome: nonEmptyString.optional(),
     discover: z.array(z.enum(["mixins", "access-wideners", "access-transformers"])).optional()
   }),
   z.object({

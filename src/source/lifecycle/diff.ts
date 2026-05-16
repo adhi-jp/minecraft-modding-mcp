@@ -99,7 +99,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     fromVersion,
     mapping,
     input.sourcePriority,
-    mappingWarnings
+    mappingWarnings,
+    input.gradleUserHome
   );
   const obfuscatedToClassName =
     fromVersion === toVersion
@@ -110,7 +111,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
           toVersion,
           mapping,
           input.sourcePriority,
-          mappingWarnings
+          mappingWarnings,
+          input.gradleUserHome
         );
 
   const [fromResolved, toResolved] = await Promise.all([
@@ -243,8 +245,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     kind: "field" | "method"
   ): Promise<DiffClassMemberDelta> => {
     const [addedResult, removedResult] = await Promise.all([
-      svc.remapSignatureMembers(delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings),
-      svc.remapSignatureMembers(delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings)
+      svc.remapSignatureMembers(delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome),
+      svc.remapSignatureMembers(delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome)
     ]);
     const remappedModified = await Promise.all(
       delta.modified.map(async (change) => {
@@ -262,8 +264,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
           });
         }
         const [fromResult, toResult] = await Promise.all([
-          svc.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings),
-          svc.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings)
+          svc.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome),
+          svc.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome)
         ]);
         const fromMember = fromResult.members[0];
         const toMember = toResult.members[0];

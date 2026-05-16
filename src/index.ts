@@ -297,6 +297,7 @@ const validateProjectService = new ValidateProjectService({
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
@@ -321,6 +322,7 @@ const verifyMixinTargetService = new VerifyMixinTargetService({
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion
@@ -731,6 +733,7 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
         mapping: input.mapping,
         sourcePriority: input.sourcePriority,
         projectPath: input.projectPath,
+        gradleUserHome: input.gradleUserHome,
         target: input.target as ResolveArtifactTargetInput,
         scope: input.scope,
         preferProjectVersion: input.preferProjectVersion,
@@ -794,6 +797,7 @@ server.tool("resolve-artifact",
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion,
@@ -840,6 +844,7 @@ server.tool("get-class-source",
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion,
@@ -874,6 +879,7 @@ server.tool("get-class-members",
       memberPattern: input.memberPattern,
       maxMembers: input.maxMembers,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope as ArtifactScope | undefined,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion
@@ -913,7 +919,8 @@ server.tool("search-class-source",
         limit: input.limit,
         cursor: input.cursor,
         queryNamespace: input.queryNamespace,
-        sourcePriority: input.sourcePriority
+        sourcePriority: input.sourcePriority,
+        gradleUserHome: input.gradleUserHome
       }) as Promise<Record<string, unknown>>;
     })
 );
@@ -960,6 +967,7 @@ server.tool("trace-symbol-lifecycle",
       toVersion: input.toVersion,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       includeSnapshots: input.includeSnapshots,
       maxVersions: input.maxVersions,
       includeTimeline: input.includeTimeline
@@ -979,6 +987,7 @@ server.tool("diff-class-signatures",
       toVersion: input.toVersion,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       includeFullDiff: input.includeFullDiff
     }) as Promise<Record<string, unknown>>
   )
@@ -999,6 +1008,7 @@ server.tool("find-mapping",
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       signatureMode: input.signatureMode,
       disambiguation: input.disambiguation,
       maxCandidates: input.maxCandidates
@@ -1020,6 +1030,7 @@ server.tool("resolve-method-mapping-exact",
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
@@ -1037,6 +1048,7 @@ server.tool("get-class-api-matrix",
       classNameMapping: input.classNameMapping,
       includeKinds: parseClassApiKinds(input.includeKinds),
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       maxRows: input.maxRows
     }) as Promise<Record<string, unknown>>
   )
@@ -1057,6 +1069,7 @@ server.tool("resolve-workspace-symbol",
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       maxCandidates: input.maxCandidates
     }) as Promise<Record<string, unknown>>
   )
@@ -1076,6 +1089,7 @@ server.tool("check-symbol-exists",
       descriptor: input.descriptor,
       sourceMapping: input.sourceMapping,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       nameMode: input.nameMode,
       signatureMode: input.signatureMode,
       maxCandidates: input.maxCandidates
@@ -1163,6 +1177,7 @@ server.tool("validate-mixin",
       sourcePriority: input.sourcePriority,
       scope: input.scope as ArtifactScope | undefined,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       preferProjectVersion: input.preferProjectVersion,
       minSeverity: input.minSeverity,
       hideUncertain: input.hideUncertain,
@@ -1191,6 +1206,7 @@ server.tool("validate-access-widener",
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope as ArtifactScope | undefined,
       preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>
@@ -1209,6 +1225,7 @@ server.tool("validate-access-transformer",
       atNamespace: input.atNamespace,
       sourcePriority: input.sourcePriority,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope as ArtifactScope | undefined,
       preferProjectVersion: input.preferProjectVersion
     }) as Promise<Record<string, unknown>>

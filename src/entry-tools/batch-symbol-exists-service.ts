@@ -57,6 +57,7 @@ export type BatchSymbolExistsInput = {
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
@@ -112,6 +113,7 @@ export class BatchSymbolExistsService {
           sourcePriority: input.sourcePriority,
           allowDecompile: input.allowDecompile,
           projectPath: input.projectPath,
+          gradleUserHome: input.gradleUserHome,
           scope: input.scope,
           preferProjectVersion: input.preferProjectVersion,
           strictVersion: input.strictVersion
@@ -151,6 +153,7 @@ export class BatchSymbolExistsService {
           descriptor: entry.descriptor,
           sourceMapping: sharedArtifact.sourceMapping,
           sourcePriority: input.sourcePriority,
+          gradleUserHome: input.gradleUserHome,
           nameMode: entry.nameMode,
           signatureMode: entry.signatureMode,
           maxCandidates: entry.maxCandidates,

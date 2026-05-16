@@ -116,6 +116,7 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
       sourceMapping: input.sourceMapping,
       targetMapping: mappingApplied,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       maxCandidates: input.maxCandidates
     });
 
@@ -133,7 +134,8 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
       className,
       classNameMapping: input.sourceMapping,
       includeKinds: ["class"],
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome
     });
 
     const resolvedClass = matrix.classIdentity[mappingApplied];
@@ -196,6 +198,7 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
     sourceMapping: input.sourceMapping,
     targetMapping: mappingApplied,
     sourcePriority: input.sourcePriority,
+    gradleUserHome: input.gradleUserHome,
     maxCandidates: input.maxCandidates
   });
 

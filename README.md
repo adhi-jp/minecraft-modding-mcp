@@ -134,6 +134,8 @@ Pass environment variables to override defaults:
 }
 ```
 
+When a build used a non-default Gradle User Home, pass `gradleUserHome` on cache-backed source, mapping, validation, and workflow calls. The server treats it as a per-call Gradle User Home and searches `<gradleUserHome>/loom-cache` and `<gradleUserHome>/caches/fabric-loom` before the MCP process default. It does not accept arbitrary Loom cache directories.
+
 ## Start Here
 
 These six top-level workflow tools cover the common paths and return summary-first results. They are the best default starting points for agents and MCP clients.
@@ -161,6 +163,7 @@ These notes cover high-frequency decisions during onboarding. For the full pitfa
 - `validate-project task="project-summary"` propagates `preferProjectVersion=true` across discovered Mixin, Access Widener, and Access Transformer checks. If no version can be resolved from the request or `gradle.properties`, the summary returns recovery guidance instead of guessing.
 - `validate-mixin` and `validate-project` keep `mapping-health` lightweight for `obfuscated` and `mojang` validation, avoiding full Tiny mapping graph loads unless `intermediary` or `yarn` namespaces are requested.
 - `validate-project task="project-summary"` uses a lightweight artifact probe for `tasks["minecraft.artifact.resolved"]`; it does not decompile Minecraft or rebuild the source index just to report per-probe status. Set `VALIDATE_PROJECT_TASKS_OFF=1` to omit the additive `tasks` field.
+- If a workspace was built with `GRADLE_USER_HOME=/tmp/...` or another isolated Gradle home, pass that path as `gradleUserHome` so source, mapping, runtime, and project validation lookups use the same Loom cache instead of stale caches under the MCP process home.
 
 ### Inspect Minecraft source from a version
 

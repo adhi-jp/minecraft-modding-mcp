@@ -2013,6 +2013,63 @@ test("SourceService resolves mojang mapping for version target using workspace L
   }
 });
 
+test("SourceService prefers explicit gradleUserHome over stale process GRADLE_USER_HOME source jars", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-explicit-gradle-home-source-"));
+  const defaultGradleUserHome = join(root, "default-gradle-home");
+  const explicitGradleUserHome = join(root, "explicit-gradle-home");
+  const defaultLoomDir = join(defaultGradleUserHome, "caches", "fabric-loom", "1.21.10");
+  const explicitLoomDir = join(explicitGradleUserHome, "caches", "fabric-loom", "1.21.10");
+  const staleSourceJarPath = join(defaultLoomDir, "minecraft-merged-1.21.10-sources.jar");
+  const exactSourceJarPath = join(explicitLoomDir, "minecraft-merged-1.21.10-sources.jar");
+  const versionJarPath = join(root, "client-1.21.10.jar");
+
+  await mkdir(defaultLoomDir, { recursive: true });
+  await mkdir(explicitLoomDir, { recursive: true });
+  await createJar(staleSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java": [
+      "package net.minecraft.world.level.block;",
+      "public class Blocks { public static final String SOURCE = \"stale\"; }"
+    ].join("\n")
+  });
+  await createJar(exactSourceJarPath, {
+    "net/minecraft/world/level/block/Blocks.java": [
+      "package net.minecraft.world.level.block;",
+      "public class Blocks { public static final String SOURCE = \"explicit\"; }"
+    ].join("\n")
+  });
+  await createJar(versionJarPath, {
+    "net/minecraft/world/level/block/Blocks.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { versionService: unknown }).versionService = {
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: versionJarPath,
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  const resolved = await withGradleUserHome(defaultGradleUserHome, () =>
+    service.resolveArtifact({
+      target: { kind: "version", value: "1.21.10" },
+      mapping: "mojang",
+      scope: "merged",
+      gradleUserHome: explicitGradleUserHome
+    } as any)
+  );
+
+  assert.equal(resolved.resolvedSourceJarPath, exactSourceJarPath);
+  assert.ok(
+    resolved.warnings.some((warning) => warning.includes(exactSourceJarPath)),
+    `Expected warning to mention explicit source jar, got ${JSON.stringify(resolved.warnings)}`
+  );
+});
+
 test("SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial", { concurrency: false }, async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-version-mojang-partial-"));

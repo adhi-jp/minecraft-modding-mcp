@@ -15,7 +15,23 @@ export function normalizeOptionalProjectPath(projectPath: string | undefined): s
   return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
 }
 
-export function resolveGradleUserHomePath(): string {
+export function normalizeOptionalGradleUserHomePath(gradleUserHome: string | undefined): string | undefined {
+  if (!gradleUserHome) {
+    return undefined;
+  }
+  const trimmed = gradleUserHome.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = normalizePathForHost(trimmed, undefined, "gradleUserHome");
+  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+}
+
+export function resolveGradleUserHomePath(gradleUserHome?: string): string {
+  const explicit = normalizeOptionalGradleUserHomePath(gradleUserHome);
+  if (explicit) {
+    return explicit;
+  }
   const configured = process.env.GRADLE_USER_HOME?.trim();
   if (!configured) {
     return resolvePath(homedir(), ".gradle");
@@ -24,7 +40,32 @@ export function resolveGradleUserHomePath(): string {
   return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
 }
 
-export function buildVersionSourceSearchRoots(projectPath: string | undefined): string[] {
+export type GradleCacheSearchInput =
+  | string
+  | {
+      projectPath?: string;
+      gradleUserHome?: string;
+    }
+  | undefined;
+
+function normalizeGradleCacheSearchInput(input: GradleCacheSearchInput): {
+  projectPath?: string;
+  gradleUserHome?: string;
+} {
+  if (typeof input === "string" || input === undefined) {
+    return {
+      projectPath: normalizeOptionalProjectPath(input)
+    };
+  }
+  const gradleUserHome = normalizeOptionalGradleUserHomePath(input.gradleUserHome);
+  return {
+    projectPath: normalizeOptionalProjectPath(input.projectPath),
+    gradleUserHome
+  };
+}
+
+export function buildVersionSourceSearchRoots(input: GradleCacheSearchInput): string[] {
+  const { projectPath, gradleUserHome } = normalizeGradleCacheSearchInput(input);
   const roots = new Set<string>();
   if (projectPath) {
     roots.add(resolvePath(projectPath, ".gradle", "loom-cache"));
@@ -34,13 +75,14 @@ export function buildVersionSourceSearchRoots(projectPath: string | undefined): 
     roots.add(resolvePath(projectParent, ".gradle-user-home", "loom-cache"));
     roots.add(resolvePath(projectParent, ".gradle-user-home", "caches", "fabric-loom"));
   }
-  const homeGradle = resolveGradleUserHomePath();
+  const homeGradle = resolveGradleUserHomePath(gradleUserHome);
   roots.add(resolvePath(homeGradle, "loom-cache"));
   roots.add(resolvePath(homeGradle, "caches", "fabric-loom"));
   return [...roots];
 }
 
-export function buildLoaderRuntimeSearchRoots(projectPath: string | undefined): string[] {
+export function buildLoaderRuntimeSearchRoots(input: GradleCacheSearchInput): string[] {
+  const { projectPath, gradleUserHome } = normalizeGradleCacheSearchInput(input);
   const roots = new Set<string>();
   if (projectPath) {
     roots.add(resolvePath(projectPath, "build"));
@@ -52,7 +94,7 @@ export function buildLoaderRuntimeSearchRoots(projectPath: string | undefined): 
     roots.add(resolvePath(projectPath, ".gradle", "caches", "neoformruntime"));
     roots.add(resolvePath(projectPath, ".gradle", "caches", "moddev"));
   }
-  const homeGradle = resolveGradleUserHomePath();
+  const homeGradle = resolveGradleUserHomePath(gradleUserHome);
   roots.add(resolvePath(homeGradle, "caches", "forge_gradle"));
   roots.add(resolvePath(homeGradle, "caches", "neogradle"));
   roots.add(resolvePath(homeGradle, "caches", "neoformruntime"));

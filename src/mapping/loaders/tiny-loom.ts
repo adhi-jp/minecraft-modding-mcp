@@ -15,9 +15,13 @@ const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
 
 export async function loadTinyPairsFromLoom(
   version: string,
-  projectPath?: string
+  projectPath?: string,
+  gradleUserHome?: string
 ): Promise<MappingLoaderResult> {
-  const searchRoots = buildVersionSourceSearchRoots(effectiveLoomSearchProjectPath(projectPath));
+  const searchRoots = buildVersionSourceSearchRoots({
+    projectPath: effectiveLoomSearchProjectPath(projectPath),
+    gradleUserHome
+  });
   const merged = new Map<PairKey, DirectionIndex>();
   const discoveredPaths = new Set<string>();
 

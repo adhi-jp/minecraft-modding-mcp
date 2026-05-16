@@ -80,7 +80,13 @@ if (!input.version && !input.preferProjectVersion) {
     projectPath: input.subject.projectPath,
     reason: "missing-version"
   });
-  const tasks = await buildEarlyTasksForBlocked(input.subject.projectPath, detail, include);
+  const tasks = await buildEarlyTasksForBlocked(
+    input.subject.projectPath,
+    detail,
+    include,
+    undefined,
+    input.subject.gradleUserHome
+  );
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -89,6 +95,7 @@ if (!input.version && !input.preferProjectVersion) {
 }
 
 const projectPath = input.subject.projectPath;
+const gradleUserHome = input.subject.gradleUserHome;
 const discover = input.subject.discover ?? ["mixins", "access-wideners"];
 await safeEmit(options.stageEmitter,"validate-project:workspace-discovery", {
   projectPath,
@@ -157,7 +164,7 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
     mixinDiscoveryCount: mixinConfigs.length,
     awDiscoveryCount: accessWideners.length,
     atDiscoveryCount: accessTransformers.length
-  });
+  }, gradleUserHome);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -200,7 +207,7 @@ if (!resolvedVersion) {
     projectPath,
     reason: "version-not-required"
   });
-  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include);
+  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, undefined, gradleUserHome);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -235,6 +242,7 @@ for (const [mixinIndex, configPath] of mixinConfigs.entries()) {
       sourcePriority: input.sourcePriority,
       scope: input.scope,
       projectPath,
+      gradleUserHome,
       preferProjectVersion: false,
       preferProjectMapping: input.preferProjectMapping,
       sourceRoots: input.sourceRoots,
@@ -289,6 +297,7 @@ for (const [awIndex, awPath] of accessWideners.entries()) {
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
       projectPath,
+      gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
@@ -336,6 +345,7 @@ for (const [atIndex, atPath] of accessTransformers.entries()) {
       atNamespace: input.atNamespace,
       sourcePriority: input.sourcePriority,
       projectPath,
+      gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
@@ -414,6 +424,7 @@ const tasks = await buildFullTaskStatusReport(deps, {
   resolvedVersion: validationVersion,
   mapping: input.mapping,
   sourcePriority: input.sourcePriority,
+  gradleUserHome,
   scope: input.scope,
   preferProjectVersion: input.preferProjectVersion,
   mixinDiscoveryCount: mixinConfigs.length,

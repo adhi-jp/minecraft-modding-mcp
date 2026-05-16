@@ -99,6 +99,7 @@ export type ResolveArtifactInput = {
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
@@ -130,6 +131,7 @@ export type ProbeMinecraftArtifactInput = {
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 };
@@ -192,6 +194,7 @@ export type SearchClassSourceInput = {
   cursor?: string;
   queryNamespace?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
 };
 
 export type SearchClassSourceOutput = {
@@ -260,6 +263,7 @@ export type ResolveWorkspaceSymbolInput = {
   descriptor?: string;
   sourceMapping: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   maxCandidates?: number;
 };
 
@@ -278,6 +282,7 @@ export type GetClassSourceInput = {
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
@@ -345,6 +350,7 @@ export type GetClassMembersInput = {
   memberPattern?: string;
   maxMembers?: number;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
@@ -408,6 +414,7 @@ export type TraceSymbolLifecycleInput = {
   toVersion?: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   includeSnapshots?: boolean;
   maxVersions?: number;
   includeTimeline?: boolean;
@@ -466,6 +473,7 @@ export type DiffClassSignaturesInput = {
   toVersion: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
+  gradleUserHome?: string;
   includeFullDiff?: boolean;
 };
 
@@ -539,6 +547,7 @@ export type ValidateMixinInput = {
   sourcePriority?: MappingSourcePriority;
   scope?: ArtifactScope;
   projectPath?: string;
+  gradleUserHome?: string;
   preferProjectVersion?: boolean;
   minSeverity?: "error" | "warning" | "all";
   hideUncertain?: boolean;
@@ -617,6 +626,7 @@ export type ValidateAccessWidenerInput = {
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 };
@@ -629,6 +639,7 @@ export type ValidateAccessTransformerInput = {
   atNamespace?: AccessTransformerNamespace;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 };
@@ -709,6 +720,7 @@ export class SourceService {
     version: string;
     awNamespace: SourceMapping;
     projectPath?: string;
+    gradleUserHome?: string;
     scope?: ArtifactScope;
     preferProjectVersion?: boolean;
   }): Promise<RuntimeValidationProvenance<SourceMapping>> {
@@ -726,6 +738,7 @@ export class SourceService {
     version: string;
     atNamespace: AccessTransformerNamespace;
     projectPath?: string;
+    gradleUserHome?: string;
     scope?: ArtifactScope;
     preferProjectVersion?: boolean;
   }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
@@ -744,6 +757,7 @@ export class SourceService {
   async discoverVersionSourceJar(input: {
     version: string;
     projectPath?: string;
+    gradleUserHome?: string;
   }): ReturnType<typeof artifactResolver.discoverVersionSourceJar> {
     return artifactResolver.discoverVersionSourceJar(this, input);
   }
@@ -751,6 +765,7 @@ export class SourceService {
   async discoverAccessWidenerRuntimeCandidates(input: {
     version: string;
     projectPath?: string;
+    gradleUserHome?: string;
     requestedScope: ArtifactScope;
   }): ReturnType<typeof artifactResolver.discoverAccessWidenerRuntimeCandidates> {
     return artifactResolver.discoverAccessWidenerRuntimeCandidates(this, input);
@@ -759,6 +774,7 @@ export class SourceService {
   async discoverAccessTransformerRuntimeCandidates(input: {
     version: string;
     projectPath?: string;
+    gradleUserHome?: string;
     requestedScope: ArtifactScope;
     atNamespace: AccessTransformerNamespace;
     loader: import("./workspace-mapping-service.js").WorkspaceProjectLoader | "unknown";
@@ -890,9 +906,10 @@ export class SourceService {
     targetMapping: SourceMapping,
     sourcePriority: MappingSourcePriority | undefined,
     warnings: string[],
-    projectPath?: string
+    projectPath?: string,
+    gradleUserHome?: string
   ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
-    return lifecycle.remapSignatureMembers(this, members, kind, version, sourceMapping, targetMapping, sourcePriority, warnings, projectPath);
+    return lifecycle.remapSignatureMembers(this, members, kind, version, sourceMapping, targetMapping, sourcePriority, warnings, projectPath, gradleUserHome);
   }
 
   async validateAccessWidener(input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {
@@ -923,6 +940,7 @@ export class SourceService {
     sourceMapping: SourceMapping;
     targetMapping: SourceMapping;
     sourcePriority: MappingSourcePriority | undefined;
+    gradleUserHome?: string;
     warnings: string[];
     context: string;
   }): Promise<string> {

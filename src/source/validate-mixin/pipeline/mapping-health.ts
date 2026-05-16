@@ -9,7 +9,8 @@ export async function runMappingHealthStage(svc: SourceService, ctx: MutableMixi
     const health = await svc.mappingService.checkMappingHealth({
       version: ctx.version,
       requestedMapping: ctx.requestedMapping,
-      sourcePriority: ctx.currentSourcePriority
+      sourcePriority: ctx.currentSourcePriority,
+      gradleUserHome: ctx.input.gradleUserHome
     });
     const jarAvailable = existsSync(ctx.jarPath);
     ctx.healthReport = {

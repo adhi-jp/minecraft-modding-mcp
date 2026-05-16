@@ -43,6 +43,7 @@ deps: InspectMinecraftDeps,
               projectPath: subject.projectPath,
               mapping: subject.mapping,
               scope: subject.scope,
+              gradleUserHome: subject.gradleUserHome,
               preferProjectVersion: subject.preferProjectVersion,
               strictVersion: subject.strictVersion,
               focus: {

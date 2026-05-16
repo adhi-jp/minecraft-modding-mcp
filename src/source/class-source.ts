@@ -153,6 +153,7 @@ export async function resolveClassNameForLookup(svc: SourceService, input: {
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;
   sourcePriority: MappingSourcePriority | undefined;
+  gradleUserHome?: string;
   warnings: string[];
   context: string;
 }): Promise<string> {
@@ -172,7 +173,8 @@ export async function resolveClassNameForLookup(svc: SourceService, input: {
       name: input.className,
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
-      sourcePriority: input.sourcePriority
+      sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome
     });
     if (mapped.resolved && mapped.resolvedSymbol) {
       return mapped.resolvedSymbol.name;
@@ -518,6 +520,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion
@@ -615,6 +618,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     sourceMapping: requestedMapping,
     targetMapping: activeMappingApplied,
     sourcePriority: input.sourcePriority,
+    gradleUserHome: input.gradleUserHome,
     warnings,
     context: "source lookup"
   });
@@ -626,6 +630,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       sourceMapping: requestedMapping,
       targetMapping: activeMappingApplied,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       warnings,
       context: "source lookup"
     });
@@ -657,6 +662,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       sourceMapping: requestedMapping,
       targetMapping: activeMappingApplied,
       sourcePriority: input.sourcePriority,
+      gradleUserHome: input.gradleUserHome,
       warnings,
       context: "source lookup"
     });
@@ -803,6 +809,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       sourcePriority: input.sourcePriority,
       allowDecompile: input.allowDecompile,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion
@@ -875,6 +882,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     sourceMapping: requestedMapping,
     targetMapping: mappingApplied,
     sourcePriority: input.sourcePriority,
+    gradleUserHome: input.gradleUserHome,
     warnings,
     context: "binary lookup"
   });
@@ -925,6 +933,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     mappingApplied,
     requestedMapping,
     sourcePriority: input.sourcePriority,
+    gradleUserHome: input.gradleUserHome,
     memberPattern,
     warnings
   });

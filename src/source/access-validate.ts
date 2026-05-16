@@ -93,6 +93,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
       version,
       awNamespace,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
@@ -124,7 +125,8 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
           sourceMapping: awNamespace,
           targetMapping: lookupMapping,
           sourcePriority: input.sourcePriority,
-          projectPath: input.projectPath
+          projectPath: input.projectPath,
+          gradleUserHome: input.gradleUserHome
         });
         if (mapped.resolved && mapped.resolvedSymbol) {
           lookupFqn = mapped.resolvedSymbol.name;
@@ -156,7 +158,8 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
             awNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.methods,
@@ -166,7 +169,8 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
             awNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.fields,
@@ -176,7 +180,8 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
             awNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           )
         ]);
         constructors = ctorResult.members;
@@ -231,6 +236,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
       version,
       atNamespace,
       projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
@@ -265,7 +271,8 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             sourceMapping: atNamespace,
             targetMapping: lookupMapping,
             sourcePriority: input.sourcePriority,
-            projectPath: input.projectPath
+            projectPath: input.projectPath,
+            gradleUserHome: input.gradleUserHome
           });
           if (mapped.resolved && mapped.resolvedSymbol) {
             lookupFqn = mapped.resolvedSymbol.name;
@@ -299,7 +306,8 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             atNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.methods,
@@ -309,7 +317,8 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             atNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.fields,
@@ -319,7 +328,8 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
             atNamespace,
             input.sourcePriority,
             warnings,
-            input.projectPath
+            input.projectPath,
+            input.gradleUserHome
           )
         ]);
         constructors = ctorResult.members;

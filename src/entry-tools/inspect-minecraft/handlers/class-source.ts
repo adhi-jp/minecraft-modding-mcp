@@ -19,6 +19,7 @@ deps: InspectMinecraftDeps,
     mapping: classSubject.mapping,
     scope: classSubject.scope,
     projectPath: classSubject.projectPath,
+    gradleUserHome: classSubject.gradleUserHome,
     preferProjectVersion: classSubject.preferProjectVersion,
     strictVersion: classSubject.strictVersion,
     mode: include.includes("source") || detail === "full" ? "snippet" : "metadata"

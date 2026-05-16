@@ -22,6 +22,7 @@ export type RemapMembersInput = {
   mappingApplied: SourceMapping;
   requestedMapping: SourceMapping;
   sourcePriority: MappingSourcePriority | undefined;
+  gradleUserHome?: string;
   memberPattern: string | undefined;
   warnings: string[];
 };
@@ -41,7 +42,9 @@ export async function remapAndCountMembers(
       input.mappingApplied,
       input.requestedMapping,
       input.sourcePriority,
-      input.warnings
+      input.warnings,
+      undefined,
+      input.gradleUserHome
     );
     return result.members;
   };

@@ -43,6 +43,7 @@ export async function runResolveStage(svc: SourceService, ctx: MutableMixinPipel
         mapping: ctx.requestedMapping,
         sourcePriority: ctx.currentSourcePriority,
         projectPath: ctx.input.projectPath,
+        gradleUserHome: ctx.input.gradleUserHome,
         scope: ctx.input.scope,
         preferProjectVersion: false
       });

@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Cache-backed source, mapping, validation, batch, and workflow tools now accept `gradleUserHome` so callers can use Loom caches from a non-default Gradle User Home instead of the MCP process default.
+
 ## [4.1.1] - 2026-05-10
 
 ### Documentation

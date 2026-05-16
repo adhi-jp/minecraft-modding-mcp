@@ -45,6 +45,7 @@ export const analyzeSymbolShape = {
   targetMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   classNameMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   projectPath: nonEmptyString.optional(),
+  gradleUserHome: nonEmptyString.optional(),
   signatureMode: z.enum(["exact", "name-only"]).default("exact"),
   nameMode: z.enum(["fqcn", "auto"]).default("fqcn"),
   includeKinds: z.array(z.enum(["class", "field", "method"])).optional(),
@@ -103,6 +104,7 @@ type AnalyzeSymbolDeps = {
     descriptor?: string;
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
+    gradleUserHome?: string;
     nameMode?: "fqcn" | "auto";
     signatureMode?: "exact" | "name-only";
     maxCandidates?: number;
@@ -115,6 +117,7 @@ type AnalyzeSymbolDeps = {
     descriptor?: string;
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    gradleUserHome?: string;
     signatureMode?: "exact" | "name-only";
     maxCandidates?: number;
   }) => Promise<FindMappingOutput>;
@@ -125,12 +128,14 @@ type AnalyzeSymbolDeps = {
     descriptor: string;
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    gradleUserHome?: string;
     maxCandidates?: number;
   }) => Promise<ResolveMethodMappingExactOutput>;
   traceSymbolLifecycle: (input: {
     symbol: string;
     descriptor?: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    gradleUserHome?: string;
     toVersion?: string;
     maxVersions?: number;
   }) => Promise<TraceSymbolLifecycleOutput>;
@@ -142,6 +147,7 @@ type AnalyzeSymbolDeps = {
     owner?: string;
     descriptor?: string;
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    gradleUserHome?: string;
     maxCandidates?: number;
   }) => Promise<ResolveWorkspaceSymbolOutput>;
   getClassApiMatrix: (input: {
@@ -149,6 +155,7 @@ type AnalyzeSymbolDeps = {
     className: string;
     classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     includeKinds?: ("class" | "field" | "method")[];
+    gradleUserHome?: string;
     maxRows?: number;
   }) => Promise<GetClassApiMatrixOutput>;
 };
@@ -187,6 +194,7 @@ export class AnalyzeSymbolService {
           owner: input.subject.owner,
           descriptor: input.subject.descriptor,
           sourceMapping: input.sourceMapping ?? "obfuscated",
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           nameMode: input.nameMode,
           signatureMode: input.signatureMode,
           maxCandidates: input.maxCandidates
@@ -232,6 +240,7 @@ export class AnalyzeSymbolService {
           descriptor: input.subject.descriptor,
           sourceMapping: input.sourceMapping ?? "obfuscated",
           targetMapping: input.targetMapping ?? "mojang",
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           signatureMode: input.signatureMode,
           maxCandidates: input.maxCandidates
         });
@@ -282,6 +291,7 @@ export class AnalyzeSymbolService {
           descriptor: input.subject.descriptor,
           sourceMapping: input.sourceMapping ?? "obfuscated",
           targetMapping: input.targetMapping ?? "mojang",
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           maxCandidates: input.maxCandidates
         });
         return {
@@ -323,6 +333,7 @@ export class AnalyzeSymbolService {
             : input.subject.name,
           descriptor: input.subject.descriptor,
           mapping: input.sourceMapping,
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           toVersion: input.version,
           maxVersions: 5
         });
@@ -366,6 +377,7 @@ export class AnalyzeSymbolService {
           owner: input.subject.owner,
           descriptor: input.subject.descriptor,
           sourceMapping: input.sourceMapping ?? "obfuscated",
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           maxCandidates: input.maxCandidates
         });
         return {
@@ -408,6 +420,7 @@ export class AnalyzeSymbolService {
           className: input.subject.name,
           classNameMapping,
           includeKinds: input.includeKinds,
+          ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           maxRows: input.maxRows
         });
         return {

@@ -45,7 +45,8 @@ deps: InspectMinecraftDeps,
   const binaryBackedClassHit = needsBinaryBackedClassHit
     ? await resolveBinaryBackedClass(deps, searchSubject.query, {
         version: artifact.version,
-        mapping: subject.mapping
+        mapping: subject.mapping,
+        gradleUserHome: subject.gradleUserHome
       })
     : undefined;
   const binaryBackedHitRecord = binaryBackedClassHit == null

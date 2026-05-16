@@ -429,6 +429,35 @@ test("MappingService loads Loom tiny mappings from GRADLE_USER_HOME fabric-loom 
   }
 });
 
+test("MappingService prefers explicit gradleUserHome over process GRADLE_USER_HOME", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-explicit-gradle-home-"));
+  try {
+    const defaultGradleUserHome = join(root, "default-gradle-home");
+    const explicitGradleUserHome = join(root, "explicit-gradle-home");
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeFabricLoomTinyCache(defaultGradleUserHome, TEST_TINY_ALT);
+    await writeFabricLoomTinyCache(explicitGradleUserHome, TEST_TINY);
+
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+    const result = await withGradleUserHome(defaultGradleUserHome, () =>
+      service.findMapping({
+        version: "1.21.10",
+        ...queryFromSymbol("a.b.C"),
+        sourceMapping: "obfuscated",
+        targetMapping: "yarn",
+        gradleUserHome: explicitGradleUserHome
+      } as any)
+    );
+
+    assert.equal(result.resolved, true);
+    assert.equal(result.candidates[0]?.symbol, "yarn.pkg.NamedClass");
+    assert.equal(result.provenance?.mappingArtifact.startsWith(explicitGradleUserHome), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("MappingService does not issue unbounded Loom tiny version globs", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-bounded-loom-glob-"));

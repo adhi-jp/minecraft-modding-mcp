@@ -41,6 +41,7 @@ export type BatchClassSourceInput = {
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
   projectPath?: string;
+  gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
@@ -80,6 +81,7 @@ export class BatchClassSourceService {
           sourcePriority: input.sourcePriority,
           allowDecompile: input.allowDecompile,
           projectPath: input.projectPath,
+          gradleUserHome: input.gradleUserHome,
           scope: input.scope,
           preferProjectVersion: input.preferProjectVersion,
           strictVersion: input.strictVersion
@@ -116,6 +118,7 @@ export class BatchClassSourceService {
           sourcePriority: input.sourcePriority,
           allowDecompile: input.allowDecompile,
           projectPath: input.projectPath,
+          gradleUserHome: input.gradleUserHome,
           scope: input.scope,
           preferProjectVersion: input.preferProjectVersion,
           strictVersion: input.strictVersion

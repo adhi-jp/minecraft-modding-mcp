@@ -15,6 +15,7 @@ function findValidateMixinClassMapping(svc: SourceService, input: {
   targetMapping: SourceMapping;
   sourcePriority: MappingSourcePriority;
   projectPath?: string;
+  gradleUserHome?: string;
   batchCaches?: ValidateMixinSingleInput["batchCaches"];
 }): Promise<MappingFindMappingOutput> {
   const cache = input.batchCaches?.classMappings;
@@ -26,7 +27,8 @@ function findValidateMixinClassMapping(svc: SourceService, input: {
       sourceMapping: input.sourceMapping,
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
-      projectPath: input.projectPath
+      projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome
     });
   }
 
@@ -36,7 +38,8 @@ function findValidateMixinClassMapping(svc: SourceService, input: {
     input.sourceMapping,
     input.targetMapping,
     input.sourcePriority,
-    input.projectPath ?? ""
+    input.projectPath ?? "",
+    input.gradleUserHome ?? ""
   ].join("\0");
   const cached = cache.get(cacheKey);
   if (cached) {
@@ -50,7 +53,8 @@ function findValidateMixinClassMapping(svc: SourceService, input: {
     sourceMapping: input.sourceMapping,
     targetMapping: input.targetMapping,
     sourcePriority: input.sourcePriority,
-    projectPath: input.projectPath
+    projectPath: input.projectPath,
+    gradleUserHome: input.gradleUserHome
   }).catch((error) => {
     cache.delete(cacheKey);
     throw error;
@@ -105,6 +109,7 @@ export async function processSingleMixinTarget(
         targetMapping: ctx.signatureLookupMapping,
         sourcePriority: ctx.currentSourcePriority,
         projectPath: ctx.input.projectPath,
+        gradleUserHome: ctx.input.gradleUserHome,
         batchCaches: ctx.input.batchCaches
       });
       if (mapped.resolved && mapped.resolvedSymbol) {
@@ -150,7 +155,8 @@ export async function processSingleMixinTarget(
             ctx.requestedMapping,
             ctx.currentSourcePriority,
             ctx.warnings,
-            ctx.input.projectPath
+            ctx.input.projectPath,
+            ctx.input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.methods,
@@ -160,7 +166,8 @@ export async function processSingleMixinTarget(
             ctx.requestedMapping,
             ctx.currentSourcePriority,
             ctx.warnings,
-            ctx.input.projectPath
+            ctx.input.projectPath,
+            ctx.input.gradleUserHome
           ),
           svc.remapSignatureMembers(
             sig.fields,
@@ -170,7 +177,8 @@ export async function processSingleMixinTarget(
             ctx.requestedMapping,
             ctx.currentSourcePriority,
             ctx.warnings,
-            ctx.input.projectPath
+            ctx.input.projectPath,
+            ctx.input.gradleUserHome
           )
         ]);
         constructors = ctorResult.members;
@@ -218,7 +226,8 @@ export async function processSingleMixinTarget(
     try {
       const existenceCheck = await svc.mappingService.checkSymbolExists({
         version: ctx.version, kind: "class", name: resolvedClassName,
-        sourceMapping: ctx.requestedMapping, nameMode: "auto", sourcePriority: ctx.currentSourcePriority
+        sourceMapping: ctx.requestedMapping, nameMode: "auto", sourcePriority: ctx.currentSourcePriority,
+        gradleUserHome: ctx.input.gradleUserHome
       });
       if (existenceCheck.resolved) {
         ctx.symbolExistsButSignatureFailed.add(target.className);

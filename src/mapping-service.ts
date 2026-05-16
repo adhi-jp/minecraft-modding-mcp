@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
-import { normalizeOptionalProjectPath } from "./gradle-paths.js";
+import { resolveGradleUserHomePath } from "./gradle-paths.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
 import { collectMatchedJarEntriesAsUtf8 } from "./source-jar-reader.js";
 import type { Config, MappingSourcePriority, SourceMapping } from "./types.js";
@@ -275,7 +275,8 @@ export class MappingService {
       version,
       priority,
       requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
-      input.projectPath
+      input.projectPath,
+      input.gradleUserHome
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
@@ -455,7 +456,8 @@ export class MappingService {
       version,
       priority,
       requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
-      input.projectPath
+      input.projectPath,
+      input.gradleUserHome
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
@@ -552,7 +554,8 @@ export class MappingService {
       version,
       priority,
       requiresOnlyObfuscatedMojangGraph(sourceMapping, targetMapping) ? "obfuscated-mojang-only" : "full",
-      input.projectPath
+      input.projectPath,
+      input.gradleUserHome
     );
     const path = namespacePath(graph, sourceMapping, targetMapping);
 
@@ -677,7 +680,7 @@ export class MappingService {
     }
 
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
-    const graph = await this.loadGraph(version, priority, "full");
+    const graph = await this.loadGraph(version, priority, "full", undefined, input.gradleUserHome);
     const warnings = [...graph.warnings];
     const includeKinds = normalizeIncludedKinds(input.includeKinds);
     const pathCache = new Map<PairKey, SourceMapping[] | undefined>();
@@ -947,7 +950,9 @@ export class MappingService {
     const graph = await this.loadGraph(
       version,
       priority,
-      sourceMapping === "mojang" ? "obfuscated-mojang-only" : "full"
+      sourceMapping === "mojang" ? "obfuscated-mojang-only" : "full",
+      undefined,
+      input.gradleUserHome
     );
     const warnings = [...graph.warnings];
     const records = collectTargetRecords(graph, sourceMapping);
@@ -1294,6 +1299,7 @@ export class MappingService {
     version: string;
     requestedMapping: SourceMapping;
     sourcePriority?: MappingSourcePriority;
+    gradleUserHome?: string;
   }): Promise<{
     mojangMappingsAvailable: boolean;
     tinyMappingsAvailable: boolean;
@@ -1326,7 +1332,9 @@ export class MappingService {
       graph = await this.loadGraph(
         input.version,
         priority,
-        needsTinyMappings ? "full" : "obfuscated-mojang-only"
+        needsTinyMappings ? "full" : "obfuscated-mojang-only",
+        undefined,
+        input.gradleUserHome
       );
     } catch {
       return {
@@ -1376,10 +1384,12 @@ export class MappingService {
     version: string,
     priority: MappingSourcePriority,
     mode: GraphLoadMode,
-    projectPath?: string
+    projectPath?: string,
+    gradleUserHome?: string
   ): Promise<LoadedGraph> {
     const effectiveProjectPath = effectiveLoomSearchProjectPath(projectPath);
-    const cacheKey = `${version}|${priority}|${mode}|${effectiveProjectPath ?? ""}`;
+    const effectiveGradleUserHome = resolveGradleUserHomePath(gradleUserHome);
+    const cacheKey = `${version}|${priority}|${mode}|${effectiveProjectPath ?? ""}|${effectiveGradleUserHome}`;
     const cached = this.graphCache.get(cacheKey);
     if (cached) {
       this.graphCache.delete(cacheKey);
@@ -1392,7 +1402,7 @@ export class MappingService {
       return existingLock;
     }
 
-    const buildPromise = this.buildGraph(version, priority, mode, effectiveProjectPath);
+    const buildPromise = this.buildGraph(version, priority, mode, effectiveProjectPath, effectiveGradleUserHome);
     this.buildLocks.set(cacheKey, buildPromise);
     try {
       const built = await buildPromise;
@@ -1408,7 +1418,8 @@ export class MappingService {
     version: string,
     priority: MappingSourcePriority,
     mode: GraphLoadMode,
-    projectPath?: string
+    projectPath?: string,
+    gradleUserHome?: string
   ): Promise<LoadedGraph> {
     if (isUnobfuscatedVersion(version)) {
       return {
@@ -1446,7 +1457,7 @@ export class MappingService {
       for (const source of mappingSourceOrder(priority)) {
         const tinyLoad =
           source === "loom-cache"
-            ? await this.loadTinyPairsFromLoom(version, projectPath)
+            ? await this.loadTinyPairsFromLoom(version, projectPath, gradleUserHome)
             : await this.loadTinyPairsFromMaven(version);
         if (tinyLoad.pairs.size === 0) {
           deferredTinyWarnings.push(...tinyLoad.warnings);
@@ -1503,8 +1514,12 @@ export class MappingService {
     return loadMojangPairs(this.loaderDeps(), version);
   }
 
-  private async loadTinyPairsFromLoom(version: string, projectPath?: string): Promise<MappingLoaderResult> {
-    return loadTinyPairsFromLoom(version, projectPath);
+  private async loadTinyPairsFromLoom(
+    version: string,
+    projectPath?: string,
+    gradleUserHome?: string
+  ): Promise<MappingLoaderResult> {
+    return loadTinyPairsFromLoom(version, projectPath, gradleUserHome);
   }
 
   private async loadTinyPairsFromMaven(version: string): Promise<MappingLoaderResult> {
@@ -1570,6 +1585,7 @@ export class MappingService {
       input.targetMapping,
       input.sourcePriority ?? "",
       effectiveLoomSearchProjectPath(input.projectPath) ?? "",
+      resolveGradleUserHomePath(input.gradleUserHome),
       effectiveSignatureMode,
       String(input.maxCandidates ?? ""),
       JSON.stringify(input.disambiguation ?? "")

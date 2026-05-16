@@ -77,6 +77,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
+    gradleUserHome: nonEmptyString.optional(),
     preferProjectVersion: z.boolean().optional(),
     strictVersion: z.boolean().optional()
   }),
@@ -86,6 +87,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
+    gradleUserHome: nonEmptyString.optional(),
     preferProjectVersion: z.boolean().optional(),
     strictVersion: z.boolean().optional()
   }),
@@ -96,6 +98,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
+    gradleUserHome: nonEmptyString.optional(),
     preferProjectVersion: z.boolean().optional(),
     strictVersion: z.boolean().optional()
   }),
@@ -120,6 +123,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     projectPath: nonEmptyString,
     mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
+    gradleUserHome: nonEmptyString.optional(),
     preferProjectVersion: z.boolean().optional(),
     strictVersion: z.boolean().optional(),
     focus: workspaceFocusSchema.optional()
@@ -174,6 +178,7 @@ export type InspectMinecraftDeps = {
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
+    gradleUserHome?: string;
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
   }) => Promise<ResolveArtifactOutput>;
@@ -186,6 +191,7 @@ export type InspectMinecraftDeps = {
     descriptor?: string;
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     sourcePriority?: "loom-first" | "maven-first";
+    gradleUserHome?: string;
     nameMode?: "fqcn" | "auto";
     signatureMode?: "exact" | "name-only";
     maxCandidates?: number;
@@ -197,6 +203,7 @@ export type InspectMinecraftDeps = {
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
+    gradleUserHome?: string;
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
     mode?: "metadata" | "snippet" | "full";
@@ -210,6 +217,7 @@ export type InspectMinecraftDeps = {
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
+    gradleUserHome?: string;
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
     maxMembers?: number;
@@ -288,6 +296,7 @@ export function buildClassSubject(
     className: workspaceFocus.className,
     artifact: workspaceFocus.artifact,
     projectPath: subject.projectPath,
+    ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
     mapping: subject.mapping,
     scope: subject.scope,
     preferProjectVersion: subject.preferProjectVersion,
@@ -326,6 +335,7 @@ export async function resolveWorkspaceArtifactReference(
     mapping: subject.mapping,
     scope: subject.scope,
     projectPath: subject.projectPath,
+    ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
     preferProjectVersion: subject.preferProjectVersion,
     strictVersion: subject.strictVersion
   });
@@ -481,6 +491,7 @@ export async function resolveBinaryBackedClass(
   input: {
     version?: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    gradleUserHome?: string;
   }
 ): Promise<{ className: string; warnings: string[] } | undefined> {
   if (!deps.checkSymbolExists || !input.version) {
@@ -493,6 +504,7 @@ export async function resolveBinaryBackedClass(
       kind: "class",
       name: className,
       sourceMapping: input.mapping ?? "obfuscated",
+      ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
       nameMode: className.includes(".") ? "fqcn" : "auto",
       maxCandidates: 10
     });
@@ -545,6 +557,7 @@ export async function resolveArtifactReference(
       mapping: subject.mapping,
       scope: subject.scope,
       projectPath: subject.projectPath,
+      ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
       preferProjectVersion: subject.preferProjectVersion,
       strictVersion: subject.strictVersion
     });
@@ -568,6 +581,7 @@ export async function resolveArtifactReference(
     mapping: subject.mapping,
     scope: subject.scope,
     projectPath: subject.projectPath,
+    ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
     preferProjectVersion: subject.preferProjectVersion ?? true,
     strictVersion: subject.strictVersion
   });
@@ -596,6 +610,7 @@ async function resolveArtifactRef(
     mapping: "mapping" in subject ? subject.mapping : undefined,
     scope: "scope" in subject ? subject.scope : undefined,
     projectPath: "projectPath" in subject ? subject.projectPath : undefined,
+    ...("gradleUserHome" in subject && subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
     preferProjectVersion: "preferProjectVersion" in subject ? subject.preferProjectVersion : undefined,
     strictVersion: "strictVersion" in subject ? subject.strictVersion : undefined
   });

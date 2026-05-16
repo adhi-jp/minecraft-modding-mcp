@@ -178,7 +178,8 @@ export async function traceSymbolLifecycle(svc: SourceService, input: TraceSymbo
             version,
             mapping,
             input.sourcePriority,
-            versionWarnings
+            versionWarnings,
+            input.gradleUserHome
           ),
           resolveToObfuscatedMemberName(
             svc,
@@ -189,7 +190,8 @@ export async function traceSymbolLifecycle(svc: SourceService, input: TraceSymbo
             version,
             mapping,
             input.sourcePriority,
-            versionWarnings
+            versionWarnings,
+            input.gradleUserHome
           ),
           svc.versionService.resolveVersionJar(version)
         ]);
