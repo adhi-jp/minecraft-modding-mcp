@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 
 import { createError, ERROR_CODES } from "./errors.js";
-import { assertJavaAvailable, runJavaProcess } from "./java-process.js";
+import { javaRunner } from "./java-process.js";
 import { log } from "./logger.js";
 
 export interface RemapOptions {
@@ -37,7 +37,7 @@ export async function remapJar(
     maxMemoryMb = 4096
   } = options;
 
-  await assertJavaAvailable();
+  await javaRunner.assertAvailable();
 
   log("info", "remap.start", {
     inputJar,
@@ -58,7 +58,7 @@ export async function remapJar(
   }
 
   try {
-    const result = await runJavaProcess({
+    const result = await javaRunner.run({
       jarPath: tinyRemapperJarPath,
       args,
       timeoutMs,

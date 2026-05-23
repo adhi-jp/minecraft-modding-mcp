@@ -169,3 +169,13 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
     });
   });
 }
+
+// Mutable container that lets tests stub the Java subprocess boundary via
+// `mock.method(javaRunner, "run", ...)` without rewriting ESM named imports.
+export const javaRunner: {
+  run: (options: JavaProcessOptions) => Promise<JavaProcessResult>;
+  assertAvailable: () => Promise<void>;
+} = {
+  run: runJavaProcess,
+  assertAvailable: assertJavaAvailable
+};
