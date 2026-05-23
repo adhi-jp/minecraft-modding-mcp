@@ -140,3 +140,53 @@ test("ArtifactContentsSummary sourceCoverage contract only allows full or partia
   );
   assert.doesNotMatch(sourceService, /sourceCoverage: "full" \| "partial" \| "unknown";/);
 });
+
+test("README, tool-reference, and CHANGELOG all reference the 5 top-level workflow tools (triangle parity)", async () => {
+  const [readme, toolRef, changelog] = await Promise.all([
+    readFile("README.md", "utf8"),
+    readFile("docs/tool-reference.md", "utf8"),
+    readFile("CHANGELOG.md", "utf8")
+  ]);
+  for (const tool of [
+    "inspect-minecraft",
+    "analyze-symbol",
+    "compare-minecraft",
+    "analyze-mod",
+    "validate-project"
+  ]) {
+    assert.ok(readme.includes(tool), `README.md must mention "${tool}"`);
+    assert.ok(toolRef.includes(tool), `docs/tool-reference.md must mention "${tool}"`);
+    assert.ok(changelog.includes(tool), `CHANGELOG.md must mention "${tool}" somewhere in release history`);
+  }
+});
+
+test("README, tool-reference, and CHANGELOG all reference the 4 batch tools (triangle parity)", async () => {
+  const [readme, toolRef, changelog] = await Promise.all([
+    readFile("README.md", "utf8"),
+    readFile("docs/tool-reference.md", "utf8"),
+    readFile("CHANGELOG.md", "utf8")
+  ]);
+  for (const tool of [
+    "batch-class-source",
+    "batch-class-members",
+    "batch-symbol-exists",
+    "batch-mappings"
+  ]) {
+    assert.ok(readme.includes(tool), `README.md must mention batch tool "${tool}"`);
+    assert.ok(toolRef.includes(tool), `docs/tool-reference.md must mention batch tool "${tool}"`);
+    assert.ok(changelog.includes(tool), `CHANGELOG.md must mention batch tool "${tool}"`);
+  }
+});
+
+test("README and tool-reference both document the removed-mapping migration token", async () => {
+  const [readme, toolRef] = await Promise.all([
+    readFile("README.md", "utf8"),
+    readFile("docs/tool-reference.md", "utf8")
+  ]);
+  // tool-reference owns the canonical migration note; README cross-links the
+  // tool-reference, so the existence of either reference here is enough — but
+  // we pin both for visibility.
+  assert.ok(toolRef.includes("official"), "tool-reference.md must keep the `official` migration note");
+  // README must at least point at tool-reference.
+  assert.ok(/tool-reference/.test(readme), "README.md must link to docs/tool-reference.md");
+});
