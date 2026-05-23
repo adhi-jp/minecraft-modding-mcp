@@ -44,7 +44,11 @@ const EXPECTED_TOOLS = [
   "get-mod-class-source",
   "search-mod-source",
   "remap-mod-jar",
-  "verify-mixin-target"
+  "verify-mixin-target",
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
 ] as const;
 
 test("registry contains every public tool from EXPECTED_TOOLS after server import", async () => {
@@ -118,4 +122,44 @@ test("listRegisteredTools returns names in sorted order", async () => {
 // mkdtemp side-effect to keep `tmpdir` / `mkdtemp` imports live for lint.
 test.before(async () => {
   await mkdtemp(join(tmpdir(), "mcp-tool-schema-registry-pre-"));
+});
+
+test("registry tool count matches EXPECTED_TOOLS length exactly (no extra registrations leak)", async () => {
+  await import("../src/index.ts");
+  const { listRegisteredTools } = await import("../src/tool-schema-registry.ts");
+  const registered = listRegisteredTools();
+  // EXPECTED_TOOLS represents the public tool surface this file pins. Filter
+  // out internal test-tool names introduced via registerToolSchema in other
+  // tests (their names start with `__test-tool-`).
+  const publicTools = registered.filter((name) => !name.startsWith("__test-tool-"));
+  assert.equal(
+    publicTools.length,
+    EXPECTED_TOOLS.length,
+    `expected ${EXPECTED_TOOLS.length} public tools, got ${publicTools.length}: ${publicTools.join(", ")}`
+  );
+});
+
+test("registry does NOT contain removed/legacy tool names from earlier renames", async () => {
+  await import("../src/index.ts");
+  const { listRegisteredTools } = await import("../src/tool-schema-registry.ts");
+  const registered = new Set(listRegisteredTools());
+  for (const removed of [
+    // pre-rename top-level workflow names should never resurrect under their
+    // older identifiers.
+    "official",
+    "targetKind",
+    "snippetLines",
+    "inspect-mc-class",
+    "explore-mod"
+  ]) {
+    assert.ok(
+      !registered.has(removed),
+      `tool-schema-registry must NOT contain removed tool name "${removed}"`
+    );
+  }
+});
+
+test("EXPECTED_TOOLS list contains no duplicates", () => {
+  const unique = new Set(EXPECTED_TOOLS);
+  assert.equal(unique.size, EXPECTED_TOOLS.length, "EXPECTED_TOOLS must not have duplicates");
 });

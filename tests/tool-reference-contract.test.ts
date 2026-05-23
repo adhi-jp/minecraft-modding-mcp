@@ -144,3 +144,26 @@ test("tool-reference.md documents the verify-mixin-target tool and accessorAdvic
     assert.ok(doc.includes(token), `tool-reference.md must mention verify-mixin-target token "${token}"`);
   }
 });
+
+test("tool-reference.md references all 5 top-level workflow tools (post-rename)", async () => {
+  const doc = await loadDoc();
+  for (const tool of [
+    "inspect-minecraft",
+    "analyze-symbol",
+    "compare-minecraft",
+    "analyze-mod",
+    "validate-project"
+  ]) {
+    assert.ok(doc.includes(tool), `tool-reference.md must reference top-level tool "${tool}"`);
+  }
+});
+
+test("tool-reference.md preserves migration guidance for removed legacy tokens", async () => {
+  const doc = await loadDoc();
+  for (const token of ["official", "targetKind"]) {
+    assert.ok(
+      doc.includes(token),
+      `tool-reference.md must keep the migration note for removed token "${token}"`
+    );
+  }
+});
