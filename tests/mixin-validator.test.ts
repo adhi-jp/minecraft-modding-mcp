@@ -2540,3 +2540,91 @@ test("loadMixinStageBudgets allows test-only override of individual stages", () 
   // unspecified stages keep defaults
   assert.equal(budgets.resolve, 15_000);
 });
+
+import { validateMixinSchema } from "../src/tool-schemas.ts";
+
+// --- Phase 1A–3C param surface guards via Zod schema -------------------------
+
+test("validateMixinSchema accepts every Phase 1A–3C parameter value (reportMode, warningCategoryFilter, etc.)", () => {
+  const base = {
+    input: { mode: "inline", source: "class M {}" },
+    version: "1.21.10"
+  } as const;
+
+  // reportMode default is "full"
+  const defaults = validateMixinSchema.parse(base);
+  assert.equal(defaults.reportMode, "full");
+  assert.equal(defaults.treatInfoAsWarning, true);
+  assert.equal(defaults.preferProjectMapping, false);
+  assert.equal(defaults.includeIssues, true);
+  assert.equal(defaults.warningCategoryFilter, undefined);
+
+  for (const reportMode of ["compact", "full", "summary-first"] as const) {
+    const out = validateMixinSchema.parse({ ...base, reportMode });
+    assert.equal(out.reportMode, reportMode);
+  }
+
+  for (const category of ["mapping", "configuration", "validation", "resolution", "parse"] as const) {
+    const out = validateMixinSchema.parse({ ...base, warningCategoryFilter: [category] });
+    assert.deepEqual(out.warningCategoryFilter, [category]);
+  }
+
+  const both = validateMixinSchema.parse({
+    ...base,
+    preferProjectMapping: true,
+    treatInfoAsWarning: false,
+    includeIssues: false
+  });
+  assert.equal(both.preferProjectMapping, true);
+  assert.equal(both.treatInfoAsWarning, false);
+  assert.equal(both.includeIssues, false);
+});
+
+test("validateMixinSchema rejects unknown reportMode and unknown warningCategoryFilter values", () => {
+  const base = {
+    input: { mode: "inline", source: "class M {}" },
+    version: "1.21.10"
+  } as const;
+  assert.throws(() => validateMixinSchema.parse({ ...base, reportMode: "verbose" as any }));
+  assert.throws(() =>
+    validateMixinSchema.parse({ ...base, warningCategoryFilter: ["unknown-cat" as any] })
+  );
+});
+
+test("validateMixinSchema config mode accepts an array of mixin config paths (Phase 3A multi-config)", () => {
+  const parsed = validateMixinSchema.parse({
+    input: { mode: "config", configPaths: ["src/main/resources/mod.mixins.json", "other.mixins.json"] },
+    version: "1.21.10"
+  });
+  assert.equal(parsed.input.mode, "config");
+  assert.deepEqual(
+    (parsed.input as Extract<typeof parsed.input, { mode: "config" }>).configPaths,
+    ["src/main/resources/mod.mixins.json", "other.mixins.json"]
+  );
+});
+
+test("validateMixinSchema input modes are mutually exclusive (paths vs configPaths)", () => {
+  // mode: "paths" requires `paths`, not `configPaths`
+  assert.throws(() =>
+    validateMixinSchema.parse({
+      input: { mode: "paths", configPaths: ["x"] } as any,
+      version: "1.21.10"
+    })
+  );
+  // mode: "config" requires `configPaths`, not `paths`
+  assert.throws(() =>
+    validateMixinSchema.parse({
+      input: { mode: "config", paths: ["x"] } as any,
+      version: "1.21.10"
+    })
+  );
+});
+
+test("validateMixinSchema config mode requires a non-empty configPaths array", () => {
+  assert.throws(() =>
+    validateMixinSchema.parse({
+      input: { mode: "config", configPaths: [] },
+      version: "1.21.10"
+    })
+  );
+});
