@@ -1580,3 +1580,39 @@ test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)"
   const keysWithoutCompact = Object.keys(withoutCompact.structuredContent?.result ?? {}).sort();
   assert.deepEqual(keysWithCompact, keysWithoutCompact);
 });
+
+test("EXPECTED_TOOLS is locked at length 41 (bidirectional with tool registry)", async () => {
+  // Literal magic-number fix: when this fires, update BOTH this assertion
+  // and the EXPECTED_TOOLS array above to keep the public contract pinned.
+  assert.equal(EXPECTED_TOOLS.length, 41);
+});
+
+test("EXPECTED_TOOLS matches the registered tool-schema-registry set (set equivalence)", async () => {
+  await import("../src/index.ts");
+  const { listRegisteredTools } = await import("../src/tool-schema-registry.ts");
+  const registered = new Set(
+    listRegisteredTools().filter((name) => !name.startsWith("__test-tool-"))
+  );
+  const expected = new Set(EXPECTED_TOOLS);
+  // bidirectional equivalence
+  for (const name of expected) {
+    assert.ok(registered.has(name), `EXPECTED_TOOLS has ${name} but registry does not`);
+  }
+  for (const name of registered) {
+    assert.ok(expected.has(name), `registry has ${name} but EXPECTED_TOOLS does not`);
+  }
+  assert.equal(registered.size, expected.size);
+});
+
+test("EXPECTED_TOOLS excludes every removed legacy tool name (negative-list)", () => {
+  const expected = new Set<string>(EXPECTED_TOOLS);
+  for (const removed of [
+    "official",
+    "targetKind",
+    "snippetLines",
+    "inspect-mc-class",
+    "explore-mod"
+  ]) {
+    assert.ok(!expected.has(removed), `EXPECTED_TOOLS must not contain removed name "${removed}"`);
+  }
+});
