@@ -47,6 +47,11 @@ function resolveTagName(tagId: number, pointer: string): NbtTagName {
   return tagName;
 }
 
+// Java NBT TAG_String uses MUTF-8 (Mojang's on-disk format matches the JVM
+// `DataInput/OutputStream.{read,write}UTF` contract), which differs from UTF-8
+// for two ranges: `U+0000` encodes as `C0 80`, and supplementary code points
+// (`U+10000`+) encode as two 3-byte sequences for the UTF-16 surrogate pair
+// (6 bytes total). All other characters share the UTF-8 byte sequence.
 function mutf8ByteLength(value: string): number {
   let length = 0;
   for (let i = 0; i < value.length; i += 1) {

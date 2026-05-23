@@ -74,10 +74,6 @@ test("remapJar invokes javaRunner via mockJavaRunner helper (mock smoke)", async
   ]);
 });
 
-// Note: default-value propagation is covered by the mock-based assertions
-// further down (`propagates default timeoutMs / maxMemoryMb and
-// normalizePathArgs`), so a separate type-only smoke is unnecessary.
-
 async function buildRemapFixture(prefix: string): Promise<{
   root: string;
   inputJar: string;

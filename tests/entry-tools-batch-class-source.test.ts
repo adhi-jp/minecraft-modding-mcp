@@ -422,10 +422,8 @@ test("top-level resolution failure surfaces as a thrown error (no results array)
 });
 
 test("BATCH_TOOLS_OFF env constant is exported (env-driven kill switch wiring)", async () => {
+  // `src/index.ts` gates the four batch-tool registrations on this value, so
+  // it must stay boolean even if the env-reading logic is refactored.
   const mod = await import("../src/entry-tools/batch-runner.ts");
-  // Whatever the current runtime evaluates to (true / false), it must always
-  // be a boolean — `BATCH_TOOLS_OFF` is set at module-load time from
-  // `process.env.BATCH_TOOLS_OFF === "1"`, and src/index.ts gates the four
-  // batch tool registrations on this value.
   assert.equal(typeof mod.BATCH_TOOLS_OFF, "boolean");
 });

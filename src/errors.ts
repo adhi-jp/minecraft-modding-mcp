@@ -65,6 +65,9 @@ export class AppError extends Error {
 
 export const createError = (payload: ErrorPayload): AppError => new AppError(payload);
 
+// Narrow strictly by class identity. Duck-typing on `code` would also accept
+// arbitrary Errors whose `details` may leak unsanitised context (paths, tokens)
+// into AppError handling paths.
 export const isAppError = (value: unknown): value is AppError => {
   return value instanceof AppError;
 };
