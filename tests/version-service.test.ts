@@ -356,3 +356,70 @@ test("resolveServerJar rejects versions without a server download URL", async ()
     }
   );
 });
+
+test("resolveVersionJar deduplicates concurrent calls and releases the lock when all complete", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-lock-concurrent-"));
+  const jarBytes = Buffer.from("fake-jar-content");
+  const sha1 = createHash("sha1").update(jarBytes).digest("hex");
+  const config = buildTestConfig(root);
+  let jarFetchCount = 0;
+  const fetchFn = (async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("version_manifest")) {
+      return new Response(JSON.stringify({
+        latest: { release: "1.21.4" },
+        versions: [{ id: "1.21.4", type: "release", url: "https://example.test/detail.json" }]
+      }), { status: 200 });
+    }
+    if (url === "https://example.test/detail.json") {
+      return new Response(JSON.stringify({
+        id: "1.21.4",
+        downloads: { client: { url: "https://example.test/client.jar", sha1 } }
+      }), { status: 200 });
+    }
+    if (url === "https://example.test/client.jar") {
+      jarFetchCount += 1;
+      return new Response(jarBytes, { status: 200 });
+    }
+    return new Response("", { status: 404 });
+  }) as typeof fetch;
+  const svc = new VersionService(config, fetchFn);
+
+  const [a, b, c] = await Promise.all([
+    svc.resolveVersionJar("1.21.4"),
+    svc.resolveVersionJar("1.21.4"),
+    svc.resolveVersionJar("1.21.4")
+  ]);
+  assert.equal(a.jarPath, b.jarPath);
+  assert.equal(b.jarPath, c.jarPath);
+  assert.equal(jarFetchCount, 1, "single in-flight download must serve all 3 concurrent callers");
+
+  // After all three promises settle the lock map must be empty so the next
+  // call is not blocked on a stale promise reference.
+  const lockMap = (svc as unknown as { resolveLocks: Map<string, unknown> }).resolveLocks;
+  assert.equal(lockMap.size, 0, "resolveLocks map must be empty after all callers finish");
+});
+
+test("resolveVersionJar releases the lock when the resolution rejects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-lock-reject-"));
+  const config = buildTestConfig(root);
+  const failingFetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("version_manifest")) {
+      return new Response(JSON.stringify({
+        latest: { release: "9.9.9" },
+        versions: [{ id: "9.9.9", type: "release", url: "https://example.test/detail.json" }]
+      }), { status: 200 });
+    }
+    if (url === "https://example.test/detail.json") {
+      return new Response("", { status: 500 });
+    }
+    return new Response("", { status: 404 });
+  }) as typeof fetch;
+  const svc = new VersionService(config, failingFetch);
+
+  await assert.rejects(() => svc.resolveVersionJar("9.9.9"));
+
+  const lockMap = (svc as unknown as { resolveLocks: Map<string, unknown> }).resolveLocks;
+  assert.equal(lockMap.size, 0, "lock must be released even when the underlying resolution rejects");
+});
