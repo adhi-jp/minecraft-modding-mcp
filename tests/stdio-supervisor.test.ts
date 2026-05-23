@@ -605,3 +605,156 @@ test("buildSyntheticCallToolResult omits suggestedCall when toolArgsRedacted und
   };
   assert.equal(reply.result.structuredContent.error.suggestedCall, undefined);
 });
+
+// --- new pure-function edges ------------------------------------------------
+
+test("decideRetryRecommendation maps SIGSEGV and SIGKILL to clear-cache", () => {
+  const ctxBase = { toolName: "validate-mixin", lastStage: undefined, lastStageMeta: undefined };
+  const segv = decideRetryRecommendation(
+    { ...ctxBase, exit: { code: null, signal: "SIGSEGV" } },
+    []
+  );
+  const kill = decideRetryRecommendation(
+    { ...ctxBase, exit: { code: null, signal: "SIGKILL" } },
+    []
+  );
+  assert.equal(segv, "clear-cache");
+  assert.equal(kill, "clear-cache");
+});
+
+test("decideRetryRecommendation: SIGTERM does NOT map to clear-cache (default branch)", () => {
+  const result = decideRetryRecommendation(
+    { toolName: "x", lastStage: undefined, lastStageMeta: undefined, exit: { code: null, signal: "SIGTERM" } },
+    []
+  );
+  assert.equal(result, "same-request");
+});
+
+test("decideRetryRecommendation: target-lookup boundary at targetTotal === 5 (no narrow-query) and 6 (narrow-query)", () => {
+  const make = (targetTotal: unknown) =>
+    decideRetryRecommendation(
+      {
+        toolName: "validate-mixin",
+        lastStage: "target-lookup",
+        lastStageMeta: { targetTotal } as Record<string, unknown>,
+        exit: baseExit
+      },
+      []
+    );
+  assert.equal(make(5), "same-request");
+  assert.equal(make(6), "narrow-query");
+  assert.equal(make(undefined), "same-request");
+  assert.equal(make("12"), "same-request");
+  assert.equal(make(Number.NaN), "same-request");
+});
+
+test("decideRetryRecommendation: repeated restart threshold yields report-bug only at >= threshold", () => {
+  const ctx = { toolName: "x", lastStage: undefined, lastStageMeta: undefined, exit: baseExit };
+  // RESTART_REPEAT_THRESHOLD is 3 according to existing test fixtures
+  assert.equal(decideRetryRecommendation(ctx, [1, 2]), "same-request");
+  assert.equal(decideRetryRecommendation(ctx, [1, 2, 3]), "report-bug");
+});
+
+test("buildSyntheticCallToolResult hints carry the recommendation phrase for each branch", () => {
+  const id = "id-1";
+  const baseCtx: RestartContext = {
+    toolName: "validate-mixin",
+    lastStage: "target-lookup",
+    lastStageMeta: { targetIndex: 9, targetTotal: 12 },
+    lastStageStartedAt: 1000,
+    exit: baseExit,
+    retryRecommendation: "narrow-query",
+    toolArgsRedacted: undefined,
+    toolArgsRedactedModified: false
+  };
+  const checkHint = (recommendation: RestartContext["retryRecommendation"], re: RegExp) => {
+    const reply = buildSyntheticCallToolResult(id, {
+      ...baseCtx,
+      retryRecommendation: recommendation
+    });
+    const result = (reply as any).result;
+    const error = result.structuredContent.error;
+    assert.ok(
+      Array.isArray(error.hints) && re.test(error.hints[0]),
+      `expected hint for ${recommendation} to match ${re}, got: ${JSON.stringify(error.hints)}`
+    );
+  };
+  checkHint("narrow-query", /narrow mixinConfigPath to one file and retry/);
+  checkHint("clear-cache", /clear cache and retry/);
+  checkHint("report-bug", /report a bug/);
+  checkHint("same-request", /retry the same request/);
+});
+
+test("buildSyntheticCallToolResult hints fall back to stage-tracking-began message when lastStage is undefined", () => {
+  const reply = buildSyntheticCallToolResult("id-2", {
+    toolName: "validate-mixin",
+    lastStage: undefined,
+    lastStageMeta: undefined,
+    lastStageStartedAt: undefined,
+    exit: baseExit,
+    retryRecommendation: "same-request",
+    toolArgsRedacted: undefined,
+    toolArgsRedactedModified: false
+  });
+  const error = (reply as any).result.structuredContent.error;
+  assert.deepEqual(error.hints, ["worker exited before stage tracking began"]);
+});
+
+test("pruneRestartTimestamps keeps timestamps equal to the cutoff and drops the value 1 ms older", () => {
+  const now = 100_000;
+  const window = 60_000;
+  const cutoff = now - window;
+  const result = pruneRestartTimestamps([cutoff, cutoff - 1, cutoff + 1], now, window);
+  assert.deepEqual(result, [cutoff, cutoff + 1]);
+});
+
+test("redactToolArgs preserves long PRESERVED_PATH_KEYS values without truncation", () => {
+  const long = "/" + "a".repeat(400);
+  const { args, modified } = redactToolArgs({
+    projectPath: long,
+    sourcePath: long,
+    mixinConfigPath: long
+  });
+  assert.equal(args.projectPath, long);
+  assert.equal(args.sourcePath, long);
+  assert.equal(args.mixinConfigPath, long);
+  assert.equal(modified, false);
+});
+
+test("redactToolArgs redacts secret-like keys whose name is NOT a preserved path", () => {
+  const { args, modified } = redactToolArgs({ tokenPath: "/usr/local/secret.token" });
+  assert.equal(args.tokenPath, "<redacted>");
+  assert.equal(modified, true);
+});
+
+test("redactToolArgs truncates long strings inside arrays", () => {
+  const { args, modified } = redactToolArgs({
+    items: ["x".repeat(300), "short"]
+  });
+  const items = args.items as unknown[];
+  assert.match(String(items[0]), /^<truncated:\d+ bytes>$/);
+  assert.equal(items[1], "short");
+  assert.equal(modified, true);
+});
+
+test("buildWorkerRestartReply yields a structured envelope without throwing when lastStageStartedAt is undefined", () => {
+  const { reply } = buildWorkerRestartReply(
+    {
+      id: "id-3",
+      method: "tools/call",
+      toolName: "validate-mixin",
+      startedAt: 1000,
+      lastStage: undefined,
+      lastStageStartedAt: undefined,
+      lastStageMeta: undefined
+    } as PendingRequestSnapshot,
+    baseExit,
+    9999,
+    []
+  );
+  // structured (CallToolResult) envelope path: result.structuredContent.error.hints
+  const error = (reply as any).result?.structuredContent?.error;
+  assert.ok(error && typeof error === "object", "expected structured restart envelope");
+  // hints fallback when lastStage is undefined
+  assert.deepEqual(error.hints, ["worker exited before stage tracking began"]);
+});
