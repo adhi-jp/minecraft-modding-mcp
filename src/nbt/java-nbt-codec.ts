@@ -47,6 +47,74 @@ function resolveTagName(tagId: number, pointer: string): NbtTagName {
   return tagName;
 }
 
+function mutf8ByteLength(value: string): number {
+  let length = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c === 0x0000) {
+      length += 2;
+    } else if (c <= 0x007f) {
+      length += 1;
+    } else if (c <= 0x07ff) {
+      length += 2;
+    } else {
+      length += 3;
+    }
+  }
+  return length;
+}
+
+function encodeMutf8(value: string): Buffer {
+  const buffer = Buffer.allocUnsafe(mutf8ByteLength(value));
+  let offset = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c === 0x0000) {
+      buffer[offset++] = 0xc0;
+      buffer[offset++] = 0x80;
+    } else if (c <= 0x007f) {
+      buffer[offset++] = c;
+    } else if (c <= 0x07ff) {
+      buffer[offset++] = 0xc0 | (c >> 6);
+      buffer[offset++] = 0x80 | (c & 0x3f);
+    } else {
+      buffer[offset++] = 0xe0 | (c >> 12);
+      buffer[offset++] = 0x80 | ((c >> 6) & 0x3f);
+      buffer[offset++] = 0x80 | (c & 0x3f);
+    }
+  }
+  return buffer;
+}
+
+function decodeMutf8(buffer: Buffer, start: number, end: number): string {
+  const codeUnits: number[] = [];
+  let i = start;
+  while (i < end) {
+    const b0 = buffer[i++]!;
+    if ((b0 & 0x80) === 0) {
+      codeUnits.push(b0);
+    } else if ((b0 & 0xe0) === 0xc0) {
+      if (i >= end) {
+        throw parseError("Truncated MUTF-8 2-byte sequence.", { offset: i - 1 });
+      }
+      const b1 = buffer[i++]!;
+      codeUnits.push(((b0 & 0x1f) << 6) | (b1 & 0x3f));
+    } else if ((b0 & 0xf0) === 0xe0) {
+      if (i + 1 >= end) {
+        throw parseError("Truncated MUTF-8 3-byte sequence.", { offset: i - 1 });
+      }
+      const b1 = buffer[i++]!;
+      const b2 = buffer[i++]!;
+      codeUnits.push(((b0 & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f));
+    } else {
+      throw parseError("Invalid MUTF-8 lead byte.", { byte: b0, offset: i - 1 });
+    }
+  }
+  // NBT TAG_String is bounded by uint16 length so codeUnits.length <= 65535,
+  // safely within String.fromCharCode's argument cap.
+  return String.fromCharCode(...codeUnits);
+}
+
 class NbtReader {
   private offset = 0;
 
@@ -121,7 +189,7 @@ class NbtReader {
   readString(): string {
     const byteLength = this.readUInt16();
     this.ensure(byteLength);
-    const value = this.buffer.toString("utf8", this.offset, this.offset + byteLength);
+    const value = decodeMutf8(this.buffer, this.offset, this.offset + byteLength);
     this.offset += byteLength;
     return value;
   }
@@ -183,7 +251,7 @@ class NbtWriter {
   }
 
   writeString(value: string): void {
-    const encoded = Buffer.from(value, "utf8");
+    const encoded = encodeMutf8(value);
     if (encoded.length > 0xffff) {
       throw encodeError("NBT string length exceeds uint16.", { byteLength: encoded.length });
     }
