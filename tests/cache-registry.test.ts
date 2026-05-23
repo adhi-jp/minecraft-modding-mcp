@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -329,6 +329,14 @@ test("cache registry deleteEntries(executionMode='preview') does not delete file
   assert.equal(preview.deletedEntries, 1, "preview must still report the matched count");
   assert.ok(preview.deletedBytes > 0, "preview must still report the matched bytes");
   assert.equal(existsSync(jarPath), true, "preview must NOT delete the file on disk");
+  // Verify the bytes are intact, not silently truncated/replaced by a partial
+  // write. Just checking existsSync would miss a regression that opens with
+  // O_TRUNC then aborts.
+  assert.equal(
+    await readFile(jarPath, "utf8"),
+    "remapped-jar-bytes",
+    "preview must leave the jar bytes intact"
+  );
 });
 
 test("cache registry listEntries rejects invalid `olderThan` selector with ERR_INVALID_INPUT", async () => {

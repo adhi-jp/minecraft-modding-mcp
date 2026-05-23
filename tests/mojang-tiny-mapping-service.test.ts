@@ -22,7 +22,11 @@ function makeFetchStub(table: FetchTable): typeof fetch {
           : input.url;
     const entry = table[url];
     if (!entry) {
-      return new Response("not in table", { status: 404 });
+      // Fail loudly on unexpected URLs. A silent 404 here can mask a SUT
+      // change that introduces a new download/manifest hop, because the
+      // existing warning paths would absorb the 404 and the test would still
+      // appear to succeed.
+      throw new Error(`makeFetchStub: unexpected URL "${url}" (not declared in the table)`);
     }
     if ("failWith" in entry) {
       const error = new Error("aborted");

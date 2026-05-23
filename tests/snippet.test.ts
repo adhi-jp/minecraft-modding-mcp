@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import test from "node:test";
@@ -406,7 +406,13 @@ test("getClassSource outputFile (relative) is resolved to absolute path before w
     }
   });
 
+  // Resolve the relative path from the test's mkdtemp dir, not from
+  // process.cwd(). That way the test never writes outside its sandbox and
+  // failure on cleanup cannot leak files into the repository checkout.
+  const relRoot = await mkdtemp(join(tmpdir(), "snippet-outputfile-rel-cwd-"));
   const relName = `snippet-rel-${process.pid}.java`;
+  const previousCwd = process.cwd();
+  process.chdir(relRoot);
   try {
     const result = await service.getClassSource({
       artifactId,
@@ -414,18 +420,16 @@ test("getClassSource outputFile (relative) is resolved to absolute path before w
       mode: "full",
       outputFile: relName
     });
+    const expected = resolvePath(relRoot, relName);
     assert.equal(typeof result.outputFile, "string");
     assert.equal(isAbsolute(result.outputFile!), true);
-    assert.equal(result.outputFile, resolvePath(relName));
+    assert.equal(result.outputFile, expected);
+    // The relative-path contract is only meaningful if the file was actually
+    // written to the resolved absolute path — verify the content reaches disk.
+    const written = await readFile(expected, "utf8");
+    assert.match(written, /class Out/);
   } finally {
-    // best-effort cleanup
-    await readFile(resolvePath(relName)).catch(() => undefined).then(async (buf) => {
-      if (buf) {
-        await writeFile(resolvePath(relName), Buffer.alloc(0));
-        const fs = await import("node:fs/promises");
-        await fs.unlink(resolvePath(relName)).catch(() => undefined);
-      }
-    });
+    process.chdir(previousCwd);
   }
 });
 
