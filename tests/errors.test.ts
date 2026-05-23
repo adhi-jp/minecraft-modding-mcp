@@ -31,3 +31,44 @@ test("new error codes are part of the ErrorCode union", () => {
   assert.ok(values.includes("ERR_WORKSPACE_VERSION_UNRESOLVED" as ErrorCode));
   assert.ok(values.includes("ERR_DEPENDENCY_VERSION_UNRESOLVED" as ErrorCode));
 });
+
+import { AppError, createError, isAppError } from "../src/errors.ts";
+
+test("isAppError returns true for AppError instances created via createError", () => {
+  const err = createError({ code: ERROR_CODES.INVALID_INPUT, message: "bad", details: { x: 1 } });
+  assert.equal(isAppError(err), true);
+});
+
+test("isAppError returns false for arbitrary Error objects with a `code` property", () => {
+  const masquerade = Object.assign(new Error("/secret/path"), { code: "ERR_FAKE" });
+  assert.equal(
+    isAppError(masquerade),
+    false,
+    "isAppError must NOT accept plain Errors that merely set a `code` field — that lets unrelated errors leak through AppError handling"
+  );
+});
+
+test("isAppError returns false for non-Error values that look error-like", () => {
+  assert.equal(isAppError({ code: "ERR_FAKE", message: "x" }), false);
+  assert.equal(isAppError({ code: "ERR_FAKE" }), false);
+  assert.equal(isAppError(null), false);
+  assert.equal(isAppError(undefined), false);
+  assert.equal(isAppError("ERR_FAKE"), false);
+});
+
+test("isAppError narrows the type so callers can read AppError fields safely", () => {
+  const err: unknown = createError({ code: ERROR_CODES.INVALID_INPUT, message: "x", details: { y: 2 } });
+  if (isAppError(err)) {
+    // Compile-time: err is AppError. Runtime: code and details are accessible.
+    assert.equal(err.code, ERROR_CODES.INVALID_INPUT);
+    assert.deepEqual(err.details, { y: 2 });
+  } else {
+    assert.fail("createError result must be recognised by isAppError");
+  }
+});
+
+test("AppError carries name === 'AppError' for diagnostic logging", () => {
+  const err = createError({ code: ERROR_CODES.INVALID_INPUT, message: "x" });
+  assert.ok(err instanceof AppError);
+  assert.equal(err.name, "AppError");
+});

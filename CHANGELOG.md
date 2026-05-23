@@ -9,6 +9,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 - Mojang binary-remap cache writes recover from corrupt `<cacheDir>/remapped/<artifactId>.jar` directories instead of surfacing raw `ENOTEMPTY`, and `manage-cache` can list and delete those corrupt `binary-remap` entries by `selector.artifactId`.
+- `isAppError(value)` now narrows to `AppError` via `instanceof AppError` instead of `Error & { code: string }`. Plain `Error` objects that happen to carry a `code` field no longer pass the guard, so unrelated errors can no longer leak through `AppError`-specific error handling.
 
 ## [4.2.0] - 2026-05-17
 

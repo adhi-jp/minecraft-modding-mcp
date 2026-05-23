@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ERROR_CODES } from "../src/errors.ts";
+import { createError, ERROR_CODES } from "../src/errors.ts";
 import type { Config } from "../src/types.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
 import { withGradleUserHome } from "./helpers/env.ts";
@@ -5114,15 +5114,11 @@ test("SourceService diffClassSignatures reports class added and absent_in_both s
       }
 
       if (input.fqn === "net.minecraft.server.AlwaysMissing") {
-        const error = new Error("missing") as Error & { code: string };
-        error.code = ERROR_CODES.CLASS_NOT_FOUND;
-        throw error;
+        throw createError({ code: ERROR_CODES.CLASS_NOT_FOUND, message: "missing" });
       }
 
       if (version === "1.0.0") {
-        const error = new Error("missing") as Error & { code: string };
-        error.code = ERROR_CODES.CLASS_NOT_FOUND;
-        throw error;
+        throw createError({ code: ERROR_CODES.CLASS_NOT_FOUND, message: "missing" });
       }
 
       return {

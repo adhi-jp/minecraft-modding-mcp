@@ -66,5 +66,5 @@ export class AppError extends Error {
 export const createError = (payload: ErrorPayload): AppError => new AppError(payload);
 
 export const isAppError = (value: unknown): value is AppError => {
-  return value instanceof Error && (value as AppError).code !== undefined;
+  return value instanceof AppError;
 };
