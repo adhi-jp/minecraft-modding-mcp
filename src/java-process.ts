@@ -4,7 +4,7 @@ import { createError, ERROR_CODES } from "./errors.js";
 import { normalizePathForHost } from "./path-converter.js";
 
 const JAVA_CHECK_TIMEOUT_MS = 2_000;
-const MAX_STDIO_SNAPSHOT = 6_240;
+export const MAX_STDIO_SNAPSHOT = 6_240;
 
 export interface JavaProcessOptions {
   jarPath: string;
@@ -22,22 +22,22 @@ export interface JavaProcessResult {
   stderrTail: string;
 }
 
-function limitStdio(text: string): string {
+export function limitStdio(text: string): string {
   if (text.length <= MAX_STDIO_SNAPSHOT) {
     return text;
   }
   return text.slice(-MAX_STDIO_SNAPSHOT);
 }
 
-function isAbsolutePath(value: string): boolean {
+export function isAbsolutePath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
-function isOptionArg(value: string): boolean {
+export function isOptionArg(value: string): boolean {
   return value.startsWith("-");
 }
 
-function normalizeArgs(args: string[]): string[] {
+export function normalizeArgs(args: string[]): string[] {
   return args.map((arg) => {
     if (isOptionArg(arg)) {
       return arg;
