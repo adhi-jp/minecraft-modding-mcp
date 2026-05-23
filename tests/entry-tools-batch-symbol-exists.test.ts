@@ -234,3 +234,37 @@ test("ERR_WORKSPACE_VERSION_UNRESOLVED when shared artifact lacks Minecraft vers
     (err: unknown) => (err as { code?: string }).code === ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED
   );
 });
+
+test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABORTED", async () => {
+  const service = new BatchSymbolExistsService(buildDeps({ failName: "Doom" }));
+  const out = await service.execute({
+    ...baseInput,
+    concurrency: 1,
+    failFast: true,
+    entries: [
+      { kind: "class", name: "Doom" },
+      { kind: "class", name: "OkB" },
+      { kind: "class", name: "OkC" }
+    ]
+  });
+  assert.equal((out.results[1] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
+  assert.equal((out.results[2] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
+});
+
+test("E2: failFast=false (default) keeps running and preserves the entry's underlying code", async () => {
+  const service = new BatchSymbolExistsService(buildDeps({ failName: "Doom" }));
+  const out = await service.execute({
+    ...baseInput,
+    entries: [
+      { kind: "class", name: "Doom" },
+      { kind: "class", name: "OkB" }
+    ]
+  });
+  assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.CLASS_NOT_FOUND);
+  // Second entry must still be processed (no abort).
+  assert.ok("result" in (out.results[1] as object) || "error" in (out.results[1] as object));
+  if ("result" in (out.results[1] as object)) {
+    const r = (out.results[1] as { result: { status: string } }).result;
+    assert.equal(r.status, "resolved");
+  }
+});

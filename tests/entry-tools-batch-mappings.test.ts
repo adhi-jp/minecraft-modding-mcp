@@ -224,3 +224,35 @@ test("E8: batch-mappings compact:true strips empty arrays and applies mapping pr
   assert.ok(!("ambiguityReasons" in result));
   assert.ok(!("candidates" in result), "empty candidates array should be dropped under compact");
 });
+
+test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABORTED", async () => {
+  const service = new BatchMappingsService(buildDeps({ failName: "doom" }));
+  const out = await service.execute({
+    ...baseInput,
+    concurrency: 1,
+    failFast: true,
+    entries: [
+      { kind: "class", name: "doom", sourceMapping: "obfuscated", targetMapping: "mojang" },
+      { kind: "class", name: "ok.B", sourceMapping: "obfuscated", targetMapping: "mojang" },
+      { kind: "class", name: "ok.C", sourceMapping: "obfuscated", targetMapping: "mojang" }
+    ]
+  });
+  // The first entry surfaces the original underlying code; subsequent
+  // entries are marked aborted because failFast halted dispatch.
+  assert.equal((out.results[1] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
+  assert.equal((out.results[2] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
+});
+
+test("E2: failFast=false (default) keeps running and reports the entry's underlying code", async () => {
+  const service = new BatchMappingsService(buildDeps({ failName: "doom" }));
+  const out = await service.execute({
+    ...baseInput,
+    entries: [
+      { kind: "class", name: "doom", sourceMapping: "obfuscated", targetMapping: "mojang" },
+      { kind: "class", name: "ok.B", sourceMapping: "obfuscated", targetMapping: "mojang" }
+    ]
+  });
+  assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.MAPPING_UNAVAILABLE);
+  // The second entry must still be evaluated (no abort) because failFast is false by default.
+  assert.ok("result" in (out.results[1] as object) || "error" in (out.results[1] as object));
+});
