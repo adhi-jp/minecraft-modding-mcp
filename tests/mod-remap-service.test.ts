@@ -337,3 +337,190 @@ test("ModRemapInput type accepts valid configurations", () => {
   assert.equal(mojangInput.targetMapping, "mojang");
   assert.equal(mojangInput.mcVersion, "1.20.4");
 });
+
+// --- New high-priority coverage tests ---------------------------------------
+
+async function createMinimalQuiltJar(path: string): Promise<void> {
+  const { createJar } = await import("./helpers/zip.ts");
+  await createJar(path, {
+    "quilt.mod.json": JSON.stringify({
+      schema_version: 1,
+      quilt_loader: {
+        group: "com.example",
+        id: "example-mod",
+        version: "1.0.0",
+        depends: [{ id: "minecraft", versions: "1.21.1" }]
+      }
+    }),
+    "com/example/ExampleMod.class": fakeClassBytesForNamespace("intermediary")
+  });
+}
+
+async function createFabricJarWithoutMcDep(path: string): Promise<void> {
+  const { createJar } = await import("./helpers/zip.ts");
+  await createJar(path, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "no-mc-dep",
+      version: "2.0.0"
+      // depends omitted on purpose
+    }),
+    "com/example/Mod.class": fakeClassBytesForNamespace("intermediary")
+  });
+}
+
+async function createForgeJar(path: string): Promise<void> {
+  const { createJar } = await import("./helpers/zip.ts");
+  await createJar(path, {
+    "META-INF/mods.toml": [
+      "modLoader=\"javafml\"",
+      "loaderVersion=\"[40,)\"",
+      "license=\"MIT\"",
+      "[[mods]]",
+      "modId=\"forge-test\"",
+      "version=\"1.0\""
+    ].join("\n"),
+    "com/example/Mod.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+}
+
+test("remapModJar rejects forge loader with REMAP_FAILED (only fabric/quilt supported)", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "forge-mod.jar");
+    await createForgeJar(jarPath);
+    const config = makeTestConfig(tempDir);
+    await assert.rejects(
+      () => remapModJar({ inputJar: jarPath, targetMapping: "mojang" }, config),
+      (err: any) => {
+        assert.equal(err.code, ERROR_CODES.REMAP_FAILED);
+        assert.equal(err.details?.loader, "forge");
+        return true;
+      }
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar throws INVALID_INPUT when mcVersion cannot be extracted from depends.minecraft", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "no-mc.jar");
+    await createFabricJarWithoutMcDep(jarPath);
+    const config = makeTestConfig(tempDir);
+    await assert.rejects(
+      () => remapModJar({ inputJar: jarPath, targetMapping: "mojang" }, config),
+      (err: any) => {
+        assert.equal(err.code, ERROR_CODES.INVALID_INPUT);
+        assert.match(err.message ?? "", /determine Minecraft version|mcVersion/i);
+        return true;
+      }
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar auto-detects mcVersion from tilde / range / bracket version expressions", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const { createJar } = await import("./helpers/zip.ts");
+    const cases = [
+      { range: "~1.20.4", expected: "1.20.4" },
+      { range: "^1.19.2", expected: "1.19.2" },
+      { range: ">=1.21", expected: "1.21" },
+      { range: "[1.21,)", expected: "1.21" }
+    ];
+    for (const { range, expected } of cases) {
+      const jarPath = join(tempDir, `mod-${expected}.jar`);
+      await createJar(jarPath, {
+        "fabric.mod.json": JSON.stringify({
+          schemaVersion: 1,
+          id: "rng-mod",
+          version: "1.0.0",
+          depends: { minecraft: range }
+        }),
+        "com/example/Mod.class": fakeClassBytesForNamespace("intermediary")
+      });
+      const cachedOutput = scopedCachePath(tempDir, jarPath, "intermediary", "mojang", expected);
+      mkdirSync(dirname(cachedOutput), { recursive: true });
+      writeFileSync(cachedOutput, "cached");
+      const result = await remapModJar(
+        { inputJar: jarPath, targetMapping: "mojang" },
+        makeTestConfig(tempDir)
+      );
+      assert.equal(result.mcVersion, expected, `expected ${range} → mcVersion ${expected}, got ${result.mcVersion}`);
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar copies cache hit to an explicit outputJar destination", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample.jar");
+    await createMinimalFabricJar(jarPath);
+    const cachedOutput = scopedCachePath(tempDir, jarPath, "intermediary", "mojang", "1.21.1");
+    mkdirSync(dirname(cachedOutput), { recursive: true });
+    writeFileSync(cachedOutput, "cached-bytes");
+
+    const explicit = join(tempDir, "custom-name.jar");
+    const result = await remapModJar(
+      {
+        inputJar: jarPath,
+        mcVersion: "1.21.1",
+        targetMapping: "mojang",
+        outputJar: explicit
+      },
+      makeTestConfig(tempDir)
+    );
+    assert.equal(result.outputJar, explicit);
+    const written = statSync(explicit);
+    assert.ok(written.size > 0, "explicit outputJar must receive the cached bytes");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar accepts quilt loader and returns cached output for mojang target", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "quilt-mod.jar");
+    await createMinimalQuiltJar(jarPath);
+    const cachedOutput = scopedCachePath(tempDir, jarPath, "intermediary", "mojang", "1.21.1");
+    mkdirSync(dirname(cachedOutput), { recursive: true });
+    writeFileSync(cachedOutput, "cached");
+
+    const result = await remapModJar(
+      { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" },
+      makeTestConfig(tempDir)
+    );
+    assert.equal(result.outputJar, cachedOutput);
+    assert.equal(result.targetMapping, "mojang");
+    assert.equal(result.mcVersion, "1.21.1");
+    assert.equal(result.fromMapping, "intermediary");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar exposes a numeric durationMs on cache-hit results", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "with-duration.jar");
+    await createMinimalFabricJar(jarPath);
+    const cachedOutput = scopedCachePath(tempDir, jarPath, "intermediary", "mojang", "1.21.1");
+    mkdirSync(dirname(cachedOutput), { recursive: true });
+    writeFileSync(cachedOutput, "x");
+    const result = await remapModJar(
+      { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" },
+      makeTestConfig(tempDir)
+    );
+    assert.equal(typeof (result as any).durationMs, "number");
+    assert.ok((result as any).durationMs >= 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
