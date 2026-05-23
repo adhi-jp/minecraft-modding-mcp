@@ -214,3 +214,34 @@ test("collectMatchedJarEntriesAsUtf8 stops after maxEntries successful matches",
     }
   ]);
 });
+
+test("sourceJarReader: readJarEntryAsUtf8 rejects caller-supplied traversal entry names with INVALID_INPUT", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-zipslip-read-"));
+  const jarPath = join(root, "safe.jar");
+  await createJar(jarPath, {
+    "com/example/Safe.java": "package com.example;\npublic class Safe {}"
+  });
+
+  for (const traversal of [
+    "../escape.java",
+    "..\\evil.java",
+    "a/../../etc/passwd.java",
+    "META-INF/../shadow.java"
+  ]) {
+    await assert.rejects(
+      () => readJarEntryAsUtf8(jarPath, traversal),
+      (err: any) => err.code === "ERR_INVALID_INPUT" && /not allowed/.test(err.message ?? ""),
+      `expected zip-slip rejection on caller input "${traversal}"`
+    );
+  }
+});
+
+test("sourceJarReader: readJarEntryAsUtf8 still resolves safe entries from the same jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-zipslip-positive-"));
+  const jarPath = join(root, "safe.jar");
+  await createJar(jarPath, {
+    "com/example/Safe.java": "package com.example;\npublic class Safe {}"
+  });
+  const text = await readJarEntryAsUtf8(jarPath, "com/example/Safe.java");
+  assert.match(text, /class Safe/);
+});
