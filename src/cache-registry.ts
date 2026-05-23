@@ -544,6 +544,10 @@ async function fileBackedEntries(
   config: CacheRegistryConfig,
   cacheKind: Exclude<PublicCacheKind, "artifact-index" | "workspace">
 ): Promise<CacheEntry[]> {
+  if (cacheKind === "binary-remap") {
+    return binaryRemapEntries(config);
+  }
+
   const root = kindRoot(config, cacheKind);
   const files = await listFilesRecursive(root);
   const entries: CacheEntry[] = [];
@@ -569,16 +573,97 @@ async function fileBackedEntries(
           filePath.endsWith(".lock") ||
           filePath.endsWith(".wal") ||
           filePath.endsWith(".journal"),
-        ...(cacheKind === "downloads" || cacheKind === "mod-remap" || cacheKind === "binary-remap"
+        ...(cacheKind === "downloads" || cacheKind === "mod-remap"
           ? { jarPath: filePath }
-          : {}),
-        ...(cacheKind === "binary-remap"
-          ? { artifactId: normalizedEntryId.replace(/\.jar$/i, "") }
           : {})
       }
     });
   }
   return entries;
+}
+
+/**
+ * Binary-remap cache entries are keyed by the final artifact id even when the
+ * on-disk entry is a corrupt final directory or a leftover temp path.
+ */
+function parseBinaryRemapEntryName(name: string): { artifactId: string; corrupt: boolean } | undefined {
+  const legacyTempMatch = /^(.+)\.jar\.tmp\..+$/.exec(name);
+  if (legacyTempMatch?.[1]) {
+    return { artifactId: legacyTempMatch[1], corrupt: true };
+  }
+
+  const tempMatch = /^(.+)\.tmp\.\d+\.\d+\.[A-Za-z0-9_-]+\.jar$/.exec(name);
+  if (tempMatch?.[1]) {
+    return { artifactId: tempMatch[1], corrupt: true };
+  }
+
+  const finalJarMatch = /^(.+)\.jar$/.exec(name);
+  if (finalJarMatch?.[1]) {
+    return { artifactId: finalJarMatch[1], corrupt: false };
+  }
+
+  return undefined;
+}
+
+async function binaryRemapEntries(config: CacheRegistryConfig): Promise<CacheEntry[]> {
+  const root = kindRoot(config, "binary-remap");
+  if (!existsSync(root)) {
+    return [];
+  }
+
+  const entries: CacheEntry[] = [];
+  // Do not recurse here: a corrupt `<artifactId>.jar` directory must remain one
+  // selectable cache entry so `selector.artifactId` can remove it recursively.
+  const dirents = await readdir(root, { withFileTypes: true });
+  for (const entry of dirents.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isFile() && !entry.isDirectory()) {
+      continue;
+    }
+    const parsed = parseBinaryRemapEntryName(entry.name);
+    if (!parsed) {
+      continue;
+    }
+
+    const filePath = join(root, entry.name);
+    const fileStat = await stat(filePath);
+    const corrupt = parsed.corrupt || entry.isDirectory();
+    const sizeBytes = entry.isDirectory()
+      ? await directoryFileSizeBytes(filePath)
+      : fileStat.size;
+    entries.push({
+      cacheKind: "binary-remap",
+      entryId: entry.name,
+      path: filePath,
+      sizeBytes,
+      status: corrupt ? "corrupt" : "healthy",
+      meta: {
+        updatedAt: fileStat.mtime.toISOString(),
+        version: inferVersion(filePath, entry.name),
+        mapping: inferMapping(filePath, entry.name),
+        scope: inferScope(filePath, entry.name),
+        projectPath: inferProjectPath(filePath, config.pathRuntimeInfo),
+        partial: entry.isFile() && fileStat.size === 0,
+        corrupt,
+        inUse: false,
+        jarPath: filePath,
+        artifactId: parsed.artifactId
+      }
+    });
+  }
+  return entries;
+}
+
+async function directoryFileSizeBytes(root: string): Promise<number> {
+  const files = await listFilesRecursive(root);
+  let totalBytes = 0;
+  for (const filePath of files) {
+    try {
+      totalBytes += (await stat(filePath)).size;
+    } catch {
+      // The entry may disappear during cleanup or a concurrent cache write.
+    }
+  }
+  return totalBytes;
 }
 
 export type CacheRegistryConfig = {
@@ -727,7 +812,9 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
               continue;
             }
             if (existsSync(entry.path)) {
-              await rm(entry.path, { force: true });
+              // Only binary-remap inventory can return directories as entries;
+              // other file-backed kinds keep their existing file-only contract.
+              await rm(entry.path, { recursive: entry.cacheKind === "binary-remap", force: true });
             }
           }
         } finally {

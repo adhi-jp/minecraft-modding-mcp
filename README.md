@@ -164,6 +164,7 @@ These notes cover high-frequency decisions during onboarding. For the full pitfa
 - `validate-mixin` and `validate-project` keep `mapping-health` lightweight for `obfuscated` and `mojang` validation, avoiding full Tiny mapping graph loads unless `intermediary` or `yarn` namespaces are requested.
 - `validate-project task="project-summary"` uses a lightweight artifact probe for `tasks["minecraft.artifact.resolved"]`; it does not decompile Minecraft or rebuild the source index just to report per-probe status. Set `VALIDATE_PROJECT_TASKS_OFF=1` to omit the additive `tasks` field.
 - If a workspace was built with `GRADLE_USER_HOME=/tmp/...` or another isolated Gradle home, pass that path as `gradleUserHome` so source, mapping, runtime, and project validation lookups use the same Loom cache instead of stale caches under the MCP process home.
+- `manage-cache` reports corrupt Mojang binary-remap cache directories under `cacheKinds: ["binary-remap"]` with `status: "corrupt"`, and can delete them by `selector.artifactId` in preview/apply workflows.
 
 ### Inspect Minecraft source from a version
 

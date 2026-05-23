@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { log } from "../logger.js";
@@ -21,7 +21,7 @@ export function unlinkRemappedJarForArtifact(svc: SourceService, artifactId: str
   const remappedJarPath = join(svc.config.cacheDir, "remapped", `${artifactId}.jar`);
   try {
     if (existsSync(remappedJarPath)) {
-      unlinkSync(remappedJarPath);
+      rmSync(remappedJarPath, { recursive: true, force: true });
     }
   } catch {
     // ignore: orphaned jar is still reclaimable via manage-cache binary-remap kind.

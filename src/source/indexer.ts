@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { decompileBinaryJar } from "../decompiler/vineflower.js";
@@ -26,6 +26,27 @@ import {
 import { normalizePathStyle } from "./shared-utils.js";
 
 export const INDEX_SCHEMA_VERSION = 1;
+
+/**
+ * Injectable dependencies let remap-cache regression tests run without Java.
+ * Production callers use `defaultBinaryRemapDeps`; this is not a public MCP
+ * extension point.
+ */
+export type BinaryRemapDeps = {
+  resolveTinyRemapperJar: typeof resolveTinyRemapperJar;
+  resolveMojangTinyFile: typeof resolveMojangTinyFile;
+  remapJar: typeof remapJar;
+  now: () => number;
+  randomSuffix: () => string;
+};
+
+const defaultBinaryRemapDeps: BinaryRemapDeps = {
+  resolveTinyRemapperJar,
+  resolveMojangTinyFile,
+  remapJar,
+  now: () => Date.now(),
+  randomSuffix: () => Math.random().toString(36).slice(2, 8) || "0"
+};
 
 export type IndexRebuildReason =
   | "force"
@@ -453,13 +474,16 @@ async function rebuildMissingArtifactIndex(
  * binary remap, run tiny-remapper now and return the remapped jar path.
  * Otherwise return the original binaryJarPath unchanged.
  *
- * Cache safety: writes to a per-attempt temp file then atomic-renames into
- * <cacheDir>/remapped/<artifactId>.jar. A per-target inflight Promise map
- * collapses concurrent calls so two simultaneous resolveArtifact calls for
- * the same artifactId share one tiny-remapper run instead of racing on the
- * same output path.
+ * Cache safety: writes to a per-attempt `.jar` temp path, validates ZIP magic,
+ * then atomic-renames into <cacheDir>/remapped/<artifactId>.jar. A per-target
+ * inflight Promise map collapses concurrent calls so simultaneous
+ * resolveArtifact calls for the same artifactId share one tiny-remapper run.
  */
-export async function maybeRemapBinaryForMojang(svc: SourceService, resolved: ResolvedSourceArtifact): Promise<string> {
+export async function maybeRemapBinaryForMojang(
+  svc: SourceService,
+  resolved: ResolvedSourceArtifact,
+  deps: BinaryRemapDeps = defaultBinaryRemapDeps
+): Promise<string> {
   const binaryJarPath = resolved.binaryJarPath;
   if (!binaryJarPath) {
     throw createError({
@@ -500,9 +524,18 @@ export async function maybeRemapBinaryForMojang(svc: SourceService, resolved: Re
       remappedJarPath
     });
     try {
-      await unlink(remappedJarPath);
-    } catch {
-      // ignore: race with another process or already-deleted file.
+      await rm(remappedJarPath, { recursive: true, force: true });
+    } catch (caughtError) {
+      releaseRemappedJarBytes(svc, resolved.artifactId);
+      throw createError({
+        code: ERROR_CODES.REMAP_FAILED,
+        message: "Failed to remove corrupt binary remap cache entry.",
+        details: {
+          artifactId: resolved.artifactId,
+          remappedJarPath,
+          cause: caughtError instanceof Error ? caughtError.message : String(caughtError)
+        }
+      });
     }
     releaseRemappedJarBytes(svc, resolved.artifactId);
   }
@@ -512,12 +545,12 @@ export async function maybeRemapBinaryForMojang(svc: SourceService, resolved: Re
     return inflight;
   }
 
-  const remapPromise = runBinaryRemap(svc, {
+  const remapPromise = runBinaryRemapWithDeps(svc, {
     version: resolved.version,
     inputJar: binaryJarPath,
     remappedDir,
     remappedJarPath
-  });
+  }, deps);
   svc.state.inflightRemaps.set(remappedJarPath, remapPromise);
   try {
     const path = await remapPromise;
@@ -531,6 +564,9 @@ export async function maybeRemapBinaryForMojang(svc: SourceService, resolved: Re
 export async function recordRemappedJarBytesFromDisk(svc: SourceService, artifactId: string, path: string): Promise<void> {
   try {
     const fileStat = await stat(path);
+    if (!fileStat.isFile()) {
+      return;
+    }
     recordRemappedJarBytes(svc, artifactId, fileStat.size);
   } catch {
     // best-effort: accounting will be rebuilt on the next refreshCacheMetrics.
@@ -566,24 +602,68 @@ export async function isUsableJarFile(path: string): Promise<boolean> {
   }
 }
 
+export function buildBinaryRemapTempPath(
+  remappedJarPath: string,
+  input: { pid: number; now: number; randomSuffix: string }
+): string {
+  // Keep the final extension as `.jar`; the remap output is rejected unless it
+  // is a regular ZIP/JAR file, and manage-cache recognizes this temp shape.
+  const fileName = basename(remappedJarPath);
+  const artifactId = fileName.endsWith(".jar")
+    ? fileName.slice(0, -".jar".length)
+    : fileName;
+  return join(
+    dirname(remappedJarPath),
+    `${artifactId}.tmp.${input.pid}.${input.now}.${input.randomSuffix}.jar`
+  );
+}
+
+async function describePathKind(path: string): Promise<"missing" | "file" | "directory" | "other"> {
+  try {
+    const stats = await stat(path);
+    if (stats.isFile()) {
+      return "file";
+    }
+    if (stats.isDirectory()) {
+      return "directory";
+    }
+    return "other";
+  } catch {
+    return "missing";
+  }
+}
+
 export async function runBinaryRemap(svc: SourceService, input: {
   version: string;
   inputJar: string;
   remappedDir: string;
   remappedJarPath: string;
 }): Promise<string> {
-  const tinyRemapperJarPath = await resolveTinyRemapperJar(
+  return runBinaryRemapWithDeps(svc, input, defaultBinaryRemapDeps);
+}
+
+export async function runBinaryRemapWithDeps(svc: SourceService, input: {
+  version: string;
+  inputJar: string;
+  remappedDir: string;
+  remappedJarPath: string;
+}, deps: BinaryRemapDeps): Promise<string> {
+  const tinyRemapperJarPath = await deps.resolveTinyRemapperJar(
     svc.config.cacheDir,
     svc.config.tinyRemapperJarPath
   );
-  const mojangTiny = await resolveMojangTinyFile(input.version, svc.config);
+  const mojangTiny = await deps.resolveMojangTinyFile(input.version, svc.config);
 
   await mkdir(input.remappedDir, { recursive: true });
 
-  const tempPath = `${input.remappedJarPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  const tempPath = buildBinaryRemapTempPath(input.remappedJarPath, {
+    pid: process.pid,
+    now: deps.now(),
+    randomSuffix: deps.randomSuffix()
+  });
   const remapStartedAt = Date.now();
   try {
-    await remapJar(tinyRemapperJarPath, {
+    await deps.remapJar(tinyRemapperJarPath, {
       inputJar: input.inputJar,
       outputJar: tempPath,
       mappingsFile: mojangTiny.path,
@@ -592,19 +672,36 @@ export async function runBinaryRemap(svc: SourceService, input: {
       timeoutMs: svc.config.remapTimeoutMs,
       maxMemoryMb: svc.config.remapMaxMemoryMb
     });
-    const tempStats = await stat(tempPath);
-    if (tempStats.size === 0) {
+    if (!(await isUsableJarFile(tempPath))) {
       throw createError({
         code: ERROR_CODES.REMAP_FAILED,
-        message: "tiny-remapper produced an empty output jar.",
-        details: { inputJar: input.inputJar, tempPath }
+        message: "tiny-remapper produced an invalid output jar.",
+        details: {
+          inputJar: input.inputJar,
+          tempPath,
+          outputKind: await describePathKind(tempPath)
+        }
       });
     }
-    await rename(tempPath, input.remappedJarPath);
+    try {
+      await rename(tempPath, input.remappedJarPath);
+    } catch (caughtError) {
+      throw createError({
+        code: ERROR_CODES.REMAP_FAILED,
+        message: "Failed to finalize binary remap cache entry.",
+        details: {
+          inputJar: input.inputJar,
+          tempPath,
+          remappedJarPath: input.remappedJarPath,
+          outputKind: await describePathKind(input.remappedJarPath),
+          cause: caughtError instanceof Error ? caughtError.message : String(caughtError)
+        }
+      });
+    }
     return input.remappedJarPath;
   } catch (caughtError) {
     try {
-      await unlink(tempPath);
+      await rm(tempPath, { recursive: true, force: true });
     } catch {
       // tempPath may not exist if remapJar failed before writing anything; ignore.
     }

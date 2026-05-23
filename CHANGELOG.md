@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Mojang binary-remap cache writes recover from corrupt `<cacheDir>/remapped/<artifactId>.jar` directories instead of surfacing raw `ENOTEMPTY`, and `manage-cache` can list and delete those corrupt `binary-remap` entries by `selector.artifactId`.
+
 ## [4.2.0] - 2026-05-17
 
 ### Added

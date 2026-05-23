@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -143,6 +144,48 @@ test("cache registry inventories `<cacheDir>/remapped/<artifactId>.jar` as the b
   assert.deepEqual(remaining.entries.map((entry) => entry.entryId), ["beta.jar"]);
 });
 
+test("cache registry lists and deletes corrupt top-level binary-remap directories by artifactId", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-binremap-corrupt-"));
+  const remappedRoot = join(root, "remapped");
+  await mkdir(join(remappedRoot, "alpha.jar", "nested"), { recursive: true });
+  await mkdir(join(remappedRoot, "beta.jar.tmp.123.456.abcdef", "nested"), { recursive: true });
+  await mkdir(join(remappedRoot, "gamma.tmp.123.456.abcdef.jar", "nested"), { recursive: true });
+  await writeFile(join(remappedRoot, "alpha.jar", "nested", "poison.txt"), "directory");
+  await writeFile(join(remappedRoot, "beta.jar.tmp.123.456.abcdef", "nested", "poison.txt"), "legacy temp");
+  await writeFile(join(remappedRoot, "gamma.tmp.123.456.abcdef.jar", "nested", "poison.txt"), "new temp");
+  await writeFile(join(remappedRoot, "healthy.jar"), "remapped-jar");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const listed = await registry.listEntries({ cacheKinds: ["binary-remap"], limit: 10 });
+  const byId = new Map(listed.entries.map((entry) => [entry.entryId, entry]));
+
+  assert.equal(byId.get("alpha.jar")?.status, "corrupt");
+  assert.equal(byId.get("alpha.jar")?.meta?.artifactId, "alpha");
+  assert.equal(byId.get("beta.jar.tmp.123.456.abcdef")?.status, "corrupt");
+  assert.equal(byId.get("beta.jar.tmp.123.456.abcdef")?.meta?.artifactId, "beta");
+  assert.equal(byId.get("gamma.tmp.123.456.abcdef.jar")?.status, "corrupt");
+  assert.equal(byId.get("gamma.tmp.123.456.abcdef.jar")?.meta?.artifactId, "gamma");
+  assert.equal(byId.get("healthy.jar")?.status, "healthy");
+
+  const summary = await registry.summarize({ cacheKinds: ["binary-remap"] });
+  assert.equal(summary.kinds["binary-remap"]?.status, "corrupt");
+
+  const deletion = await registry.deleteEntries({
+    cacheKinds: ["binary-remap"],
+    selector: { artifactId: "alpha" },
+    executionMode: "apply"
+  });
+
+  assert.equal(deletion.deletedEntries, 1);
+  assert.equal(deletion.deletedBytes, "directory".length);
+  assert.equal(existsSync(join(remappedRoot, "alpha.jar")), false);
+  assert.equal(existsSync(join(remappedRoot, "healthy.jar")), true);
+});
+
 test("cache registry matches artifact-index entries by mapping, scope, and projectPath selectors", async () => {
   const root = await mkdtemp(join(tmpdir(), "cache-registry-artifacts-"));
   const workspace = join(root, "workspace");
@@ -265,4 +308,3 @@ test("cache registry deletes a single workspace entry by projectPath selector", 
   assert.equal(cache.read("/tmp/project-a"), undefined);
   assert.ok(cache.read("/tmp/project-b"));
 });
-
