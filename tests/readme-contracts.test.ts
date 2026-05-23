@@ -183,10 +183,15 @@ test("README and tool-reference both document the removed-mapping migration toke
     readFile("README.md", "utf8"),
     readFile("docs/tool-reference.md", "utf8")
   ]);
-  // tool-reference owns the canonical migration note; README cross-links the
-  // tool-reference, so the existence of either reference here is enough — but
-  // we pin both for visibility.
-  assert.ok(toolRef.includes("official"), "tool-reference.md must keep the `official` migration note");
+  // tool-reference owns the canonical migration note. We anchor the assertion
+  // on a removal/rejection phrase next to the literal `official` so the test
+  // would still fail if `official` were ever reintroduced as an *active*
+  // mapping value (e.g. as a legal `mapping: "official"` example in a sample).
+  assert.match(
+    toolRef,
+    /(removed|rejects?|fail|deprecated|legacy)[^\n]{0,80}`?official`?|`?official`?[^\n]{0,80}(removed|rejected?|fail|deprecat|legacy)/i,
+    "tool-reference.md must keep the `official` token tied to a removal / rejection note"
+  );
   // README must at least point at tool-reference.
   assert.ok(/tool-reference/.test(readme), "README.md must link to docs/tool-reference.md");
 });

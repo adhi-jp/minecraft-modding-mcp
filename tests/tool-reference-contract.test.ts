@@ -160,10 +160,17 @@ test("tool-reference.md references all 5 top-level workflow tools (post-rename)"
 
 test("tool-reference.md preserves migration guidance for removed legacy tokens", async () => {
   const doc = await loadDoc();
-  for (const token of ["official", "targetKind"]) {
-    assert.ok(
-      doc.includes(token),
-      `tool-reference.md must keep the migration note for removed token "${token}"`
-    );
-  }
+  // Anchor on the removal context, not on the bare substring. If `official`
+  // or `targetKind` is ever re-introduced as an active token (without the
+  // removal phrase nearby), this test fails.
+  assert.match(
+    doc,
+    /(removed|rejects?|fail|deprecated|legacy)[^\n]{0,120}`?official`?|`?official`?[^\n]{0,120}(removed|rejected?|fail|deprecat|legacy)/i,
+    "tool-reference.md must keep the `official` migration note tied to a removal phrase"
+  );
+  assert.match(
+    doc,
+    /(removed|replace|migrat|deprecat|rename)[^\n]{0,120}`?targetKind`?|`?targetKind`?[^\n]{0,120}(removed|replace|migrat|deprecat|rename)/i,
+    "tool-reference.md must keep the `targetKind` migration note tied to a removal/rename phrase"
+  );
 });

@@ -1606,12 +1606,14 @@ test("EXPECTED_TOOLS matches the registered tool-schema-registry set (set equiva
 
 test("EXPECTED_TOOLS excludes every removed legacy tool name (negative-list)", () => {
   const expected = new Set<string>(EXPECTED_TOOLS);
+  // Tool names only — mapping values (`official`) and parameter names
+  // (`targetKind`, `snippetLines`) cannot appear here by construction and are
+  // pinned by docs-contract tests instead.
   for (const removed of [
-    "official",
-    "targetKind",
-    "snippetLines",
     "inspect-mc-class",
-    "explore-mod"
+    "explore-mod",
+    "mc-list-versions",
+    "mc-resolve-artifact"
   ]) {
     assert.ok(!expected.has(removed), `EXPECTED_TOOLS must not contain removed name "${removed}"`);
   }

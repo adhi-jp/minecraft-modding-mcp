@@ -2585,10 +2585,27 @@ test("validateMixinSchema rejects unknown reportMode and unknown warningCategory
     input: { mode: "inline", source: "class M {}" },
     version: "1.21.10"
   } as const;
-  assert.throws(() => validateMixinSchema.parse({ ...base, reportMode: "verbose" as any }));
-  assert.throws(() =>
-    validateMixinSchema.parse({ ...base, warningCategoryFilter: ["unknown-cat" as any] })
-  );
+  const badReportMode = validateMixinSchema.safeParse({ ...base, reportMode: "verbose" as any });
+  assert.equal(badReportMode.success, false);
+  if (!badReportMode.success) {
+    assert.ok(
+      badReportMode.error.issues.some((issue) => issue.path.join(".") === "reportMode"),
+      `expected rejection path to include "reportMode", got: ${JSON.stringify(badReportMode.error.issues.map((i) => i.path))}`
+    );
+  }
+  const badCategory = validateMixinSchema.safeParse({
+    ...base,
+    warningCategoryFilter: ["unknown-cat" as any]
+  });
+  assert.equal(badCategory.success, false);
+  if (!badCategory.success) {
+    assert.ok(
+      badCategory.error.issues.some((issue) =>
+        issue.path.join(".").startsWith("warningCategoryFilter")
+      ),
+      `expected rejection path to include "warningCategoryFilter", got: ${JSON.stringify(badCategory.error.issues.map((i) => i.path))}`
+    );
+  }
 });
 
 test("validateMixinSchema config mode accepts an array of mixin config paths (Phase 3A multi-config)", () => {
@@ -2604,20 +2621,38 @@ test("validateMixinSchema config mode accepts an array of mixin config paths (Ph
 });
 
 test("validateMixinSchema input modes are mutually exclusive (paths vs configPaths)", () => {
-  // mode: "paths" requires `paths`, not `configPaths`
-  assert.throws(() =>
-    validateMixinSchema.parse({
-      input: { mode: "paths", configPaths: ["x"] } as any,
-      version: "1.21.10"
-    })
-  );
-  // mode: "config" requires `configPaths`, not `paths`
-  assert.throws(() =>
-    validateMixinSchema.parse({
-      input: { mode: "config", paths: ["x"] } as any,
-      version: "1.21.10"
-    })
-  );
+  // mode: "paths" requires `paths`; the test must verify the rejection is
+  // about the missing `paths` field (the structural contract), not just any
+  // failure. A regression that accepts both keys together would otherwise
+  // sneak through, because Zod's discriminated union strips unknown keys
+  // silently when the required field is also supplied.
+  const pathsModeWithConfigPaths = validateMixinSchema.safeParse({
+    input: { mode: "paths", configPaths: ["x"] } as any,
+    version: "1.21.10"
+  });
+  assert.equal(pathsModeWithConfigPaths.success, false);
+  if (!pathsModeWithConfigPaths.success) {
+    assert.ok(
+      pathsModeWithConfigPaths.error.issues.some(
+        (issue) => issue.path.join(".") === "input.paths"
+      ),
+      `mode='paths' without 'paths' must fail on input.paths, got: ${JSON.stringify(pathsModeWithConfigPaths.error.issues)}`
+    );
+  }
+
+  const configModeWithPaths = validateMixinSchema.safeParse({
+    input: { mode: "config", paths: ["x"] } as any,
+    version: "1.21.10"
+  });
+  assert.equal(configModeWithPaths.success, false);
+  if (!configModeWithPaths.success) {
+    assert.ok(
+      configModeWithPaths.error.issues.some(
+        (issue) => issue.path.join(".") === "input.configPaths"
+      ),
+      `mode='config' without 'configPaths' must fail on input.configPaths, got: ${JSON.stringify(configModeWithPaths.error.issues)}`
+    );
+  }
 });
 
 test("validateMixinSchema config mode requires a non-empty configPaths array", () => {

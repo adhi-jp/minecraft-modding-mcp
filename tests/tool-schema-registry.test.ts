@@ -144,13 +144,13 @@ test("registry does NOT contain removed/legacy tool names from earlier renames",
   const { listRegisteredTools } = await import("../src/tool-schema-registry.ts");
   const registered = new Set(listRegisteredTools());
   for (const removed of [
-    // pre-rename top-level workflow names should never resurrect under their
-    // older identifiers.
-    "official",
-    "targetKind",
-    "snippetLines",
+    // Pre-rename top-level workflow names that should never resurrect.
+    // (Mapping-value / parameter-name tokens like `official`, `targetKind`,
+    // `snippetLines` are not tool names and live in a different test.)
     "inspect-mc-class",
-    "explore-mod"
+    "explore-mod",
+    "mc-list-versions",
+    "mc-resolve-artifact"
   ]) {
     assert.ok(
       !registered.has(removed),
