@@ -175,3 +175,8 @@ test("F2: per-entry status field from single-tool result is preserved", async ()
   const result = (out.results[0] as { result: Record<string, unknown> }).result;
   assert.equal(result.status, "available");
 });
+
+test("BATCH_TOOLS_OFF env constant is exported (env-driven kill switch wiring)", async () => {
+  const mod = await import("../src/entry-tools/batch-runner.ts");
+  assert.equal(typeof mod.BATCH_TOOLS_OFF, "boolean");
+});

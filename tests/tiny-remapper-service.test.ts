@@ -9,13 +9,15 @@ import { ERROR_CODES } from "../src/errors.ts";
 import { remapJar, type RemapOptions } from "../src/tiny-remapper-service.ts";
 import { mockJavaRunner } from "./helpers/java-runner-mock.ts";
 
-test("remapJar throws REMAP_FAILED when tiny-remapper jar does not exist", async () => {
-  // First check if Java is available
+test("remapJar surfaces JAVA_PROCESS_FAILED / REMAP_FAILED when the tiny-remapper jar is missing (real-spawn smoke)", async (t) => {
+  // This test exercises the real `spawn` path, so it requires a working Java
+  // runtime. Skip explicitly instead of silently returning when Java is
+  // unavailable, otherwise the test would appear "green" on CI without Java.
   try {
     const { assertJavaAvailable } = await import("../src/java-process.ts");
     await assertJavaAvailable();
   } catch {
-    // No Java — skip
+    t.skip("java runtime not available — real-spawn smoke skipped");
     return;
   }
 
@@ -72,21 +74,9 @@ test("remapJar invokes javaRunner via mockJavaRunner helper (mock smoke)", async
   ]);
 });
 
-test("remapJar uses default values for optional parameters", () => {
-  // Verify type compatibility — this is a compile-time check
-  const options: RemapOptions = {
-    inputJar: "/tmp/input.jar",
-    outputJar: "/tmp/output.jar",
-    mappingsFile: "/tmp/mappings.tiny",
-    fromNamespace: "intermediary",
-    toNamespace: "named"
-  };
-
-  assert.equal(options.threads, undefined);
-  assert.equal(options.rebuildSourceFilenames, undefined);
-  assert.equal(options.timeoutMs, undefined);
-  assert.equal(options.maxMemoryMb, undefined);
-});
+// Note: default-value propagation is covered by the mock-based assertions
+// further down (`propagates default timeoutMs / maxMemoryMb and
+// normalizePathArgs`), so a separate type-only smoke is unnecessary.
 
 async function buildRemapFixture(prefix: string): Promise<{
   root: string;

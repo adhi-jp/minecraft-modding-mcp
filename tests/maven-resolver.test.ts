@@ -75,7 +75,14 @@ test("parseCoordinate rejects coordinates with any empty mandatory segment", () 
   for (const value of [":a:1.0", "g::1.0", "g:a:", ":::"]) {
     assert.throws(
       () => parseCoordinate(value),
-      (err: any) => err.code === ERROR_CODES.COORDINATE_PARSE_FAILED,
+      (err: any) => {
+        assert.equal(err.code, ERROR_CODES.COORDINATE_PARSE_FAILED);
+        // Each failing input must be echoed back in `details.coordinate` so
+        // agent callers can identify which coordinate failed. A regression
+        // that dropped the echo would still satisfy a plain code check.
+        assert.equal(err.details?.coordinate, value);
+        return true;
+      },
       `expected reject for "${value}"`
     );
   }
