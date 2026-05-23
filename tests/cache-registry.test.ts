@@ -308,3 +308,70 @@ test("cache registry deletes a single workspace entry by projectPath selector", 
   assert.equal(cache.read("/tmp/project-a"), undefined);
   assert.ok(cache.read("/tmp/project-b"));
 });
+
+test("cache registry deleteEntries(executionMode='preview') does not delete files but reports the deletion count", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-preview-"));
+  await mkdir(join(root, "remapped"), { recursive: true });
+  const jarPath = join(root, "remapped", "alpha.jar");
+  await writeFile(jarPath, "remapped-jar-bytes");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const preview = await registry.deleteEntries({
+    cacheKinds: ["binary-remap"],
+    selector: { artifactId: "alpha" },
+    executionMode: "preview"
+  });
+
+  assert.equal(preview.deletedEntries, 1, "preview must still report the matched count");
+  assert.ok(preview.deletedBytes > 0, "preview must still report the matched bytes");
+  assert.equal(existsSync(jarPath), true, "preview must NOT delete the file on disk");
+});
+
+test("cache registry listEntries rejects invalid `olderThan` selector with ERR_INVALID_INPUT", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-olderthan-bad-"));
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  for (const value of ["30D", "P0D", "garbage"]) {
+    await assert.rejects(
+      () =>
+        registry.listEntries({
+          cacheKinds: ["downloads"],
+          selector: { olderThan: value }
+        } as any),
+      (err: any) => err.code === "ERR_INVALID_INPUT",
+      `expected ERR_INVALID_INPUT for olderThan="${value}"`
+    );
+  }
+});
+
+test("cache registry deleteEntries on binary-remap leaves non-binary-remap caches untouched (non-recursive scope)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-scope-"));
+  // binary-remap entry to delete
+  await mkdir(join(root, "remapped"), { recursive: true });
+  await writeFile(join(root, "remapped", "alpha.jar"), "remapped-bytes");
+  // downloads entry that must stay
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const downloadFile = join(root, "downloads", "neighbour.bin");
+  await writeFile(downloadFile, "download-bytes");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  await registry.deleteEntries({
+    cacheKinds: ["binary-remap"],
+    selector: { artifactId: "alpha" },
+    executionMode: "apply"
+  });
+
+  assert.equal(existsSync(join(root, "remapped", "alpha.jar")), false, "binary-remap entry was deleted");
+  assert.equal(existsSync(downloadFile), true, "downloads cache must remain untouched");
+});
