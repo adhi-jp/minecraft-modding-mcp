@@ -1,7 +1,7 @@
 import { createError, ERROR_CODES } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
-import { readJarEntryAsBuffer } from "./source-jar-reader.js";
+import { createJarEntryReader } from "./source-jar-reader.js";
 import type { Config } from "./types.js";
 
 export type MappingNamespace = "obfuscated" | "mojang" | "yarn";
@@ -577,18 +577,26 @@ export class MinecraftExplorerService {
     }
 
     const classEntryPath = `${toInternalName(fqn)}.class`;
-    let classBuffer: Buffer;
+    // Open the jar ONCE for this call; every hierarchy class is served from the
+    // same handle (see reader.close() after hierarchy construction below).
+    const reader = await createJarEntryReader(jarPath);
+    let parsed: ParsedClassFile;
     try {
-      classBuffer = await readJarEntryAsBuffer(jarPath, classEntryPath);
-    } catch {
-      throw createError({
-        code: ERROR_CODES.CLASS_NOT_FOUND,
-        message: `Class "${fqn}" was not found in "${jarPath}".`,
-        details: { fqn, jarPath, classEntryPath }
-      });
+      let classBuffer: Buffer;
+      try {
+        classBuffer = await reader.getEntryBuffer(classEntryPath);
+      } catch {
+        throw createError({
+          code: ERROR_CODES.CLASS_NOT_FOUND,
+          message: `Class "${fqn}" was not found in "${jarPath}".`,
+          details: { fqn, jarPath, classEntryPath }
+        });
+      }
+      parsed = parseClassFile(classBuffer);
+    } catch (error) {
+      reader.close();
+      throw error;
     }
-
-    const parsed = parseClassFile(classBuffer);
     const parsedClassCache = new Map<string, ParsedClassFile>([[parsed.internalName, parsed]]);
     const warnings: string[] = [];
     const warnMissingInheritedClass = (internalName: string, relation: "super" | "interface"): void => {
@@ -607,7 +615,7 @@ export class MinecraftExplorerService {
 
       const classPath = `${internalName}.class`;
       try {
-        const classBytes = await readJarEntryAsBuffer(jarPath, classPath);
+        const classBytes = await reader.getEntryBuffer(classPath);
         const parsedClass = parseClassFile(classBytes);
         parsedClassCache.set(parsedClass.internalName, parsedClass);
         return parsedClass;
@@ -678,6 +686,9 @@ export class MinecraftExplorerService {
 
       hierarchyClasses.push(...interfaceClasses);
     }
+    // All jar reads are done; release the file descriptor before member projection
+    // (which performs no IO but may throw on malformed descriptors).
+    reader.close();
 
     const toSignatureMember = (
       ownerFqn: string,

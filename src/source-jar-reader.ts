@@ -7,6 +7,16 @@ import { isSecureJarEntryPath } from "./path-resolver.js";
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
+// Test-only instrumentation: counts real jar opens at the single openZipFile
+// chokepoint so perf tests can assert N-opens-per-call collapses to 1.
+let zipOpenCount = 0;
+export function __getZipOpenCount(): number {
+  return zipOpenCount;
+}
+export function __resetZipOpenCount(): void {
+  zipOpenCount = 0;
+}
+
 interface ZipEntry {
   fileName: string;
 }
@@ -79,6 +89,7 @@ export function openZipFile(jarPath: string): Promise<ZipFile> {
           reject(new Error(`Failed to read jar "${jarPath}": ${toErrorMessage(error)}`));
           return;
         }
+        zipOpenCount += 1;
         resolve(zipFile as unknown as ZipFile);
       }
     );
@@ -260,6 +271,72 @@ export async function readJarEntryAsBuffer(jarPath: string, entryPath: string): 
       return readEntryStream(zipFile, entry, jarPath);
     }
   });
+}
+
+export interface JarEntryReader {
+  getEntryBuffer(entryPath: string): Promise<Buffer>;
+  close(): void;
+}
+
+/**
+ * Opens a jar ONCE, drains its central directory into a name->entry index, and
+ * serves repeated entry reads via O(1) lookup + openReadStream. Use this when a
+ * single logical operation reads many entries from the same jar (e.g. walking a
+ * class hierarchy) instead of calling {@link readJarEntryAsBuffer} per entry,
+ * which re-opens and re-scans the jar each time. Callers MUST close() the reader
+ * (in a finally) to release the file descriptor. getEntryBuffer throws the same
+ * INVALID_INPUT (unsafe path) / SOURCE_NOT_FOUND (missing entry) errors as
+ * readJarEntryAsBuffer; duplicate entry names resolve to the first occurrence.
+ */
+export async function createJarEntryReader(jarPath: string): Promise<JarEntryReader> {
+  const zipFile = await openZipFile(jarPath);
+  let closed = false;
+  const index = new Map<string, ZipEntry>();
+  try {
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        break;
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (!index.has(entry.fileName)) {
+        index.set(entry.fileName, entry);
+      }
+    }
+  } catch (error) {
+    zipFile.close();
+    throw error;
+  }
+
+  return {
+    async getEntryBuffer(entryPath: string): Promise<Buffer> {
+      const normalizedTargetPath = entryPath.replaceAll("\\", "/");
+      if (!isSecureJarEntryPath(normalizedTargetPath)) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Entry path "${normalizedTargetPath}" is not allowed.`,
+          details: { jarPath, entryPath: normalizedTargetPath }
+        });
+      }
+      const entry = index.get(normalizedTargetPath);
+      if (!entry) {
+        throw createError({
+          code: ERROR_CODES.SOURCE_NOT_FOUND,
+          message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
+          details: { jarPath, entryPath: normalizedTargetPath }
+        });
+      }
+      return readEntryStream(zipFile, entry, jarPath);
+    },
+    close(): void {
+      if (!closed) {
+        closed = true;
+        zipFile.close();
+      }
+    }
+  };
 }
 
 export async function collectMatchedJarEntriesAsUtf8(

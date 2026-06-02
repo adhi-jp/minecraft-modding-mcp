@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import { MinecraftExplorerService } from "../src/minecraft-explorer-service.ts";
+import { __getZipOpenCount, __resetZipOpenCount } from "../src/source-jar-reader.ts";
 import type { Config } from "../src/types.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
 import { buildTestConfig } from "./helpers/test-config.ts";
@@ -347,6 +348,52 @@ test("MinecraftExplorerService expands inherited superclass and interface member
     ["com.example.Parent:inheritedMethod", "com.example.Primary:primaryMethod"]
   );
   assert.deepEqual(result.warnings, []);
+});
+
+test("getSignature opens the jar once for the whole inheritance hierarchy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-getsignature-open-count-"));
+  const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
+    "java/lang/Object.class": buildClassFile({ internalName: "java/lang/Object" }),
+    "com/example/Child.class": buildClassFile({
+      internalName: "com/example/Child",
+      superInternalName: "com/example/Parent",
+      interfaceInternalNames: ["com/example/Primary"],
+      methods: [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }],
+      fields: [{ name: "childValue", descriptor: "I", accessFlags: ACC_PUBLIC }]
+    }),
+    "com/example/Parent.class": buildClassFile({
+      internalName: "com/example/Parent",
+      interfaceInternalNames: ["com/example/Secondary"],
+      fields: [{ name: "parentValue", descriptor: "I", accessFlags: ACC_PROTECTED }]
+    }),
+    "com/example/Primary.class": buildClassFile({
+      internalName: "com/example/Primary",
+      methods: [{ name: "primaryMethod", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    }),
+    "com/example/Secondary.class": buildClassFile({
+      internalName: "com/example/Secondary",
+      fields: [{ name: "secondaryFlag", descriptor: "Z", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const service = createService(root);
+
+  __resetZipOpenCount();
+  const result = await service.getSignature({
+    jarPath,
+    fqn: "com.example.Child",
+    includeInherited: true
+  });
+
+  // The entire super/interface hierarchy is read through ONE jar open
+  // (previously one yauzl.open per distinct class in the hierarchy).
+  assert.equal(__getZipOpenCount(), 1);
+  // Parity: inherited members are still resolved through the single-open reader.
+  assert.ok(
+    result.fields.some((field) => field.ownerFqn === "com.example.Parent" && field.name === "parentValue")
+  );
+  assert.ok(
+    result.methods.some((method) => method.ownerFqn === "com.example.Primary" && method.name === "primaryMethod")
+  );
 });
 
 test("MinecraftExplorerService warns when inherited classes or interfaces are missing", async () => {
