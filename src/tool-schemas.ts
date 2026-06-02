@@ -714,7 +714,7 @@ export const checkSymbolExistsShape = {
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
-  nameMode: classNameModeSchema.default("fqcn").describe("fqcn | auto"),
+  nameMode: classNameModeSchema.default("auto").describe("auto (default) infers fqcn when the name contains a dot and simple-name lookup otherwise; fqcn requires a fully-qualified name"),
   signatureMode: z.enum(["exact", "name-only"]).default("exact")
     .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
@@ -840,7 +840,7 @@ export const validateMixinShape = {
   ]).describe("One of { mode: 'inline', source }, { mode: 'path', path }, { mode: 'paths', paths[] }, { mode: 'config', configPaths[] }, or { mode: 'project', path }."),
   sourceRoots: z.array(z.string().min(1)).optional()
     .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
-  version: nonEmptyString.describe("Minecraft version"),
+  version: optionalNonEmptyString.describe("Minecraft version. Optional when input.mode='project' (detected from the workspace) or preferProjectVersion=true with projectPath set; required otherwise."),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
@@ -866,7 +866,21 @@ export const validateMixinShape = {
   includeIssues: z.boolean().default(true)
     .describe("When false, keep summary fields but omit per-result issues[] payloads")
 };
-export const validateMixinSchema = z.object(validateMixinShape);
+export const validateMixinSchema = z.object(validateMixinShape).superRefine((value, ctx) => {
+  if (value.version) {
+    return;
+  }
+  const canDetectVersion =
+    value.input?.mode === "project" || (value.preferProjectVersion === true && Boolean(value.projectPath));
+  if (!canDetectVersion) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["version"],
+      message:
+        "version is required unless input.mode='project' or preferProjectVersion=true with projectPath set (so the Minecraft version can be detected from gradle.properties)."
+    });
+  }
+});
 
 export const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),

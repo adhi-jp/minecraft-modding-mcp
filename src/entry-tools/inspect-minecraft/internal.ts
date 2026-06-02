@@ -398,17 +398,17 @@ export function summarizeRequestedSubject(subject: Subject): Record<string, unkn
   return subject;
 }
 
-async function exampleVersionForSubject(
+async function detectedVersionForSubject(
   deps: InspectMinecraftDeps,
   subject: Extract<Subject, { kind: "class" | "search" | "file" }>
-): Promise<string> {
+): Promise<string | undefined> {
   if ("projectPath" in subject && typeof subject.projectPath === "string") {
     const detectedVersion = await deps.detectProjectMinecraftVersion(subject.projectPath);
     if (detectedVersion) {
       return detectedVersion;
     }
   }
-  return "<version>";
+  return undefined;
 }
 
 async function buildArtifactContextSuggestedCall(
@@ -416,21 +416,39 @@ async function buildArtifactContextSuggestedCall(
   task: ArtifactContextTask,
   subject: Extract<Subject, { kind: "class" | "search" | "file" }>
 ): Promise<ReturnType<typeof buildSuggestedCall>> {
-  return buildSuggestedCall({
-    tool: "inspect-minecraft",
-    params: {
-      task,
-      subject: {
-        ...subject,
-        artifact: {
-          type: "resolve-target",
-          target: {
-            kind: "version",
-            value: await exampleVersionForSubject(deps, subject)
-          }
+  const paramsForVersion = (version: string): Record<string, unknown> => ({
+    task,
+    subject: {
+      ...subject,
+      artifact: {
+        type: "resolve-target",
+        target: {
+          kind: "version",
+          value: version
         }
       }
     }
+  });
+
+  const detectedVersion = await detectedVersionForSubject(deps, subject);
+  if (detectedVersion) {
+    return buildSuggestedCall({
+      tool: "inspect-minecraft",
+      params: paramsForVersion(detectedVersion)
+    });
+  }
+
+  // No concrete version could be detected: emit a template the caller must fill
+  // in (via exampleCalls) rather than a placeholder-laden suggestedCall.
+  return buildSuggestedCall({
+    tool: "inspect-minecraft",
+    params: undefined,
+    examples: [
+      {
+        params: paramsForVersion("<version>"),
+        reason: "Supply the Minecraft version (e.g. \"1.21.10\") to resolve artifact context."
+      }
+    ]
   });
 }
 

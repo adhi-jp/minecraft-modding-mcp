@@ -312,15 +312,21 @@ export async function synthesizeDependencyTarget(
         nextAction,
         ...buildSuggestedCall({
           tool: "resolve-artifact",
-          params: {
-            target: {
-              kind: "dependency",
-              group,
-              name,
-              version: "<your-version>"
-            },
-            projectPath
-          }
+          params: undefined,
+          examples: [
+            {
+              params: {
+                target: {
+                  kind: "dependency",
+                  group,
+                  name,
+                  version: "<your-version>"
+                },
+                projectPath
+              },
+              reason: "Replace <your-version> with the dependency version, or declare it in gradle.properties."
+            }
+          ]
         })
       }
     });

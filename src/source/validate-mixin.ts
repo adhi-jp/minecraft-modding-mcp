@@ -39,7 +39,8 @@ import { runTargetLookupStage } from "./validate-mixin/pipeline/target-lookup.js
 import { normalizePathStyle, pathExists } from "./shared-utils.js";
 /* remapSignatureMembers reached via svc.remapSignatureMembers so tests can monkey-patch */
 
-export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input"> & {
+export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input" | "version"> & {
+  version: string;
   source?: string;
   sourcePath?: string;
   batchCaches?: {
@@ -240,11 +241,56 @@ export async function validateMixin(
   }
 }
 
+/**
+ * ValidateMixinInput after the dispatcher has resolved a concrete Minecraft
+ * version (explicit, or detected from the project's gradle.properties).
+ */
+type VersionedValidateMixinInput = ValidateMixinInput & { version: string };
+
+/**
+ * Resolve the Minecraft version for a validate-mixin request. Uses the explicit
+ * `version` when present; otherwise detects it from gradle.properties for
+ * project mode or when preferProjectVersion is set with a projectPath. Throws an
+ * actionable INVALID_INPUT error when no version can be determined.
+ */
+async function resolveRequestedMinecraftVersion(
+  svc: SourceService,
+  input: ValidateMixinInput
+): Promise<string> {
+  const explicit = input.version?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const projectPathCandidate =
+    input.projectPath ?? (input.input.mode === "project" ? input.input.path : undefined);
+  if (projectPathCandidate) {
+    const normalizedProjectPath = resolveMixinInputPath(projectPathCandidate, "path");
+    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
+    if (detected?.trim()) {
+      return detected.trim();
+    }
+  }
+
+  throw createError({
+    code: ERROR_CODES.INVALID_INPUT,
+    message:
+      "Could not detect a Minecraft version from the project. Pass version explicitly, or ensure gradle.properties declares minecraft_version.",
+    details: {
+      failedStage: "input-validation",
+      nextAction:
+        'Pass version (e.g. "1.21.10"), or set preferProjectVersion=true with a projectPath whose gradle.properties contains minecraft_version.'
+    }
+  });
+}
+
 async function runValidateMixinDispatcher(
   svc: SourceService,
-  input: ValidateMixinInput,
+  rawInput: ValidateMixinInput,
   options: ValidateMixinOptions = {}
 ): Promise<ValidateMixinOutput> {
+  const requestedVersion = await resolveRequestedMinecraftVersion(svc, rawInput);
+  const input: VersionedValidateMixinInput = { ...rawInput, version: requestedVersion };
   const { input: sourceInput, ...sharedInput } = input;
   const mode = sourceInput.mode;
   const stageEmitter = options.stageEmitter ?? NOOP_STAGE_EMITTER;
@@ -338,7 +384,9 @@ async function runValidateMixinDispatcher(
   );
 }
 
-async function createProjectValidateMixinConfigInput(input: ValidateMixinInput): Promise<ValidateMixinInput> {
+async function createProjectValidateMixinConfigInput(
+  input: VersionedValidateMixinInput
+): Promise<VersionedValidateMixinInput> {
   if (input.input.mode !== "project") {
     return input;
   }
@@ -778,7 +826,7 @@ async function validateMixinMany(
   svc: SourceService,
   mode: "paths" | "config" | "project",
   entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
-  input: ValidateMixinInput,
+  input: VersionedValidateMixinInput,
   additionalWarnings: string[],
   extras: {
     stageEmitter?: StageEmitter;

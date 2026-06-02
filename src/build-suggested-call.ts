@@ -42,17 +42,36 @@ function asParamsRecord(params: unknown): Record<string, unknown> | undefined {
   return params as Record<string, unknown>;
 }
 
-export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput {
-  if (SUGGESTED_CALL_VALIDATE_OFF) {
-    const rawParams = asParamsRecord(spec.params);
-    if (rawParams) {
-      return { suggestedCall: { tool: spec.tool, params: rawParams } };
-    }
-    return {};
-  }
+// Placeholder sentinels are `<...>` tokens that a caller must substitute before
+// the call is executable (e.g. "<version>", "<fully-qualified-class-name>").
+// The two JVM pseudo-method-names `<init>` / `<clinit>` are real, valid values
+// and are explicitly excluded so constructor lookups are not misclassified.
+const PLACEHOLDER_SENTINEL_RE = /<(?!init>)(?!clinit>)[^<>]+>/;
 
+function containsPlaceholderSentinel(value: unknown): boolean {
+  if (typeof value === "string") {
+    return PLACEHOLDER_SENTINEL_RE.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsPlaceholderSentinel);
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(containsPlaceholderSentinel);
+  }
+  return false;
+}
+
+export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput {
   const primaryParams = asParamsRecord(spec.params);
-  if (primaryParams) {
+
+  // A `suggestedCall` must be directly executable. Reject any primary payload
+  // that still carries a placeholder sentinel (e.g. "<version>") even when it
+  // is schema-valid: those belong in `exampleCalls` as templates, not as a
+  // call the caller can replay verbatim.
+  if (primaryParams && !containsPlaceholderSentinel(primaryParams)) {
+    if (SUGGESTED_CALL_VALIDATE_OFF) {
+      return { suggestedCall: { tool: spec.tool, params: primaryParams } };
+    }
     // Unknown-tool fail-open: the registry is populated at index.ts startup;
     // service-level tests that do not boot index.ts run with an empty
     // registry and rely on this pass-through. Callers that synthesize a tool
@@ -71,14 +90,18 @@ export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput
     spec.params !== undefined ? { _suggestedCallPrimaryDropped: true as const } : {};
 
   if (spec.examples && spec.examples.length > 0) {
+    // Example calls are templates (placeholders allowed) and only their
+    // schema-shape is checked. Mirror the primary path's unknown-tool
+    // fail-open so service-level tests with an unpopulated registry still
+    // surface templates instead of silently dropping them.
+    const exampleSchemaUnavailable = SUGGESTED_CALL_VALIDATE_OFF || !getToolSchema(spec.tool);
     const validated = spec.examples
       .map((example): ValidatedExampleCall | null => {
         const exampleParams = asParamsRecord(example.params);
         if (!exampleParams) {
           return null;
         }
-        const result = validateToolParams(spec.tool, exampleParams);
-        if (!result.valid) {
+        if (!exampleSchemaUnavailable && !validateToolParams(spec.tool, exampleParams).valid) {
           return null;
         }
         return {

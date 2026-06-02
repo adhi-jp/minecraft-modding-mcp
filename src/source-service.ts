@@ -542,7 +542,12 @@ export type ValidateMixinInput = {
         path: string;
       };
   sourceRoots?: string[];
-  version: string;
+  /**
+   * Optional when input.mode='project', or preferProjectVersion=true with a
+   * projectPath set: the dispatcher detects the Minecraft version from
+   * gradle.properties before any version-dependent stage runs.
+   */
+  version?: string;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   scope?: ArtifactScope;

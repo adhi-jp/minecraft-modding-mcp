@@ -34,7 +34,7 @@ test("top-level workflow tool schemas expose explicit defaults on safe public pa
   assert.match(validateProjectSource, /treatInfoAsWarning:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(validateProjectSource, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(analyzeSymbolSource, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
-  assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("fqcn"\)/);
+  assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("auto"\)/);
   assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(5\)/);
   assert.match(compareMinecraftSource, /maxClassResults:\s*positiveIntSchema\.default\(500\)/);
   assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
@@ -2156,7 +2156,7 @@ test("ValidateProjectService access-transformer issues block only includes inval
   assert.equal((result.issues as Array<Record<string, unknown>>)[0]?.valid, false);
 });
 
-test("ValidateProjectService project-summary blocked recovery omits a hardcoded version when no version source is available", async () => {
+test("ValidateProjectService project-summary blocked recovery suggests preferProjectVersion without a hardcoded version", async () => {
   const service = new ValidateProjectService({
     validateMixin: async () => {
       throw new Error("not used");
@@ -2179,12 +2179,15 @@ test("ValidateProjectService project-summary blocked recovery omits a hardcoded 
   });
 
   assert.equal(result.summary.status, "blocked");
+  // The recovery must make progress instead of repeating the same blocked call:
+  // it adds preferProjectVersion=true (no hardcoded/placeholder version).
   assert.deepEqual(result.summary.nextActions, [
     {
       tool: "validate-project",
       params: {
         task: "project-summary",
-        subject
+        subject,
+        preferProjectVersion: true
       }
     }
   ]);

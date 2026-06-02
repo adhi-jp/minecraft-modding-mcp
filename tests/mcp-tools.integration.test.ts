@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
+import { checkSymbolExistsSchema, validateMixinSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
 
@@ -101,6 +102,72 @@ test("tools/list exposes the expected MCP tools without legacy mc prefixes", asy
 
   assert.deepEqual(toolNames, [...EXPECTED_TOOLS].sort());
   assert.ok(toolNames.every((name) => !name.startsWith("mc-")));
+});
+
+function schemaDeclaresProperty(schema: unknown, key: string): boolean {
+  if (Array.isArray(schema)) {
+    return schema.some((entry) => schemaDeclaresProperty(entry, key));
+  }
+  if (schema && typeof schema === "object") {
+    const record = schema as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties && typeof properties === "object" && key in (properties as Record<string, unknown>)) {
+      return true;
+    }
+    return Object.values(record).some((value) => schemaDeclaresProperty(value, key));
+  }
+  return false;
+}
+
+test("check-symbol-exists accepts a dotless class name with the default nameMode", () => {
+  const parsed = checkSymbolExistsSchema.safeParse({
+    version: "1.21.10",
+    kind: "class",
+    name: "ItemStack",
+    sourceMapping: "mojang"
+  });
+
+  assert.ok(
+    parsed.success,
+    parsed.success ? "" : `dotless class name should parse by default: ${JSON.stringify(parsed.error.issues)}`
+  );
+});
+
+test("validate-mixin omits version requirement for project mode", () => {
+  const parsed = validateMixinSchema.safeParse({
+    input: { mode: "project", path: "/workspace" }
+  });
+
+  assert.ok(
+    parsed.success,
+    parsed.success ? "" : `project mode should not require version: ${JSON.stringify(parsed.error.issues)}`
+  );
+});
+
+test("validate-mixin still requires version for inline mode without project detection", () => {
+  const parsed = validateMixinSchema.safeParse({
+    input: { mode: "inline", source: "class X {}" }
+  });
+
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    assert.ok(parsed.error.issues.some((issue) => issue.path.includes("version")));
+  }
+});
+
+test("read-only tools do not expose file-writing fields", async () => {
+  const tools = (await listTools()) as Array<ToolSchema & { annotations?: { readOnlyHint?: boolean } }>;
+  const offenders = tools
+    .filter((tool) => tool.annotations?.readOnlyHint === true)
+    .filter((tool) => schemaDeclaresProperty(tool.inputSchema, "outputFile"))
+    .map((tool) => tool.name)
+    .sort();
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `read-only tools must not accept the write-capable outputFile field: ${offenders.join(", ")}`
+  );
 });
 
 test("manual stdio smoke validates restarted list-versions against the current releases contract", async () => {
@@ -643,7 +710,7 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
   assert.equal(validateMixinSchema.properties?.includeIssues?.default, true);
   assert.equal(inspectMinecraftSchema.properties?.includeSnapshots?.default, false);
   assert.equal(inspectMinecraftSchema.properties?.limit?.default, undefined);
-  assert.equal(analyzeSymbolSchema.properties?.nameMode?.default, "fqcn");
+  assert.equal(analyzeSymbolSchema.properties?.nameMode?.default, "auto");
   assert.equal(analyzeSymbolSchema.properties?.signatureMode?.default, "exact");
   assert.equal(analyzeSymbolSchema.properties?.maxCandidates?.default, 5);
   assert.equal(analyzeSymbolSchema.properties?.sourceMapping?.default, undefined);
@@ -679,7 +746,8 @@ test("inspect-minecraft search without artifact context returns retryable sugges
     structuredContent?: {
       error?: {
         code?: string;
-        suggestedCall?: {
+        suggestedCall?: unknown;
+        exampleCalls?: Array<{
           tool?: string;
           params?: {
             task?: string;
@@ -691,18 +759,22 @@ test("inspect-minecraft search without artifact context returns retryable sugges
               };
             };
           };
-        };
+        }>;
       };
     };
   };
 
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "search");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "search");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+  // No detectable version: the recovery is a fill-in template (exampleCalls),
+  // not a non-executable placeholder suggestedCall.
+  assert.equal(result.structuredContent?.error?.suggestedCall, undefined);
+  const example = result.structuredContent?.error?.exampleCalls?.[0];
+  assert.equal(example?.tool, "inspect-minecraft");
+  assert.equal(example?.params?.task, "search");
+  assert.equal(example?.params?.subject?.kind, "search");
+  assert.equal(example?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(example?.params?.subject?.artifact?.target?.kind, "version");
 });
 
 test("inspect-minecraft class-source without artifact context returns retryable suggestedCall", async () => {
@@ -717,7 +789,8 @@ test("inspect-minecraft class-source without artifact context returns retryable 
     structuredContent?: {
       error?: {
         code?: string;
-        suggestedCall?: {
+        suggestedCall?: unknown;
+        exampleCalls?: Array<{
           tool?: string;
           params?: {
             task?: string;
@@ -729,18 +802,20 @@ test("inspect-minecraft class-source without artifact context returns retryable 
               };
             };
           };
-        };
+        }>;
       };
     };
   };
 
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "class-source");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "class");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+  assert.equal(result.structuredContent?.error?.suggestedCall, undefined);
+  const example = result.structuredContent?.error?.exampleCalls?.[0];
+  assert.equal(example?.tool, "inspect-minecraft");
+  assert.equal(example?.params?.task, "class-source");
+  assert.equal(example?.params?.subject?.kind, "class");
+  assert.equal(example?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(example?.params?.subject?.artifact?.target?.kind, "version");
 });
 
 test("inspect-minecraft class-members without artifact context preserves the requested task in suggestedCall", async () => {
@@ -755,7 +830,8 @@ test("inspect-minecraft class-members without artifact context preserves the req
     structuredContent?: {
       error?: {
         code?: string;
-        suggestedCall?: {
+        suggestedCall?: unknown;
+        exampleCalls?: Array<{
           tool?: string;
           params?: {
             task?: string;
@@ -767,18 +843,20 @@ test("inspect-minecraft class-members without artifact context preserves the req
               };
             };
           };
-        };
+        }>;
       };
     };
   };
 
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.tool, "inspect-minecraft");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.task, "class-members");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.kind, "class");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.type, "resolve-target");
-  assert.equal(result.structuredContent?.error?.suggestedCall?.params?.subject?.artifact?.target?.kind, "version");
+  assert.equal(result.structuredContent?.error?.suggestedCall, undefined);
+  const example = result.structuredContent?.error?.exampleCalls?.[0];
+  assert.equal(example?.tool, "inspect-minecraft");
+  assert.equal(example?.params?.task, "class-members");
+  assert.equal(example?.params?.subject?.kind, "class");
+  assert.equal(example?.params?.subject?.artifact?.type, "resolve-target");
+  assert.equal(example?.params?.subject?.artifact?.target?.kind, "version");
 });
 
 test("inspect-minecraft class-source with version subject returns concrete retry guidance", async () => {

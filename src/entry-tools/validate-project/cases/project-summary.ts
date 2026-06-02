@@ -62,12 +62,13 @@ if (!input.version && !input.preferProjectVersion) {
           tool: "validate-project",
           params: {
             task: "project-summary",
-            subject: input.subject
+            subject: input.subject,
+            preferProjectVersion: true
           }
         }
       ],
       notes: [
-        "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version."
+        "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version. The suggested retry sets preferProjectVersion=true for you."
       ]
     },
     blocks: {

@@ -116,6 +116,55 @@ test("invalid primary + no surviving examples returns no suggestedCall (marker p
   assert.equal(out._suggestedCallPrimaryDropped, true);
 });
 
+test("placeholder primary is not emitted as an executable suggestedCall", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const params = {
+    className: "<fully-qualified-class-name>",
+    target: { type: "resolve" as const, kind: "version" as const, value: "1.21.10" }
+  };
+  const out = buildSuggestedCall({ tool: "get-class-source", params });
+  assert.equal(out.suggestedCall, undefined, "placeholder params must not become an executable suggestedCall");
+  assert.equal(out._suggestedCallPrimaryDropped, true);
+});
+
+test("placeholder primary surfaces as an exampleCalls template when supplied as an example", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const params = {
+    className: "<fully-qualified-class-name>",
+    target: { type: "resolve" as const, kind: "version" as const, value: "1.21.10" }
+  };
+  const out = buildSuggestedCall({
+    tool: "get-class-source",
+    params,
+    examples: [{ params, reason: "Replace <fully-qualified-class-name> with the real FQCN." }]
+  });
+  assert.equal(out.suggestedCall, undefined);
+  assert.ok(out.exampleCalls);
+  assert.equal(out.exampleCalls!.length, 1);
+  assert.match(out.exampleCalls![0]!.params.className as string, /fully-qualified/);
+});
+
+test("constructor pseudo-name <init> is not treated as a placeholder", async () => {
+  await import("../src/index.ts");
+  const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
+  const out = buildSuggestedCall({
+    tool: "find-mapping",
+    params: {
+      version: "1.21.10",
+      kind: "method" as const,
+      owner: "net/minecraft/world/item/Item",
+      name: "<init>",
+      descriptor: "()V",
+      sourceMapping: "obfuscated" as const,
+      targetMapping: "mojang" as const
+    }
+  });
+  assert.ok(out.suggestedCall, "<init> is a valid JVM method name, not a placeholder");
+  assert.equal(out.suggestedCall!.params.name, "<init>");
+});
+
 test("unknown tool name fails open: passes the caller payload through (registry-not-populated case)", async () => {
   // Service-level tests that do not boot src/index.ts run with an empty
   // registry; the gate falls open and passes the payload through. Callers

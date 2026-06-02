@@ -127,9 +127,17 @@ test("synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when n
           { target: { kind: "dependency" }, projectPath: project },
           { kind: "dependency", group: "dev.architectury", name: "architectury" }
         ),
-      (err: Error & { code?: string; details?: { suggestedCall?: { params?: { target?: { version?: string } } } } }) => {
+      (err: Error & {
+        code?: string;
+        details?: {
+          suggestedCall?: unknown;
+          exampleCalls?: Array<{ params?: { target?: { version?: string } } }>;
+        };
+      }) => {
         assert.equal(err.code, ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED);
-        assert.equal(err.details?.suggestedCall?.params?.target?.version, "<your-version>");
+        // The placeholder version is a fill-in template, not an executable call.
+        assert.equal(err.details?.suggestedCall, undefined);
+        assert.equal(err.details?.exampleCalls?.[0]?.params?.target?.version, "<your-version>");
         return true;
       }
     );

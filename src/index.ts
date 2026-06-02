@@ -746,9 +746,9 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
 
 if (!BATCH_TOOLS_OFF) {
   server.tool("batch-class-source",
-    "Batch lookup: read source for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-source.",
+    "Batch lookup: read source for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-source. Not read-only: per-entry outputFile writes source files to disk.",
     batchClassSourceShape,
-    { readOnlyHint: true },
+    { readOnlyHint: false },
     async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
       batchClassSourceService.execute(input as z.infer<typeof batchClassSourceSchema>) as unknown as Promise<Record<string, unknown>>
     )
@@ -829,9 +829,9 @@ server.tool("find-class",
 registerToolSchema("find-class", findClassSchema);
 
 server.tool("get-class-source",
-  "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). Default mode=metadata returns symbol outline only; use mode=snippet for bounded excerpts or mode=full for entire source.",
+  "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). To read source text, pass mode=snippet (bounded excerpt) or mode=full (entire source); the default mode=metadata returns a symbol outline only, not the body. Not read-only: outputFile writes the source to disk.",
   getClassSourceShape,
-  { readOnlyHint: true },
+  { readOnlyHint: false },
   async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) => {
     const normalizedTarget = normalizeSourceLookupTarget(input.target as SourceLookupTargetInput);
     return (
@@ -1293,9 +1293,9 @@ server.tool("decompile-mod-jar",
 registerToolSchema("decompile-mod-jar", decompileModJarSchema);
 
 server.tool("get-mod-class-source",
-  "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached.",
+  "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached. Not read-only: outputFile writes the source to disk.",
   getModClassSourceShape,
-  { readOnlyHint: true },
+  { readOnlyHint: false },
   async (args) => runTool("get-mod-class-source", args, getModClassSourceSchema, async (input) =>
     sourceService.getModClassSource({
       jarPath: input.jarPath,

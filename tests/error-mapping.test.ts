@@ -2,7 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ERROR_CODES, createError } from "../src/errors.ts";
-import { errorToBatchEntryProblem, statusForErrorCode } from "../src/error-mapping.ts";
+import { errorToBatchEntryProblem, retryClassForErrorCode, statusForErrorCode } from "../src/error-mapping.ts";
+
+test("retryClassForErrorCode classifies the four recovery families", () => {
+  assert.equal(retryClassForErrorCode(ERROR_CODES.JAVA_UNAVAILABLE), "environment");
+  assert.equal(retryClassForErrorCode(ERROR_CODES.REPO_FETCH_FAILED), "transient");
+  assert.equal(retryClassForErrorCode(ERROR_CODES.INVALID_INPUT), "input");
+  assert.equal(retryClassForErrorCode(ERROR_CODES.CLASS_NOT_FOUND), "permanent");
+});
+
+test("errorToBatchEntryProblem attaches retryClass derived from the error code", () => {
+  const problem = errorToBatchEntryProblem(
+    createError({ code: ERROR_CODES.CLASS_NOT_FOUND, message: "missing" }),
+    "test-retry-class"
+  );
+  assert.equal(problem.retryClass, "permanent");
+});
 
 test("statusForErrorCode: ERR_WORKSPACE_VERSION_UNRESOLVED maps to 422 (recoverable input)", () => {
   assert.equal(statusForErrorCode(ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED), 422);

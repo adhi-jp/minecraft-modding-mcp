@@ -530,6 +530,56 @@ test("SourceService getClassMembers uses sibling binary jar when artifact is res
   assert.equal(result.members.methods[0]?.name, "use");
 });
 
+test("SourceService getClassMembers enriches a binary-path CLASS_NOT_FOUND with recovery guidance", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-notfound-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "net/minecraft/world/item/Item.java": [
+      "package net.minecraft.world.item;",
+      "public class Item {}"
+    ].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "obfuscated"
+  });
+
+  // Force the bytecode extraction path to report the class as missing with the
+  // sparse error shape that getSignature produces.
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      throw createError({
+        code: ERROR_CODES.CLASS_NOT_FOUND,
+        message: 'Class "net.minecraft.world.item.Missing" was not found in jar.',
+        details: { fqn: "net.minecraft.world.item.Missing", jarPath: binaryJarPath, classEntryPath: "x.class" }
+      });
+    }
+  };
+
+  await assert.rejects(
+    () => service.getClassMembers({
+      artifactId: resolved.artifactId,
+      className: "net.minecraft.world.item.Missing",
+      mapping: "obfuscated"
+    }),
+    (err: unknown) => {
+      const appError = err as { code?: string; details?: Record<string, unknown> };
+      assert.equal(appError.code, ERROR_CODES.CLASS_NOT_FOUND);
+      assert.ok(appError.details?.nextAction, "expected enriched nextAction");
+      assert.ok(appError.details?.suggestedCall, "expected enriched suggestedCall");
+      return true;
+    }
+  );
+});
+
 test("SourceService getClassSource falls back to sibling binary artifact when source jar coverage is partial", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-fallback-"));
@@ -9926,6 +9976,50 @@ test("SourceService validateMixin tags failedStage='input-validation' when proje
       const appError = err as { code?: string; details?: Record<string, unknown> };
       assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
       assert.equal(appError.details?.failedStage, "input-validation");
+      return true;
+    }
+  );
+});
+
+test("SourceService validateMixin errors with version guidance when project mode cannot detect a version", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-detect-missing-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  await assert.rejects(
+    () => service.validateMixin({
+      input: { mode: "project", path: root },
+      mapping: "obfuscated"
+    }),
+    (err: unknown) => {
+      const appError = err as { code?: string; message?: string; details?: Record<string, unknown> };
+      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+      assert.equal(appError.details?.failedStage, "input-validation");
+      assert.match(appError.message ?? "", /could not detect a minecraft version/i);
+      return true;
+    }
+  );
+});
+
+test("SourceService validateMixin detects the version from gradle.properties in project mode without an explicit version", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-detect-gradle-"));
+  await writeFile(join(root, "gradle.properties"), "minecraft_version=1.21\n", "utf8");
+  const service = new SourceService(buildTestConfig(root));
+
+  // With a detectable version, the dispatcher gets past version resolution and
+  // fails later on the absent mixin configs — not on a missing version.
+  await assert.rejects(
+    () => service.validateMixin({
+      input: { mode: "project", path: root },
+      mapping: "obfuscated"
+    }),
+    (err: unknown) => {
+      const appError = err as { code?: string; message?: string; details?: Record<string, unknown> };
+      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+      assert.equal(appError.details?.failedStage, "input-validation");
+      assert.match(appError.message ?? "", /no mixin config json files/i);
+      assert.doesNotMatch(appError.message ?? "", /could not detect a minecraft version/i);
       return true;
     }
   );

@@ -47,7 +47,7 @@ export const analyzeSymbolShape = {
   projectPath: nonEmptyString.optional(),
   gradleUserHome: nonEmptyString.optional(),
   signatureMode: z.enum(["exact", "name-only"]).default("exact"),
-  nameMode: z.enum(["fqcn", "auto"]).default("fqcn"),
+  nameMode: z.enum(["fqcn", "auto"]).default("auto"),
   includeKinds: z.array(z.enum(["class", "field", "method"])).optional(),
   maxRows: positiveIntSchema.optional(),
   maxCandidates: positiveIntSchema.default(5),

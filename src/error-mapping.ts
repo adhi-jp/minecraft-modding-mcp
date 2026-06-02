@@ -18,6 +18,18 @@ export type ExampleCall = {
   reason: string;
 };
 
+/**
+ * Whether retrying the same call can help, and why if not:
+ * - `transient`: a temporary failure (network, rate limit, timeout); retrying
+ *   the same call later may succeed.
+ * - `permanent`: the requested thing does not exist or cannot be produced;
+ *   retrying the same call will keep failing.
+ * - `environment`: the server lacks a capability (Java, decompiler, remapper);
+ *   retrying will not help until the environment is fixed.
+ * - `input`: the caller's input is wrong; fix the input, then retry.
+ */
+export type RetryClass = "transient" | "permanent" | "environment" | "input";
+
 export type ProblemDetails = {
   type: string;
   title: string;
@@ -25,6 +37,7 @@ export type ProblemDetails = {
   status: number;
   code: string;
   instance: string;
+  retryClass: RetryClass;
   fieldErrors?: ProblemFieldError[];
   hints?: string[];
   suggestedCall?: SuggestedCall;
@@ -109,6 +122,65 @@ export function statusForErrorCode(code: string): number {
   return 500;
 }
 
+const RETRY_CLASS_INPUT = new Set<string>([
+  ERROR_CODES.INVALID_INPUT,
+  ERROR_CODES.COORDINATE_PARSE_FAILED,
+  ERROR_CODES.INVALID_LINE_RANGE,
+  ERROR_CODES.NBT_PARSE_FAILED,
+  ERROR_CODES.NBT_INVALID_TYPED_JSON,
+  ERROR_CODES.JSON_PATCH_INVALID,
+  ERROR_CODES.JSON_PATCH_CONFLICT,
+  ERROR_CODES.NBT_ENCODE_FAILED,
+  ERROR_CODES.NBT_UNSUPPORTED_FEATURE,
+  ERROR_CODES.NAMESPACE_MISMATCH,
+  ERROR_CODES.CONTEXT_UNRESOLVED,
+  ERROR_CODES.MIXIN_PARSE_FAILED
+]);
+
+const RETRY_CLASS_PERMANENT = new Set<string>([
+  ERROR_CODES.SOURCE_NOT_FOUND,
+  ERROR_CODES.FILE_NOT_FOUND,
+  ERROR_CODES.JAR_NOT_FOUND,
+  ERROR_CODES.VERSION_NOT_FOUND,
+  ERROR_CODES.CLASS_NOT_FOUND,
+  ERROR_CODES.MAPPING_NOT_APPLIED,
+  ERROR_CODES.MAPPING_UNAVAILABLE,
+  ERROR_CODES.DECOMPILE_DISABLED,
+  ERROR_CODES.REMAP_FAILED,
+  ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+  ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED,
+  ERROR_CODES.PROVENANCE_INCOMPLETE,
+  ERROR_CODES.BATCH_ABORTED
+]);
+
+const RETRY_CLASS_ENVIRONMENT = new Set<string>([
+  ERROR_CODES.JAVA_UNAVAILABLE,
+  ERROR_CODES.DECOMPILER_UNAVAILABLE,
+  ERROR_CODES.DECOMPILER_FAILED,
+  ERROR_CODES.REMAPPER_UNAVAILABLE,
+  ERROR_CODES.REGISTRY_GENERATION_FAILED
+]);
+
+/**
+ * Single source of truth mapping an error code to its {@link RetryClass}. Used
+ * by every public problem builder so callers can branch on recovery strategy
+ * without parsing prose. Codes not explicitly classified (including
+ * `ERR_INTERNAL` and unknown codes) default to `transient`: a generic server
+ * failure where one retry is reasonable.
+ */
+export function retryClassForErrorCode(code: string): RetryClass {
+  if (RETRY_CLASS_INPUT.has(code)) {
+    return "input";
+  }
+  if (RETRY_CLASS_PERMANENT.has(code)) {
+    return "permanent";
+  }
+  if (RETRY_CLASS_ENVIRONMENT.has(code)) {
+    return "environment";
+  }
+  return "transient";
+}
+
 function extractFieldErrors(details: unknown): ProblemFieldError[] | undefined {
   if (typeof details !== "object" || details == null) return undefined;
   const raw = (details as Record<string, unknown>).fieldErrors;
@@ -155,6 +227,7 @@ export function errorToBatchEntryProblem(
       status: statusForErrorCode(caughtError.code),
       code: caughtError.code,
       instance,
+      retryClass: retryClassForErrorCode(caughtError.code),
       ...(fieldErrors ? { fieldErrors } : {}),
       ...(baseHints ? { hints: baseHints } : {}),
       ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {})
@@ -178,6 +251,7 @@ export function errorToBatchEntryProblem(
     status: 500,
     code: ERROR_CODES.INTERNAL,
     instance,
+    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL),
     ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {})
   };
 }
@@ -189,7 +263,8 @@ export function buildBatchAbortedProblem(instance: string): ProblemDetails {
     detail: "Earlier entry failed and failFast=true.",
     status: 412,
     code: ERROR_CODES.BATCH_ABORTED,
-    instance
+    instance,
+    retryClass: retryClassForErrorCode(ERROR_CODES.BATCH_ABORTED)
   };
 }
 

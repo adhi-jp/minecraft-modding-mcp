@@ -6,6 +6,7 @@ import {
   isAppError
 } from "./errors.js";
 import {
+  retryClassForErrorCode,
   statusForErrorCode,
   type ExampleCall,
   type ProblemDetails,
@@ -147,14 +148,19 @@ export function extractValidatedSuggestionAndExamples(details: unknown): {
       ) {
         continue;
       }
+      // Re-validate through the example path, not the primary path: example
+      // calls are templates and MAY carry placeholder sentinels (e.g.
+      // "<version>"), which the primary gate intentionally rejects.
       const result = buildSuggestedCall({
         tool: ex.tool,
-        params: ex.params as Record<string, unknown>
+        params: undefined,
+        examples: [{ params: ex.params as Record<string, unknown>, reason: ex.reason }]
       });
-      if (result.suggestedCall) {
+      const validatedExample = result.exampleCalls?.[0];
+      if (validatedExample) {
         validated.push({
           tool: ex.tool,
-          params: result.suggestedCall.params,
+          params: validatedExample.params,
           reason: ex.reason
         });
       }
@@ -763,7 +769,21 @@ function gatedGuidance(
   hints: string[],
   params: Record<string, unknown>
 ): InvalidInputGuidance {
-  const validated = buildSuggestedCall({ tool, params });
+  // Pass the reconstructed params as both the primary and a fallback example.
+  // When they are fully executable they become `suggestedCall`; when they still
+  // carry `<…>` placeholders (e.g. a missing version) the gate drops the
+  // primary and surfaces the same shape as an `exampleCalls` template instead
+  // of emitting a non-callable suggestedCall.
+  const validated = buildSuggestedCall({
+    tool,
+    params,
+    examples: [
+      {
+        params,
+        reason: `Example ${tool} call shape — replace any <…> placeholder values before sending.`
+      }
+    ]
+  });
   return {
     hints,
     ...validated,
@@ -857,6 +877,7 @@ export function mapErrorToProblem(
       status: 400,
       code: ERROR_CODES.INVALID_INPUT,
       instance: requestId,
+      retryClass: retryClassForErrorCode(ERROR_CODES.INVALID_INPUT),
       fieldErrors: toFieldErrorsFromZod(caughtError),
       hints: hintsWithFallback,
       ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
@@ -888,6 +909,7 @@ export function mapErrorToProblem(
       status: statusForErrorCode(caughtError.code),
       code: caughtError.code,
       instance: requestId,
+      retryClass: retryClassForErrorCode(caughtError.code),
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: hintsWithFallback,
       ...(suggestedCall ? { suggestedCall } : {}),
@@ -902,7 +924,8 @@ export function mapErrorToProblem(
     detail: "Unexpected server error.",
     status: 500,
     code: ERROR_CODES.INTERNAL,
-    instance: requestId
+    instance: requestId,
+    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL)
   };
 }
 

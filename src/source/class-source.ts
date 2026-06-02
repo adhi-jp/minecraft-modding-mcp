@@ -909,7 +909,24 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     signatureMethods = signature.methods;
   } catch (error) {
     if (isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND) {
-      throw error;
+      // Re-raise with the shared recovery shape (find-class/api-matrix
+      // suggestedCall, namespace + scope hints) instead of the sparse bytecode
+      // error, so members and source agree on CLASS_NOT_FOUND guidance.
+      throw buildClassSourceNotFoundError(svc, {
+        artifactId,
+        className,
+        lookupClassName,
+        mappingApplied,
+        requestedMapping,
+        qualityFlags,
+        attemptedBinaryFallback: true,
+        targetKind: input.target?.kind,
+        targetValue:
+          input.target && "value" in input.target ? input.target.value : undefined,
+        scope: input.scope,
+        projectPath: input.projectPath,
+        version
+      });
     }
     binaryExtractionFailed = true;
     binaryExtractionFailureReason = error instanceof Error ? error.message : String(error);
