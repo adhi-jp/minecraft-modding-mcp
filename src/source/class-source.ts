@@ -727,6 +727,9 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
   // Continuation guidance: when output was truncated and was not redirected to
   // a file, hand the caller the next line to read plus a replayable call that
   // re-reads from the already-resolved artifact (no re-resolution needed).
+  // nextStartLine is only set for snippet/full mode, so `mode` here is never
+  // "metadata". The caller's original endLine window is preserved so the
+  // continuation never reads past the requested range.
   const continuation =
     nextStartLine != null && !resolvedOutputFile
       ? buildSuggestedCall({
@@ -734,8 +737,9 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
           params: {
             className,
             target: { type: "artifact", artifactId: activeArtifactId },
-            mode: mode === "metadata" ? "snippet" : mode,
+            mode,
             startLine: nextStartLine,
+            ...(input.endLine != null ? { endLine: input.endLine } : {}),
             ...(input.maxLines != null ? { maxLines: input.maxLines } : {}),
             ...(input.maxChars != null ? { maxChars: input.maxChars } : {})
           }

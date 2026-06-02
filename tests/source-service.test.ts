@@ -1500,10 +1500,89 @@ test("SourceService getClassSource truncation reports nextStartLine and an execu
   assert.equal(suggested?.tool, "get-class-source");
   assert.equal(suggested?.params?.startLine, 6);
   assert.equal(suggested?.params?.className, "net.minecraft.server.Main");
+  // The caller's original endLine window must be preserved so the continuation
+  // does not read past line 7.
+  assert.equal(suggested?.params?.endLine, 7);
   assert.deepEqual(suggested?.params?.target, {
     type: "artifact",
     artifactId: resolved.artifactId
   });
+});
+
+test("SourceService getClassSource omits a line continuation for metadata-mode maxChars truncation", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-meta-chars-"));
+  const binaryJarPath = join(root, "server-3.0.0.jar");
+  const sourcesJarPath = join(root, "server-3.0.0-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {",
+      "  void tickServer() {}",
+      "  void shutdown() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  // The metadata outline is a synthesized summary, not a line window into the
+  // source, so a maxChars cut must not produce a (bogus) line continuation.
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.server.Main",
+    mode: "metadata",
+    maxChars: 20
+  });
+
+  assert.equal(source.mode, "metadata");
+  assert.equal(source.charsTruncated, true);
+  assert.equal(source.nextStartLine, undefined);
+  assert.equal(source.suggestedCall, undefined);
+});
+
+test("SourceService getClassSource omits a line continuation when maxChars cuts within the first line", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-firstline-"));
+  const binaryJarPath = join(root, "server-3.0.0.jar");
+  const sourcesJarPath = join(root, "server-3.0.0-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;", // line 1, 29 chars — longer than maxChars
+      "public class Main {}",
+      "int x = 1;"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  // A cut inside the first returned line cannot advance by line; resuming at the
+  // same startLine with the same maxChars would loop, so emit no continuation.
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.server.Main",
+    mode: "full",
+    maxChars: 10
+  });
+
+  assert.equal(source.charsTruncated, true);
+  assert.equal(source.truncated, true);
+  assert.equal(source.nextStartLine, undefined);
+  assert.equal(source.suggestedCall, undefined);
 });
 
 test("SourceService getClassSource maxChars truncation resumes at a safe line boundary", async () => {

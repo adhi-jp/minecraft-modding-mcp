@@ -67,14 +67,21 @@ export function buildClassSourceSnippet(input: SnippetBuildInput): SnippetBuildR
   }
 
   let nextStartLine: number | undefined;
-  if (truncated) {
+  // Metadata mode returns a synthesized outline, not a line window into the
+  // source, so its returnedStart/returnedEnd are not line-addressable and a
+  // char cut must not yield a (bogus) line continuation.
+  if (truncated && input.mode !== "metadata") {
     if (charsTruncated) {
       // A mid-line character cut may leave the final returned line partial.
       // Count only the complete (newline-terminated) lines and resume from the
       // first line not fully returned, re-reading any partial line in full.
+      // Require forward progress: when the cut lands inside the first returned
+      // line (no complete line returned), resuming at the same startLine with
+      // the same maxChars would loop, so emit no continuation — the caller must
+      // raise maxChars instead.
       const completeLines = (sourceText.match(/\n/g) ?? []).length;
       const resume = returnedStart + completeLines;
-      if (resume <= totalLines) {
+      if (resume > returnedStart && resume <= totalLines) {
         nextStartLine = resume;
       }
     } else if (returnedEnd < totalLines) {
