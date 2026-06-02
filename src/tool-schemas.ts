@@ -244,6 +244,9 @@ export const verifyMixinTargetShape = {
     "Optional caller-authored mixin field/method name. Drives @Accessor (getXxx/setXxx) and @Invoker (invokeXxx/callXxx) advice when the target is private."
   ),
   mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
+  autoRemap: z.boolean().optional().describe(
+    "When true and mapping differs from the artifact namespace, translate owner+member via find-mapping instead of failing ERR_NAMESPACE_MISMATCH. Requires a version-based target."
+  ),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   projectPath: optionalNonEmptyString.describe("Workspace root path for target.kind=workspace and Loom cache assistance."),
   gradleUserHome: gradleUserHomeSchema,

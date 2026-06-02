@@ -22,6 +22,7 @@ export type VerifyMixinTargetInput = {
     | { kind: "field"; name: string; descriptor?: string };
   mixinMemberName?: string;
   mapping?: SourceMapping;
+  autoRemap?: boolean;
   sourcePriority?: MappingSourcePriority;
   projectPath?: string;
   gradleUserHome?: string;
@@ -104,6 +105,7 @@ export type VerifyMixinTargetDeps = {
     artifactId: string;
     mappingApplied: SourceMapping;
     binaryJarPath?: string;
+    version?: string;
     provenance?: ArtifactProvenance;
     warnings?: string[];
   }>;
@@ -114,6 +116,23 @@ export type VerifyMixinTargetDeps = {
     includeSynthetic: boolean;
     includeInherited: boolean;
   }) => Promise<ExplorerSignatureOutput>;
+  /**
+   * Optional mapping translator used by autoRemap to convert owner/member names
+   * from the request namespace into the artifact namespace. When absent,
+   * autoRemap is unavailable and a namespace mismatch surfaces as an error.
+   */
+  findMapping?: (input: {
+    version: string;
+    kind: "class" | "field" | "method";
+    name: string;
+    owner?: string;
+    descriptor?: string;
+    sourceMapping: SourceMapping;
+    targetMapping: SourceMapping;
+  }) => Promise<{
+    resolved: boolean;
+    resolvedSymbol?: { name: string; owner?: string; descriptor?: string };
+  }>;
 };
 
 const ACCESSOR_NAME_RE = /^(get|set|is)([A-Z]\w*)$/;
@@ -277,14 +296,15 @@ export class VerifyMixinTargetService {
         details: { fieldErrors: [{ path: "target", message: "target is required" }] }
       });
     }
-    const owner = input.owner.trim();
+    let owner = input.owner.trim();
     if (!owner) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
         message: "owner must be non-empty."
       });
     }
-    const memberName = input.member.name.trim();
+    let member: VerifyMixinTargetInput["member"] = input.member;
+    let memberName = member.name.trim();
     if (!memberName) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -303,23 +323,30 @@ export class VerifyMixinTargetService {
     });
     const warnings: string[] = [...(resolved.warnings ?? [])];
     if (input.mapping && input.mapping !== resolved.mappingApplied) {
-      throw createError({
-        code: ERROR_CODES.NAMESPACE_MISMATCH,
-        message:
-          `verify-mixin-target requires owner and member.name to be in the artifact's namespace `
-          + `("${resolved.mappingApplied}"), but the request supplied mapping="${input.mapping}". `
-          + `Automatic name/descriptor translation is not yet supported; supply owner+member in the artifact namespace, `
-          + `or omit the mapping argument so the resolver picks the namespace automatically.`,
-        details: {
-          owner,
-          requestedMapping: input.mapping,
-          mappingApplied: resolved.mappingApplied,
-          artifactId: resolved.artifactId,
-          nextAction:
-            `Retry with mapping="${resolved.mappingApplied}" and owner/member translated to that namespace, `
-            + `or use find-mapping to translate before calling verify-mixin-target.`
-        }
-      });
+      if (input.autoRemap) {
+        const remapped = await this.applyAutoRemap(input, resolved, owner, member, warnings);
+        owner = remapped.owner;
+        member = remapped.member;
+        memberName = member.name;
+      } else {
+        throw createError({
+          code: ERROR_CODES.NAMESPACE_MISMATCH,
+          message:
+            `verify-mixin-target requires owner and member.name to be in the artifact's namespace `
+            + `("${resolved.mappingApplied}"), but the request supplied mapping="${input.mapping}". `
+            + `Set autoRemap=true to translate names automatically, supply owner+member in the artifact namespace, `
+            + `or omit the mapping argument so the resolver picks the namespace automatically.`,
+          details: {
+            owner,
+            requestedMapping: input.mapping,
+            mappingApplied: resolved.mappingApplied,
+            artifactId: resolved.artifactId,
+            nextAction:
+              `Retry with autoRemap=true, or with mapping="${resolved.mappingApplied}" and owner/member already in that namespace, `
+              + `or use find-mapping to translate before calling verify-mixin-target.`
+          }
+        });
+      }
     }
     if (!resolved.binaryJarPath) {
       throw createError({
@@ -362,15 +389,15 @@ export class VerifyMixinTargetService {
     warnings.push(...(signature.warnings ?? []));
 
     const memberPool: ExplorerSignatureMember[] =
-      input.member.kind === "method"
+      member.kind === "method"
         ? [...signature.constructors, ...signature.methods]
         : [...signature.fields];
     const allMemberNames = memberPool.map((m) => m.name);
     const exactNameHits = memberPool.filter((m) => m.name === memberName);
     let matches: VerifyMixinTargetMatch[];
     let candidates: VerifyMixinTargetCandidate[] = [];
-    if (input.member.descriptor) {
-      const descriptorHits = exactNameHits.filter((m) => m.jvmDescriptor === input.member.descriptor);
+    if (member.descriptor) {
+      const descriptorHits = exactNameHits.filter((m) => m.jvmDescriptor === member.descriptor);
       if (descriptorHits.length > 0) {
         matches = descriptorHits.map(buildMatch);
       } else {
@@ -378,7 +405,7 @@ export class VerifyMixinTargetService {
         candidates = exactNameHits.map((m) => ({
           name: m.name,
           descriptor: m.jvmDescriptor,
-          reason: `name match, descriptor ${m.jvmDescriptor} differs from requested ${input.member.descriptor}`
+          reason: `name match, descriptor ${m.jvmDescriptor} differs from requested ${member.descriptor}`
         }));
       }
     } else {
@@ -401,7 +428,7 @@ export class VerifyMixinTargetService {
     const exists = matches.length > 0;
     let accessorAdvice: AccessorAdvice | undefined;
     if (matches.length === 1) {
-      accessorAdvice = inferAnnotation(input.member, matches[0]!, input.mixinMemberName);
+      accessorAdvice = inferAnnotation(member, matches[0]!, input.mixinMemberName);
     }
 
     return {
@@ -422,6 +449,95 @@ export class VerifyMixinTargetService {
           : {})
       }
     };
+  }
+
+  /**
+   * Translate owner + member from the request namespace into the artifact
+   * namespace via find-mapping, so a caller looking at yarn/intermediary
+   * sources can verify against an obfuscated artifact in one call. Throws a
+   * namespace-mismatch (or invalid-input) error when translation is impossible.
+   */
+  private async applyAutoRemap(
+    input: VerifyMixinTargetInput,
+    resolved: { mappingApplied: SourceMapping; artifactId: string; version?: string },
+    owner: string,
+    member: VerifyMixinTargetInput["member"],
+    warnings: string[]
+  ): Promise<{ owner: string; member: VerifyMixinTargetInput["member"] }> {
+    const sourceMapping = input.mapping!;
+    const targetMapping = resolved.mappingApplied;
+    const mismatchDetails = {
+      owner,
+      member: member.name,
+      requestedMapping: sourceMapping,
+      mappingApplied: targetMapping,
+      artifactId: resolved.artifactId
+    };
+    if (!this.deps.findMapping) {
+      throw createError({
+        code: ERROR_CODES.NAMESPACE_MISMATCH,
+        message: `autoRemap is unavailable (no mapping translator configured); supply owner/member in the artifact namespace ("${targetMapping}").`,
+        details: mismatchDetails
+      });
+    }
+    const version = resolved.version ?? (input.target?.kind === "version" ? input.target.value : undefined);
+    if (!version) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `autoRemap needs a Minecraft version to translate names; use target.kind="version" or a workspace that resolves one.`,
+        details: mismatchDetails
+      });
+    }
+
+    const classResult = await this.deps.findMapping({
+      version,
+      kind: "class",
+      name: owner,
+      sourceMapping,
+      targetMapping
+    });
+    if (!classResult.resolved || !classResult.resolvedSymbol) {
+      throw createError({
+        code: ERROR_CODES.NAMESPACE_MISMATCH,
+        message: `autoRemap could not translate owner "${owner}" from ${sourceMapping} to ${targetMapping}.`,
+        details: {
+          ...mismatchDetails,
+          nextAction: `Confirm "${owner}" exists in ${sourceMapping} for ${version}, or supply owner/member already in ${targetMapping}.`
+        }
+      });
+    }
+    const translatedOwner = classResult.resolvedSymbol.name;
+
+    // Look the member up by its source-namespace owner so find-mapping can
+    // locate it, then take the translated name/descriptor.
+    const memberResult = await this.deps.findMapping({
+      version,
+      kind: member.kind,
+      name: member.name,
+      owner,
+      descriptor: member.descriptor,
+      sourceMapping,
+      targetMapping
+    });
+    if (!memberResult.resolved || !memberResult.resolvedSymbol) {
+      throw createError({
+        code: ERROR_CODES.NAMESPACE_MISMATCH,
+        message: `autoRemap could not translate ${member.kind} "${member.name}" of "${owner}" from ${sourceMapping} to ${targetMapping}.`,
+        details: mismatchDetails
+      });
+    }
+    const translatedDescriptor = memberResult.resolvedSymbol.descriptor ?? member.descriptor;
+    const translatedMember = (
+      member.kind === "method"
+        ? { kind: "method", name: memberResult.resolvedSymbol.name, descriptor: translatedDescriptor }
+        : { kind: "field", name: memberResult.resolvedSymbol.name, descriptor: translatedDescriptor }
+    ) as VerifyMixinTargetInput["member"];
+
+    warnings.push(
+      `autoRemap translated the target from ${sourceMapping} to ${targetMapping} (artifact namespace): `
+      + `${owner}#${member.name} -> ${translatedOwner}#${translatedMember.name}.`
+    );
+    return { owner: translatedOwner, member: translatedMember };
   }
 }
 

@@ -400,16 +400,19 @@ If the input JAR was already built with Mojang mappings, use `targetMapping: "mo
 When `search-mod-source` or `get-mod-class-source` surfaces a class or member that
 looks like a Minecraft target (for example a Mixin `@Shadow`/`@Inject` target, or a
 symbol from a crash stack), verify it against the target Minecraft version before
-trusting it. Feed the owner/member into `verify-mixin-target`:
+trusting it. Feed the owner/member into `verify-mixin-target`. When your owner/member
+are in a readable namespace (e.g. `mojang`/`yarn`) but the resolved artifact is
+obfuscated, set `autoRemap: true` to translate them automatically in one call:
 
 ```json
 {
   "tool": "verify-mixin-target",
   "arguments": {
-    "version": "1.21.10",
+    "target": { "kind": "version", "value": "1.21.10" },
     "owner": "net.minecraft.world.entity.LivingEntity",
-    "member": "tickServer",
-    "mapping": "mojang"
+    "member": { "kind": "method", "name": "tickServer", "descriptor": "()V" },
+    "mapping": "mojang",
+    "autoRemap": true
   }
 }
 ```

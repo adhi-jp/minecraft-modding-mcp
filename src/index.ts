@@ -351,8 +351,30 @@ const verifyMixinTargetService = new VerifyMixinTargetService({
       artifactId: output.artifactId,
       mappingApplied: output.mappingApplied,
       binaryJarPath: output.binaryJarPath,
+      version: output.version,
       provenance: output.provenance,
       warnings: output.warnings
+    };
+  },
+  findMapping: async (input) => {
+    const output = await sourceService.findMapping({
+      version: input.version,
+      kind: input.kind,
+      name: input.name,
+      owner: input.owner,
+      descriptor: input.descriptor,
+      sourceMapping: input.sourceMapping,
+      targetMapping: input.targetMapping
+    });
+    return {
+      resolved: output.resolved,
+      resolvedSymbol: output.resolvedSymbol
+        ? {
+            name: output.resolvedSymbol.name,
+            owner: output.resolvedSymbol.owner,
+            descriptor: output.resolvedSymbol.descriptor
+          }
+        : undefined
     };
   },
   getSignature: (input) =>
@@ -753,6 +775,7 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
         member: input.member,
         mixinMemberName: input.mixinMemberName,
         mapping: input.mapping,
+        autoRemap: input.autoRemap,
         sourcePriority: input.sourcePriority,
         projectPath: input.projectPath,
         gradleUserHome: input.gradleUserHome,

@@ -494,6 +494,88 @@ test("C13: explicit input.mapping that differs from resolved.mappingApplied thro
   );
 });
 
+test("C14: autoRemap translates owner+member across namespaces instead of throwing", async () => {
+  const findMappingCalls: Array<{ kind: string; name: string }> = [];
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: "1.21.10",
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async (input) => {
+      findMappingCalls.push({ kind: input.kind, name: input.name });
+      if (input.kind === "class") {
+        return { resolved: true, resolvedSymbol: { kind: "class", name: "a_obf", symbol: "a_obf" } };
+      }
+      return { resolved: true, resolvedSymbol: { kind: "method", name: "m_obf", owner: "a_obf", descriptor: "()V", symbol: "a_obf.m_obf" } };
+    },
+    getSignature: async (input) => {
+      assert.equal(input.fqn, "a_obf", "getSignature must receive the translated (obfuscated) owner");
+      return {
+        constructors: [],
+        methods: [
+          { ownerFqn: "a_obf", name: "m_obf", javaSignature: "public void m_obf()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
+        ],
+        fields: [],
+        warnings: []
+      };
+    }
+  });
+
+  const result = await service.execute({
+    owner: "net.minecraft.world.entity.LivingEntity",
+    member: { kind: "method", name: "tickServer", descriptor: "()V" },
+    target: { kind: "version", value: "1.21.10" },
+    mapping: "yarn",
+    autoRemap: true
+  });
+
+  assert.equal(result.exists, true);
+  assert.equal(result.resolvedOwner.className, "a_obf");
+  assert.equal(result.matches.length, 1);
+  assert.ok(
+    result.warnings.some((w) => /autoRemap/.test(w) && /yarn/.test(w) && /obfuscated/.test(w)),
+    "expected an autoRemap translation warning"
+  );
+  assert.deepEqual(findMappingCalls.map((c) => c.kind).sort(), ["class", "method"]);
+});
+
+test("C15: autoRemap surfaces a NAMESPACE_MISMATCH when the owner cannot be translated", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: "1.21.10",
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async () => ({ resolved: false }),
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when translation fails");
+    }
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "tickServer" },
+        target: { kind: "version", value: "1.21.10" },
+        mapping: "yarn",
+        autoRemap: true
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.NAMESPACE_MISMATCH);
+      return true;
+    }
+  );
+});
+
 test("C12: exampleSnippet is deterministic for given (annotation, kind, accessFlags)", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({
