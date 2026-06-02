@@ -226,6 +226,25 @@ const server = new McpServer({
   }
 ).validateToolInput = async (_tool: unknown, args: unknown) => args;
 
+// Low-level/expert tools duplicate capability that the six entry tools expose
+// in a single resolve+fetch call. expertTool() registers them exactly like
+// server.tool() but appends a note steering agents to the entry tools first.
+// Entry tools, batch tools, and the NBT/runtime utilities (which have no entry
+// equivalent) keep their plain descriptions via server.tool().
+const EXPERT_TOOL_NOTE =
+  " Expert/follow-up tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first; reach for this only for the narrow operation it names.";
+
+const expertTool: typeof server.tool = ((
+  name: string,
+  description: string,
+  ...rest: unknown[]
+) =>
+  (server.tool as (...args: unknown[]) => unknown)(
+    name,
+    description + EXPERT_TOOL_NOTE,
+    ...rest
+  )) as typeof server.tool;
+
 const config = loadConfig();
 const nbtLimits = {
   maxInputBytes: config.maxNbtInputBytes,
@@ -645,7 +664,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   }
 }
 
-server.tool("list-versions",
+expertTool("list-versions",
   "List available Minecraft versions from Mojang manifest and locally cached version jars.",
   listVersionsShape,
   { readOnlyHint: true },
@@ -786,7 +805,7 @@ if (!BATCH_TOOLS_OFF) {
   registerToolSchema("batch-mappings", batchMappingsSchema);
 }
 
-server.tool("resolve-artifact",
+expertTool("resolve-artifact",
   "Resolve source artifact from a target object ({ kind, value }) and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
   resolveArtifactShape,
   { readOnlyHint: true },
@@ -814,7 +833,7 @@ const findClassShape = {
 };
 const findClassSchema = z.object(findClassShape);
 
-server.tool("find-class",
+expertTool("find-class",
   "Resolve a simple or qualified class name to fully-qualified class names within an artifact. Use this before get-class-source when you only have a simple name.",
   findClassShape,
   { readOnlyHint: true },
@@ -828,7 +847,7 @@ server.tool("find-class",
 );
 registerToolSchema("find-class", findClassSchema);
 
-server.tool("get-class-source",
+expertTool("get-class-source",
   "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). To read source text, pass mode=snippet (bounded excerpt) or mode=full (entire source); the default mode=metadata returns a symbol outline only, not the body. Not read-only: outputFile writes the source to disk.",
   getClassSourceShape,
   { readOnlyHint: false },
@@ -859,7 +878,7 @@ server.tool("get-class-source",
 );
 registerToolSchema("get-class-source", getClassSourceSchema);
 
-server.tool("get-class-members",
+expertTool("get-class-members",
   "Get fields/methods/constructors for one class from binary bytecode by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }).",
   getClassMembersShape,
   { readOnlyHint: true },
@@ -889,7 +908,7 @@ server.tool("get-class-members",
 );
 registerToolSchema("get-class-members", getClassMembersSchema);
 
-server.tool("search-class-source",
+expertTool("search-class-source",
   "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output.",
   searchClassSourceShape,
   { readOnlyHint: true },
@@ -926,7 +945,7 @@ server.tool("search-class-source",
 );
 registerToolSchema("search-class-source", searchClassSourceSchema);
 
-server.tool("get-artifact-file",
+expertTool("get-artifact-file",
   "Get full source file content by artifactId and file path.",
   getArtifactFileShape,
   { readOnlyHint: true },
@@ -940,7 +959,7 @@ server.tool("get-artifact-file",
 );
 registerToolSchema("get-artifact-file", getArtifactFileSchema);
 
-server.tool("list-artifact-files",
+expertTool("list-artifact-files",
   "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
   listArtifactFilesShape,
   { readOnlyHint: true },
@@ -955,7 +974,7 @@ server.tool("list-artifact-files",
 );
 registerToolSchema("list-artifact-files", listArtifactFilesSchema);
 
-server.tool("trace-symbol-lifecycle",
+expertTool("trace-symbol-lifecycle",
   "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
   traceSymbolLifecycleShape,
   { readOnlyHint: true },
@@ -976,7 +995,7 @@ server.tool("trace-symbol-lifecycle",
 );
 registerToolSchema("trace-symbol-lifecycle", traceSymbolLifecycleSchema);
 
-server.tool("diff-class-signatures",
+expertTool("diff-class-signatures",
   "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
   diffClassSignaturesShape,
   { readOnlyHint: true },
@@ -994,7 +1013,7 @@ server.tool("diff-class-signatures",
 );
 registerToolSchema("diff-class-signatures", diffClassSignaturesSchema);
 
-server.tool("find-mapping",
+expertTool("find-mapping",
   "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
   findMappingShape,
   { readOnlyHint: true },
@@ -1017,7 +1036,7 @@ server.tool("find-mapping",
 );
 registerToolSchema("find-mapping", findMappingSchema);
 
-server.tool("resolve-method-mapping-exact",
+expertTool("resolve-method-mapping-exact",
   "Resolve one method mapping exactly by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous.",
   resolveMethodMappingExactShape,
   { readOnlyHint: true },
@@ -1037,7 +1056,7 @@ server.tool("resolve-method-mapping-exact",
 );
 registerToolSchema("resolve-method-mapping-exact", resolveMethodMappingExactSchema);
 
-server.tool("get-class-api-matrix",
+expertTool("get-class-api-matrix",
   "List class/member API rows across obfuscated/mojang/intermediary/yarn mappings for one class and Minecraft version.",
   getClassApiMatrixShape,
   { readOnlyHint: true },
@@ -1055,7 +1074,7 @@ server.tool("get-class-api-matrix",
 );
 registerToolSchema("get-class-api-matrix", getClassApiMatrixSchema);
 
-server.tool("resolve-workspace-symbol",
+expertTool("resolve-workspace-symbol",
   "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
   resolveWorkspaceSymbolShape,
   { readOnlyHint: true },
@@ -1076,7 +1095,7 @@ server.tool("resolve-workspace-symbol",
 );
 registerToolSchema("resolve-workspace-symbol", resolveWorkspaceSymbolSchema);
 
-server.tool("check-symbol-exists",
+expertTool("check-symbol-exists",
   "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
   checkSymbolExistsShape,
   { readOnlyHint: true },
@@ -1143,7 +1162,7 @@ server.tool("json-to-nbt",
 );
 registerToolSchema("json-to-nbt", jsonToNbtSchema);
 
-server.tool("index-artifact",
+expertTool("index-artifact",
   "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
   indexArtifactShape,
   async (args) => runTool("index-artifact", args, indexArtifactSchema, async (input) =>
@@ -1164,7 +1183,7 @@ server.tool("get-runtime-metrics",
 );
 registerToolSchema("get-runtime-metrics", emptySchema);
 
-server.tool("validate-mixin",
+expertTool("validate-mixin",
   "Validate Mixin source against Minecraft bytecode signatures for a given version.",
   validateMixinShape,
   { readOnlyHint: true },
@@ -1195,7 +1214,7 @@ server.tool("validate-mixin",
 );
 registerToolSchema("validate-mixin", validateMixinSchema);
 
-server.tool("validate-access-widener",
+expertTool("validate-access-widener",
   "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
   validateAccessWidenerShape,
   { readOnlyHint: true },
@@ -1214,7 +1233,7 @@ server.tool("validate-access-widener",
 );
 registerToolSchema("validate-access-widener", validateAccessWidenerSchema);
 
-server.tool("validate-access-transformer",
+expertTool("validate-access-transformer",
   "Validate Access Transformer file entries against Minecraft bytecode signatures for a given version.",
   validateAccessTransformerShape,
   { readOnlyHint: true },
@@ -1233,7 +1252,7 @@ server.tool("validate-access-transformer",
 );
 registerToolSchema("validate-access-transformer", validateAccessTransformerSchema);
 
-server.tool("analyze-mod-jar",
+expertTool("analyze-mod-jar",
   "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
   analyzeModJarShape,
   { readOnlyHint: true },
@@ -1261,7 +1280,7 @@ server.tool("get-registry-data",
 );
 registerToolSchema("get-registry-data", getRegistryDataSchema);
 
-server.tool("compare-versions",
+expertTool("compare-versions",
   "Compare two Minecraft versions to find added/removed classes and registry entry changes. Useful for understanding what changed between versions during mod migration.",
   compareVersionsShape,
   { readOnlyHint: true },
@@ -1277,7 +1296,7 @@ server.tool("compare-versions",
 );
 registerToolSchema("compare-versions", compareVersionsSchema);
 
-server.tool("decompile-mod-jar",
+expertTool("decompile-mod-jar",
   "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar by exposing the actual source code.",
   decompileModJarShape,
   { readOnlyHint: true },
@@ -1292,7 +1311,7 @@ server.tool("decompile-mod-jar",
 );
 registerToolSchema("decompile-mod-jar", decompileModJarSchema);
 
-server.tool("get-mod-class-source",
+expertTool("get-mod-class-source",
   "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached. Not read-only: outputFile writes the source to disk.",
   getModClassSourceShape,
   { readOnlyHint: false },
@@ -1308,7 +1327,7 @@ server.tool("get-mod-class-source",
 );
 registerToolSchema("get-mod-class-source", getModClassSourceSchema);
 
-server.tool("search-mod-source",
+expertTool("search-mod-source",
   "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
   searchModSourceShape,
   { readOnlyHint: true },
@@ -1323,7 +1342,7 @@ server.tool("search-mod-source",
 );
 registerToolSchema("search-mod-source", searchModSourceSchema);
 
-server.tool("remap-mod-jar",
+expertTool("remap-mod-jar",
   "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
   remapModJarShape,
   { readOnlyHint: false },

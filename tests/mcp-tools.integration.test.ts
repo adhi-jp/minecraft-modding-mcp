@@ -119,6 +119,40 @@ function schemaDeclaresProperty(schema: unknown, key: string): boolean {
   return false;
 }
 
+test("expert tools steer callers to the entry tools, which keep plain descriptions", async () => {
+  const tools = (await listTools()) as Array<ToolSchema & { description?: string }>;
+  const description = new Map(tools.map((tool) => [tool.name, tool.description ?? ""]));
+  const NOTE = /prefer the entry tools/;
+
+  // Entry, batch, and the no-entry-equivalent utilities must NOT carry the note.
+  const plainTools = [
+    "inspect-minecraft", "analyze-symbol", "compare-minecraft", "analyze-mod", "validate-project", "manage-cache",
+    "verify-mixin-target", "batch-class-source", "batch-class-members", "batch-symbol-exists", "batch-mappings",
+    "nbt-to-json", "nbt-apply-json-patch", "json-to-nbt", "get-runtime-metrics", "get-registry-data"
+  ];
+  for (const name of plainTools) {
+    assert.ok(description.has(name), `${name} must be registered`);
+    assert.doesNotMatch(description.get(name)!, NOTE, `${name} must not carry the expert-tool note`);
+  }
+
+  // Every low-level tool that duplicates an entry-tool capability carries it.
+  const expertTools = [
+    "list-versions", "resolve-artifact", "find-class", "get-class-source", "get-class-members",
+    "search-class-source", "get-artifact-file", "list-artifact-files", "index-artifact",
+    "trace-symbol-lifecycle", "diff-class-signatures", "compare-versions",
+    "find-mapping", "resolve-method-mapping-exact", "get-class-api-matrix", "resolve-workspace-symbol", "check-symbol-exists",
+    "analyze-mod-jar", "decompile-mod-jar", "get-mod-class-source", "search-mod-source", "remap-mod-jar",
+    "validate-mixin", "validate-access-widener", "validate-access-transformer"
+  ];
+  for (const name of expertTools) {
+    assert.ok(description.has(name), `${name} must be registered`);
+    assert.match(description.get(name)!, NOTE, `${name} must carry the expert-tool note`);
+  }
+
+  // Together they account for every registered tool (no tool left unclassified).
+  assert.equal(plainTools.length + expertTools.length, EXPECTED_TOOLS.length);
+});
+
 test("README states the registered tool count and entry/expert split", async () => {
   const readme = await readFile("README.md", "utf8");
   const entryCount = 6;
