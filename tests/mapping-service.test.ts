@@ -1579,8 +1579,11 @@ test("MappingService getClassApiMatrix paginates rows with a stable nextCursor",
     };
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
-    const rowKey = (r: { kind: string; obfuscated?: { name?: string }; mojang?: { name?: string } }) =>
-      `${r.kind}:${r.obfuscated?.name ?? r.mojang?.name ?? ""}`;
+    // Injective row key: include the descriptor so overloaded members (same
+    // name, different descriptor) are distinct, making this a real no-overlap
+    // oracle.
+    const rowKey = (r: { kind: string; descriptor?: string; obfuscated?: { name?: string }; mojang?: { name?: string } }) =>
+      `${r.kind}:${r.obfuscated?.name ?? r.mojang?.name ?? ""}:${r.descriptor ?? ""}`;
 
     const page1 = await withCwd(root, () =>
       service.getClassApiMatrix({
@@ -1590,15 +1593,35 @@ test("MappingService getClassApiMatrix paginates rows with a stable nextCursor",
     assert.equal(page1.rows.length, 1);
     assert.equal(page1.rowsTruncated, true);
     assert.ok(page1.nextCursor, "page 1 must carry a continuation cursor");
+    const total = page1.rowCount;
+    assert.ok(total > 2, "fixture must have several rows to exercise pagination");
 
-    const page2 = await withCwd(root, () =>
-      service.getClassApiMatrix({
-        version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated", maxRows: 1,
-        cursor: page1.nextCursor
-      } as never)
-    );
-    assert.equal(page2.cursorIgnored, undefined);
-    assert.notEqual(rowKey(page2.rows[0]!), rowKey(page1.rows[0]!), "page 2 must advance past page 1");
+    // Walk every page with maxRows:1; collect keys to prove gap-free, no-overlap,
+    // terminating pagination.
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (;;) {
+      const page = await withCwd(root, () =>
+        service.getClassApiMatrix({
+          version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated", maxRows: 1,
+          ...(cursor ? { cursor } : {})
+        } as never)
+      );
+      assert.equal(page.cursorIgnored, undefined);
+      assert.ok(page.rows.length <= 1);
+      for (const r of page.rows) seen.push(rowKey(r));
+      pages += 1;
+      assert.ok(pages <= total + 2, "pagination must terminate");
+      if (!page.nextCursor) {
+        // The final page must not advertise a continuation.
+        assert.equal(page.rowsTruncated, undefined);
+        break;
+      }
+      cursor = page.nextCursor;
+    }
+    assert.equal(seen.length, total, "every row returned exactly once across all pages");
+    assert.equal(new Set(seen).size, total, "no row was returned twice (keys are unique)");
 
     // A malformed cursor is ignored and the scan restarts from the first row.
     const restarted = await withCwd(root, () =>

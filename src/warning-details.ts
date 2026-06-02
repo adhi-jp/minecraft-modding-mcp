@@ -47,7 +47,7 @@ const WARNING_RULES: WarningRule[] = [
     severity: "info"
   },
   {
-    test: /namespace translation requires a version|could not be applied because the artifact has no version|Could not map .* from .* to|No exact class symbol matched|Unsupported .* namespace/i,
+    test: /namespace translation requires a version|could not be applied because the artifact has no version|Could not (re)?map .* (from .* to|to .* namespace)|Remap failed for|Mapping lookup failed|No exact class symbol matched|Unsupported .* namespace/i,
     code: "namespace_fallback",
     category: "mapping",
     severity: "warning",

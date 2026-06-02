@@ -40,6 +40,19 @@ test("classifyWarnings preserves the original message and is 1:1 with the input"
   assert.ok(details[0]!.affectedFields?.includes("cursor"));
 });
 
+test("classifyWarnings classifies remap and mapping-lookup failures as mapping/warning", () => {
+  const [remap, remapFailed, lookupFailed] = classifyWarnings([
+    'Could not remap method "foo" from yarn to obfuscated.',
+    'Remap failed for field "bar" from yarn to obfuscated.',
+    'Mapping lookup failed for class "x" while preparing source lookup in obfuscated.'
+  ]);
+  for (const detail of [remap, remapFailed, lookupFailed]) {
+    assert.equal(detail!.category, "mapping");
+    assert.equal(detail!.severity, "warning");
+    assert.notEqual(detail!.code, "general");
+  }
+});
+
 test("classifyWarnings returns an empty array for no warnings", () => {
   assert.deepEqual(classifyWarnings([]), []);
 });

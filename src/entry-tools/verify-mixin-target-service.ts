@@ -526,11 +526,20 @@ export class VerifyMixinTargetService {
         details: mismatchDetails
       });
     }
-    const translatedDescriptor = memberResult.resolvedSymbol.descriptor ?? member.descriptor;
+    // Use the translated (target-namespace) descriptor only. Never fall back to
+    // the request descriptor: it is still in the source namespace and would
+    // never match the artifact's jvmDescriptor, turning a real member into a
+    // false exists=false. When no descriptor could be translated, match by name.
+    const translatedDescriptor = memberResult.resolvedSymbol.descriptor;
+    if (member.descriptor && !translatedDescriptor) {
+      warnings.push(
+        `autoRemap could not translate the descriptor for ${member.kind} "${member.name}" into ${targetMapping}; matching by name only.`
+      );
+    }
     const translatedMember = (
       member.kind === "method"
-        ? { kind: "method", name: memberResult.resolvedSymbol.name, descriptor: translatedDescriptor }
-        : { kind: "field", name: memberResult.resolvedSymbol.name, descriptor: translatedDescriptor }
+        ? { kind: "method", name: memberResult.resolvedSymbol.name, ...(translatedDescriptor ? { descriptor: translatedDescriptor } : {}) }
+        : { kind: "field", name: memberResult.resolvedSymbol.name, ...(translatedDescriptor ? { descriptor: translatedDescriptor } : {}) }
     ) as VerifyMixinTargetInput["member"];
 
     warnings.push(

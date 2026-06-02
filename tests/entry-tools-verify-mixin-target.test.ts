@@ -576,6 +576,131 @@ test("C15: autoRemap surfaces a NAMESPACE_MISMATCH when the owner cannot be tran
   );
 });
 
+test("C16: autoRemap drops an untranslatable descriptor and matches by name", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: "1.21.10",
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async (input) => {
+      if (input.kind === "class") {
+        return { resolved: true, resolvedSymbol: { kind: "class", name: "a_obf", symbol: "a_obf" } };
+      }
+      // Descriptorless mapping entry: no descriptor is returned for the member.
+      return { resolved: true, resolvedSymbol: { kind: "method", name: "m_obf", owner: "a_obf" } };
+    },
+    getSignature: async () => ({
+      constructors: [],
+      methods: [
+        { ownerFqn: "a_obf", name: "m_obf", javaSignature: "public void m_obf(cps)", jvmDescriptor: "(Lcps;)V", accessFlags: 0x0001, isSynthetic: false }
+      ],
+      fields: [],
+      warnings: []
+    })
+  });
+
+  const result = await service.execute({
+    owner: "net.minecraft.world.entity.LivingEntity",
+    // Source-namespace descriptor carries a class reference that cannot survive
+    // a descriptorless translation; it must not leak into the obfuscated match.
+    member: { kind: "method", name: "tick", descriptor: "(Lnet/minecraft/block/Block;)V" },
+    target: { kind: "version", value: "1.21.10" },
+    mapping: "yarn",
+    autoRemap: true
+  });
+
+  assert.equal(result.exists, true, "member should match by name when the descriptor cannot be translated");
+  assert.equal(result.matches.length, 1);
+  assert.ok(
+    result.warnings.some((w) => /descriptor/i.test(w) && /name only/i.test(w)),
+    "expected a descriptor-not-translated, name-only warning"
+  );
+});
+
+test("C17: autoRemap translates a field target", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: "1.21.10",
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async (input) => {
+      if (input.kind === "class") {
+        return { resolved: true, resolvedSymbol: { kind: "class", name: "a_obf", symbol: "a_obf" } };
+      }
+      assert.equal(input.kind, "field");
+      return { resolved: true, resolvedSymbol: { kind: "field", name: "f_obf", owner: "a_obf" } };
+    },
+    getSignature: async () => ({
+      constructors: [],
+      methods: [],
+      fields: [
+        { ownerFqn: "a_obf", name: "f_obf", javaSignature: "private int f_obf", jvmDescriptor: "I", accessFlags: 0x0002, isSynthetic: false }
+      ],
+      warnings: []
+    })
+  });
+
+  const result = await service.execute({
+    owner: "net.minecraft.world.entity.LivingEntity",
+    member: { kind: "field", name: "airSupply" },
+    target: { kind: "version", value: "1.21.10" },
+    mapping: "yarn",
+    autoRemap: true
+  });
+
+  assert.equal(result.exists, true);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0]?.name, "f_obf");
+});
+
+test("C18: autoRemap throws NAMESPACE_MISMATCH when the member (not the owner) cannot be translated", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: "1.21.10",
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async (input) => {
+      if (input.kind === "class") {
+        return { resolved: true, resolvedSymbol: { kind: "class", name: "a_obf", symbol: "a_obf" } };
+      }
+      // owner translates, but the member does not.
+      return { resolved: false };
+    },
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when member translation fails");
+    }
+  });
+
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "noSuchMethod" },
+        target: { kind: "version", value: "1.21.10" },
+        mapping: "yarn",
+        autoRemap: true
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.NAMESPACE_MISMATCH);
+      assert.match((err as { message: string }).message, /could not translate (method|field) "noSuchMethod"/);
+      return true;
+    }
+  );
+});
+
 test("C12: exampleSnippet is deterministic for given (annotation, kind, accessFlags)", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({
