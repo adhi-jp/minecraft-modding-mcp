@@ -355,6 +355,7 @@ export type GetClassMembersInput = {
   includeInherited?: boolean;
   memberPattern?: string;
   maxMembers?: number;
+  cursor?: string;
   projectPath?: string;
   gradleUserHome?: string;
   scope?: ArtifactScope;
@@ -391,6 +392,10 @@ export type GetClassMembersOutput = {
     total: number;
   };
   truncated: boolean;
+  /** Continuation cursor when more members remain; pass back as cursor to fetch the next page. */
+  nextCursor?: string;
+  /** True when a provided cursor was malformed or belonged to a different query and was ignored. */
+  cursorIgnored?: boolean;
   context: ExplorerResponseContext;
   origin: ResolvedSourceArtifact["origin"];
   artifactId: string;

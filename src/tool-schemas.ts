@@ -210,6 +210,7 @@ export const getClassMembersShape = {
   includeInherited: z.boolean().default(false),
   memberPattern: optionalNonEmptyString,
   maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
+  cursor: optionalNonEmptyString.describe("Continuation cursor from a previous response's nextCursor; resumes the member list after the last returned page."),
   projectPath: optionalNonEmptyString,
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
@@ -624,7 +625,8 @@ export const getClassApiMatrixShape = {
   includeKinds: classApiKindsSchema.optional().describe("comma-separated: class,field,method"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
-  maxRows: optionalPositiveInt.describe("Limit returned rows (max 5000)")
+  maxRows: optionalPositiveInt.describe("Limit returned rows (max 5000)"),
+  cursor: optionalNonEmptyString.describe("Continuation cursor from a previous response's nextCursor; resumes after the last returned row.")
 };
 export const getClassApiMatrixSchema = z.object(getClassApiMatrixShape);
 

@@ -122,6 +122,7 @@ export type ClassApiMatrixInput = {
   gradleUserHome?: string;
   includeKinds?: ClassApiMatrixKind[];
   maxRows?: number;
+  cursor?: string;
 };
 
 export type ClassApiMatrixEntry = {
@@ -149,6 +150,10 @@ export type ClassApiMatrixOutput = {
   rows: ClassApiMatrixRow[];
   rowCount: number;
   rowsTruncated?: boolean;
+  /** Continuation cursor when more rows remain; pass back as cursor for the next page. */
+  nextCursor?: string;
+  /** True when a provided cursor was malformed or belonged to a different query and was ignored. */
+  cursorIgnored?: boolean;
   warnings: string[];
   ambiguousRowCount?: number;
 };

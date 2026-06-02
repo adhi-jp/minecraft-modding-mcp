@@ -530,6 +530,92 @@ test("SourceService getClassMembers uses sibling binary jar when artifact is res
   assert.equal(result.members.methods[0]?.name, "use");
 });
 
+test("SourceService getClassMembers paginates with a stable nextCursor and rejects foreign cursors", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-page-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "net/minecraft/world/item/Item.java": ["package net.minecraft.world.item;", "public class Item {}"].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "obfuscated"
+  });
+
+  const makeMethod = (i: number) => ({
+    ownerFqn: "net.minecraft.world.item.Item",
+    name: `method${i}`,
+    javaSignature: `public void method${i}()`,
+    jvmDescriptor: "()V",
+    accessFlags: 0x0001,
+    isSynthetic: false
+  });
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return {
+        constructors: [],
+        fields: [],
+        methods: [0, 1, 2, 3, 4].map(makeMethod),
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const names = (page: { members: { methods: Array<{ name: string }> } }) => page.members.methods.map((m) => m.name);
+
+  const page1 = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "obfuscated",
+    maxMembers: 2
+  });
+  assert.equal(page1.counts.total, 5);
+  assert.deepEqual(names(page1), ["method0", "method1"]);
+  assert.equal(page1.truncated, true);
+  assert.ok(page1.nextCursor, "page 1 must carry a continuation cursor");
+
+  const page2 = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "obfuscated",
+    maxMembers: 2,
+    cursor: page1.nextCursor
+  });
+  assert.deepEqual(names(page2), ["method2", "method3"]);
+  assert.equal(page2.cursorIgnored, undefined);
+  assert.ok(page2.nextCursor);
+
+  const page3 = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "obfuscated",
+    maxMembers: 2,
+    cursor: page2.nextCursor
+  });
+  assert.deepEqual(names(page3), ["method4"]);
+  assert.equal(page3.truncated, false);
+  assert.equal(page3.nextCursor, undefined);
+
+  // A cursor minted for a different class must be ignored and restart at page one.
+  const foreign = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.OtherItem",
+    mapping: "obfuscated",
+    maxMembers: 2,
+    cursor: page1.nextCursor
+  });
+  assert.equal(foreign.cursorIgnored, true);
+  assert.deepEqual(names(foreign), ["method0", "method1"]);
+});
+
 test("SourceService getClassMembers enriches a binary-path CLASS_NOT_FOUND with recovery guidance", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-notfound-"));

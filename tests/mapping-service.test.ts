@@ -1550,6 +1550,70 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
   }
 });
 
+test("MappingService getClassApiMatrix paginates rows with a stable nextCursor", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-cursor-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const rowKey = (r: { kind: string; obfuscated?: { name?: string }; mojang?: { name?: string } }) =>
+      `${r.kind}:${r.obfuscated?.name ?? r.mojang?.name ?? ""}`;
+
+    const page1 = await withCwd(root, () =>
+      service.getClassApiMatrix({
+        version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated", maxRows: 1
+      } as never)
+    );
+    assert.equal(page1.rows.length, 1);
+    assert.equal(page1.rowsTruncated, true);
+    assert.ok(page1.nextCursor, "page 1 must carry a continuation cursor");
+
+    const page2 = await withCwd(root, () =>
+      service.getClassApiMatrix({
+        version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated", maxRows: 1,
+        cursor: page1.nextCursor
+      } as never)
+    );
+    assert.equal(page2.cursorIgnored, undefined);
+    assert.notEqual(rowKey(page2.rows[0]!), rowKey(page1.rows[0]!), "page 2 must advance past page 1");
+
+    // A malformed cursor is ignored and the scan restarts from the first row.
+    const restarted = await withCwd(root, () =>
+      service.getClassApiMatrix({
+        version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated", maxRows: 1,
+        cursor: "not-a-valid-cursor"
+      } as never)
+    );
+    assert.equal(restarted.cursorIgnored, true);
+    assert.equal(rowKey(restarted.rows[0]!), rowKey(page1.rows[0]!));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("MappingService getClassApiMatrix prefers the explicit classNameMapping over obfuscated base rows", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-explicit-base-"));

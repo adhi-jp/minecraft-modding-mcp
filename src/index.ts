@@ -897,6 +897,7 @@ expertTool("get-class-members",
       includeInherited: input.includeInherited,
       memberPattern: input.memberPattern,
       maxMembers: input.maxMembers,
+      cursor: input.cursor,
       projectPath: input.projectPath,
       gradleUserHome: input.gradleUserHome,
       scope: input.scope as ArtifactScope | undefined,
@@ -1068,7 +1069,8 @@ expertTool("get-class-api-matrix",
       includeKinds: parseClassApiKinds(input.includeKinds),
       sourcePriority: input.sourcePriority,
       gradleUserHome: input.gradleUserHome,
-      maxRows: input.maxRows
+      maxRows: input.maxRows,
+      cursor: input.cursor
     }) as Promise<Record<string, unknown>>
   )
 );

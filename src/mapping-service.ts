@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
+import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "./page-cursor.js";
 import { resolveGradleUserHomePath } from "./gradle-paths.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
 import { collectMatchedJarEntriesAsUtf8 } from "./source-jar-reader.js";
@@ -847,7 +848,24 @@ export class MappingService {
 
     const rowCount = rows.length;
     const rowLimit = clampRowLimit(input.maxRows);
-    const limitedRows = rowLimit != null && rowCount > rowLimit ? rows.slice(0, rowLimit) : rows;
+    // Offset cursor over the stable row order; the context key ties a cursor to
+    // this exact query so a stale cursor restarts from the first page.
+    const rowCursorContext = buildPageContextKey([
+      version,
+      className,
+      classNameMapping,
+      (input.includeKinds ?? []).join(","),
+      input.sourcePriority
+    ]);
+    const { offset: rowOffset, cursorIgnored: rowCursorIgnored } = resolveCursorOffset(
+      input.cursor,
+      rowCursorContext
+    );
+    const limitedRows =
+      rowLimit != null ? rows.slice(rowOffset, rowOffset + rowLimit) : rows.slice(rowOffset);
+    const consumedRows = rowOffset + limitedRows.length;
+    const rowsTruncated = consumedRows < rowCount;
+    const nextCursor = rowsTruncated ? encodeOffsetCursor(consumedRows, rowCursorContext) : undefined;
 
     return {
       version,
@@ -861,7 +879,9 @@ export class MappingService {
       },
       rows: limitedRows,
       rowCount,
-      rowsTruncated: limitedRows.length < rowCount ? true : undefined,
+      rowsTruncated: rowsTruncated ? true : undefined,
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(rowCursorIgnored ? { cursorIgnored: true } : {}),
       warnings,
       ambiguousRowCount: ambiguousRowCount > 0 ? ambiguousRowCount : undefined
     };

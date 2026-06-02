@@ -33,6 +33,7 @@ import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit } from "./class-source/members-builder.js";
+import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
@@ -980,11 +981,29 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     warnings
   });
   const counts = remapped.counts;
-  const sliced = sliceMembersWithLimit(remapped, counts.total, maxMembers, warnings);
+  // Offset cursor over the flat [constructors, fields, methods] member sequence.
+  // The context key ties a cursor to this exact query so a stale cursor restarts.
+  const memberCursorContext = buildPageContextKey([
+    artifactId,
+    lookupClassName,
+    requestedMapping,
+    mappingApplied,
+    access,
+    includeSynthetic,
+    includeInherited,
+    memberPattern
+  ]);
+  const { offset: memberOffset, cursorIgnored: memberCursorIgnored } = resolveCursorOffset(
+    input.cursor,
+    memberCursorContext
+  );
+  const sliced = sliceMembersWithLimit(remapped, counts.total, maxMembers, warnings, memberOffset);
   const constructors = sliced.constructors;
   const fields = sliced.fields;
   const methods = sliced.methods;
   const truncated = sliced.truncated;
+  const nextCursor =
+    sliced.nextOffset != null ? encodeOffsetCursor(sliced.nextOffset, memberCursorContext) : undefined;
 
   const normalizedProvenance =
     provenance ??
@@ -1068,6 +1087,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     },
     counts,
     truncated,
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(memberCursorIgnored ? { cursorIgnored: true } : {}),
     context: signatureContext,
     origin,
     artifactId,

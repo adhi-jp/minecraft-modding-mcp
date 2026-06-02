@@ -76,20 +76,32 @@ export type MemberSliceResult = {
   methods: SignatureMember[];
   truncated: boolean;
   returnedTotal: number;
+  /** Absolute offset to resume from when more members remain after this page. */
+  nextOffset?: number;
 };
 
 export function sliceMembersWithLimit(
   remapped: Omit<RemappedMembers, "counts">,
   totalCount: number,
   maxMembers: number,
-  warnings: string[]
+  warnings: string[],
+  offset = 0
 ): MemberSliceResult {
+  // Members form a single flat sequence in [constructors, fields, methods]
+  // order; offset skips that many from the start before taking maxMembers.
+  let toSkip = Math.max(0, offset);
   let remaining = maxMembers;
   const takeWithinLimit = (members: SignatureMember[]): SignatureMember[] => {
+    if (toSkip >= members.length) {
+      toSkip -= members.length;
+      return [];
+    }
+    const afterSkip = toSkip > 0 ? members.slice(toSkip) : members;
+    toSkip = 0;
     if (remaining <= 0) {
       return [];
     }
-    const slice = members.slice(0, remaining);
+    const slice = afterSkip.slice(0, remaining);
     remaining -= slice.length;
     return slice;
   };
@@ -98,10 +110,18 @@ export function sliceMembersWithLimit(
   const fields = takeWithinLimit(remapped.fields);
   const methods = takeWithinLimit(remapped.methods);
   const returnedTotal = constructors.length + fields.length + methods.length;
-  const truncated = returnedTotal < totalCount;
+  const consumed = Math.min(Math.max(0, offset), totalCount) + returnedTotal;
+  const truncated = consumed < totalCount;
   if (truncated) {
     warnings.push(`Member list was truncated to ${returnedTotal} entries (from ${totalCount}).`);
   }
 
-  return { constructors, fields, methods, truncated, returnedTotal };
+  return {
+    constructors,
+    fields,
+    methods,
+    truncated,
+    returnedTotal,
+    ...(truncated ? { nextOffset: consumed } : {})
+  };
 }
