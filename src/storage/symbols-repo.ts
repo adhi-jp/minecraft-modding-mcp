@@ -28,6 +28,12 @@ export interface FindScopedSymbolsOptions {
   query: string;
   match: ScopedSymbolMatch;
   symbolKind?: string;
+  /**
+   * Restrict results to these symbol kinds via a bound `symbol_kind IN (...)` clause.
+   * Combined with the singular `symbolKind` it ANDs (both apply). An empty array is
+   * ignored (degrades to no kind filter) to avoid emitting an invalid `IN ()`.
+   */
+  symbolKinds?: string[];
   packagePrefix?: string;
   filePathLike?: string;
   limit?: number;
@@ -400,6 +406,13 @@ export class SymbolsRepo {
     if (options.symbolKind) {
       where.push("symbol_kind = ?");
       params.push(options.symbolKind);
+    }
+
+    const symbolKinds = options.symbolKinds;
+    if (symbolKinds && symbolKinds.length > 0) {
+      const placeholders = symbolKinds.map(() => "?").join(", ");
+      where.push(`symbol_kind IN (${placeholders})`);
+      params.push(...symbolKinds);
     }
 
     if (options.packagePrefix?.trim()) {

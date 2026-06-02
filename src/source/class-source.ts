@@ -356,6 +356,10 @@ export function buildDecompiledFallback(svc: SourceService, artifactId: string, 
   };
 }
 
+// The class-like symbol kinds findClass returns. MUST stay in sync with the JS-side
+// isTypeSymbol checks below; pushed down to SQL so non-type rows are never fetched.
+const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
+
 export function findClass(svc: SourceService, input: FindClassInput): FindClassOutput {
   const className = input.className.trim();
   if (!className) {
@@ -391,7 +395,8 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
       artifactId,
       query: simpleName,
       match: "exact",
-      limit: 5000
+      symbolKinds: TYPE_SYMBOL_KINDS,
+      limit: limit * 5
     });
     const matches = result.items
       .filter((row) => {
@@ -441,6 +446,7 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
     artifactId,
     query: className,
     match: "exact",
+    symbolKinds: TYPE_SYMBOL_KINDS,
     limit: limit * 5
   });
   const matches: FindClassMatch[] = [];

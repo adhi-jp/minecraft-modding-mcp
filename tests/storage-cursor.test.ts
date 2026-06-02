@@ -381,6 +381,64 @@ test("symbolsRepo.findScopedSymbols supports contains + package prefix filtering
   assert.equal(result.items[0]?.symbolName, "tickServer");
 });
 
+test("symbolsRepo.findScopedSymbols filters by a symbolKinds IN-list, excluding non-type kinds", async () => {
+  const { artifacts, files, symbols } = await createRepos();
+  const artifactId = "artifact-scoped-symbol-kinds";
+  seedArtifact(artifacts, artifactId);
+  files.replaceFilesForArtifact(artifactId, [
+    {
+      filePath: "a/Main.java",
+      content: "class Main {}",
+      contentBytes: 13,
+      contentHash: "ka"
+    },
+    {
+      filePath: "b/Other.java",
+      content: "class Other { void Main() {} }",
+      contentBytes: 30,
+      contentHash: "kb"
+    }
+  ]);
+
+  symbols.replaceSymbolsForArtifact(artifactId, [
+    {
+      filePath: "a/Main.java",
+      symbolKind: "class",
+      symbolName: "Main",
+      qualifiedName: "a.Main",
+      line: 1
+    },
+    {
+      filePath: "b/Other.java",
+      symbolKind: "method",
+      symbolName: "Main",
+      qualifiedName: "b.Other.Main",
+      line: 1
+    }
+  ]);
+
+  const result = (symbols as unknown as {
+    findScopedSymbols: (input: {
+      artifactId: string;
+      query: string;
+      match: "exact";
+      symbolKinds?: string[];
+      limit: number;
+    }) => { items: Array<{ filePath: string; symbolName: string; symbolKind: string }>; nextCursor: string | undefined };
+  }).findScopedSymbols({
+    artifactId,
+    query: "Main",
+    match: "exact",
+    symbolKinds: ["class", "interface", "enum", "record"],
+    limit: 10
+  });
+
+  // The method named "Main" must be filtered out at the SQL layer, leaving only the class row.
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.symbolKind, "class");
+  assert.equal(result.items[0]?.filePath, "a/Main.java");
+});
+
 test("symbolsRepo.findScopedSymbols treats LIKE wildcard characters literally", async () => {
   const { artifacts, files, symbols } = await createRepos();
   const artifactId = "artifact-scoped-symbols-like-escaping";

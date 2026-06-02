@@ -1757,6 +1757,46 @@ test("SourceService findClass resolves qualified names even with many same-name 
   assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
+test("SourceService findClass pushes type symbolKinds and a bounded limit to findScopedSymbols", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-findclass-pushdown-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "pushdown-artifact",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    files: [{ filePath: "pkg/Main.java", content: "package pkg;\npublic class Main {}" }],
+    symbols: [
+      { filePath: "pkg/Main.java", symbolKind: "class", symbolName: "Main", qualifiedName: "pkg.Main", line: 2 }
+    ]
+  });
+
+  const captured: Array<{ symbolKinds?: string[]; limit?: number }> = [];
+  const repo = (service as unknown as {
+    symbolsRepo: {
+      findScopedSymbols: (options: { symbolKinds?: string[]; limit?: number }) => unknown;
+    };
+  }).symbolsRepo;
+  const original = repo.findScopedSymbols.bind(repo);
+  repo.findScopedSymbols = (options) => {
+    captured.push({ symbolKinds: options.symbolKinds, limit: options.limit });
+    return original(options);
+  };
+
+  // Unqualified branch and qualified branch must BOTH push the kind filter to SQL
+  // and bound the over-fetch at limit*5 (not the old hard-coded 5000).
+  service.findClass({ className: "Main", artifactId: "pushdown-artifact", limit: 7 });
+  service.findClass({ className: "pkg.Main", artifactId: "pushdown-artifact", limit: 7 });
+
+  assert.equal(captured.length, 2);
+  for (const call of captured) {
+    assert.deepEqual(call.symbolKinds, ["class", "interface", "enum", "record"]);
+    assert.equal(call.limit, 35);
+  }
+});
+
 test("SourceService findClass resolves a qualified inner-class name to its outer file", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-find-class-inner-"));
