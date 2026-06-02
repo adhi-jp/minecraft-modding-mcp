@@ -917,7 +917,7 @@ export const analyzeModJarSchema = z.object(analyzeModJarShape);
 export const getRegistryDataShape = {
   version: nonEmptyString.describe("Minecraft version (e.g. 1.21)"),
   registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.'),
-  includeData: z.boolean().default(true).describe("When false, return registry names/counts without full entry bodies"),
+  includeData: z.boolean().default(true).describe("When false, return registry names/counts only. To discover which registries exist without pulling every entry body, pass includeData:false (omitting registry with the default includeData:true returns the full data for every registry)."),
   maxEntriesPerRegistry: optionalPositiveInt.describe("Limit returned entries per registry body")
 };
 export const getRegistryDataSchema = z.object(getRegistryDataShape);

@@ -15,7 +15,7 @@
 
 It runs over stdio and works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
-**37 tools** (6 entry + 31 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+**41 tools** (6 entry + 35 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 
@@ -203,7 +203,8 @@ These notes cover high-frequency decisions during onboarding. For the full pitfa
     "version": "1.21.10",
     "sourceMapping": "mojang",
     "targetMapping": "intermediary",
-    "signatureMode": "name-only"
+    "signatureMode": "name-only",
+    "detail": "standard"
   }
 }
 ```

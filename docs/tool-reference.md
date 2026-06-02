@@ -24,7 +24,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
 | "Validate every Mixin / Access Widener / Access Transformer in a workspace." | `validate-project` (`task="project-summary"` discovers everything; `task="mixin"|"access-widener"|"access-transformer"` validates a single subject). |
 | "Inspect the Minecraft workspace or an artifact without picking a lower-level tool." | `inspect-minecraft` — use this when you want the server to resolve the artifact and pick the right sub-tool. |
 | "Trace when a symbol was added, renamed, or removed across versions." | `trace-symbol-lifecycle` (or `analyze-symbol task="lifecycle"` for the summarized 5-version window). |
-| "Compare two MC versions or two class versions." | `compare-minecraft` (`task="class"` for a single class diff; `task="versions"` for a full summary). |
+| "Compare two MC versions or two class versions." | `compare-minecraft` (`task="class-diff"` for a single class diff; `task="versions"` for a full summary). |
 | "Inspect or remap an existing `.jar` file." | `analyze-mod` / `analyze-mod-jar` / `remap-mod-jar`. |
 
 ## Essential Conventions
@@ -208,7 +208,7 @@ Read source for many classes against one shared resolved artifact. Per-entry: `{
 
 ### batch-class-members
 
-List members for many classes against one shared resolved artifact. Per-entry: `{ className, access?, includeSynthetic?, includeInherited?, memberPattern?, maxMembers? }`. Shared inputs match `batch-class-source`. Result shape per entry mirrors `get-class-members`, including the `status` field (`"available"` / `"unavailable"` / etc.).
+List members for many classes against one shared resolved artifact. Per-entry: `{ className, access?, includeSynthetic?, includeInherited?, memberPattern?, maxMembers? }`. Shared inputs match `batch-class-source`. Result shape per entry mirrors `get-class-members`, including the `status` field (`"ok"` / `"partial"` / `"members_unavailable"`).
 
 ### batch-symbol-exists
 
@@ -311,7 +311,7 @@ MCP resources provide URI-based access to Minecraft data for clients that suppor
 | --- | --- | --- |
 | `class-source` | `mc://source/{artifactId}/{className}` | Java source code for a class within a resolved artifact |
 | `artifact-file` | `mc://artifact/{artifactId}/files/{filePath}` | Raw content of a file within a resolved artifact |
-| `find-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}` | Look up a mapping between two naming namespaces |
+| `find-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}` | Look up a **class** mapping between two naming namespaces. The URI carries no `owner`/`descriptor`, so field/method lookups (which need an owner) are not supported here — use the `find-mapping` or `analyze-symbol` tool for those. |
 | `class-members` | `mc://artifact/{artifactId}/members/{className}` | List constructors, methods, and fields for a class |
 | `artifact-metadata` | `mc://artifact/{artifactId}` | Metadata for a previously resolved artifact |
 

@@ -395,6 +395,27 @@ Start with these top-level workflow tools when possible. They cover the common w
 
 If the input JAR was already built with Mojang mappings, use `targetMapping: "mojang"` to get a copied output JAR and a `fromMapping: "mojang"` result.
 
+### Bridge a mod hit to a Minecraft-side check
+
+When `search-mod-source` or `get-mod-class-source` surfaces a class or member that
+looks like a Minecraft target (for example a Mixin `@Shadow`/`@Inject` target, or a
+symbol from a crash stack), verify it against the target Minecraft version before
+trusting it. Feed the owner/member into `verify-mixin-target`:
+
+```json
+{
+  "tool": "verify-mixin-target",
+  "arguments": {
+    "version": "1.21.10",
+    "owner": "net.minecraft.world.entity.LivingEntity",
+    "member": "tickServer",
+    "mapping": "mojang"
+  }
+}
+```
+
+For a plain "does this symbol exist in this version?" question, use `analyze-symbol task="exists"` instead.
+
 ## Validation
 
 ### Validate Mixin source

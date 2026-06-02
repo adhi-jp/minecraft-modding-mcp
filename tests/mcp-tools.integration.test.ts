@@ -119,6 +119,22 @@ function schemaDeclaresProperty(schema: unknown, key: string): boolean {
   return false;
 }
 
+test("README states the registered tool count and entry/expert split", async () => {
+  const readme = await readFile("README.md", "utf8");
+  const entryCount = 6;
+  const expertCount = EXPECTED_TOOLS.length - entryCount;
+
+  assert.match(
+    readme,
+    new RegExp(`\\*\\*${EXPECTED_TOOLS.length} tools\\*\\*`),
+    `README must state "${EXPECTED_TOOLS.length} tools"`
+  );
+  assert.ok(
+    readme.includes(`${entryCount} entry + ${expertCount} expert`),
+    `README must state "${entryCount} entry + ${expertCount} expert"`
+  );
+});
+
 test("check-symbol-exists accepts a dotless class name with the default nameMode", () => {
   const parsed = checkSymbolExistsSchema.safeParse({
     version: "1.21.10",

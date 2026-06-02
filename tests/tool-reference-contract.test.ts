@@ -131,6 +131,37 @@ test("tool-reference.md documents the get-class-members status enum", async () =
   }
 });
 
+test("tool-reference.md uses the real compare-minecraft class-diff task name", async () => {
+  const doc = await loadDoc();
+  // The schema enum is class-diff, not class.
+  assert.ok(doc.includes('task="class-diff"'), 'tool-reference.md must reference task="class-diff"');
+  assert.doesNotMatch(
+    doc,
+    /task="class"/,
+    'tool-reference.md must not present the invalid task="class" (the enum value is "class-diff")'
+  );
+});
+
+test("tool-reference.md batch-class-members status mirrors the real enum, not available/unavailable", async () => {
+  const doc = await loadDoc();
+  // Batch members mirror get-class-members status: ok | members_unavailable | partial.
+  assert.doesNotMatch(
+    doc,
+    /"available"\s*\/\s*"unavailable"/,
+    'batch-class-members must not claim "available"/"unavailable" status values'
+  );
+});
+
+test("tool-reference.md tells callers to inspect analyze-mod metadata via detail=\"standard\"", async () => {
+  const doc = await loadDoc();
+  // The metadata block is surfaced by detail="standard", not include:["metadata"].
+  assert.doesNotMatch(
+    doc,
+    /include:\s*\[\s*"metadata"\s*\]/,
+    'analyze-mod metadata is not an include group; use detail="standard"'
+  );
+});
+
 test("tool-reference.md documents the verify-mixin-target tool and accessorAdvice", async () => {
   const doc = await loadDoc();
   for (const token of [
