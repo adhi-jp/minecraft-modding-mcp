@@ -116,6 +116,17 @@ const TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME = [
   "c\tnet/minecraft/class_2680\tnet/minecraft/class_2680\tnet/minecraft/world/level/block/state/BlockState"
 ].join("\n");
 
+// Three distinct methods on one owner that ALL reference the same parameter class,
+// so their descriptor class-projections are identical and can be shared graph-wide.
+const TEST_SHARED_CLASS_REF_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/Owner\tinter/Owner\tnamed/Owner",
+  "\tm\t(La/b/Shared;)V\tm1\tinterM1\talpha",
+  "\tm\t(La/b/Shared;)V\tm2\tinterM2\tbeta",
+  "\tm\t(La/b/Shared;)V\tm3\tinterM3\tgamma",
+  "c\ta/b/Shared\tinter/Shared\tnamed/Shared"
+].join("\n");
+
 // A standalone Fabric yarn tiny declares only `intermediary named` (no obfuscated
 // column), so the stored method descriptor is in INTERMEDIARY coordinates.
 const TEST_TINY_YARN_2COL = [
@@ -250,6 +261,49 @@ test("MappingService releaseGraphCacheEntry evicts all mode/projectPath variants
 
     const keysAfter = [...graphCache.keys()].filter((k: string) => k.startsWith("1.21.10|"));
     assert.equal(keysAfter.length, 0, "All 1.21.10 entries should be evicted");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService shares class-descriptor projections across members on one graph", async () => {
+  const { root, service } = await createLoomService(
+    "mapping-service-shared-projection-",
+    TEST_SHARED_CLASS_REF_TINY
+  );
+  try {
+    const resolveMethod = (name: string) =>
+      withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "method",
+          owner: "a.b.Owner",
+          name,
+          descriptor: "(La/b/Shared;)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn",
+          signatureMode: "exact"
+        })
+      );
+
+    // Warm the graph-scoped projection cache with the first member.
+    const first = await resolveMethod("m1");
+    assert.equal(first.resolved, true);
+
+    // Distinct members sharing the same parameter class projection must reuse the
+    // cached result, so resolving them triggers ZERO new class-projection computes.
+    const before = service.classProjectionStats.computes;
+    const second = await resolveMethod("m2");
+    const third = await resolveMethod("m3");
+    const after = service.classProjectionStats.computes;
+
+    assert.equal(second.resolved, true);
+    assert.equal(third.resolved, true);
+    assert.equal(
+      after - before,
+      0,
+      `members sharing a class ref must reuse the cached projection; saw ${after - before} new computes`
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1687,6 +1741,7 @@ test("MappingService getClassApiMatrix prefers the explicit classNameMapping ove
       pairs: new Map(),
       adjacency: new Map(),
       pathCache: new Map(),
+      classProjectionCache: new Map(),
       warnings: [],
       recordsByTarget: new Map([
         [

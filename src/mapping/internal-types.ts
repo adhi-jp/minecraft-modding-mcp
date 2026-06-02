@@ -62,5 +62,12 @@ export type LoadedGraph = {
   adjacency: Map<import("../types.js").SourceMapping, import("../types.js").SourceMapping[]>;
   pathCache: Map<PairKey, import("../types.js").SourceMapping[] | undefined>;
   recordsByTarget: Map<import("../types.js").SourceMapping, MappingSymbolRecord[]>;
+  /**
+   * Graph-scoped cache of class-to-class descriptor projections, keyed by
+   * `path.join(">") + NUL + internalName`. Value is the projected internal name,
+   * or `null` to memoize an unmapped/ambiguous class. Shared across all member
+   * lookups on this graph; dies with graph eviction.
+   */
+  classProjectionCache: Map<string, string | null>;
   warnings: string[];
 };

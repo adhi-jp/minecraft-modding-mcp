@@ -178,6 +178,7 @@ export class MappingService {
   private static readonly RESOLUTION_CACHE_TTL_MS = 5 * 60 * 1000;
   private resolutionCacheHits = 0;
   private resolutionCacheMisses = 0;
+  private classProjectionComputes = 0;
 
   get resolutionCacheStats() {
     return {
@@ -185,6 +186,11 @@ export class MappingService {
       misses: this.resolutionCacheMisses,
       size: this.resolutionCache.size
     };
+  }
+
+  /** Test seam: counts genuine class-projection computes (cache misses). */
+  get classProjectionStats() {
+    return { computes: this.classProjectionComputes };
   }
 
   constructor(
@@ -1268,25 +1274,38 @@ export class MappingService {
   ): DescriptorProjection {
     let hadClassReferences = false;
     let complete = true;
-    const classProjectionCache = new Map<string, string>();
+    // Class-to-class projection depends only on (graph, path, internalName) — not on
+    // the descriptor — so memoize it on the graph and share it across every member
+    // lookup on this graph instead of rebuilding a fresh cache per call. A `null`
+    // entry memoizes an unmapped/ambiguous class so a repeat reference stays
+    // `complete=false` without recomputing.
+    const projectionKey = path.join(">");
+    const classProjectionCache = graph.classProjectionCache;
 
     const projectedDescriptor = descriptor.replace(/L([^;]+);/g, (fullMatch, internalName: string) => {
       hadClassReferences = true;
-      const cached = classProjectionCache.get(internalName);
-      if (cached) {
+      const cacheKey = `${projectionKey}\0${internalName}`;
+      const cached = classProjectionCache.get(cacheKey);
+      if (cached !== undefined) {
+        if (cached === null) {
+          complete = false;
+          return fullMatch;
+        }
         return `L${cached};`;
       }
 
+      this.classProjectionComputes += 1;
       const projectedClassCandidates = this
         .mapCandidatesAlongPath(graph, path, createClassSymbolRecord(internalName.replace(/\//g, ".")))
         .filter((candidate) => candidate.kind === "class");
       if (projectedClassCandidates.length !== 1) {
         complete = false;
+        classProjectionCache.set(cacheKey, null);
         return fullMatch;
       }
 
       const projectedInternalName = projectedClassCandidates[0]!.symbol.replace(/\./g, "/");
-      classProjectionCache.set(internalName, projectedInternalName);
+      classProjectionCache.set(cacheKey, projectedInternalName);
       return `L${projectedInternalName};`;
     });
 
@@ -1459,6 +1478,7 @@ export class MappingService {
         adjacency: new Map(),
         pathCache: new Map(),
         recordsByTarget: new Map(),
+        classProjectionCache: new Map(),
         warnings: [
           `Version ${version} is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names.`
         ]
@@ -1473,6 +1493,7 @@ export class MappingService {
       adjacency: new Map(),
       pathCache: new Map(),
       recordsByTarget: new Map(),
+      classProjectionCache: new Map(),
       warnings: []
     };
 
