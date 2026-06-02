@@ -1309,7 +1309,7 @@ server.tool("get-registry-data",
 registerToolSchema("get-registry-data", getRegistryDataSchema);
 
 expertTool("compare-versions",
-  "Compare two Minecraft versions to find added/removed classes and registry entry changes. Useful for understanding what changed between versions during mod migration.",
+  "Compare two Minecraft versions to find added/removed classes and registry entry changes.",
   compareVersionsShape,
   { readOnlyHint: true },
   async (args) => runTool("compare-versions", args, compareVersionsSchema, async (input) =>
@@ -1325,7 +1325,7 @@ expertTool("compare-versions",
 registerToolSchema("compare-versions", compareVersionsSchema);
 
 expertTool("decompile-mod-jar",
-  "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar by exposing the actual source code.",
+  "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar.",
   decompileModJarShape,
   { readOnlyHint: true },
   async (args) => runTool("decompile-mod-jar", args, decompileModJarSchema, async (input) =>
