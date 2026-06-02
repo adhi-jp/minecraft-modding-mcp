@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
+import { buildClassFile } from "./helpers/classfile.ts";
 import { checkSymbolExistsSchema, validateMixinSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
@@ -1099,6 +1100,51 @@ test("get-class-members invalid string target suggestedCall preserves valid fiel
     access: "all",
     memberPattern: "tick"
   });
+});
+
+test("get-class-members surfaces meta.warningDetails for the truncation family", async () => {
+  const root = await mkdtemp(join(tmpdir(), "warning-details-members-"));
+  const jarPath = join(root, "lib.jar");
+  await createJar(jarPath, {
+    "com/example/Widget.class": buildClassFile({
+      internalName: "com/example/Widget",
+      accessFlags: 0x0001,
+      methods: [
+        { name: "alpha", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "beta", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "gamma", descriptor: "()V", accessFlags: 0x0001 }
+      ]
+    })
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId");
+
+  const result = await callTool("get-class-members", {
+    target: { type: "artifact", artifactId },
+    className: "com.example.Widget",
+    access: "all",
+    maxMembers: 1
+  }) as {
+    structuredContent?: {
+      result?: { truncated?: boolean };
+      meta?: { warnings?: string[]; warningDetails?: Array<{ code?: string; category?: string }> };
+    };
+  };
+
+  assert.equal(result.structuredContent?.result?.truncated, true);
+  const details = result.structuredContent?.meta?.warningDetails;
+  assert.ok(Array.isArray(details) && details.length >= 1, "expected meta.warningDetails");
+  assert.ok(
+    details!.some((d) => d.code === "result_truncated" && d.category === "pagination"),
+    "truncation warning must classify as result_truncated/pagination"
+  );
+  // The string warnings are preserved alongside the structured details.
+  assert.ok(Array.isArray(result.structuredContent?.meta?.warnings));
 });
 
 test("analyze-mod remap preview returns an operation block without mutating", async () => {

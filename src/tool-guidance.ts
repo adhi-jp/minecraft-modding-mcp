@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";
+import type { WarningDetail } from "./warning-details.js";
 import {
   ERROR_CODES,
   isAppError
@@ -22,6 +23,8 @@ export type ToolMeta = {
   tool: string;
   durationMs: number;
   warnings: string[];
+  /** Structured companion to `warnings`: one classified entry per warning string. */
+  warningDetails?: WarningDetail[];
   detailApplied?: "summary" | "standard" | "full";
   includeApplied?: string[];
   truncated?: Record<string, unknown>;

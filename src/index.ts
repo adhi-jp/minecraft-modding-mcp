@@ -39,6 +39,7 @@ import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
 import { ToolExecutionGate } from "./tool-execution-gate.js";
+import { classifyWarnings } from "./warning-details.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
 import { WorkspaceMappingService } from "./workspace-mapping-service.js";
 import {
@@ -601,6 +602,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
 
     const durationMs = Date.now() - startedAt;
     sourceService.recordToolCall(tool, durationMs);
+    const warningDetails = classifyWarnings(warnings);
     return objectResult({
       result: projectedResult,
       meta: {
@@ -609,7 +611,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         requestId,
         tool,
         durationMs,
-        warnings
+        warnings,
+        ...(warningDetails.length > 0 ? { warningDetails } : {})
       } satisfies ToolMeta
     });
   } catch (caughtError) {
