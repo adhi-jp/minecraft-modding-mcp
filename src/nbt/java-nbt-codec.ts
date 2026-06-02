@@ -103,6 +103,9 @@ function decodeMutf8(buffer: Buffer, start: number, end: number): string {
         throw parseError("Truncated MUTF-8 2-byte sequence.", { offset: i - 1 });
       }
       const b1 = buffer[i++]!;
+      if ((b1 & 0xc0) !== 0x80) {
+        throw parseError("Invalid MUTF-8 continuation byte.", { byte: b1, offset: i - 1 });
+      }
       codeUnits.push(((b0 & 0x1f) << 6) | (b1 & 0x3f));
     } else if ((b0 & 0xf0) === 0xe0) {
       if (i + 1 >= end) {
@@ -110,6 +113,9 @@ function decodeMutf8(buffer: Buffer, start: number, end: number): string {
       }
       const b1 = buffer[i++]!;
       const b2 = buffer[i++]!;
+      if ((b1 & 0xc0) !== 0x80 || (b2 & 0xc0) !== 0x80) {
+        throw parseError("Invalid MUTF-8 continuation byte.", { offset: i - 2 });
+      }
       codeUnits.push(((b0 & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f));
     } else {
       throw parseError("Invalid MUTF-8 lead byte.", { byte: b0, offset: i - 1 });

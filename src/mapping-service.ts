@@ -355,7 +355,7 @@ export class MappingService {
           candidate.descriptor !== undefined && acceptedDescriptors.has(candidate.descriptor)
       );
     }
-    const disambiguatedCandidates = applyDisambiguationHints(rawCandidates, input.disambiguation);
+    const disambiguatedCandidates = applyDisambiguationHints(rawCandidates, input.disambiguation, warnings);
     if (rawCandidates.length > disambiguatedCandidates.length) {
       warnings.push(
         `Disambiguation hints narrowed candidates from ${rawCandidates.length} to ${disambiguatedCandidates.length}.`
@@ -1093,23 +1093,32 @@ export class MappingService {
     // and produce false negatives in the most common lookup shape. When no class references
     // exist at all (primitives-only descriptors such as `(I)V`) the projector marks
     // `hadClassReferences === false` and we simply reuse the original descriptor.
+    // Stored descriptors carry whatever coordinate the tiny column used: obfuscated
+    // for merged graphs, but intermediary for a standalone Fabric yarn tiny
+    // (`tiny 2 0 intermediary named`). The descriptor namespace is not recorded
+    // per record, so project the query descriptor along every reachable base
+    // namespace and accept a match in any of them rather than assuming obfuscated.
     const queryDescriptor = queryRecord.descriptor as string;
-    let effectiveDescriptor = queryDescriptor;
-    if (sourceMapping !== "obfuscated") {
-      const projectionPath = namespacePath(graph, sourceMapping, "obfuscated");
-      if (projectionPath) {
-        const projection = this.projectMethodDescriptorToTarget(
-          graph,
-          projectionPath,
-          queryDescriptor
-        );
-        if (projection.hadClassReferences) {
-          effectiveDescriptor = projection.descriptor;
-        }
+    const candidateDescriptors = new Set<string>([queryDescriptor]);
+    for (const baseNamespace of ["obfuscated", "intermediary"] as const) {
+      if (sourceMapping === baseNamespace) {
+        continue;
+      }
+      const projectionPath = namespacePath(graph, sourceMapping, baseNamespace);
+      if (!projectionPath) {
+        continue;
+      }
+      const projection = this.projectMethodDescriptorToTarget(
+        graph,
+        projectionPath,
+        queryDescriptor
+      );
+      if (projection.hadClassReferences) {
+        candidateDescriptors.add(projection.descriptor);
       }
     }
     const descriptorMatched = methodCandidates.filter(
-      (record) => record.descriptor === effectiveDescriptor || record.descriptor === queryDescriptor
+      (record) => record.descriptor != null && candidateDescriptors.has(record.descriptor)
     );
     if (descriptorMatched.length === 1) {
       return buildOutput(querySymbol, descriptorMatched, "resolved");

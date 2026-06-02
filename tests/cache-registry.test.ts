@@ -5,9 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createCacheRegistry } from "../src/cache-registry.ts";
+import { createCacheRegistry, pathContainsVersion } from "../src/cache-registry.ts";
 import { runMigrations } from "../src/storage/migrations.ts";
 import Database from "../src/storage/sqlite.ts";
+
+test("pathContainsVersion matches whole version tokens, not coarse substrings", () => {
+  // Exact and major.minor.patch sweep should match.
+  assert.equal(pathContainsVersion("/cache/registries/1.2/data", "1.2"), true);
+  assert.equal(pathContainsVersion("/cache/registries/1.21.4/data", "1.21"), true);
+  assert.equal(pathContainsVersion("/cache/downloads/minecraft-1.21.4-sources.jar", "1.21.4"), true);
+  // The bug: a coarse "1.2" selector must NOT match a "1.21" path (destructive prune safety).
+  assert.equal(pathContainsVersion("/cache/registries/1.21/data", "1.2"), false);
+  assert.equal(pathContainsVersion("/cache/registries/1.214/data", "1.21"), false);
+});
 
 test("cache registry inventories logical public cache kinds from filesystem state", async () => {
   const root = await mkdtemp(join(tmpdir(), "cache-registry-"));

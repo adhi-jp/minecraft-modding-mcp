@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -53,6 +53,9 @@ function legacyCachePath(cacheDir: string, inputJar: string, targetMapping: "yar
   return join(cacheDir, "remapped-mods", `${key}.jar`);
 }
 
+// Must mirror buildCacheKey() in src/mod-remap-service.ts, including the
+// REMAP_PIPELINE_VERSION prefix ("v2").
+const REMAP_PIPELINE_VERSION = "v2";
 function scopedCachePath(
   cacheDir: string,
   inputJar: string,
@@ -63,7 +66,7 @@ function scopedCachePath(
   const stat = statSync(inputJar, { throwIfNoEntry: false });
   const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "unknown";
   const key = createHash("sha256")
-    .update(`${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
+    .update(`${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
     .digest("hex");
   return join(cacheDir, "remapped-mods", `${key}.jar`);
 }
@@ -200,6 +203,76 @@ test("remapModJar accepts mojang target and returns cached output", async () => 
     assert.equal(result.fromMapping, "intermediary");
     assert.equal(result.resolvedTargetNamespace, "mojang");
     assert.ok(result.warnings.some((warning) => warning.toLowerCase().includes("cache")));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar remaps an intermediary jar to mojang in two passes with valid namespaces", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
+
+    // Write real tiny files with the headers the production resolvers emit.
+    const intermediaryTiny = join(tempDir, "1.21.1-intermediary.tiny");
+    writeFileSync(intermediaryTiny, "tiny\t2\t0\tofficial\tintermediary\n");
+    const mojangTiny = join(tempDir, "1.21.1-mojang.tiny");
+    writeFileSync(mojangTiny, "tiny\t2\t0\tobfuscated\tmojang\n");
+
+    function namespacesIn(tinyPath: string): string[] {
+      const header = readFileSync(tinyPath, "utf8").split("\n")[0] as string;
+      return header.split("\t").slice(3);
+    }
+
+    const remapCalls: Array<{ mappingsFile: string; fromNamespace: string; toNamespace: string }> = [];
+    const config = makeTestConfig(tempDir);
+
+    const result = await remapModJar(
+      { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" },
+      config,
+      {
+        resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+        resolveTinyMappingFile: async (_v, mapping) => {
+          assert.equal(mapping, "intermediary");
+          return intermediaryTiny;
+        },
+        resolveMojangTinyFile: async () => ({ path: mojangTiny, warnings: [] }),
+        remapJar: async (_jar, opts) => {
+          remapCalls.push({
+            mappingsFile: opts.mappingsFile,
+            fromNamespace: opts.fromNamespace,
+            toNamespace: opts.toNamespace
+          });
+          // The fromNamespace MUST exist in the mapping file this pass uses, or
+          // tiny-remapper finds no keys and silently no-ops (the original bug).
+          const namespaces = namespacesIn(opts.mappingsFile);
+          assert.ok(
+            namespaces.includes(opts.fromNamespace),
+            `fromNamespace "${opts.fromNamespace}" not in ${opts.mappingsFile} (${namespaces.join(",")})`
+          );
+          assert.ok(
+            namespaces.includes(opts.toNamespace),
+            `toNamespace "${opts.toNamespace}" not in ${opts.mappingsFile} (${namespaces.join(",")})`
+          );
+          writeFileSync(opts.outputJar, "remapped");
+          return { outputJar: opts.outputJar, durationMs: 0 };
+        }
+      }
+    );
+
+    assert.equal(result.resolvedTargetNamespace, "mojang");
+    assert.equal(remapCalls.length, 2, "intermediary->mojang must use two passes");
+    assert.deepEqual(remapCalls[0], {
+      mappingsFile: intermediaryTiny,
+      fromNamespace: "intermediary",
+      toNamespace: "official"
+    });
+    assert.deepEqual(remapCalls[1], {
+      mappingsFile: mojangTiny,
+      fromNamespace: "obfuscated",
+      toNamespace: "mojang"
+    });
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

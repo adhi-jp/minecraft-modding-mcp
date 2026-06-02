@@ -67,7 +67,10 @@ export function registerResources(
       try {
         const result = await sourceService.getClassSource({
           artifactId: params.artifactId as string,
-          className: decodeTemplateParam(params as Record<string, string>, "className")
+          className: decodeTemplateParam(params as Record<string, string>, "className"),
+          // A "text/x-java" source resource must return real Java, not the default
+          // metadata outline; match the sibling class-source-json resource.
+          mode: "full"
         });
         return textResource(uri.href, result.sourceText);
       } catch (e: unknown) {

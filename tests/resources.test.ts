@@ -173,9 +173,33 @@ test("class-source resource decodes template params before calling sourceService
 
   assert.deepEqual(receivedInput, {
     artifactId: "artifact-1",
-    className: "com.example/Main"
+    className: "com.example/Main",
+    mode: "full"
   });
   assert.equal(result.contents[0]?.text, "class Example {}");
+});
+
+test("class-source resource requests full source, not the metadata outline", async () => {
+  let receivedMode: string | undefined;
+  const registrations = captureResources({
+    async getClassSource(input: Record<string, string>) {
+      receivedMode = input.mode;
+      // Emulate metadata mode returning only an outline when mode is omitted/metadata.
+      const sourceText = input.mode === "full" ? "package a;\nclass Example {}\n" : "// [class] line 1";
+      return { sourceText };
+    }
+  });
+
+  const handler = registrations.get("class-source")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(
+    new URL("mc://source/artifact-1/a.Example"),
+    { artifactId: "artifact-1", className: "a.Example" }
+  );
+
+  assert.equal(receivedMode, "full");
+  assert.match(result.contents[0]?.text as string, /class Example/);
 });
 
 test("class-source resource returns an invalid-input envelope for missing template params", async () => {

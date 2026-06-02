@@ -306,6 +306,8 @@ export type GetClassSourceOutput = {
   };
   truncated: boolean;
   charsTruncated?: boolean;
+  /** True when startLine begins past EOF; the returned range is empty (not clamped). */
+  outOfRange?: boolean;
   /** First not-yet-returned line when truncated; pass back as startLine to continue. */
   nextStartLine?: number;
   origin: ResolvedSourceArtifact["origin"];

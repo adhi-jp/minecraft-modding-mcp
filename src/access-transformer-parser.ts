@@ -6,9 +6,16 @@ export type AccessTransformerAccessAction =
 
 export type AccessTransformerFinalAction = "add" | "remove";
 
+export type AccessTransformerTargetKind =
+  | "class"
+  | "field"
+  | "method"
+  | "wildcard-all"
+  | "wildcard-method";
+
 export type AccessTransformerEntry = {
   line: number;
-  targetKind: "class" | "field" | "method";
+  targetKind: AccessTransformerTargetKind;
   owner: string;
   target: string;
   name?: string;
@@ -46,7 +53,7 @@ function parseAccessDeclaration(raw: string): {
 function splitMemberToken(tokens: string[]): {
   name?: string;
   descriptor?: string;
-  targetKind: "class" | "field" | "method";
+  targetKind: AccessTransformerTargetKind;
 } {
   if (tokens.length === 0) {
     return { targetKind: "class" };
@@ -55,10 +62,19 @@ function splitMemberToken(tokens: string[]): {
   if (tokens.length === 1) {
     const token = tokens[0] ?? "";
     const descriptorStart = token.indexOf("(");
+    // Wildcards: "*" targets all fields and methods; "*()" targets all methods.
+    // (Standard Forge/NeoForge AT syntax — previously parsed as a literal name.)
+    if (token === "*") {
+      return { targetKind: "wildcard-all", name: "*" };
+    }
     if (descriptorStart >= 0) {
+      const namePart = token.slice(0, descriptorStart);
+      if (namePart === "*") {
+        return { targetKind: "wildcard-method", name: "*", descriptor: token.slice(descriptorStart) };
+      }
       return {
         targetKind: "method",
-        name: token.slice(0, descriptorStart),
+        name: namePart,
         descriptor: token.slice(descriptorStart)
       };
     }

@@ -423,3 +423,25 @@ test("resolveVersionJar releases the lock when the resolution rejects", async ()
   const lockMap = (svc as unknown as { resolveLocks: Map<string, unknown> }).resolveLocks;
   assert.equal(lockMap.size, 0, "lock must be released even when the underlying resolution rejects");
 });
+
+test("recordCacheEntry serializes concurrent writes for different versions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "version-cache-race-"));
+  const svc = new VersionService(buildTestConfig(root));
+  const record = (entry: { version: string; jarPath: string; downloadedAt: string }) =>
+    (svc as unknown as { recordCacheEntry: (e: typeof entry) => Promise<void> }).recordCacheEntry(entry);
+
+  // Two different versions resolved in parallel. resolveLocks only guards the
+  // SAME version, so without serialized index writes the read-modify-write of
+  // index.json interleaves and the last writer clobbers the other entry.
+  await Promise.all([
+    record({ version: "1.20.1", jarPath: join(root, "a.jar"), downloadedAt: "2026-01-01T00:00:00.000Z" }),
+    record({ version: "1.21.4", jarPath: join(root, "b.jar"), downloadedAt: "2026-01-02T00:00:00.000Z" })
+  ]);
+
+  const indexPath = (svc as unknown as { cacheIndexPath: () => string }).cacheIndexPath();
+  const parsed = JSON.parse(await readFile(indexPath, "utf8")) as {
+    entries: Array<{ version: string }>;
+  };
+  const versions = parsed.entries.map((entry) => entry.version).sort();
+  assert.deepEqual(versions, ["1.20.1", "1.21.4"]);
+});

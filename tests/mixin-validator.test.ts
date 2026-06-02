@@ -11,6 +11,7 @@ import {
   extractMethodDescriptor,
   validateParsedMixin,
   validateParsedAccessWidener,
+  validateParsedAccessTransformer,
   refreshMixinValidationOutcome,
   loadMixinStageBudgets,
   type MixinValidationResult,
@@ -23,6 +24,7 @@ import {
   type ValidationSummary
 } from "../src/mixin-validator.ts";
 import type { ParsedAccessWidener } from "../src/access-widener-parser.ts";
+import { parseAccessTransformer } from "../src/access-transformer-parser.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -1001,33 +1003,38 @@ test("extractMethodDescriptor returns the descriptor portion when present", () =
 /* ------------------------------------------------------------------ */
 
 test("validateParsedMixin handles descriptor-bearing and owner-prefixed method references", () => {
+  // Each available method now carries its real jvmDescriptor: a descriptor-bearing
+  // reference resolves only when an overload's descriptor matches.
   const cases = [
     {
       name: "descriptor-bearing method reference",
       annotation: "Inject",
       method: "playerTouch(Lnet/minecraft/world/entity/player/Player;)V",
-      availableMethods: ["playerTouch", "tick"],
+      availableMethods: [
+        { name: "playerTouch", jvmDescriptor: "(Lnet/minecraft/world/entity/player/Player;)V" },
+        { name: "tick", jvmDescriptor: "()V" }
+      ],
       valid: true
     },
     {
       name: "owner-prefixed method reference",
       annotation: "Redirect",
       method: "Lnet/minecraft/SomeClass;tick(I)V",
-      availableMethods: ["tick"],
+      availableMethods: [{ name: "tick", jvmDescriptor: "(I)V" }],
       valid: true
     },
     {
       name: "method name starting with L",
       annotation: "Inject",
       method: "Load(Lfoo/Bar;)V",
-      availableMethods: ["Load"],
+      availableMethods: [{ name: "Load", jvmDescriptor: "(Lfoo/Bar;)V" }],
       valid: true
     },
     {
       name: "missing method keeps descriptor hint",
       annotation: "Inject",
       method: "missingMethod(I)V",
-      availableMethods: ["tick"],
+      availableMethods: [{ name: "tick", jvmDescriptor: "()V" }],
       valid: false,
       issueMessageIncludes: "(descriptor: (I)V)"
     }
@@ -1038,7 +1045,14 @@ test("validateParsedMixin handles descriptor-bearing and owner-prefixed method r
       injections: [{ annotation: testCase.annotation, method: testCase.method, line: 10 }]
     });
     const targetMembers = new Map<string, ResolvedTargetMembers>([
-      ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: testCase.availableMethods })]
+      ["PlayerEntity", {
+        className: "PlayerEntity",
+        constructors: [],
+        methods: testCase.availableMethods.map((m) =>
+          makeMember({ name: m.name, ownerFqn: "PlayerEntity", jvmDescriptor: m.jvmDescriptor })
+        ),
+        fields: []
+      }]
     ]);
     const warnings: string[] = [];
 
@@ -1055,6 +1069,86 @@ test("validateParsedMixin handles descriptor-bearing and owner-prefixed method r
       testCase.name
     );
   }
+});
+
+test("validateParsedMixin flags an @Inject whose descriptor matches no overload", () => {
+  // Target exposes only tick(I)V; the injection targets tick(D)V — a real
+  // wrong-signature that name-only matching used to report as RESOLVED.
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick(D)V", line: 12 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: [makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor: "(I)V" })],
+      fields: []
+    }]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+
+  assert.equal(result.valid, false, "descriptor mismatch must not be reported as valid");
+  const issue = result.issues.find((i) => i.kind === "descriptor-mismatch");
+  assert.ok(issue, `expected a descriptor-mismatch issue, got ${JSON.stringify(result.issues)}`);
+  assert.equal(issue!.annotation, "@Inject");
+  assert.ok(issue!.message.includes("(I)V"), "should list the available descriptor as a candidate");
+});
+
+test("validateParsedMixin resolves an @Inject whose descriptor matches an overload", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "tick(I)V", line: 12 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: [
+        makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor: "(I)V" }),
+        makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor: "(D)V" })
+      ],
+      fields: []
+    }]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 0);
+});
+
+test("validateParsedAccessTransformer treats wildcard targets as valid when the owner resolves", () => {
+  const parsed = parseAccessTransformer([
+    "public com.example.Foo *",
+    "public com.example.Foo *()"
+  ].join("\n"));
+  const membersByClass = new Map<string, ResolvedTargetMembers>([
+    ["com.example.Foo", {
+      className: "com.example.Foo",
+      constructors: [],
+      methods: [makeMember({ name: "bar", ownerFqn: "com.example.Foo", jvmDescriptor: "()V" })],
+      fields: [makeMember({ name: "baz", ownerFqn: "com.example.Foo", jvmDescriptor: "I" })]
+    }]
+  ]);
+  const result = validateParsedAccessTransformer(parsed, membersByClass, []);
+  assert.equal(result.valid, true, `wildcards should be valid, got ${JSON.stringify(result.entries)}`);
+  assert.equal(result.entries.every((e) => e.valid), true);
+});
+
+test("validateParsedAccessTransformer reports a descriptor mismatch with candidates", () => {
+  const parsed = parseAccessTransformer("public com.example.Foo bar(D)V");
+  const membersByClass = new Map<string, ResolvedTargetMembers>([
+    ["com.example.Foo", {
+      className: "com.example.Foo",
+      constructors: [],
+      methods: [makeMember({ name: "bar", ownerFqn: "com.example.Foo", jvmDescriptor: "(I)V" })],
+      fields: []
+    }]
+  ]);
+  const result = validateParsedAccessTransformer(parsed, membersByClass, []);
+  assert.equal(result.valid, false);
+  assert.ok(result.entries[0]?.issue?.includes("(I)V"), "issue should list the available descriptor");
 });
 
 /* ------------------------------------------------------------------ */

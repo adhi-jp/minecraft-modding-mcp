@@ -25,6 +25,17 @@ export async function resolveTinyRemapperJar(
 ): Promise<string> {
   // 1. Environment / config override
   if (overridePath) {
+    if (!existsSync(overridePath)) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `Configured tiny-remapper jar does not exist: ${overridePath}`,
+        details: {
+          path: overridePath,
+          nextAction:
+            "Point tinyRemapperJarPath / MCP_TINY_REMAPPER_JAR at an existing fat jar, or unset it to download automatically."
+        }
+      });
+    }
     return overridePath;
   }
 

@@ -493,7 +493,8 @@ export function normalizeDescriptorHint(descriptorHint: string | undefined): str
 
 export function applyDisambiguationHints(
   candidates: MappingLookupCandidate[],
-  disambiguation: { ownerHint?: string; descriptorHint?: string } | undefined
+  disambiguation: { ownerHint?: string; descriptorHint?: string } | undefined,
+  warnings?: string[]
 ): MappingLookupCandidate[] {
   if (!disambiguation || candidates.length <= 1) {
     return candidates;
@@ -521,6 +522,13 @@ export function applyDisambiguationHints(
     );
     if (descriptorMatched.length > 0) {
       filtered = descriptorMatched;
+    } else {
+      // Candidate descriptors are projected toward the target namespace, so a hint
+      // written in another namespace silently matches nothing. Surface that instead
+      // of leaving the ambiguity unexplained.
+      warnings?.push(
+        `descriptorHint "${descriptorHint}" matched none of the ${filtered.length} candidate descriptor(s); it may be in a different mapping namespace. Hint ignored.`
+      );
     }
   }
 

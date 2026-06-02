@@ -129,6 +129,28 @@ function parseRegistrySnapshot(
     });
   }
 
+  // Every registry value must carry an `entries` object. Without this guard a
+  // malformed value slips through and later throws a raw TypeError on `.entries`
+  // (registry-service.ts:268/305, version-diff-service.ts), bypassing the
+  // corrupt-snapshot regeneration path that keys off REGISTRY_GENERATION_FAILED.
+  for (const [registryName, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const entries = (value as { entries?: unknown } | null | undefined)?.entries;
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      typeof entries !== "object" ||
+      entries === null ||
+      Array.isArray(entries)
+    ) {
+      throw createError({
+        code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
+        message: `registries.json for version "${version}" has a malformed "${registryName}" registry (missing entries).`,
+        details: { version, registryFile, registryName }
+      });
+    }
+  }
+
   return parsed as Record<string, RegistryData>;
 }
 

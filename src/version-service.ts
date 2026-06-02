@@ -145,6 +145,9 @@ export class VersionService {
     }
   >();
   private readonly resolveLocks = new Map<string, Promise<ResolvedVersionJar>>();
+  // Serializes index.json read-modify-write so parallel resolutions of different
+  // versions can't clobber each other (resolveLocks only guards the same version).
+  private indexWriteChain: Promise<void> = Promise.resolve();
 
   constructor(config: Config, fetchFn: typeof fetch = globalThis.fetch) {
     this.config = config;
@@ -536,7 +539,16 @@ export class VersionService {
     }
   }
 
-  private async recordCacheEntry(entry: VersionCacheEntry): Promise<void> {
+  private recordCacheEntry(entry: VersionCacheEntry): Promise<void> {
+    // Chain onto the previous write so reads and writes never interleave. The
+    // caller still awaits its own write's result, but the shared chain swallows
+    // failures so one rejected write cannot poison subsequent writes.
+    const next = this.indexWriteChain.then(() => this.recordCacheEntryInternal(entry));
+    this.indexWriteChain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async recordCacheEntryInternal(entry: VersionCacheEntry): Promise<void> {
     const indexPath = this.cacheIndexPath();
     const existing = await this.loadCacheIndex();
     const deduped = existing.entries.filter((candidate) => candidate.version !== entry.version);

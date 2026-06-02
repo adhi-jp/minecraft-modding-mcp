@@ -168,6 +168,21 @@ function inferVersion(...candidates: Array<string | null | undefined>): string |
   return undefined;
 }
 
+/**
+ * Whether a cache entry path contains the selector version as a whole version
+ * token. Used as a fallback when an entry has no structured meta.version. The
+ * match is anchored so that a coarse selector like "1.2" does NOT match a "1.21"
+ * path (which would cause destructive prune/delete to hit the wrong caches),
+ * while still allowing major.minor sweeps where "1.21" matches "1.21.4".
+ */
+export function pathContainsVersion(path: string, version: string): boolean {
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Preceding char must not be a digit or dot (avoid matching inside a longer
+  // version like 1.21 -> 21); following char must not be a digit (block
+  // 1.2 -> 1.21) but a dot is allowed so 1.21 sweeps 1.21.4.
+  return new RegExp(`(?<![\\d.])${escaped}(?!\\d)`).test(path);
+}
+
 function inferMapping(...candidates: Array<string | null | undefined>): string | undefined {
   for (const candidate of candidates) {
     const normalized = candidate?.toLowerCase();
@@ -420,7 +435,7 @@ function matchesSelector(entry: CacheEntry, selector: PreparedSelector | undefin
   }
   if (selector.version) {
     const version = typeof maybeMeta.version === "string" ? maybeMeta.version : undefined;
-    if (version !== selector.version && !entry.path.includes(selector.version)) {
+    if (version !== selector.version && !pathContainsVersion(entry.path, selector.version)) {
       return false;
     }
   }

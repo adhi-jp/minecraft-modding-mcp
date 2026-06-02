@@ -116,6 +116,14 @@ const TEST_DESCRIPTOR_REMAP_TINY_GRADLE_HOME = [
   "c\tnet/minecraft/class_2680\tnet/minecraft/class_2680\tnet/minecraft/world/level/block/state/BlockState"
 ].join("\n");
 
+// A standalone Fabric yarn tiny declares only `intermediary named` (no obfuscated
+// column), so the stored method descriptor is in INTERMEDIARY coordinates.
+const TEST_TINY_YARN_2COL = [
+  "tiny\t2\t0\tintermediary\tnamed",
+  "c\tnet/minecraft/class_1937\tnet/minecraft/world/level/Level",
+  "\tm\t(Lnet/minecraft/class_1937;)V\tmethod_x\tdoThing"
+].join("\n");
+
 function createVersionServiceStub(mappingsUrl?: string) {
   return {
     async resolveVersionMappings(version: string) {
@@ -953,6 +961,35 @@ test("MappingService suppresses raw Loom miss warnings when Maven fallback resol
     assert.equal(result.resolved, true);
     assert.equal(result.status, "resolved");
     assert.ok(result.warnings.every((warning) => !warning.includes("No Loom tiny mapping files matched version")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService checkSymbolExists matches a descriptor against an intermediary-coordinate yarn tiny", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-yarn-2col-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    await writeLoomTinyCache(root, TEST_TINY_YARN_2COL);
+    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
+
+    const result = await withCwd(root, () =>
+      service.checkSymbolExists({
+        version: "1.21.10",
+        kind: "method",
+        owner: "net.minecraft.world.level.Level",
+        name: "doThing",
+        // Query descriptor is in yarn (named) coordinates; the stored descriptor
+        // is in intermediary coordinates. Projecting only to obfuscated (absent
+        // from this graph) used to miss it and report not_found.
+        descriptor: "(Lnet/minecraft/world/level/Level;)V",
+        sourceMapping: "yarn"
+      } as never)
+    );
+
+    assert.equal(result.resolved, true, `expected resolved, got ${JSON.stringify(result)}`);
+    assert.equal(result.status, "resolved");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

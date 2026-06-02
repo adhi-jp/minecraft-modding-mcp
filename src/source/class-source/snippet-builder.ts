@@ -1,4 +1,5 @@
 import * as classSourceHelpers from "../class-source-helpers.js";
+import { sliceToMaxCharsSafe } from "../../text-truncate.js";
 import type { SourceMode } from "../../source-service.js";
 
 export type SnippetBuildInput = {
@@ -24,10 +25,24 @@ export type SnippetBuildResult = {
    * response already reached the end of the file.
    */
   nextStartLine?: number;
+  /**
+   * True when the requested window begins past the end of the file. The returned
+   * window is empty (returnedEnd < returnedStart) rather than clamped into the
+   * last real line, so paginated readers can detect overshoot instead of silently
+   * re-reading the final line.
+   */
+  outOfRange?: boolean;
 };
 
 export function buildClassSourceSnippet(input: SnippetBuildInput): SnippetBuildResult {
-  const lines = input.content.split(/\r?\n/);
+  const rawLines = input.content.split(/\r?\n/);
+  // A trailing newline produces a final empty element that is not a real source
+  // line. Drop a single one so totalLines and line addressing reflect the actual
+  // source (decompiled Java almost always ends with a trailing newline).
+  const lines =
+    rawLines.length > 1 && rawLines[rawLines.length - 1] === ""
+      ? rawLines.slice(0, -1)
+      : rawLines;
   const totalLines = lines.length;
 
   let sourceText: string;
@@ -43,7 +58,22 @@ export function buildClassSourceSnippet(input: SnippetBuildInput): SnippetBuildR
   } else {
     const requestedStart = input.startLine ?? 1;
     const requestedEnd = input.endLine ?? totalLines;
-    const normalizedStart = Math.min(Math.max(1, requestedStart), Math.max(totalLines, 1));
+
+    if (requestedStart > totalLines) {
+      // The window begins past EOF: return an empty selection instead of clamping
+      // into the last real line, so paginated readers can detect the overshoot.
+      return {
+        sourceText: "",
+        totalLines,
+        returnedStart: requestedStart,
+        returnedEnd: requestedStart - 1,
+        truncated: true,
+        charsTruncated: false,
+        outOfRange: true
+      };
+    }
+
+    const normalizedStart = Math.max(1, requestedStart);
     const normalizedEnd = Math.min(Math.max(normalizedStart, requestedEnd), Math.max(totalLines, 1));
     let selectedLines = lines.slice(normalizedStart - 1, normalizedEnd);
     const clippedByRange = normalizedStart !== requestedStart || normalizedEnd !== requestedEnd;
@@ -61,7 +91,7 @@ export function buildClassSourceSnippet(input: SnippetBuildInput): SnippetBuildR
   }
 
   if (input.maxChars != null && sourceText.length > input.maxChars) {
-    sourceText = sourceText.slice(0, input.maxChars);
+    sourceText = sliceToMaxCharsSafe(sourceText, input.maxChars);
     charsTruncated = true;
     truncated = true;
   }

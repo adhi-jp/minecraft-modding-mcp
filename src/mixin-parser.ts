@@ -109,9 +109,39 @@ function collectMultilineAnnotation(lines: string[], startIndex: number): { text
  * Lines with inline annotation + declaration (e.g. `@Nullable private int x;`)
  * are treated as declaration lines (not skipped).
  */
+function isUpperCaseLetter(ch: string): boolean {
+  return ch !== ch.toLowerCase() && ch === ch.toUpperCase();
+}
+
 function skipAnnotations(lines: string[], startIndex: number): number {
   let idx = startIndex;
-  while (idx < lines.length && /^\s*@/.test(lines[idx])) {
+  while (idx < lines.length) {
+    const current = lines[idx];
+    // Skip blank lines and comment-only lines that sit between an annotation and the
+    // member declaration; otherwise the declaration line is missed and the member dropped.
+    if (/^\s*$/.test(current) || /^\s*\/\//.test(current)) {
+      idx++;
+      continue;
+    }
+    if (/^\s*\/\*/.test(current)) {
+      if (current.includes("*/")) {
+        const afterComment = current.slice(current.indexOf("*/") + 2).trim();
+        if (afterComment === "") {
+          idx++;
+          continue;
+        }
+        break; // declaration text follows an inline block comment
+      }
+      idx++;
+      while (idx < lines.length && !lines[idx].includes("*/")) {
+        idx++;
+      }
+      idx++; // move past the closing "*/" line
+      continue;
+    }
+    if (!/^\s*@/.test(current)) {
+      break;
+    }
     if (lines[idx].includes("(")) {
       // Check if parentheses are unbalanced (multi-line annotation) — always skip
       let depth = 0;
@@ -151,18 +181,34 @@ function stripInlineAnnotations(line: string): string {
   return line.replace(INLINE_ANNOTATION_RE, " ").trim();
 }
 
+/**
+ * JavaBeans `Introspector.decapitalize`, which SpongePowered Mixin's AccessorInfo
+ * uses for inflection: leave the name unchanged when its first two characters are
+ * both upper case (getURL -> URL, getNBT -> NBT), otherwise lower-case the first
+ * character (getId -> id, getHealth -> health).
+ */
+function decapitalize(name: string): string {
+  if (name.length === 0) {
+    return name;
+  }
+  if (name.length > 1 && isUpperCaseLetter(name.charAt(1)) && isUpperCaseLetter(name.charAt(0))) {
+    return name;
+  }
+  return name.charAt(0).toLowerCase() + name.slice(1);
+}
+
 function inferAccessorTarget(methodName: string): string {
   const getterMatch = GETTER_PREFIX_RE.exec(methodName);
   if (getterMatch) {
-    return getterMatch[1].charAt(0).toLowerCase() + getterMatch[1].slice(1);
+    return decapitalize(getterMatch[1]);
   }
   const setterMatch = SETTER_PREFIX_RE.exec(methodName);
   if (setterMatch) {
-    return setterMatch[1].charAt(0).toLowerCase() + setterMatch[1].slice(1);
+    return decapitalize(setterMatch[1]);
   }
   const invokerMatch = INVOKER_PREFIX_RE.exec(methodName);
   if (invokerMatch) {
-    return invokerMatch[1].charAt(0).toLowerCase() + invokerMatch[1].slice(1);
+    return decapitalize(invokerMatch[1]);
   }
   return methodName;
 }

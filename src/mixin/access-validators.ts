@@ -223,6 +223,18 @@ export function validateParsedAccessTransformer(
       continue;
     }
 
+    if (entry.targetKind === "wildcard-all" || entry.targetKind === "wildcard-method") {
+      // A wildcard transforms all members (or all methods); it is valid as long as
+      // the owner class resolved, which it has by this point.
+      validatedEntries.push({
+        ...entry,
+        valid: true,
+        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: true } : {})
+      });
+      validCount++;
+      continue;
+    }
+
     if (entry.targetKind === "field") {
       const fieldNames = allFieldNames(members);
       const matchedField = members.fields.find((member) => member.name === entry.name);
@@ -257,12 +269,31 @@ export function validateParsedAccessTransformer(
     }
 
     const methodNames = allMethodNames(members);
-    const matchedMethod = members.methods.find(
-      (member) => member.name === entry.name && member.jvmDescriptor === entry.descriptor
-    ) ?? members.constructors.find(
-      (member) => member.name === entry.name && member.jvmDescriptor === entry.descriptor
+    const sameNameMethods = [...members.methods, ...members.constructors].filter(
+      (member) => member.name === entry.name
     );
+    // Match by descriptor when one is supplied (AT method lines always carry one);
+    // fall back to a unique name match when it is absent.
+    const matchedMethod = entry.descriptor
+      ? sameNameMethods.find((member) => member.jvmDescriptor === entry.descriptor)
+      : sameNameMethods.length === 1
+        ? sameNameMethods[0]
+        : undefined;
     if (!matchedMethod) {
+      // Distinguish a true missing method from a descriptor mismatch so the user
+      // can see which overloads exist instead of a flat "not found".
+      if (entry.descriptor && sameNameMethods.length > 0) {
+        const available = [...new Set(sameNameMethods.map((member) => member.jvmDescriptor))];
+        validatedEntries.push({
+          ...entry,
+          valid: false,
+          issue: `Method "${entry.name}" exists in "${ownerFqn}" but no overload matches descriptor ${entry.descriptor} (available: ${available.join(", ")}).`,
+          suggestions: available,
+          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        });
+        invalidCount++;
+        continue;
+      }
       const suggestions = entry.name ? suggestSimilar(entry.name, methodNames) : [];
       validatedEntries.push({
         ...entry,

@@ -8,6 +8,7 @@ import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { analyzeModJar, type ModAnalysisResult } from "./mod-analyzer.js";
 import { validateAndNormalizeJarPath } from "./path-resolver.js";
+import { sliceToMaxCharsSafe } from "./text-truncate.js";
 import type { Config } from "./types.js";
 
 export type DecompileModJarInput = {
@@ -196,7 +197,7 @@ export class ModDecompileService {
 
     // Apply maxChars truncation
     if (input.maxChars != null && input.maxChars > 0 && content.length > input.maxChars) {
-      content = content.slice(0, input.maxChars);
+      content = sliceToMaxCharsSafe(content, input.maxChars);
       charsTruncated = true;
       truncated = true;
     }

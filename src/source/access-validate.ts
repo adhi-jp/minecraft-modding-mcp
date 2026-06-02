@@ -34,6 +34,11 @@ function normalizeAccessWidenerNamespace(namespace: string | undefined): SourceM
   if (normalized === "named") {
     return "yarn";
   }
+  // Fabric/Loom call the obfuscated namespace "official"; treat it as obfuscated
+  // (matches the tiny-parser alias) instead of silently assuming intermediary.
+  if (normalized === "official") {
+    return "obfuscated";
+  }
   if (
     normalized === "obfuscated" ||
     normalized === "mojang" ||
@@ -72,8 +77,15 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
   const headerNamespaceRaw = normalizeOptionalString(parsed.namespace);
   const overrideMapping = input.mapping ? normalizeMapping(input.mapping) : undefined;
   const headerNamespace = normalizeAccessWidenerNamespace(headerNamespaceRaw);
-  if (!headerNamespace && headerNamespaceRaw && !overrideMapping) {
-    warnings.push(`Unsupported access widener namespace "${headerNamespaceRaw}". Assuming intermediary.`);
+  if (!headerNamespace && !overrideMapping) {
+    // No usable namespace resolved and no override: surface the intermediary
+    // assumption so it is never silent (previously only warned when a header
+    // namespace was present but unsupported).
+    warnings.push(
+      headerNamespaceRaw
+        ? `Unsupported access widener namespace "${headerNamespaceRaw}". Assuming intermediary.`
+        : `Access widener namespace not declared; assuming intermediary. Pass mapping=… to set it explicitly.`
+    );
   }
 
   const awNamespace = overrideMapping ?? headerNamespace ?? "intermediary";

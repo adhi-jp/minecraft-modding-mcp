@@ -26,6 +26,24 @@ test("resolveTinyRemapperJar returns override path when provided", async () => {
   }
 });
 
+test("resolveTinyRemapperJar throws INVALID_INPUT when the override path does not exist", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const missing = join(tempDir, "does-not-exist.jar");
+    await assert.rejects(
+      () => resolveTinyRemapperJar(tempDir, missing),
+      (error: unknown) => {
+        const appError = error as { code?: string; message?: string };
+        assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+        assert.match(appError.message ?? "", /does-not-exist\.jar/);
+        return true;
+      }
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveTinyRemapperJar returns cached jar when it exists", async () => {
   const tempDir = makeTempDir();
   try {

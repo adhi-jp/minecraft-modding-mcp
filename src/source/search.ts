@@ -245,6 +245,11 @@ export function findContentMatchIndex(content: string, query: string, match: Sea
 
   const normalizedContent = toLower(content);
   const normalizedQuery = toLower(query);
+  // Both "contains" and "prefix" map to a substring search here. For free-text
+  // content, `prefix` is intentionally treated as "contains": file bodies are
+  // searched grep-style and the default match for intent=text resolves to
+  // "prefix" (see normalizeMatch), so anchoring at the start of the file would
+  // yield almost no hits. Symbol/path prefix anchoring lives in findMatchIndex.
   return normalizedContent.indexOf(normalizedQuery);
 }
 

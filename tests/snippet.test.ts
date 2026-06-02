@@ -102,7 +102,7 @@ test("buildClassSourceSnippet returns full content for mode='full'", async () =>
   assert.equal(result.truncated, false);
 });
 
-test("buildClassSourceSnippet clamps startLine and endLine beyond totalLines", async () => {
+test("buildClassSourceSnippet returns an empty out-of-range window when startLine is past EOF", async () => {
   const { buildClassSourceSnippet } = await import(
     "../src/source/class-source/snippet-builder.ts"
   );
@@ -118,10 +118,54 @@ test("buildClassSourceSnippet clamps startLine and endLine beyond totalLines", a
     maxChars: undefined
   });
 
-  assert.equal(result.returnedStart, 5);
-  assert.equal(result.returnedEnd, 5);
-  assert.equal(result.sourceText, "line5");
+  // Beyond EOF must not silently clamp into the last real line; return an empty window.
+  assert.equal(result.sourceText, "");
+  assert.equal(result.returnedStart, 100);
+  assert.equal(result.returnedEnd, 99);
   assert.equal(result.truncated, true);
+  assert.equal(result.outOfRange, true);
+});
+
+test("buildClassSourceSnippet does not count a trailing newline as an extra line", async () => {
+  const { buildClassSourceSnippet } = await import(
+    "../src/source/class-source/snippet-builder.ts"
+  );
+
+  const result = buildClassSourceSnippet({
+    filePath: "a/Snippet.java",
+    content: "a\nb\nc\n",
+    mode: "full",
+    startLine: undefined,
+    endLine: undefined,
+    maxLines: undefined,
+    maxChars: undefined
+  });
+
+  assert.equal(result.totalLines, 3);
+  assert.equal(result.returnedStart, 1);
+  assert.equal(result.returnedEnd, 3);
+  assert.equal(result.sourceText, "a\nb\nc");
+});
+
+test("buildClassSourceSnippet reads the last real line of a file ending in a newline", async () => {
+  const { buildClassSourceSnippet } = await import(
+    "../src/source/class-source/snippet-builder.ts"
+  );
+
+  const result = buildClassSourceSnippet({
+    filePath: "a/Snippet.java",
+    content: "a\nb\nc\n",
+    mode: "snippet",
+    startLine: 3,
+    endLine: undefined,
+    maxLines: undefined,
+    maxChars: undefined
+  });
+
+  assert.equal(result.returnedStart, 3);
+  assert.equal(result.returnedEnd, 3);
+  assert.equal(result.sourceText, "c");
+  assert.equal(result.outOfRange ?? false, false);
 });
 
 test("buildClassSourceSnippet applies maxLines and reports truncated=true", async () => {

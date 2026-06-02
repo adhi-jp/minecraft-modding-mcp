@@ -81,17 +81,73 @@ export function extractDecompiledMembers(
   return { constructors, fields, methods };
 }
 
+/**
+ * Remove everything that must not count toward brace depth — line comments,
+ * (possibly multi-line) block comments, string literals, and char literals —
+ * in a single stateful pass so that block comments spanning lines and char
+ * literals like '{' / '}' never skew brace accounting. Line indices are
+ * preserved (one output entry per input line). Text blocks (""" … """) are not
+ * special-cased; they are vanishingly rare in decompiled output.
+ */
+function stripBraceNoise(lines: string[]): string[] {
+  const out: string[] = new Array(lines.length);
+  let inBlockComment = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    let result = "";
+    let j = 0;
+    while (j < line.length) {
+      const ch = line[j];
+      const next = line[j + 1];
+      if (inBlockComment) {
+        if (ch === "*" && next === "/") {
+          inBlockComment = false;
+          j += 2;
+        } else {
+          j += 1;
+        }
+        continue;
+      }
+      if (ch === "/" && next === "/") {
+        break; // line comment: ignore the rest of the line
+      }
+      if (ch === "/" && next === "*") {
+        inBlockComment = true;
+        j += 2;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        j += 1;
+        while (j < line.length) {
+          if (line[j] === "\\") {
+            j += 2;
+            continue;
+          }
+          if (line[j] === quote) {
+            j += 1;
+            break;
+          }
+          j += 1;
+        }
+        continue;
+      }
+      result += ch;
+      j += 1;
+    }
+    out[i] = result;
+  }
+  return out;
+}
+
 export function computeLineBraceDepths(lines: string[]): number[] {
+  const stripped = stripBraceNoise(lines);
   const depths: number[] = new Array(lines.length).fill(0);
   let depth = 0;
-  for (let i = 0; i < lines.length; i += 1) {
+  for (let i = 0; i < stripped.length; i += 1) {
     // Entry depth for this line = depth observed before any brace on it.
     depths[i] = depth;
-    const stripped = (lines[i] ?? "")
-      .replace(/\/\/.*/g, "")
-      .replace(/"(?:\\.|[^"\\])*"/g, "\"\"")
-      .replace(/'(?:\\.|[^'\\])*'/g, "''");
-    for (const char of stripped) {
+    for (const char of stripped[i] ?? "") {
       if (char === "{") {
         depth += 1;
       } else if (char === "}") {
@@ -122,13 +178,13 @@ export function scanBraceRange(
   lines: string[],
   declarationLine: number
 ): { declarationLine: number; endLine: number } {
+  // Strip from the start of the file so multi-line block-comment state is correct
+  // by the time we reach declarationLine; indices stay aligned with `lines`.
+  const stripped = stripBraceNoise(lines);
   let depth = 0;
   let started = false;
-  for (let i = declarationLine - 1; i < lines.length; i += 1) {
-    const stripped = (lines[i] ?? "")
-      .replace(/\/\/.*/g, "")
-      .replace(/"(?:\\.|[^"\\])*"/g, "\"\"");
-    for (const char of stripped) {
+  for (let i = declarationLine - 1; i < stripped.length; i += 1) {
+    for (const char of stripped[i] ?? "") {
       if (char === "{") {
         depth += 1;
         started = true;

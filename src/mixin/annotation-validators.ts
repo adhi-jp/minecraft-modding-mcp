@@ -72,13 +72,63 @@ export function validateInjection(
         status: "not-found"
       });
     } else {
-      resolvedMembers.push({
-        annotation: `@${inj.annotation}`,
-        name: methodName,
-        line: inj.line,
-        resolvedTo: `${targetName}#${methodName}`,
-        status: "resolved"
-      });
+      // Name matched. If the reference carries a JVM descriptor, require an
+      // overload to match it; otherwise a wrong-signature target (e.g. tick(D)V
+      // when only tick(I)V exists) is silently reported as resolved.
+      const refDescriptor = extractMethodDescriptor(inj.method);
+      const sameNameMembers = [...members.constructors, ...members.methods].filter(
+        (member) => member.name === methodName
+      );
+      if (
+        refDescriptor &&
+        sameNameMembers.length > 0 &&
+        !sameNameMembers.some((member) => member.jvmDescriptor === refDescriptor)
+      ) {
+        const available = [...new Set(sameNameMembers.map((member) => member.jvmDescriptor))];
+        const isRemapFailed = remapFailedMembers?.get(targetName)?.has(methodName);
+        const isSigFailed = signatureFailedTargets?.has(targetName);
+        // Only a healthy mapping lets us trust that the user-written descriptor is
+        // byte-equal to the runtime descriptor; otherwise downgrade to a warning.
+        const mappingDegraded =
+          Boolean(isRemapFailed) || Boolean(isSigFailed) || healthReport?.overallHealthy === false;
+        const resolutionPath: ResolutionPath | undefined = isRemapFailed
+          ? "member-remap-failed"
+          : isSigFailed
+            ? "source-signature-unavailable"
+            : undefined;
+        const issueConfidence: IssueConfidence = mappingDegraded
+          ? "uncertain"
+          : confidence ?? "definite";
+        issues.push({
+          severity: mappingDegraded ? "warning" : "error",
+          kind: "descriptor-mismatch",
+          annotation: `@${inj.annotation}`,
+          target: `${targetName}#${inj.method}`,
+          message: `Method "${methodName}" exists in "${targetName}" but no overload matches descriptor ${refDescriptor} (available: ${available.join(", ")}).${mappingDegraded ? " (mapping degraded; may be a remap artifact)" : ""}`,
+          suggestions: available.length > 0 ? available : undefined,
+          line: inj.line,
+          confidence: issueConfidence,
+          confidenceReason: mappingDegraded
+            ? `Member remap/signature degraded; descriptor mismatch may be a tooling artifact, not a true signature error.`
+            : confidenceReason,
+          resolutionPath,
+          falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
+        });
+        resolvedMembers.push({
+          annotation: `@${inj.annotation}`,
+          name: methodName,
+          line: inj.line,
+          status: "not-found"
+        });
+      } else {
+        resolvedMembers.push({
+          annotation: `@${inj.annotation}`,
+          name: methodName,
+          line: inj.line,
+          resolvedTo: `${targetName}#${methodName}`,
+          status: "resolved"
+        });
+      }
     }
   }
 }

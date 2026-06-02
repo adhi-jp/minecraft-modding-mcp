@@ -31,6 +31,23 @@ export interface ModRemapResult {
   warnings: string[];
 }
 
+/**
+ * Injectable external dependencies, used by tests to drive the remap pipeline
+ * without spawning Java or downloading mapping jars. Production callers omit it.
+ */
+export interface RemapModJarDeps {
+  remapJar?: typeof remapJar;
+  resolveTinyMappingFile?: typeof resolveTinyMappingFile;
+  resolveMojangTinyFile?: typeof resolveMojangTinyFile;
+  resolveTinyRemapperJar?: typeof resolveTinyRemapperJar;
+}
+
+// Bumped whenever the remap pipeline changes in a way that makes previously
+// cached output jars wrong. The v1 pipeline mis-mapped intermediary jars to
+// mojang using an obfuscated<->mojang tiny (no intermediary namespace), so any
+// cached mojang output is invalid and must not be reused.
+const REMAP_PIPELINE_VERSION = "v2";
+
 function normalizeTargetNamespace(target: ModRemapInput["targetMapping"]): "yarn" | "mojang" {
   return target === "yarn" ? "yarn" : "mojang";
 }
@@ -105,14 +122,19 @@ function buildCacheKey(
   const stat = statSync(inputJar, { throwIfNoEntry: false });
   const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "unknown";
   return createHash("sha256")
-    .update(`${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
+    .update(`${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
     .digest("hex");
 }
 
 export async function remapModJar(
   input: ModRemapInput,
-  config: Config
+  config: Config,
+  deps: RemapModJarDeps = {}
 ): Promise<ModRemapResult> {
+  const remapJarFn = deps.remapJar ?? remapJar;
+  const resolveTinyMappingFileFn = deps.resolveTinyMappingFile ?? resolveTinyMappingFile;
+  const resolveMojangTinyFileFn = deps.resolveMojangTinyFile ?? resolveMojangTinyFile;
+  const resolveTinyRemapperJarFn = deps.resolveTinyRemapperJar ?? resolveTinyRemapperJar;
   const startedAt = Date.now();
   const warnings: string[] = [];
 
@@ -233,54 +255,75 @@ export async function remapModJar(
   }
 
   // 5. Resolve tiny-remapper
-  const tinyRemapperJar = await resolveTinyRemapperJar(config.cacheDir, config.tinyRemapperJarPath);
+  const tinyRemapperJar = await resolveTinyRemapperJarFn(config.cacheDir, config.tinyRemapperJarPath);
 
-  // 6. Resolve mapping file and remap
-  let mappingsFile: string;
-  let toNamespace: string;
+  // 6. Build the remap plan. Each pass uses a mapping file whose source column
+  // actually contains the names present in that pass's input jar.
+  type RemapPass = { mappingsFile: string; fromNamespace: string; toNamespace: string };
+  const passes: RemapPass[] = [];
   if (resolvedTargetNamespace === "yarn") {
-    mappingsFile = await resolveTinyMappingFile(mcVersion, "yarn", config.cacheDir);
-    toNamespace = "named";
+    // The Fabric yarn v2 tiny declares both intermediary and named, so a single
+    // intermediary -> named pass is sufficient.
+    const yarnTiny = await resolveTinyMappingFileFn(mcVersion, "yarn", config.cacheDir);
+    passes.push({ mappingsFile: yarnTiny, fromNamespace, toNamespace: "named" });
   } else {
-    const mojangTiny = await resolveMojangTinyFile(mcVersion, config);
-    mappingsFile = mojangTiny.path;
-    toNamespace = "mojang";
+    // Mojang target. The merged mojang tiny only bridges obfuscated <-> mojang,
+    // but a Fabric/Quilt jar is intermediary-named, so a direct intermediary ->
+    // mojang remap finds no matching keys and silently no-ops. Remap in two passes:
+    //   pass 1: intermediary -> official (= obfuscated) via the Fabric intermediary v2 tiny
+    //   pass 2: obfuscated    -> mojang                via the merged mojang tiny
+    const mojangTiny = await resolveMojangTinyFileFn(mcVersion, config);
     warnings.push(...mojangTiny.warnings);
+    if (fromNamespace === "intermediary") {
+      const intermediaryTiny = await resolveTinyMappingFileFn(mcVersion, "intermediary", config.cacheDir);
+      passes.push({ mappingsFile: intermediaryTiny, fromNamespace: "intermediary", toNamespace: "official" });
+      passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
+    } else {
+      // Defensive: an already-obfuscated input maps directly. (mojang -> mojang is
+      // handled earlier by the copy short-circuit, so this is not normally reached.)
+      passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
+    }
   }
 
   mkdirSync(dirname(outputJar), { recursive: true });
 
-  // 8. Use temporary directory for intermediate work
+  // 7. Use a temporary directory for intermediate work
   const tempDir = join(tmpdir(), `mcp-remap-${cacheKey.slice(0, 12)}`);
   mkdirSync(tempDir, { recursive: true });
 
   try {
-    const tempOutput = join(tempDir, "remapped.jar");
-
-    try {
-      await remapJar(tinyRemapperJar, {
-        inputJar: normalizedInput,
-        outputJar: tempOutput,
-        mappingsFile,
-        fromNamespace,
-        toNamespace,
-        timeoutMs: config.remapTimeoutMs,
-        maxMemoryMb: config.remapMaxMemoryMb
-      });
-    } catch (caughtError) {
-      if (isAppError(caughtError)) {
-        throw createError({
-          code: caughtError.code,
-          message: caughtError.message,
-          details: {
-            ...(caughtError.details ?? {}),
-            fromMapping: fromNamespace,
-            targetMapping: input.targetMapping,
-            resolvedTargetNamespace
-          }
+    let passInput = normalizedInput;
+    let tempOutput = "";
+    for (let passIndex = 0; passIndex < passes.length; passIndex += 1) {
+      const pass = passes[passIndex]!;
+      tempOutput = join(tempDir, `pass-${passIndex}.jar`);
+      try {
+        await remapJarFn(tinyRemapperJar, {
+          inputJar: passInput,
+          outputJar: tempOutput,
+          mappingsFile: pass.mappingsFile,
+          fromNamespace: pass.fromNamespace,
+          toNamespace: pass.toNamespace,
+          timeoutMs: config.remapTimeoutMs,
+          maxMemoryMb: config.remapMaxMemoryMb
         });
+      } catch (caughtError) {
+        if (isAppError(caughtError)) {
+          throw createError({
+            code: caughtError.code,
+            message: caughtError.message,
+            details: {
+              ...(caughtError.details ?? {}),
+              fromMapping: fromNamespace,
+              targetMapping: input.targetMapping,
+              resolvedTargetNamespace,
+              pass: `${pass.fromNamespace}->${pass.toNamespace}`
+            }
+          });
+        }
+        throw caughtError;
       }
-      throw caughtError;
+      passInput = tempOutput;
     }
 
     // Copy to final destination and cache

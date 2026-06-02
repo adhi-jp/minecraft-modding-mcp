@@ -43,6 +43,20 @@ test("parseAccessTransformer parses class, field, and method entries with final 
   assert.deepEqual(result.parseWarnings, []);
 });
 
+test("parseAccessTransformer recognizes wildcard member targets", () => {
+  const result = parseAccessTransformer([
+    "public net.minecraft.server.MinecraftServer *",
+    "public net.minecraft.server.MinecraftServer *()"
+  ].join("\n"));
+
+  assert.equal(result.entries.length, 2);
+  assert.equal(result.entries[0]?.targetKind, "wildcard-all");
+  assert.equal(result.entries[0]?.name, "*");
+  assert.equal(result.entries[1]?.targetKind, "wildcard-method");
+  assert.equal(result.entries[1]?.name, "*");
+  assert.deepEqual(result.parseWarnings, []);
+});
+
 test("parseAccessTransformer warns on unsupported access declarations", () => {
   const content = [
     "friend net.minecraft.server.MinecraftServer",

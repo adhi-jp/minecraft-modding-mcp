@@ -1757,6 +1757,44 @@ test("SourceService findClass resolves qualified names even with many same-name 
   assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
+test("SourceService findClass resolves a qualified inner-class name to its outer file", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-find-class-inner-"));
+  const binaryJarPath = join(root, "inner.jar");
+  const sourcesJarPath = join(root, "inner-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "a/b/Outer.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "a/b/Outer$Inner.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "a/b/Outer.java": [
+      "package a.b;",
+      "public class Outer {",
+      "  public static class Inner {",
+      "    void marker() {}",
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "obfuscated"
+  });
+
+  const inner = service.findClass({ className: "a.b.Outer.Inner", artifactId: resolved.artifactId });
+  assert.equal(inner.total, 1, `inner-class lookup should resolve, got ${JSON.stringify(inner.matches)}`);
+  assert.equal(inner.matches[0]?.qualifiedName, "a.b.Outer.Inner");
+  assert.equal(inner.matches[0]?.filePath, "a/b/Outer.java");
+
+  // The outer class must still resolve unchanged.
+  const outer = service.findClass({ className: "a.b.Outer", artifactId: resolved.artifactId });
+  assert.equal(outer.matches[0]?.qualifiedName, "a.b.Outer");
+  assert.equal(outer.matches[0]?.filePath, "a/b/Outer.java");
+});
+
 test("SourceService findClass warns when obfuscated mapping is queried with deobfuscated class names", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-findclass-namespace-warning-"));
@@ -5644,6 +5682,35 @@ test("SourceService validateAccessWidener chooses the expected mapping namespace
 
         assert.equal(result.valid, true);
         assert.deepEqual(mappingCalls, ["mojang"]);
+      }
+    },
+    {
+      name: "treats the official header namespace as obfuscated, not intermediary",
+      rootPrefix: "service-validate-aw-official-",
+      run: async ({ mappingCalls, service }) => {
+        const result = await (
+          service as unknown as {
+            validateAccessWidener: (input: {
+              content: string;
+              version: string;
+            }) => Promise<{ valid: boolean; warnings: string[] }>;
+          }
+        ).validateAccessWidener({
+          content: [
+            "accessWidener v2 official",
+            "accessible class net/minecraft/server/MinecraftServer"
+          ].join("\n"),
+          version: "1.21.10"
+        });
+
+        assert.equal(result.valid, true);
+        // "official" == obfuscated == the runtime lookup namespace, so no
+        // cross-namespace mapping call is made (vs. the buggy intermediary default).
+        assert.deepEqual(mappingCalls, []);
+        assert.ok(
+          !result.warnings.some((w) => /assuming intermediary|unsupported/i.test(w)),
+          `official must not be treated as unsupported, got ${JSON.stringify(result.warnings)}`
+        );
       }
     }
   ];

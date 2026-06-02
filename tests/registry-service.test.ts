@@ -94,6 +94,61 @@ test("RegistryService discards corrupt cached registries and regenerates them", 
   }
 });
 
+test("RegistryService treats a cached registry value missing entries as corrupt and regenerates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "registry-service-no-entries-"));
+  const config = buildTestConfig(root);
+  const version = "1.20.1";
+  const registryDir = join(config.cacheDir, "registries", version);
+  const staleRegistryPath = join(registryDir, "registries.json");
+  await mkdir(registryDir, { recursive: true });
+  // Valid JSON object, but the registry value has no `entries` object. Previously
+  // this slipped past validation and later threw a raw TypeError on .entries.
+  await writeFile(staleRegistryPath, JSON.stringify({ "minecraft:block": { default: "minecraft:air" } }), "utf8");
+
+  const binDir = join(root, "bin");
+  await mkdir(binDir, { recursive: true });
+  await installFakeJava(
+    binDir,
+    [
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      "const args = process.argv.slice(2);",
+      'const outputIndex = args.lastIndexOf("--output");',
+      "const outputDir = outputIndex >= 0 ? args[outputIndex + 1] : process.cwd();",
+      'const registryPath = path.join(outputDir, "reports", "registries.json");',
+      'fs.mkdirSync(path.dirname(registryPath), { recursive: true });',
+      'fs.writeFileSync(registryPath, JSON.stringify({ "minecraft:block": { entries: { "minecraft:stone": { protocol_id: 1 } } } }));'
+    ].join("\n")
+  );
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+
+  try {
+    const service = new RegistryService(
+      config,
+      {
+        async resolveServerJar(requestedVersion: string) {
+          return { version: requestedVersion, jarPath: join(root, "fake-server.jar") };
+        }
+      } as any
+    );
+    await writeFile(join(root, "fake-server.jar"), "stub", "utf8");
+
+    const result = await service.getRegistryData({ version });
+
+    assert.deepEqual(result.registries, ["minecraft:block"]);
+    assert.equal(result.entryCount, 1);
+    assert.match(result.warnings.join("\n"), /corrupt cached registry snapshot/i);
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+  }
+});
+
 test("RegistryService maps invalid regenerated registry snapshots to ERR_REGISTRY_GENERATION_FAILED", async () => {
   const root = await mkdtemp(join(tmpdir(), "registry-service-invalid-"));
   const config = buildTestConfig(root);

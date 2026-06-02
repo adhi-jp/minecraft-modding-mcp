@@ -379,10 +379,17 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
   const isQualified = className.includes(".");
 
   if (isQualified) {
-    const classPath = className.replace(/\./g, "/");
+    // The innermost simple name (handles both dot- and $-separated inner types).
+    const simpleName = className.split(/[.$]/).at(-1) ?? className;
+    const directPath = `${classNameToClassPath(className)}.java`;
+    // The extractor stores ONE (outer) qualifiedName per file, so a nested type's
+    // FQCN never equals any stored qualifiedName and its synthetic file path
+    // (pkg/Outer/Inner.java) does not exist. resolveClassFilePath maps the FQCN —
+    // inner classes included — to the real outer file, which we match on.
+    const resolvedFilePath = resolveClassFilePath(svc, artifactId, className);
     const result = svc.symbolsRepo.findScopedSymbols({
       artifactId,
-      query: className.split(".").at(-1) ?? className,
+      query: simpleName,
       match: "exact",
       limit: 5000
     });
@@ -392,14 +399,24 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
           row.symbolKind === "enum" || row.symbolKind === "record";
         if (!isTypeSymbol) return false;
         const rowQualified = row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
-        return rowQualified === className || row.filePath === `${classPath}.java`;
+        return (
+          rowQualified === className ||
+          row.filePath === directPath ||
+          (resolvedFilePath != null && row.filePath === resolvedFilePath)
+        );
       })
-      .map((row) => ({
-        qualifiedName: row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", "."),
-        filePath: row.filePath,
-        line: row.line,
-        symbolKind: row.symbolKind
-      }))
+      .map((row) => {
+        const rowQualified = row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+        // For an inner-class match the stored qualifiedName is the outer type; the
+        // caller asked for the full nested FQCN, so report that.
+        const isInnerMatch = rowQualified !== className && row.filePath !== directPath;
+        return {
+          qualifiedName: isInnerMatch ? className : rowQualified,
+          filePath: row.filePath,
+          line: row.line,
+          symbolKind: row.symbolKind
+        };
+      })
       .slice(0, limit);
     const partialVanillaLookup =
       hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
@@ -758,6 +775,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     },
     truncated,
     ...(charsTruncated ? { charsTruncated } : {}),
+    ...(snippet.outOfRange ? { outOfRange: true } : {}),
     ...(nextStartLine != null ? { nextStartLine } : {}),
     origin: activeOrigin,
     artifactId: activeArtifactId,

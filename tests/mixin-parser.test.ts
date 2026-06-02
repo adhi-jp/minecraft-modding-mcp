@@ -322,6 +322,32 @@ public abstract class PlayerMixin {
     warningCount: 0
   },
   {
+    name: "@Shadow with a comment line before the declaration",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  // shadowed from the target
+  private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }],
+    warningCount: 0
+  },
+  {
+    name: "@Shadow with a blank line before the declaration",
+    source: `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+
+  private int health;
+}
+`,
+    entries: [{ kind: "field", name: "health" }],
+    warningCount: 0
+  },
+  {
     name: "@Shadow with multi-line annotation in between",
     source: `
 @Mixin(PlayerEntity.class)
@@ -526,6 +552,39 @@ public interface PlayerAccessor {
 }
 `,
     entry: { annotation: "Accessor", name: "isDead", targetName: "dead" }
+  },
+  {
+    name: "acronym getter keeps leading caps (getURL -> URL)",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  String getURL();
+}
+`,
+    entry: { annotation: "Accessor", name: "getURL", targetName: "URL" }
+  },
+  {
+    name: "single-cap-then-lower getter decapitalizes (getId -> id)",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  int getId();
+}
+`,
+    entry: { annotation: "Accessor", name: "getId", targetName: "id" }
+  },
+  {
+    name: "is-getter with acronym keeps leading caps (isXRayEnabled -> XRayEnabled)",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor
+  boolean isXRayEnabled();
+}
+`,
+    entry: { annotation: "Accessor", name: "isXRayEnabled", targetName: "XRayEnabled" }
   },
   {
     name: "after multi-line annotation",
