@@ -143,6 +143,7 @@ deps: InspectMinecraftDeps,
           }
         : {})
   };
+  const returnedCount = (detail === "summary" ? sampledHits.items : effectiveHits).length;
   return {
     ...buildEntryToolResult({
       task: "search",
@@ -164,6 +165,17 @@ deps: InspectMinecraftDeps,
       },
       alwaysBlocks: ["subject"]
     }),
-    warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])]
+    warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])],
+    // Always surface continuation state in meta, even in summary mode where the
+    // search block (and its nextCursor) is omitted, so callers never stop early
+    // believing they have all results.
+    meta: {
+      pagination: {
+        returnedCount,
+        hasMore: search.nextCursor != null,
+        ...(search.nextCursor != null ? { nextCursor: search.nextCursor } : {}),
+        ...(search.cursorIgnored ? { cursorIgnored: true } : {})
+      }
+    }
   };
 }

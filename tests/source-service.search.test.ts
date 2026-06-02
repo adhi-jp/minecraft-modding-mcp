@@ -641,6 +641,8 @@ test("SourceService searchClassSource handles representative edge cases", async 
 
         assert.equal(pathWithForeignCursor.hits.length, 1);
         assert.equal(pathWithForeignCursor.hits[0]?.filePath, pathWithoutCursor.hits[0]?.filePath);
+        // A cursor from a different query context restarts at page one; flag it.
+        assert.equal(pathWithForeignCursor.cursorIgnored, true);
       }
     },
     {

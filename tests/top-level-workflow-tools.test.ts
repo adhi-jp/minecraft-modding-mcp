@@ -291,7 +291,8 @@ test("InspectMinecraftService auto routes workspace search focus through project
         artifactId: input.artifactId,
         query: input.query,
         hits: [{ filePath: "net/minecraft/server/MinecraftServer.java", score: 120, matchedIn: "content", preview: "tickServer" }],
-        nextCursor: undefined,
+        nextCursor: "cursor-next-1",
+        cursorIgnored: true,
         mappingApplied: "mojang",
         returnedNamespace: "mojang",
         artifactContents: {
@@ -330,6 +331,14 @@ test("InspectMinecraftService auto routes workspace search focus through project
   assert.equal(result.task, "search");
   assert.equal(result.summary.status, "ok");
   assert.equal(searchCalls, 1);
+  // Summary mode omits the `search` block, so continuation state must surface in
+  // meta.pagination or the caller would stop after the first page.
+  assert.equal((result as { search?: unknown }).search, undefined);
+  const pagination = (result as { meta?: { pagination?: Record<string, unknown> } }).meta?.pagination;
+  assert.equal(pagination?.nextCursor, "cursor-next-1");
+  assert.equal(pagination?.hasMore, true);
+  assert.equal(pagination?.returnedCount, 1);
+  assert.equal(pagination?.cursorIgnored, true);
   assert.deepEqual(result.summary.subject, {
     task: "search",
     requested: {

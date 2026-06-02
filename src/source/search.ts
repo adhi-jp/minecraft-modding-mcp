@@ -423,6 +423,10 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     });
     const decodedCursor = decodeSearchCursor(input.cursor);
     const cursor = decodedCursor?.contextKey === cursorContext ? decodedCursor : undefined;
+    // A provided cursor that did not decode, or whose context key does not match
+    // this query, is silently dropped and the scan restarts from page one. Flag
+    // it so callers do not assume they are continuing a previous page.
+    const cursorIgnored = input.cursor != null && cursor == null;
     const accumulator = createSearchHitAccumulator(limit, cursor);
     const indexedSearchEnabled = svc.config.indexedSearchEnabled !== false;
     if (match === "regex") {
@@ -499,6 +503,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     return {
       hits: page,
       nextCursor,
+      ...(cursorIgnored ? { cursorIgnored: true } : {}),
       mappingApplied: artifact.mappingApplied ?? "obfuscated",
       returnedNamespace: artifact.mappingApplied ?? "obfuscated",
       artifactContents: svc.buildArtifactContentsSummary({

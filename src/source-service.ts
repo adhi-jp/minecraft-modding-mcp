@@ -200,6 +200,8 @@ export type SearchClassSourceInput = {
 export type SearchClassSourceOutput = {
   hits: SearchSourceHit[];
   nextCursor?: string;
+  /** True when a provided cursor was malformed or belonged to a different query and was ignored (results restart from page one). */
+  cursorIgnored?: boolean;
   mappingApplied: SourceMapping;
   returnedNamespace: SourceMapping;
   artifactContents: ArtifactContentsSummary;
