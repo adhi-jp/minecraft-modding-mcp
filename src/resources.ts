@@ -77,6 +77,24 @@ export function registerResources(
     }
   );
 
+  server.resource("class-source-json",
+    new ResourceTemplate("mc://source-json/{artifactId}/{className}", { list: undefined }),
+    { description: "JSON envelope of a class's full source plus metadata (artifactId, mappingApplied, totalLines, returnedRange, provenance, warnings) — the structured alternative to the raw-text class-source resource, easier to cite and continue.", mimeType: "application/json" },
+    async (uri, params) => {
+      try {
+        const result = await sourceService.getClassSource({
+          artifactId: params.artifactId as string,
+          className: decodeTemplateParam(params as Record<string, string>, "className"),
+          mode: "full"
+        });
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
+      } catch (e: unknown) {
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        throw e;
+      }
+    }
+  );
+
   server.resource("artifact-file",
     new ResourceTemplate("mc://artifact/{artifactId}/files/{filePath}", { list: undefined }),
     { description: "Raw content of a file within a resolved artifact. filePath is the archive-relative path.", mimeType: "text/plain" },
@@ -96,12 +114,33 @@ export function registerResources(
 
   server.resource("find-mapping",
     new ResourceTemplate("mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}", { list: undefined }),
-    { description: "Look up a mapping for a class, field, or method between two naming namespaces.", mimeType: "application/json" },
+    { description: "Look up a CLASS mapping between two naming namespaces. This URI carries no owner, so field/method lookups (which need an owner) must use the find-member-mapping resource or the find-mapping tool.", mimeType: "application/json" },
     async (uri, params) => {
       try {
         const result = await sourceService.findMapping({
           version: params.version as string,
           kind: params.kind as "class" | "field" | "method",
+          name: decodeTemplateParam(params as Record<string, string>, "name"),
+          sourceMapping: params.sourceMapping as "obfuscated" | "mojang" | "intermediary" | "yarn",
+          targetMapping: params.targetMapping as "obfuscated" | "mojang" | "intermediary" | "yarn"
+        });
+        return objectResource(uri.href, result as unknown as Record<string, unknown>);
+      } catch (e: unknown) {
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        throw e;
+      }
+    }
+  );
+
+  server.resource("find-member-mapping",
+    new ResourceTemplate("mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{owner}/{name}", { list: undefined }),
+    { description: "Look up a FIELD or METHOD mapping between two naming namespaces, including the owner class the member belongs to (required for member lookups). For exact method overload resolution, use the find-mapping tool with a descriptor.", mimeType: "application/json" },
+    async (uri, params) => {
+      try {
+        const result = await sourceService.findMapping({
+          version: params.version as string,
+          kind: params.kind as "class" | "field" | "method",
+          owner: decodeTemplateParam(params as Record<string, string>, "owner"),
           name: decodeTemplateParam(params as Record<string, string>, "name"),
           sourceMapping: params.sourceMapping as "obfuscated" | "mojang" | "intermediary" | "yarn",
           targetMapping: params.targetMapping as "obfuscated" | "mojang" | "intermediary" | "yarn"

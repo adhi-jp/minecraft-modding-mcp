@@ -15,7 +15,7 @@
 
 It runs over stdio and works with Claude Desktop, Claude Code, VS Code, Codex CLI, Gemini CLI, and other MCP-capable clients.
 
-**41 tools** (6 entry + 35 expert) | **7 resources** | **4 namespace mappings** | **SQLite-backed cache**
+**41 tools** (6 entry + 35 expert) | **9 resources** | **4 namespace mappings** | **SQLite-backed cache**
 
 ## Features
 

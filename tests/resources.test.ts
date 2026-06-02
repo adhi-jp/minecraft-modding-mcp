@@ -51,7 +51,7 @@ test("registerResources completes without errors", () => {
   });
 });
 
-test("registerResources registers exactly 7 resources (2 fixed + 5 template)", () => {
+test("registerResources registers exactly 9 resources (2 fixed + 7 template)", () => {
   const server = new McpServer({ name: "test", version: "0.0.0" });
   const stub = createStubSourceService();
 
@@ -65,7 +65,69 @@ test("registerResources registers exactly 7 resources (2 fixed + 5 template)", (
 
   registerResources(server, stub as never);
 
-  assert.equal(resourceCount, 7, "expected 7 total resources (2 fixed + 5 template)");
+  assert.equal(resourceCount, 9, "expected 9 total resources (2 fixed + 7 template)");
+});
+
+test("class-source-json resource returns a structured JSON envelope with metadata", async () => {
+  let receivedInput: Record<string, unknown> | undefined;
+  const registrations = captureResources({
+    async getClassSource(input: Record<string, unknown>) {
+      receivedInput = input;
+      return {
+        sourceText: "class Example {}",
+        mode: "full",
+        totalLines: 1,
+        returnedRange: { start: 1, end: 1 },
+        artifactId: "artifact-1",
+        mappingApplied: "obfuscated",
+        warnings: []
+      };
+    }
+  });
+
+  const handler = registrations.get("class-source-json")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://source-json/artifact-1/com.example%2FMain"),
+    { artifactId: "artifact-1", className: "com.example%2FMain" }
+  );
+
+  assert.equal(receivedInput?.className, "com.example/Main");
+  assert.equal(receivedInput?.mode, "full");
+  const payload = parseJsonResource(result);
+  assert.equal(payload.result.sourceText, "class Example {}");
+  assert.equal(payload.result.totalLines, 1);
+  assert.equal(payload.result.mappingApplied, "obfuscated");
+});
+
+test("find-member-mapping resource forwards owner for field/method lookups", async () => {
+  let receivedInput: Record<string, unknown> | undefined;
+  const registrations = captureResources({
+    async findMapping(input: Record<string, unknown>) {
+      receivedInput = input;
+      return { resolved: true, resolvedSymbol: { kind: "method", name: "m_obf", owner: "a_obf", symbol: "a_obf.m_obf" } };
+    }
+  });
+
+  const handler = registrations.get("find-member-mapping")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://mappings/1.21.10/mojang/obfuscated/method/net.minecraft.Foo/tickServer"),
+    {
+      version: "1.21.10",
+      sourceMapping: "mojang",
+      targetMapping: "obfuscated",
+      kind: "method",
+      owner: "net.minecraft.Foo",
+      name: "tickServer"
+    }
+  );
+
+  assert.equal(receivedInput?.owner, "net.minecraft.Foo");
+  assert.equal(receivedInput?.kind, "method");
+  assert.equal(receivedInput?.name, "tickServer");
+  const payload = parseJsonResource(result);
+  assert.equal(payload.result.resolved, true);
 });
 
 test("objectResource wraps JSON resources in a structured result envelope", () => {

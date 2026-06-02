@@ -309,13 +309,15 @@ MCP resources provide URI-based access to Minecraft data for clients that suppor
 
 | Resource | URI Template | Description |
 | --- | --- | --- |
-| `class-source` | `mc://source/{artifactId}/{className}` | Java source code for a class within a resolved artifact |
+| `class-source` | `mc://source/{artifactId}/{className}` | Java source code for a class within a resolved artifact (raw text). |
+| `class-source-json` | `mc://source-json/{artifactId}/{className}` | Full class source plus metadata (`artifactId`, `mappingApplied`, `totalLines`, `returnedRange`, `provenance`, `warnings`) as a structured JSON envelope — easier to cite and continue than the raw-text `class-source`. |
 | `artifact-file` | `mc://artifact/{artifactId}/files/{filePath}` | Raw content of a file within a resolved artifact |
-| `find-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}` | Look up a **class** mapping between two naming namespaces. The URI carries no `owner`/`descriptor`, so field/method lookups (which need an owner) are not supported here — use the `find-mapping` or `analyze-symbol` tool for those. |
+| `find-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}` | Look up a **class** mapping between two naming namespaces. The URI carries no `owner`, so use `find-member-mapping` (or the `find-mapping` tool) for field/method lookups. |
+| `find-member-mapping` | `mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{owner}/{name}` | Look up a **field or method** mapping, including the `owner` class the member belongs to. For exact method overload resolution use the `find-mapping` tool with a `descriptor`. |
 | `class-members` | `mc://artifact/{artifactId}/members/{className}` | List constructors, methods, and fields for a class |
 | `artifact-metadata` | `mc://artifact/{artifactId}` | Metadata for a previously resolved artifact |
 
-`versions-list`, `runtime-metrics`, `find-mapping`, `class-members`, and `artifact-metadata` return structured JSON envelopes on success (`{ result, meta }`) and failure (`{ error, meta }`).
+`versions-list`, `runtime-metrics`, `find-mapping`, `find-member-mapping`, `class-source-json`, `class-members`, and `artifact-metadata` return structured JSON envelopes on success (`{ result, meta }`) and failure (`{ error, meta }`).
 
 `class-source` and `artifact-file` keep raw text responses on success, but still return structured JSON errors on failure.
 
