@@ -199,6 +199,11 @@ function buildIndexedMatchQuery(
   }).join(" ");
 }
 
+/** Escape LIKE wildcards so the needle is matched literally under ESCAPE '\'. */
+function escapeLikeNeedle(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 export class FilesRepo {
   private readonly deleteStmt;
   private readonly insertFilesStmt;
@@ -206,6 +211,7 @@ export class FilesRepo {
   private readonly listStmt;
   private readonly listRowsStmt;
   private readonly searchPathStmt;
+  private readonly searchContentLikePathsStmt;
   private readonly searchFtsStmt;
   private readonly getByPathsStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
   private readonly classLookupStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
@@ -247,6 +253,14 @@ export class FilesRepo {
       SELECT file_path
       FROM files
       WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\'
+      ORDER BY file_path ASC
+      LIMIT ?
+    `);
+
+    this.searchContentLikePathsStmt = this.db.prepare(`
+      SELECT file_path
+      FROM files
+      WHERE artifact_id = ? AND content LIKE ? ESCAPE '\\'
       ORDER BY file_path ASC
       LIMIT ?
     `);
@@ -356,6 +370,27 @@ export class FilesRepo {
       })),
       nextCursor: nextCursorFromRows(rows)
     };
+  }
+
+  /**
+   * Narrow the literal/contains text-scan candidate set without hydrating content:
+   * returns the file_paths whose content matches `content LIKE %needle%` (ASCII
+   * case-insensitive). The result is a SUPERSET of the JS contains/exact match set
+   * for an ASCII needle, so callers MUST still run the exact JS post-verify. Only
+   * file_path is selected — content stays in the DB until getFileContentsByPaths.
+   */
+  searchContentLikeCandidatePaths(
+    artifactId: string,
+    needle: string,
+    limit: number
+  ): { filePaths: string[]; scannedRows: number } {
+    const pattern = `%${escapeLikeNeedle(needle)}%`;
+    const rows = this.searchContentLikePathsStmt.all(
+      artifactId,
+      pattern,
+      Math.max(1, limit)
+    ) as { file_path: string }[];
+    return { filePaths: rows.map((row) => row.file_path), scannedRows: rows.length };
   }
 
   getFileContentsByPaths(artifactId: string, filePaths: string[]): FileRow[] {

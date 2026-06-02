@@ -45,6 +45,23 @@ export function readSearchIoMetrics(service: HasMetrics): {
   };
 }
 
+export function readSearchScanMetrics(service: HasMetrics): {
+  likePrefilter: number;
+  scanTruncated: number;
+} {
+  const snapshot = service.getRuntimeMetrics() as Record<string, unknown>;
+  return {
+    likePrefilter:
+      typeof snapshot.search_like_prefilter_count === "number"
+        ? snapshot.search_like_prefilter_count
+        : -1,
+    scanTruncated:
+      typeof snapshot.search_scan_truncated_count === "number"
+        ? snapshot.search_scan_truncated_count
+        : -1
+  };
+}
+
 export function readSearchModeMetrics(service: HasMetrics): {
   autoCount: number;
   tokenCount: number;

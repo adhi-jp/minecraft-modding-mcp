@@ -122,6 +122,7 @@ export interface Config {
   fetchTimeoutMs: number;
   fetchRetries: number;
   searchScanPageSize: number;
+  searchScanMaxBytes: number;
   indexInsertChunkSize: number;
   maxMappingGraphCache: number;
   maxSignatureCache: number;

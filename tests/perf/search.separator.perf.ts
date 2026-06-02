@@ -25,6 +25,7 @@ function buildTestConfig(root: string): Config {
     indexedSearchEnabled: true,
     mappingSourcePriority: "loom-first",
     searchScanPageSize: 250,
+    searchScanMaxBytes: 67_108_864,
     indexInsertChunkSize: 200,
     maxMappingGraphCache: 16,
     maxSignatureCache: 2_000,
@@ -107,7 +108,16 @@ test("separator-query token mode stays on indexed path and avoids full scan I/O"
 
   assert.ok(tokenResult.hits.length > 0);
   assert.ok(literalResult.hits.length > 0);
-  assert.ok(tokenRowsScanned < literalRowsScanned, `${tokenRowsScanned} should be < ${literalRowsScanned}`);
   assert.ok(tokenDbRoundtrips < 4, `${tokenDbRoundtrips} should stay in the indexed path`);
-  assert.ok(literalRowsScanned >= DATASET_FILE_COUNT, `${literalRowsScanned} should reflect a scan over the dataset`);
+  // Token mode stays on the FTS indexed path. Literal ASCII "contains" now narrows
+  // candidates through the content LIKE prefilter, so BOTH modes avoid the O(dataset)
+  // full scan that the literal fallback previously performed (was >= DATASET_FILE_COUNT).
+  assert.ok(
+    tokenRowsScanned < DATASET_FILE_COUNT,
+    `${tokenRowsScanned} token rows scanned should be far below the ${DATASET_FILE_COUNT}-file dataset`
+  );
+  assert.ok(
+    literalRowsScanned < DATASET_FILE_COUNT,
+    `${literalRowsScanned} literal rows scanned should be far below the ${DATASET_FILE_COUNT}-file dataset via the LIKE prefilter`
+  );
 });

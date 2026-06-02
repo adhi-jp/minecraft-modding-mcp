@@ -43,6 +43,8 @@ export interface RuntimeMetricSnapshot {
   search_rows_scanned: number;
   search_rows_returned: number;
   search_indexed_zero_shortcircuit_count: number;
+  search_like_prefilter_count: number;
+  search_scan_truncated_count: number;
   reindex_count: number;
   reindex_skip_count: number;
   cache_evictions: number;
@@ -108,6 +110,8 @@ export class RuntimeMetrics {
   private searchRowsScanned = 0;
   private searchRowsReturned = 0;
   private searchIndexedZeroShortcircuitCount = 0;
+  private searchLikePrefilterCount = 0;
+  private searchScanTruncatedCount = 0;
   private reindexCount = 0;
   private reindexSkipCount = 0;
   private cacheEvictions = 0;
@@ -230,6 +234,14 @@ export class RuntimeMetrics {
     this.searchIndexedZeroShortcircuitCount += 1;
   }
 
+  recordSearchLikePrefilter(): void {
+    this.searchLikePrefilterCount += 1;
+  }
+
+  recordSearchScanTruncated(): void {
+    this.searchScanTruncatedCount += 1;
+  }
+
   recordReindex(): void {
     this.reindexCount += 1;
   }
@@ -303,6 +315,8 @@ export class RuntimeMetrics {
       search_rows_scanned: this.searchRowsScanned,
       search_rows_returned: this.searchRowsReturned,
       search_indexed_zero_shortcircuit_count: this.searchIndexedZeroShortcircuitCount,
+      search_like_prefilter_count: this.searchLikePrefilterCount,
+      search_scan_truncated_count: this.searchScanTruncatedCount,
       reindex_count: this.reindexCount,
       reindex_skip_count: this.reindexSkipCount,
       cache_evictions: this.cacheEvictions,

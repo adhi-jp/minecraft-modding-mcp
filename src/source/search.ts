@@ -442,12 +442,15 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     const recordHit = (hit: SearchSourceHit): void => {
       accumulator.add(hit);
     };
+    const recordWarning = (warning: string): void => {
+      searchWarnings.push(warning);
+    };
     const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
     if (intent === "symbol") {
       searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
       svc.metrics.recordSearchFallback();
-      searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+      searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
     } else if (!indexedSearchEnabled) {
       svc.metrics.recordIndexedDisabled();
       if (!tokenOnlyTextIntent) {
@@ -455,7 +458,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         if (intent === "path") {
           searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
         } else {
-          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
         }
       }
     } else if (canUseIndexedSearchPath(indexedSearchEnabled, intent, match, scope)) {
@@ -478,7 +481,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
           if (intent === "path") {
             searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
           } else {
-            searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+            searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
           }
         }
       }
@@ -488,7 +491,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         if (intent === "path") {
           searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
         } else {
-          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
         }
       }
     }
@@ -668,6 +671,17 @@ export function searchPathIntentIndexed(
   }
 }
 
+const ASCII_RE = /^[\x00-\x7F]*$/;
+
+/** True when every code unit is ASCII, so SQLite LIKE folds case identically to JS. */
+function isAsciiNeedle(query: string): boolean {
+  return ASCII_RE.test(query);
+}
+
+function searchScanBudgetWarning(byteBudget: number): string {
+  return `search scan budget of ${byteBudget} bytes reached; results may be incomplete. Narrow the query or scope (packagePrefix / fileGlob) to scan fewer files.`;
+}
+
 export function searchTextIntent(
   svc: SourceService,
   artifactId: string,
@@ -675,45 +689,100 @@ export function searchTextIntent(
   match: SearchMatch,
   scope: SearchScope | undefined,
   regexPattern: RegExp | undefined,
-  onHit: (hit: SearchSourceHit) => void
+  onHit: (hit: SearchSourceHit) => void,
+  onWarning?: (warning: string) => void
 ): void {
-  const pageSize = Math.max(1, svc.config.searchScanPageSize ?? 250);
   const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const byteBudget = Math.max(1, svc.config.searchScanMaxBytes ?? Number.MAX_SAFE_INTEGER);
+  let scannedBytes = 0;
+  let truncated = false;
+
+  const passesScope = (filePath: string): boolean =>
+    checkPackagePrefix(filePath, scope?.packagePrefix) && (!glob || glob.test(filePath));
+
+  const emitIfMatch = (filePath: string, content: string): void => {
+    const contentIndex =
+      match === "regex"
+        ? matchRegexIndex(content, regexPattern as RegExp)
+        : findContentMatchIndex(content, query, match);
+    if (contentIndex < 0) {
+      return;
+    }
+    onHit({
+      filePath,
+      score: scoreTextMatch(match, contentIndex),
+      matchedIn: "content",
+      reasonCodes: ["content_match", `text_${match}`]
+    });
+  };
+
+  // FAST PATH: an ASCII, non-regex needle narrows candidates via a content LIKE
+  // prefilter (a proven superset of the JS match), so only matching files are
+  // hydrated instead of scanning the whole corpus. The unchanged JS post-verify in
+  // emitIfMatch removes any over-included rows, so results are identical.
+  if (match !== "regex" && isAsciiNeedle(query)) {
+    const candidateLimit = indexedCandidateLimitForMatch(svc, match);
+    const { filePaths, scannedRows } = svc.filesRepo.searchContentLikeCandidatePaths(
+      artifactId,
+      query,
+      candidateLimit
+    );
+    svc.metrics.recordSearchDbRoundtrip();
+    svc.metrics.recordSearchRowsScanned(scannedRows);
+    svc.metrics.recordSearchLikePrefilter();
+
+    const scopedPaths = filePaths.filter(passesScope);
+    const rows = svc.filesRepo.getFileContentsByPaths(artifactId, scopedPaths);
+    svc.metrics.recordSearchDbRoundtrip();
+    svc.metrics.recordSearchRowsScanned(rows.length);
+
+    for (const row of rows) {
+      if (scannedBytes >= byteBudget) {
+        truncated = true;
+        break;
+      }
+      scannedBytes += row.content.length;
+      emitIfMatch(row.filePath, row.content);
+    }
+
+    if (truncated) {
+      svc.metrics.recordSearchScanTruncated();
+      onWarning?.(searchScanBudgetWarning(byteBudget));
+    }
+    return;
+  }
+
+  // SLOW PATH: regex (cannot be pushed to SQL) or non-ASCII needles (SQLite LIKE
+  // would fold case differently than JS) scan the corpus page by page.
+  const pageSize = Math.max(1, svc.config.searchScanPageSize ?? 250);
   let cursor: string | undefined = undefined;
 
-  while (true) {
+  outer: while (true) {
     const page = svc.filesRepo.listFileRows(artifactId, { limit: pageSize, cursor });
     svc.metrics.recordSearchDbRoundtrip();
     svc.metrics.recordSearchRowsScanned(page.items.length);
 
     for (const row of page.items) {
-      if (!checkPackagePrefix(row.filePath, scope?.packagePrefix)) {
+      if (!passesScope(row.filePath)) {
         continue;
       }
-      if (glob && !glob.test(row.filePath)) {
-        continue;
+      if (scannedBytes >= byteBudget) {
+        truncated = true;
+        break outer;
       }
-
-      const contentIndex =
-        match === "regex"
-          ? matchRegexIndex(row.content, regexPattern as RegExp)
-          : findContentMatchIndex(row.content, query, match);
-      if (contentIndex < 0) {
-        continue;
-      }
-
-      onHit({
-        filePath: row.filePath,
-        score: scoreTextMatch(match, contentIndex),
-        matchedIn: "content",
-        reasonCodes: ["content_match", `text_${match}`]
-      });
+      scannedBytes += row.content.length;
+      emitIfMatch(row.filePath, row.content);
     }
 
     if (!page.nextCursor) {
       break;
     }
     cursor = page.nextCursor;
+  }
+
+  if (truncated) {
+    svc.metrics.recordSearchScanTruncated();
+    onWarning?.(searchScanBudgetWarning(byteBudget));
   }
 }
 

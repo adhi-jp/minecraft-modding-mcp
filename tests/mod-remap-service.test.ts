@@ -31,6 +31,7 @@ function makeTestConfig(cacheDir: string): Config {
     fetchTimeoutMs: 15_000,
     fetchRetries: 2,
     searchScanPageSize: 250,
+    searchScanMaxBytes: 67_108_864,
     indexInsertChunkSize: 200,
     maxMappingGraphCache: 16,
     maxSignatureCache: 2000,

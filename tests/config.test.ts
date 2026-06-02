@@ -55,6 +55,7 @@ test("loadConfig applies defaults for missing environment variables", async () =
     assert.equal(config.fetchTimeoutMs, DEFAULTS.fetchTimeoutMs);
     assert.equal(config.fetchRetries, DEFAULTS.fetchRetries);
     assert.equal(config.searchScanPageSize, DEFAULTS.searchScanPageSize);
+    assert.equal(config.searchScanMaxBytes, DEFAULTS.searchScanMaxBytes);
     assert.equal(config.indexInsertChunkSize, DEFAULTS.indexInsertChunkSize);
     assert.equal(config.maxMappingGraphCache, DEFAULTS.maxMappingGraphCache);
     assert.equal(config.maxSignatureCache, DEFAULTS.maxSignatureCache);
@@ -157,6 +158,7 @@ test("loadConfig falls back for malformed numeric values", async () => {
     assert.equal(config.fetchTimeoutMs, DEFAULTS.fetchTimeoutMs);
     assert.equal(config.fetchRetries, DEFAULTS.fetchRetries);
     assert.equal(config.searchScanPageSize, DEFAULTS.searchScanPageSize);
+    assert.equal(config.searchScanMaxBytes, DEFAULTS.searchScanMaxBytes);
     assert.equal(config.indexInsertChunkSize, DEFAULTS.indexInsertChunkSize);
     assert.equal(config.maxMappingGraphCache, DEFAULTS.maxMappingGraphCache);
     assert.equal(config.maxSignatureCache, DEFAULTS.maxSignatureCache);
