@@ -718,6 +718,50 @@ async function main(): Promise<void> {
     const reindexed = requireToolOk<Record<string, unknown>>("index-artifact", indexResult as never);
     assert.equal(typeof reindexed.reindexed, "boolean");
 
+    // Top-level entry-tool probe: inspect-minecraft is the recommended default
+    // surface, so exercise it (not just the low-level get-class-source) against
+    // the same resolved artifact via a resolved-id reference.
+    const inspectResult = await client.callTool({
+      name: "inspect-minecraft",
+      arguments: {
+        task: "class-source",
+        subject: {
+          kind: "class",
+          className: "net.minecraft.server.Main",
+          artifact: { type: "resolved-id", artifactId }
+        },
+        detail: "standard",
+        include: ["source"]
+      }
+    });
+    const inspected = requireToolOk<Record<string, unknown>>("inspect-minecraft", inspectResult as never);
+    const inspectSummary = inspected.summary as { status?: unknown } | undefined;
+    assert.ok(inspectSummary, "inspect-minecraft must return a summary-first result.");
+    assert.equal(inspectSummary?.status, "ok", "inspect-minecraft class-source must resolve the class.");
+
+    // JSON resource read: the class-members resource returns a structured
+    // { result, meta } / { error, meta } envelope (unlike the raw-text source
+    // resources). Verify the JSON-resource path round-trips.
+    const membersResource = await client.readResource({
+      uri: `mc://artifact/${artifactId}/members/net.minecraft.server.Main`
+    });
+    const membersContents = membersResource.contents;
+    assert.ok(
+      Array.isArray(membersContents) && membersContents.length >= 1,
+      "class-members resource must return at least one content entry."
+    );
+    const membersEnvelope = JSON.parse(
+      asString((membersContents[0] as { text?: unknown } | undefined)?.text, "class-members resource text")
+    ) as {
+      result?: unknown;
+      error?: unknown;
+      meta?: unknown;
+    };
+    assert.ok(
+      membersEnvelope.result !== undefined || membersEnvelope.error !== undefined,
+      "class-members resource must return a JSON { result | error } envelope."
+    );
+
     if (initialWorkerPid !== undefined) {
       process.kill(initialWorkerPid, "SIGKILL");
       const restartedWorkerPid = await waitForChildPid(workerPidFile, initialWorkerPid);

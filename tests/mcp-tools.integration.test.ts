@@ -241,6 +241,17 @@ test("manual stdio smoke records cold and warm local resolve/search probes for a
   assert.match(source, /classification:\s*coldStartClassification\.classification/);
 });
 
+test("manual stdio smoke exercises a top-level entry tool and a JSON resource read", async () => {
+  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
+
+  // The recommended default surface (entry tools) and the JSON resource path
+  // must be covered, not just the low-level tools and raw-text resources.
+  assert.match(source, /name: "inspect-minecraft"/);
+  assert.match(source, /inspect-minecraft class-source must resolve the class\./);
+  assert.match(source, /client\.readResource\(\{[\s\S]*?mc:\/\/artifact\/\$\{artifactId\}\/members\//);
+  assert.match(source, /class-members resource must return a JSON \{ result \| error \} envelope\./);
+});
+
 test("manual stdio smoke bounds transport shutdown and force-kills a stuck supervisor", async () => {
   const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
 
