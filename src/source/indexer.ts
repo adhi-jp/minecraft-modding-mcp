@@ -118,8 +118,8 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
 
   const artifact = svc.getArtifact(artifactId);
   const force = input.force ?? false;
-  const hasFiles = svc.filesRepo.listFiles(artifact.artifactId, { limit: 1 }).items.length > 0;
   const meta = svc.indexMetaRepo.get(artifact.artifactId);
+  const hasFiles = meta ? meta.filesCount > 0 : false;
   const expectedSignature = artifact.artifactSignature ?? fallbackArtifactSignature(artifact.artifactId);
   const reason = resolveIndexRebuildReason({
     force,
@@ -391,8 +391,11 @@ export function getArtifact(svc: SourceService, artifactId: string): ArtifactRow
 
 export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourceArtifact): Promise<void> {
   const existing = svc.artifactsRepo.getArtifact(resolved.artifactId);
-  const hasFiles = svc.filesRepo.listFiles(resolved.artifactId, { limit: 1 }).items.length > 0;
   const meta = svc.indexMetaRepo.get(resolved.artifactId);
+  // Derive hasFiles from meta instead of a separate listFiles probe: when meta is
+  // absent the reason is "missing_meta" regardless of hasFiles, and when present
+  // meta.filesCount is the authoritative count written alongside the file rows.
+  const hasFiles = meta ? meta.filesCount > 0 : false;
   const reason = resolveIndexRebuildReason({
     force: false,
     expectedSignature: resolved.artifactSignature,

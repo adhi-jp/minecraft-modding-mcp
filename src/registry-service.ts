@@ -356,7 +356,13 @@ export class RegistryService {
     warnings: string[]
   ): Promise<Record<string, RegistryData>> {
     const cached = this.registryCache.get(version);
-    if (cached) return cached;
+    if (cached) {
+      // LRU touch: move to most-recently-used so the bound evicts the true
+      // coldest entry (Map preserves insertion order).
+      this.registryCache.delete(version);
+      this.registryCache.set(version, cached);
+      return cached;
+    }
 
     const registryDir = join(this.config.cacheDir, "registries", version);
 
