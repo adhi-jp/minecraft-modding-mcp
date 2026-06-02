@@ -2,7 +2,45 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ERROR_CODES, createError } from "../src/errors.ts";
-import { errorToBatchEntryProblem, retryClassForErrorCode, statusForErrorCode } from "../src/error-mapping.ts";
+import {
+  errorToBatchEntryProblem,
+  extractAllowlistedContext,
+  issueOriginForErrorCode,
+  retryClassForErrorCode,
+  statusForErrorCode
+} from "../src/error-mapping.ts";
+
+test("issueOriginForErrorCode separates caller input from tool capability and environment", () => {
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.INVALID_INPUT), "code_issue");
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.CLASS_NOT_FOUND), "code_issue");
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.MAPPING_UNAVAILABLE), "tool_issue");
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.JAVA_UNAVAILABLE), "environment");
+});
+
+test("errorToBatchEntryProblem attaches issueOrigin and allowlisted context", () => {
+  const problem = errorToBatchEntryProblem(
+    createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "query too long",
+      details: { queryLength: 5000, maxLength: 1000, jarPath: "/home/secret/x.jar" }
+    }),
+    "test-context"
+  );
+  assert.equal(problem.issueOrigin, "code_issue");
+  assert.deepEqual(problem.context, { queryLength: 5000, maxLength: 1000 });
+  // Filesystem paths are not allowlisted and must not leak into context.
+  assert.equal((problem.context as Record<string, unknown>)?.jarPath, undefined);
+});
+
+test("extractAllowlistedContext drops unknown and non-primitive fields", () => {
+  const context = extractAllowlistedContext({
+    artifactId: "mc-1.21.10",
+    queryLength: 42,
+    filePath: "/secret/path",
+    nested: { a: 1 }
+  });
+  assert.deepEqual(context, { artifactId: "mc-1.21.10", queryLength: 42 });
+});
 
 test("retryClassForErrorCode classifies the four recovery families", () => {
   assert.equal(retryClassForErrorCode(ERROR_CODES.JAVA_UNAVAILABLE), "environment");

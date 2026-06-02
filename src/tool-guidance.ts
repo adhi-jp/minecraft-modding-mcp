@@ -6,6 +6,8 @@ import {
   isAppError
 } from "./errors.js";
 import {
+  extractAllowlistedContext,
+  issueOriginForErrorCode,
   retryClassForErrorCode,
   statusForErrorCode,
   type ExampleCall,
@@ -878,6 +880,7 @@ export function mapErrorToProblem(
       code: ERROR_CODES.INVALID_INPUT,
       instance: requestId,
       retryClass: retryClassForErrorCode(ERROR_CODES.INVALID_INPUT),
+      issueOrigin: issueOriginForErrorCode(ERROR_CODES.INVALID_INPUT),
       fieldErrors: toFieldErrorsFromZod(caughtError),
       hints: hintsWithFallback,
       ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
@@ -889,6 +892,7 @@ export function mapErrorToProblem(
   if (isAppError(caughtError)) {
     const { suggestedCall, exampleCalls, primaryDropped } =
       extractValidatedSuggestionAndExamples(caughtError.details);
+    const sanitizedContext = extractAllowlistedContext(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
     if (
       !failedStage
@@ -910,11 +914,13 @@ export function mapErrorToProblem(
       code: caughtError.code,
       instance: requestId,
       retryClass: retryClassForErrorCode(caughtError.code),
+      issueOrigin: issueOriginForErrorCode(caughtError.code),
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: hintsWithFallback,
       ...(suggestedCall ? { suggestedCall } : {}),
       ...(exampleCalls ? { exampleCalls } : {}),
-      ...(failedStage ? { failedStage } : {})
+      ...(failedStage ? { failedStage } : {}),
+      ...(sanitizedContext ? { context: sanitizedContext } : {})
     };
   }
 
@@ -925,7 +931,8 @@ export function mapErrorToProblem(
     status: 500,
     code: ERROR_CODES.INTERNAL,
     instance: requestId,
-    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL)
+    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL),
+    issueOrigin: issueOriginForErrorCode(ERROR_CODES.INTERNAL)
   };
 }
 

@@ -30,6 +30,17 @@ export type ExampleCall = {
  */
 export type RetryClass = "transient" | "permanent" | "environment" | "input";
 
+/**
+ * Where the failure originates, so an agent knows whether to fix its own
+ * request or stop retrying this tool:
+ * - `code_issue`: the caller's input is wrong or names something that does not
+ *   exist; fix the request.
+ * - `tool_issue`: the tool could not produce a result for valid input (mapping
+ *   gap, upstream fetch, internal limit).
+ * - `environment`: a server capability is missing (Java, decompiler, remapper).
+ */
+export type IssueOrigin = "code_issue" | "tool_issue" | "environment";
+
 export type ProblemDetails = {
   type: string;
   title: string;
@@ -38,11 +49,13 @@ export type ProblemDetails = {
   code: string;
   instance: string;
   retryClass: RetryClass;
+  issueOrigin: IssueOrigin;
   fieldErrors?: ProblemFieldError[];
   hints?: string[];
   suggestedCall?: SuggestedCall;
   exampleCalls?: ExampleCall[];
   failedStage?: string;
+  context?: Record<string, string | number | boolean>;
 };
 
 export function statusForErrorCode(code: string): number {
@@ -181,6 +194,90 @@ export function retryClassForErrorCode(code: string): RetryClass {
   return "transient";
 }
 
+// "Your request is wrong or names something absent" — the caller can fix it.
+const ISSUE_ORIGIN_CODE = new Set<string>([
+  ERROR_CODES.INVALID_INPUT,
+  ERROR_CODES.COORDINATE_PARSE_FAILED,
+  ERROR_CODES.INVALID_LINE_RANGE,
+  ERROR_CODES.NBT_PARSE_FAILED,
+  ERROR_CODES.NBT_INVALID_TYPED_JSON,
+  ERROR_CODES.JSON_PATCH_INVALID,
+  ERROR_CODES.JSON_PATCH_CONFLICT,
+  ERROR_CODES.NBT_ENCODE_FAILED,
+  ERROR_CODES.NBT_UNSUPPORTED_FEATURE,
+  ERROR_CODES.NAMESPACE_MISMATCH,
+  ERROR_CODES.CONTEXT_UNRESOLVED,
+  ERROR_CODES.MIXIN_PARSE_FAILED,
+  ERROR_CODES.CLASS_NOT_FOUND,
+  ERROR_CODES.SOURCE_NOT_FOUND,
+  ERROR_CODES.FILE_NOT_FOUND,
+  ERROR_CODES.JAR_NOT_FOUND,
+  ERROR_CODES.VERSION_NOT_FOUND,
+  ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+  ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED
+]);
+
+/**
+ * Single source of truth mapping an error code to its {@link IssueOrigin}.
+ * Environment failures reuse the retry classifier; the input-family above is
+ * `code_issue`; everything else is a `tool_issue` (valid input the tool could
+ * not satisfy).
+ */
+export function issueOriginForErrorCode(code: string): IssueOrigin {
+  if (RETRY_CLASS_ENVIRONMENT.has(code)) {
+    return "environment";
+  }
+  if (ISSUE_ORIGIN_CODE.has(code)) {
+    return "code_issue";
+  }
+  return "tool_issue";
+}
+
+// Non-sensitive AppError.details fields that are safe to echo to callers as
+// machine-readable repair context. Filesystem paths and free-form text are
+// intentionally excluded.
+const CONTEXT_ALLOWLIST = new Set<string>([
+  "queryLength",
+  "maxLength",
+  "artifactId",
+  "registry",
+  "registryName",
+  "stage",
+  "version",
+  "mapping",
+  "namespace",
+  "kind",
+  "owner",
+  "limit",
+  "count",
+  "maxMembers",
+  "candidateCount",
+  "candidatesSeen",
+  "ambiguous"
+]);
+
+/**
+ * Pick the allowlisted, primitive-valued fields out of an AppError's `details`
+ * so the public envelope can carry structured repair context without leaking
+ * paths, parser internals, or other sensitive data.
+ */
+export function extractAllowlistedContext(
+  details: unknown
+): Record<string, string | number | boolean> | undefined {
+  if (typeof details !== "object" || details == null) {
+    return undefined;
+  }
+  const record = details as Record<string, unknown>;
+  const out: Record<string, string | number | boolean> = {};
+  for (const key of CONTEXT_ALLOWLIST) {
+    const value = record[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function extractFieldErrors(details: unknown): ProblemFieldError[] | undefined {
   if (typeof details !== "object" || details == null) return undefined;
   const raw = (details as Record<string, unknown>).fieldErrors;
@@ -220,6 +317,7 @@ export function errorToBatchEntryProblem(
   if (isAppError(caughtError)) {
     const baseHints = extractHints(caughtError.details);
     const fieldErrors = extractFieldErrors(caughtError.details);
+    const context = extractAllowlistedContext(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -228,9 +326,11 @@ export function errorToBatchEntryProblem(
       code: caughtError.code,
       instance,
       retryClass: retryClassForErrorCode(caughtError.code),
+      issueOrigin: issueOriginForErrorCode(caughtError.code),
       ...(fieldErrors ? { fieldErrors } : {}),
       ...(baseHints ? { hints: baseHints } : {}),
-      ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {})
+      ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {}),
+      ...(context ? { context } : {})
     };
   }
 
@@ -252,6 +352,7 @@ export function errorToBatchEntryProblem(
     code: ERROR_CODES.INTERNAL,
     instance,
     retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL),
+    issueOrigin: issueOriginForErrorCode(ERROR_CODES.INTERNAL),
     ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {})
   };
 }
@@ -264,7 +365,8 @@ export function buildBatchAbortedProblem(instance: string): ProblemDetails {
     status: 412,
     code: ERROR_CODES.BATCH_ABORTED,
     instance,
-    retryClass: retryClassForErrorCode(ERROR_CODES.BATCH_ABORTED)
+    retryClass: retryClassForErrorCode(ERROR_CODES.BATCH_ABORTED),
+    issueOrigin: issueOriginForErrorCode(ERROR_CODES.BATCH_ABORTED)
   };
 }
 
