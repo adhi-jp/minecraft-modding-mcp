@@ -1456,6 +1456,95 @@ test("SourceService returns class source with line range filtering", async () =>
   assert.doesNotMatch(source.sourceText, /int c = a \+ b/);
 });
 
+test("SourceService getClassSource truncation reports nextStartLine and an executable continuation suggestedCall", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-cont-"));
+  const binaryJarPath = join(root, "server-3.0.0.jar");
+  const sourcesJarPath = join(root, "server-3.0.0-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;",
+      "public class Main {",
+      "  void tickServer() {",
+      "    int a = 1;",
+      "    int b = 2;",
+      "    int c = a + b;",
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.server.Main",
+    mode: "full",
+    startLine: 3,
+    endLine: 7,
+    maxLines: 3
+  });
+
+  assert.equal(source.truncated, true);
+  assert.equal(source.returnedRange.end, 5);
+  // The next complete line the caller has not yet seen.
+  assert.equal(source.nextStartLine, 6);
+  const suggested = source.suggestedCall as { tool?: string; params?: Record<string, unknown> } | undefined;
+  assert.equal(suggested?.tool, "get-class-source");
+  assert.equal(suggested?.params?.startLine, 6);
+  assert.equal(suggested?.params?.className, "net.minecraft.server.Main");
+  assert.deepEqual(suggested?.params?.target, {
+    type: "artifact",
+    artifactId: resolved.artifactId
+  });
+});
+
+test("SourceService getClassSource maxChars truncation resumes at a safe line boundary", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-chars-"));
+  const binaryJarPath = join(root, "server-3.0.0.jar");
+  const sourcesJarPath = join(root, "server-3.0.0-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": [
+      "package net.minecraft.server;", // line 1 (29 chars + newline)
+      "public class Main {},,,,,,,,,,", // line 2
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // line 3
+      "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"  // line 4
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  // Cut mid line 2: only line 1 is a complete returned line, so a safe resume
+  // re-reads line 2 in full.
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.server.Main",
+    mode: "full",
+    maxChars: 40
+  });
+
+  assert.equal(source.charsTruncated, true);
+  assert.equal(source.truncated, true);
+  assert.equal(source.nextStartLine, 2);
+  const suggested = source.suggestedCall as { params?: Record<string, unknown> } | undefined;
+  assert.equal(suggested?.params?.startLine, 2);
+});
+
 test("SourceService findClass resolves qualified names even with many same-name symbols", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-find-class-qualified-"));

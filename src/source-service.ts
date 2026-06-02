@@ -304,6 +304,8 @@ export type GetClassSourceOutput = {
   };
   truncated: boolean;
   charsTruncated?: boolean;
+  /** First not-yet-returned line when truncated; pass back as startLine to continue. */
+  nextStartLine?: number;
   origin: ResolvedSourceArtifact["origin"];
   artifactId: string;
   requestedMapping: SourceMapping;
@@ -312,6 +314,8 @@ export type GetClassSourceOutput = {
   provenance: ArtifactProvenance;
   qualityFlags: string[];
   artifactContents: ArtifactContentsSummary;
+  /** Replayable get-class-source call that reads from nextStartLine (truncated, non-file output only). */
+  suggestedCall?: { tool: string; params: Record<string, unknown> };
   outputFile?: string;
   warnings: string[];
 };

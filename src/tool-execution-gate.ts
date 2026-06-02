@@ -17,6 +17,14 @@ const DEFAULT_OPTIONS: GateOptions = {
   maxQueue: 2
 };
 
+// Heavy tools that have a batch equivalent able to collapse many same-kind
+// queries into a single gated call. Used to point overflow guidance at the
+// right batch-* tool instead of just telling the caller to retry serially.
+const BATCH_EQUIVALENTS: Record<string, string> = {
+  "find-mapping": "batch-mappings",
+  "resolve-method-mapping-exact": "batch-mappings"
+};
+
 export class ToolExecutionGate {
   private readonly maxConcurrent: number;
   private readonly maxQueue: number;
@@ -34,6 +42,10 @@ export class ToolExecutionGate {
     }
 
     if (this.queue.length >= this.maxQueue) {
+      const batchTool = BATCH_EQUIVALENTS[tool];
+      const nextAction = batchTool
+        ? `Retry after the current heavy analysis request completes. To run many ${tool} queries efficiently, collapse them into a single ${batchTool} call instead of issuing them in parallel.`
+        : "Retry after the current heavy analysis request completes. Avoid sending multiple heavy mapping/version analysis tools in parallel.";
       return Promise.reject(
         createError({
           code: ERROR_CODES.LIMIT_EXCEEDED,
@@ -44,8 +56,7 @@ export class ToolExecutionGate {
             queuedCount: this.queue.length,
             maxConcurrent: this.maxConcurrent,
             maxQueue: this.maxQueue,
-            nextAction:
-              "Retry after the current heavy analysis request completes. Avoid sending multiple heavy mapping/version analysis tools in parallel."
+            nextAction
           }
         })
       );

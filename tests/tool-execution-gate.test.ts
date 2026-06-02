@@ -75,3 +75,33 @@ test("ToolExecutionGate rejects overflow instead of starting more heavy jobs", a
   releaseFirst?.();
   await first;
 });
+
+test("ToolExecutionGate overflow guidance points find-mapping at its batch equivalent", async () => {
+  const gate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 0 });
+  let releaseFirst: (() => void) | undefined;
+
+  const first = gate.run("find-mapping", async () => {
+    await new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await assert.rejects(
+    () =>
+      gate.run("find-mapping", async () => {
+        throw new Error("should not run");
+      }),
+    (error: unknown) => {
+      const details = error && typeof error === "object" && "details" in error
+        ? (error as { details?: Record<string, unknown> }).details
+        : undefined;
+      assert.match(String(details?.nextAction ?? ""), /batch-mappings/);
+      return true;
+    }
+  );
+
+  releaseFirst?.();
+  await first;
+});

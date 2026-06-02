@@ -723,6 +723,25 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       mappingApplied: activeMappingApplied
     });
 
+  const nextStartLine = snippet.nextStartLine;
+  // Continuation guidance: when output was truncated and was not redirected to
+  // a file, hand the caller the next line to read plus a replayable call that
+  // re-reads from the already-resolved artifact (no re-resolution needed).
+  const continuation =
+    nextStartLine != null && !resolvedOutputFile
+      ? buildSuggestedCall({
+          tool: "get-class-source",
+          params: {
+            className,
+            target: { type: "artifact", artifactId: activeArtifactId },
+            mode: mode === "metadata" ? "snippet" : mode,
+            startLine: nextStartLine,
+            ...(input.maxLines != null ? { maxLines: input.maxLines } : {}),
+            ...(input.maxChars != null ? { maxChars: input.maxChars } : {})
+          }
+        })
+      : undefined;
+
   return {
     className,
     mode,
@@ -734,6 +753,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     },
     truncated,
     ...(charsTruncated ? { charsTruncated } : {}),
+    ...(nextStartLine != null ? { nextStartLine } : {}),
     origin: activeOrigin,
     artifactId: activeArtifactId,
     requestedMapping,
@@ -747,6 +767,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       isDecompiled: activeOrigin === "decompiled",
       qualityFlags: activeQualityFlags
     }),
+    ...(continuation?.suggestedCall ? { suggestedCall: continuation.suggestedCall } : {}),
     ...(resolvedOutputFile ? { outputFile: resolvedOutputFile } : {}),
     warnings
   };
