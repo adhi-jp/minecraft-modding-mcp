@@ -11,7 +11,7 @@ interface ZipEntry {
   fileName: string;
 }
 
-interface ZipFile {
+export interface ZipFile {
   readEntry(): void;
   close(): void;
   once(event: "entry", listener: (entry: ZipEntry) => void): this;
@@ -66,7 +66,7 @@ export function hasJavaSourceExtension(entryPath: string): boolean {
   return true;
 }
 
-function openZipFile(jarPath: string): Promise<ZipFile> {
+export function openZipFile(jarPath: string): Promise<ZipFile> {
   return new Promise((resolve, reject) => {
     yauzl.open(
       jarPath,
@@ -301,6 +301,67 @@ export async function collectMatchedJarEntriesAsUtf8(
   });
 }
 
+export interface JarEntryBuffer {
+  filePath: string;
+  content: Buffer;
+}
+
+/**
+ * Seam for injecting the jar-open primitive so callers/tests can count opens.
+ * Defaults to the module-level {@link openZipFile}.
+ */
+export interface JarReaderOpenDeps {
+  openZipFile?: (jarPath: string) => Promise<ZipFile>;
+}
+
+/**
+ * Raw-buffer counterpart of {@link collectMatchedJarEntriesAsUtf8}: opens the jar
+ * ONCE and returns the matched entries as raw Buffers (no UTF-8 decode), so binary
+ * inputs like `.class` bytes survive intact. Used to avoid re-opening the jar per
+ * sampled entry. Mirrors the sibling's maxBytes/maxEntries/continueOnError semantics
+ * and its finally-close, but takes an injectable open seam for open-count assertions.
+ */
+export async function collectMatchedJarEntriesAsBuffers(
+  jarPath: string,
+  predicate: (entryPath: string) => boolean,
+  options: CollectMatchedJarEntriesOptions = {},
+  deps: JarReaderOpenDeps = {}
+): Promise<JarEntryBuffer[]> {
+  const open = deps.openZipFile ?? openZipFile;
+  const zipFile = await open(jarPath);
+  try {
+    const entries: JarEntryBuffer[] = [];
+    const maxEntries =
+      options.maxEntries == null ? undefined : Math.max(1, Math.trunc(options.maxEntries));
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        return entries;
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (!predicate(entry.fileName)) {
+        continue;
+      }
+
+      try {
+        const contentBuffer = await readEntryStream(zipFile, entry, jarPath, options.maxBytes);
+        entries.push({ filePath: entry.fileName, content: contentBuffer });
+        if (maxEntries != null && entries.length >= maxEntries) {
+          return entries;
+        }
+      } catch (error) {
+        if (!options.continueOnError) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    zipFile.close();
+  }
+}
+
 export async function* iterateJavaEntriesAsUtf8(
   jarPath: string, maxBytes?: number
 ): AsyncGenerator<JavaEntryText> {
@@ -368,7 +429,8 @@ function countMatches(input: string, pattern: RegExp): number {
 }
 
 export async function detectFabricLikeInputNamespace(
-  inputJar: string
+  inputJar: string,
+  deps: JarReaderOpenDeps = {}
 ): Promise<{ fromNamespace: "intermediary" | "mojang"; warnings: string[] }> {
   const warnings: string[] = [];
   const classEntries = (await listJarEntries(inputJar))
@@ -383,15 +445,21 @@ export async function detectFabricLikeInputNamespace(
     };
   }
 
+  // Read all sampled class entries in a SINGLE jar open instead of re-opening the
+  // jar once per entry. The sample set and latin1 decode are unchanged, so scores —
+  // and therefore the detected namespace — are identical.
+  const sampleSet = new Set(classEntries);
+  const matched = await collectMatchedJarEntriesAsBuffers(
+    inputJar,
+    (name) => sampleSet.has(name),
+    { continueOnError: true },
+    deps
+  );
+
   let mojangScore = 0;
   let intermediaryScore = 0;
-  for (const entry of classEntries) {
-    let text = "";
-    try {
-      text = (await readJarEntryAsBuffer(inputJar, entry)).toString("latin1");
-    } catch {
-      continue;
-    }
+  for (const { content } of matched) {
+    const text = content.toString("latin1");
     mojangScore += countMatches(
       text,
       /net\/minecraft\/(?:advancements|client|commands|core|data|gametest|nbt|network|recipe|resources|server|sounds|stats|tags|util|world)\//g

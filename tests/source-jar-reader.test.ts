@@ -5,11 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  collectMatchedJarEntriesAsBuffers,
   collectMatchedJarEntriesAsUtf8,
+  detectFabricLikeInputNamespace,
   hasAnyJarEntry,
   iterateJavaEntriesAsUtf8,
   listJarEntries,
   listJavaEntries,
+  openZipFile,
   readAllJavaEntriesAsUtf8,
   readJarEntryAsUtf8
 } from "../src/source-jar-reader.ts";
@@ -213,6 +216,82 @@ test("collectMatchedJarEntriesAsUtf8 stops after maxEntries successful matches",
       content: "tiny\t2\t0\tobfuscated\tintermediary\nc\ta/b/C\tinter/pkg/First"
     }
   ]);
+});
+
+test("collectMatchedJarEntriesAsBuffers collects raw latin1 buffers in a single jar open", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-collect-buffers-"));
+  const jarPath = join(root, "sample.jar");
+  await createJar(jarPath, {
+    "a/A.class": Buffer.concat([
+      Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0xff, 0xfe]),
+      Buffer.from("net/minecraft/class_1937", "latin1")
+    ]),
+    "a/B.class": Buffer.from("net/minecraft/class_2248", "latin1"),
+    "README.txt": "ignore me"
+  });
+
+  let openCount = 0;
+  const counted = (p: string) => {
+    openCount += 1;
+    return openZipFile(p);
+  };
+
+  const matches = await collectMatchedJarEntriesAsBuffers(
+    jarPath,
+    (name) => name.endsWith(".class"),
+    { continueOnError: true },
+    { openZipFile: counted }
+  );
+
+  assert.equal(openCount, 1);
+  assert.equal(matches.length, 2);
+  assert.ok(Buffer.isBuffer(matches[0]?.content));
+  assert.equal(matches[0]?.filePath, "a/A.class");
+  // Raw binary bytes survive (latin1 never throws on non-UTF8 input).
+  assert.match(matches[0]!.content.toString("latin1"), /net\/minecraft\/class_1937/);
+});
+
+test("collectMatchedJarEntriesAsBuffers stops after maxEntries matches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-buffers-max-entries-"));
+  const jarPath = join(root, "sample.jar");
+  await createJar(jarPath, {
+    "a/A.class": Buffer.from("net/minecraft/class_1937", "latin1"),
+    "a/B.class": Buffer.from("net/minecraft/class_2248", "latin1")
+  });
+
+  const matches = await collectMatchedJarEntriesAsBuffers(
+    jarPath,
+    (name) => name.endsWith(".class"),
+    { maxEntries: 1 }
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0]?.filePath, "a/A.class");
+});
+
+test("detectFabricLikeInputNamespace opens the jar once for the sampled classes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-detect-open-count-"));
+  const jarPath = join(root, "intermediary.jar");
+  const entries: Record<string, Buffer> = {};
+  for (let i = 0; i < 5; i += 1) {
+    entries[`net/minecraft/class_${1000 + i}.class`] = Buffer.from(
+      "net/minecraft/class_1937 method_5678 field_1234",
+      "latin1"
+    );
+  }
+  await createJar(jarPath, entries);
+
+  let openCount = 0;
+  const counted = (p: string) => {
+    openCount += 1;
+    return openZipFile(p);
+  };
+
+  const result = await detectFabricLikeInputNamespace(jarPath, { openZipFile: counted });
+
+  assert.equal(result.fromNamespace, "intermediary");
+  // The collector opens exactly once; the per-class reads must add ZERO further opens.
+  assert.equal(openCount, 1);
 });
 
 test("sourceJarReader: readJarEntryAsUtf8 rejects caller-supplied traversal entry names with INVALID_INPUT", async () => {
