@@ -1171,7 +1171,7 @@ registerToolSchema("check-symbol-exists", checkSymbolExistsSchema);
 server.tool("nbt-to-json",
   "Decode Java Edition NBT binary payload (base64) into typed JSON.",
   nbtToJsonShape,
-  { readOnlyHint: true },
+  { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("nbt-to-json", args, nbtToJsonSchema, async (input) =>
     Promise.resolve(
       nbtBase64ToTypedJson({
@@ -1186,7 +1186,7 @@ registerToolSchema("nbt-to-json", nbtToJsonSchema);
 server.tool("nbt-apply-json-patch",
   "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
   nbtApplyJsonPatchShape,
-  { readOnlyHint: true },
+  { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("nbt-apply-json-patch", args, nbtApplyJsonPatchSchema, async (input) =>
     Promise.resolve(
       applyNbtJsonPatch({
@@ -1201,7 +1201,7 @@ registerToolSchema("nbt-apply-json-patch", nbtApplyJsonPatchSchema);
 server.tool("json-to-nbt",
   "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
   jsonToNbtShape,
-  { readOnlyHint: true },
+  { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("json-to-nbt", args, jsonToNbtSchema, async (input) =>
     Promise.resolve(
       typedJsonToNbtBase64({
@@ -1216,6 +1216,7 @@ registerToolSchema("json-to-nbt", jsonToNbtSchema);
 expertTool("index-artifact",
   "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
   indexArtifactShape,
+  { readOnlyHint: false, idempotentHint: true },
   async (args) => runTool("index-artifact", args, indexArtifactSchema, async (input) =>
     sourceService.indexArtifact({
       artifactId: input.artifactId,
@@ -1227,7 +1228,7 @@ registerToolSchema("index-artifact", indexArtifactSchema);
 
 server.tool("get-runtime-metrics",
   "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
-  { readOnlyHint: true },
+  { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("get-runtime-metrics", args, emptySchema, async () =>
     Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
   )

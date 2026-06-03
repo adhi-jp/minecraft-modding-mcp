@@ -270,6 +270,53 @@ test("read-only tools do not expose file-writing fields", async () => {
   );
 });
 
+test("index-artifact declares write annotations (readOnlyHint:false, idempotentHint:true)", async () => {
+  const tools = (await listTools()) as Array<
+    ToolSchema & { annotations?: { readOnlyHint?: boolean; idempotentHint?: boolean } }
+  >;
+  const indexArtifact = tools.find((tool) => tool.name === "index-artifact");
+  assert.ok(indexArtifact, "index-artifact tool must be registered");
+  assert.equal(
+    indexArtifact?.annotations?.readOnlyHint,
+    false,
+    "index-artifact writes the SQLite index, so it must declare readOnlyHint:false"
+  );
+  assert.equal(
+    indexArtifact?.annotations?.idempotentHint,
+    true,
+    "re-indexing the same artifact is idempotent, so it must declare idempotentHint:true"
+  );
+});
+
+test("network-local NBT/runtime tools declare openWorldHint:false; network/cache tools do not", async () => {
+  const tools = (await listTools()) as Array<
+    ToolSchema & { annotations?: { openWorldHint?: boolean } }
+  >;
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  // Purely-local deterministic transforms must be marked closed-world.
+  for (const name of ["nbt-to-json", "nbt-apply-json-patch", "json-to-nbt", "get-runtime-metrics"]) {
+    const tool = byName.get(name);
+    assert.ok(tool, `${name} must be registered`);
+    assert.equal(
+      tool?.annotations?.openWorldHint,
+      false,
+      `${name} is a deterministic local transform and must declare openWorldHint:false`
+    );
+  }
+
+  // Cache-with-network-fallback tools must NOT be marked closed-world (they fetch on a miss).
+  for (const name of ["get-class-source", "get-class-members", "find-mapping", "find-class", "search-class-source"]) {
+    const tool = byName.get(name);
+    assert.ok(tool, `${name} must be registered`);
+    assert.notEqual(
+      tool?.annotations?.openWorldHint,
+      false,
+      `${name} falls back to network on a cache miss and must not declare openWorldHint:false`
+    );
+  }
+});
+
 test("manual stdio smoke validates restarted list-versions against the current releases contract", async () => {
   const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
 
