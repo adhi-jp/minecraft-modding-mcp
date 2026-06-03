@@ -9,6 +9,8 @@ import {
   compactSourceResponse,
   compactMembersResponse,
   compactLightResponse,
+  stripSourceDiagnostics,
+  stripMembersDiagnostics,
   isCompactEnabled,
   COMPACT_ENABLED_TOOL_NAMES,
   COMPACT_MAPPING_TOOL_NAMES,
@@ -597,6 +599,18 @@ test("compactSourceResponse is idempotent and passes through unknown keys", () =
   assert.equal(once.customField, "extra");
 });
 
+test("stripSourceDiagnostics omits the 3 diagnostics by default while keeping source payload", () => {
+  const result = stripSourceDiagnostics(SOURCE_FIXTURE);
+  for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
+    assert.equal(key in result, false, `${key} should be omitted by default`);
+  }
+  for (const key of ["className", "sourceText", "origin", "artifactId"]) {
+    assert.ok(key in result, `${key} should survive the default strip`);
+  }
+  // Idempotent w.r.t. a later compact pass.
+  assert.deepEqual(stripSourceDiagnostics(result), result);
+});
+
 // ---------------------------------------------------------------------------
 // compactMembersResponse (get-class-members)
 // ---------------------------------------------------------------------------
@@ -629,6 +643,18 @@ test("compactMembersResponse omits context + metadata and preserves members/coun
     assert.ok(key in result, `${key} should survive compact`);
   }
   assert.deepEqual(result.counts, MEMBERS_FIXTURE.counts);
+});
+
+test("stripMembersDiagnostics omits the 3 diagnostics by default but KEEPS context", () => {
+  const result = stripMembersDiagnostics(MEMBERS_FIXTURE);
+  for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
+    assert.equal(key in result, false, `${key} should be omitted by default`);
+  }
+  // Unlike compactMembersResponse, the default strip retains members `context`.
+  assert.ok("context" in result, "context must survive the default (non-compact) strip");
+  for (const key of ["className", "members", "counts"]) {
+    assert.ok(key in result, `${key} should survive the default strip`);
+  }
 });
 
 test("compactMembersResponse preserves decompiledFallback and decompiledMemberCounts", () => {

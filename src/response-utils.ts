@@ -178,6 +178,25 @@ export function compactMembersResponse(
   return projectOmitKeys(obj, MEMBERS_COMPACT_OMIT_KEYS);
 }
 
+/**
+ * Default diagnostic strip for get-class-source / get-class-members. Drops the
+ * three diagnostic fields (provenance, artifactContents, qualityFlags) that the
+ * common path never needs, applied unless the caller passes includeProvenance.
+ * Unlike compactMembersResponse this KEEPS members' `context` — only compact:true
+ * drops context. Reuses SOURCE_COMPACT_OMIT_KEYS (exactly those three keys).
+ */
+export function stripSourceDiagnostics(
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
+}
+
+export function stripMembersDiagnostics(
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
+}
+
 /** Fields to omit from search-class-source / list-artifact-files in compact mode. */
 const LIGHT_COMPACT_OMIT_KEYS = new Set([
   "artifactContents"

@@ -180,7 +180,10 @@ export const getClassSourceShape = {
   maxChars: optionalPositiveInt.describe("Hard character limit on sourceText; truncates if exceeded"),
   outputFile: optionalNonEmptyString.describe("Write source to this file path and return metadata-only response"),
   compact: z.boolean().default(false).describe(
-    "When true, strip debug metadata (provenance, artifactContents, qualityFlags) and empty fields from the response. Default false."
+    "When true, strip empty fields from the response. Default false. (provenance/artifactContents/qualityFlags are omitted by default regardless; pass includeProvenance:true to keep them.)"
+  ),
+  includeProvenance: z.boolean().default(false).describe(
+    "When true, include diagnostic metadata (provenance, qualityFlags, artifactContents) in the response. Default false — these fields are omitted by default to keep the common path lean."
   )
 };
 export const getClassSourceSchema = z
@@ -217,7 +220,10 @@ export const getClassMembersShape = {
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
   compact: z.boolean().default(false).describe(
-    "When true, strip debug metadata (provenance, artifactContents, qualityFlags, context) and empty fields from the response. Default false."
+    "When true, strip empty fields and members `context` from the response. Default false. (provenance/artifactContents/qualityFlags are omitted by default regardless; pass includeProvenance:true to keep them.)"
+  ),
+  includeProvenance: z.boolean().default(false).describe(
+    "When true, include diagnostic metadata (provenance, qualityFlags, artifactContents) in the response. Default false — these fields are omitted by default to keep the common path lean."
   )
 };
 export const getClassMembersSchema = z.object(getClassMembersShape);

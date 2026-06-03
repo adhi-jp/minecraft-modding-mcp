@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
-import { checkSymbolExistsSchema, validateMixinSchema } from "../src/tool-schemas.ts";
+import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
 
@@ -1147,6 +1147,59 @@ test("get-class-members surfaces meta.warningDetails for the truncation family",
   assert.equal(typeof truncationDetail!.index, "number");
   assert.equal(typeof warnings![truncationDetail!.index!], "string");
   assert.equal(truncationDetail!.message, undefined, "warningDetails must not duplicate the text");
+});
+
+test("get-class-source/get-class-members schemas default includeProvenance to false and accept true", () => {
+  const target = { type: "artifact", artifactId: "x" } as const;
+  const source = getClassSourceSchema.parse({ className: "a.B", target });
+  assert.equal(source.includeProvenance, false);
+  assert.equal(getClassSourceSchema.parse({ className: "a.B", target, includeProvenance: true }).includeProvenance, true);
+  const members = getClassMembersSchema.parse({ className: "a.B", target });
+  assert.equal(members.includeProvenance, false);
+  assert.equal(getClassMembersSchema.parse({ className: "a.B", target, includeProvenance: true }).includeProvenance, true);
+});
+
+test("get-class-members omits provenance/qualityFlags/artifactContents by default and restores them with includeProvenance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "provenance-default-members-"));
+  const jarPath = join(root, "lib.jar");
+  await createJar(jarPath, {
+    "com/example/Widget.class": buildClassFile({
+      internalName: "com/example/Widget",
+      accessFlags: 0x0001,
+      methods: [{ name: "alpha", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId");
+
+  const defaultResult = await callTool("get-class-members", {
+    target: { type: "artifact", artifactId },
+    className: "com.example.Widget",
+    access: "all"
+  }) as { structuredContent?: { result?: Record<string, unknown> } };
+  const defaulted = defaultResult.structuredContent?.result ?? {};
+  for (const key of ["provenance", "qualityFlags", "artifactContents"]) {
+    assert.equal(key in defaulted, false, `${key} must be omitted by default`);
+  }
+  // The diagnostic-free common path still carries the members + context.
+  assert.ok("members" in defaulted);
+  assert.ok("context" in defaulted, "context survives the default strip");
+
+  const withProvenance = await callTool("get-class-members", {
+    target: { type: "artifact", artifactId },
+    className: "com.example.Widget",
+    access: "all",
+    includeProvenance: true
+  }) as { structuredContent?: { result?: Record<string, unknown> } };
+  const enriched = withProvenance.structuredContent?.result ?? {};
+  for (const key of ["provenance", "qualityFlags", "artifactContents"]) {
+    assert.ok(key in enriched, `${key} must return with includeProvenance:true`);
+  }
 });
 
 test("analyze-mod remap preview returns an operation block without mutating", async () => {

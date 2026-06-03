@@ -21,7 +21,9 @@ import {
   compactMappingResponse,
   compactSourceResponse,
   compactMembersResponse,
-  compactLightResponse
+  compactLightResponse,
+  stripSourceDiagnostics,
+  stripMembersDiagnostics
 } from "./response-utils.js";
 
 import { loadConfig } from "./config.js";
@@ -581,6 +583,22 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
 
     const isCompact = isCompactEnabled(tool, parsedInput);
     let projectedResult = result;
+    // Diagnostic metadata (provenance/qualityFlags/artifactContents) is omitted by
+    // default on the source tools; callers opt back in via includeProvenance:true.
+    // (compact still drops these too, and additionally strips members `context`.)
+    const includeProvenance =
+      parsedInput !== null &&
+      typeof parsedInput === "object" &&
+      !Array.isArray(parsedInput) &&
+      (parsedInput as { includeProvenance?: unknown }).includeProvenance === true;
+    if (!includeProvenance) {
+      if (tool === "get-class-source") {
+        projectedResult = stripSourceDiagnostics(projectedResult);
+      }
+      if (tool === "get-class-members") {
+        projectedResult = stripMembersDiagnostics(projectedResult);
+      }
+    }
     if (isCompact) {
       if (tool === "resolve-artifact") {
         projectedResult = compactArtifactResponse(projectedResult);
