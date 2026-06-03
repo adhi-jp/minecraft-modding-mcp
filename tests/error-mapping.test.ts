@@ -49,6 +49,35 @@ test("retryClassForErrorCode classifies the four recovery families", () => {
   assert.equal(retryClassForErrorCode(ERROR_CODES.CLASS_NOT_FOUND), "permanent");
 });
 
+test("retryClassForErrorCode classifies non-recoverable server faults as 'server'", () => {
+  // Deterministic internal failures are not transient: retrying the identical
+  // call cannot help, so they must not be advertised as retryable.
+  assert.equal(retryClassForErrorCode(ERROR_CODES.INTERNAL), "server");
+  assert.equal(retryClassForErrorCode(ERROR_CODES.DB_FAILURE), "server");
+});
+
+test("retryClassForErrorCode keeps genuinely-transient codes transient (scope guard)", () => {
+  // The conservative reclassification (INTERNAL + DB_FAILURE -> server) must NOT
+  // spill onto codes that a later retry can legitimately resolve.
+  for (const code of [
+    ERROR_CODES.REPO_FETCH_FAILED,
+    ERROR_CODES.ARTIFACT_RESOLUTION_FAILED,
+    ERROR_CODES.STAGE_BUDGET_PRE_PARSE,
+    ERROR_CODES.LIMIT_EXCEEDED,
+    ERROR_CODES.JAVA_PROCESS_FAILED
+  ]) {
+    assert.equal(retryClassForErrorCode(code), "transient", `${code} must stay transient`);
+  }
+  // An unknown code still falls through to the transient catch-all.
+  assert.equal(retryClassForErrorCode("ERR_DOES_NOT_EXIST"), "transient");
+});
+
+test("errorToBatchEntryProblem labels a non-AppError as a non-retryable server fault", () => {
+  const problem = errorToBatchEntryProblem(new Error("boom"), "test-server-retry-class");
+  assert.equal(problem.code, ERROR_CODES.INTERNAL);
+  assert.equal(problem.retryClass, "server");
+});
+
 test("errorToBatchEntryProblem attaches retryClass derived from the error code", () => {
   const problem = errorToBatchEntryProblem(
     createError({ code: ERROR_CODES.CLASS_NOT_FOUND, message: "missing" }),

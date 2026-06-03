@@ -24,11 +24,15 @@ export type ExampleCall = {
  *   the same call later may succeed.
  * - `permanent`: the requested thing does not exist or cannot be produced;
  *   retrying the same call will keep failing.
+ * - `server`: a non-recoverable internal server fault (programming bug, DB
+ *   corruption); retrying the identical call cannot help. Distinct from
+ *   `permanent`, which is about an absent/unproducible target rather than a
+ *   server defect. Treat like `permanent` for retry posture (do not retry).
  * - `environment`: the server lacks a capability (Java, decompiler, remapper);
  *   retrying will not help until the environment is fixed.
  * - `input`: the caller's input is wrong; fix the input, then retry.
  */
-export type RetryClass = "transient" | "permanent" | "environment" | "input";
+export type RetryClass = "transient" | "permanent" | "server" | "environment" | "input";
 
 /**
  * Where the failure originates, so an agent knows whether to fix its own
@@ -174,12 +178,24 @@ const RETRY_CLASS_ENVIRONMENT = new Set<string>([
   ERROR_CODES.REGISTRY_GENERATION_FAILED
 ]);
 
+// Non-recoverable internal server faults: a deterministic defect where retrying
+// the identical call cannot help. ERR_INTERNAL covers sanitized programming
+// bugs / unexpected throws; ERR_DB_FAILURE covers SQLite integrity/migration
+// failures (the open-failure path can be a transient file lock, but corruption
+// and migration failures dominate, so it is classified server by default).
+const RETRY_CLASS_SERVER = new Set<string>([
+  ERROR_CODES.INTERNAL,
+  ERROR_CODES.DB_FAILURE
+]);
+
 /**
  * Single source of truth mapping an error code to its {@link RetryClass}. Used
  * by every public problem builder so callers can branch on recovery strategy
- * without parsing prose. Codes not explicitly classified (including
- * `ERR_INTERNAL` and unknown codes) default to `transient`: a generic server
- * failure where one retry is reasonable.
+ * without parsing prose. Non-recoverable server faults (`ERR_INTERNAL`,
+ * `ERR_DB_FAILURE`) classify as `server`. Codes not explicitly classified
+ * (genuinely-transient failures such as `ERR_REPO_FETCH_FAILED` and unknown
+ * codes) default to `transient`: a temporary failure where one retry is
+ * reasonable.
  */
 export function retryClassForErrorCode(code: string): RetryClass {
   if (RETRY_CLASS_INPUT.has(code)) {
@@ -187,6 +203,9 @@ export function retryClassForErrorCode(code: string): RetryClass {
   }
   if (RETRY_CLASS_PERMANENT.has(code)) {
     return "permanent";
+  }
+  if (RETRY_CLASS_SERVER.has(code)) {
+    return "server";
   }
   if (RETRY_CLASS_ENVIRONMENT.has(code)) {
     return "environment";

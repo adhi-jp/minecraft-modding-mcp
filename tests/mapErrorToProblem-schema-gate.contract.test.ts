@@ -104,3 +104,16 @@ test("D13: byte-identical envelope for valid suggestions (no key additions, no d
   const publishedKeys = Object.keys(problem.suggestedCall!.params).sort();
   assert.deepEqual(publishedKeys, ["className", "target"]);
 });
+
+test("D14: a non-AppError throw maps to a non-retryable server fault (retryClass=server)", async () => {
+  const { mapErrorToProblem } = await import("../src/index.ts");
+
+  // Programming bugs / null derefs surface as sanitized ERR_INTERNAL. Retrying
+  // the identical call cannot help, so the envelope must NOT advertise it as
+  // transient — it carries retryClass "server" while issueOrigin stays tool_issue.
+  const problem = mapErrorToProblem(new Error("unexpected null deref"), "test-req-internal");
+  assert.equal(problem.code, ERROR_CODES.INTERNAL);
+  assert.equal(problem.retryClass, "server");
+  assert.equal(problem.issueOrigin, "tool_issue");
+  assert.equal(problem.detail, "Unexpected server error.");
+});
