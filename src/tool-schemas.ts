@@ -235,12 +235,16 @@ export const verifyMixinTargetMemberSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("method"),
     name: nonEmptyString,
-    descriptor: z.string().trim().min(1).optional()
+    descriptor: optionalDescriptorString.describe(
+      'Optional JVM method descriptor, e.g. "()V". Empty/whitespace strings are treated as omitted.'
+    )
   }),
   z.object({
     kind: z.literal("field"),
     name: nonEmptyString,
-    descriptor: z.string().trim().min(1).optional()
+    descriptor: optionalDescriptorString.describe(
+      'Optional JVM field descriptor, e.g. "I". Empty/whitespace strings are treated as omitted.'
+    )
   })
 ]);
 

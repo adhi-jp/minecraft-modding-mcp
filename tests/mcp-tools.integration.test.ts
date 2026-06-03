@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
-import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema } from "../src/tool-schemas.ts";
+import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema, verifyMixinTargetMemberSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
 
@@ -1560,6 +1560,30 @@ test("find-mapping descriptor validator rejects empty return type and unterminat
       "ERR_INVALID_INPUT",
       `descriptor "${descriptor}" must be rejected as ERR_INVALID_INPUT`
     );
+  }
+});
+
+test("verify-mixin-target member schema normalizes empty/whitespace descriptor to undefined", () => {
+  // Empty / whitespace descriptors must normalize to undefined (treated as omitted),
+  // matching every other optional descriptor field (optionalDescriptorString).
+  const emptyCases: Array<{ kind: "method" | "field"; name: string; descriptor: string }> = [
+    { kind: "method", name: "tick", descriptor: "" },
+    { kind: "method", name: "tick", descriptor: "   " },
+    { kind: "field", name: "airSupply", descriptor: "" },
+    { kind: "field", name: "airSupply", descriptor: "\t " }
+  ];
+  for (const input of emptyCases) {
+    const parsed = verifyMixinTargetMemberSchema.safeParse(input);
+    assert.equal(parsed.success, true, `${input.kind} descriptor ${JSON.stringify(input.descriptor)} must parse`);
+    if (parsed.success) {
+      assert.equal(parsed.data.descriptor, undefined, "empty descriptor must normalize to undefined");
+    }
+  }
+  // Guard against over-loosening: a real descriptor must survive verbatim (trimmed).
+  const real = verifyMixinTargetMemberSchema.safeParse({ kind: "method", name: "tick", descriptor: "()V" });
+  assert.equal(real.success, true);
+  if (real.success) {
+    assert.equal(real.data.descriptor, "()V");
   }
 });
 
