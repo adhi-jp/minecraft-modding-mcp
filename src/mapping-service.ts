@@ -179,6 +179,7 @@ export class MappingService {
   private resolutionCacheHits = 0;
   private resolutionCacheMisses = 0;
   private classProjectionComputes = 0;
+  private apiMatrixRowMaps = 0;
 
   get resolutionCacheStats() {
     return {
@@ -191,6 +192,11 @@ export class MappingService {
   /** Test seam: counts genuine class-projection computes (cache misses). */
   get classProjectionStats() {
     return { computes: this.classProjectionComputes };
+  }
+
+  /** Test seam: counts genuine per-row cross-namespace path walks in getClassApiMatrix. */
+  get apiMatrixStats() {
+    return { rowMaps: this.apiMatrixRowMaps };
   }
 
   constructor(
@@ -763,9 +769,6 @@ export class MappingService {
       return includeKinds.has("method");
     });
 
-    const rows: ClassApiMatrixRow[] = [];
-    let ambiguousRowCount = 0;
-    const rowSeen = new Set<string>();
     const rowKindOrder: Record<ClassApiMatrixKind, number> = {
       class: 0,
       field: 1,
@@ -783,12 +786,49 @@ export class MappingService {
       return left.symbol.localeCompare(right.symbol);
     });
 
+    // Dedup up front using the base-only symbol key. The sort key and buildSymbolKey
+    // read only base-namespace fields, so this stable first-occurrence-wins order is
+    // fully determined WITHOUT any cross-namespace mapping. That lets rowCount /
+    // nextCursor / row order stay byte-identical while we map only the requested page.
+    const rowSeen = new Set<string>();
+    const dedupedBase: typeof sortedBase = [];
     for (const baseRecord of sortedBase) {
       const key = buildSymbolKey(baseRecord);
       if (rowSeen.has(key)) {
         continue;
       }
       rowSeen.add(key);
+      dedupedBase.push(baseRecord);
+    }
+
+    const rowCount = dedupedBase.length;
+    const rowLimit = clampRowLimit(input.maxRows);
+    // Offset cursor over the stable row order; the context key ties a cursor to
+    // this exact query so a stale cursor restarts from the first page.
+    const rowCursorContext = buildPageContextKey([
+      version,
+      className,
+      classNameMapping,
+      (input.includeKinds ?? []).join(","),
+      input.sourcePriority
+    ]);
+    const { offset: rowOffset, cursorIgnored: rowCursorIgnored } = resolveCursorOffset(
+      input.cursor,
+      rowCursorContext
+    );
+    const windowBase =
+      rowLimit != null ? dedupedBase.slice(rowOffset, rowOffset + rowLimit) : dedupedBase.slice(rowOffset);
+    const consumedRows = rowOffset + windowBase.length;
+    const rowsTruncated = consumedRows < rowCount;
+    const nextCursor = rowsTruncated ? encodeOffsetCursor(consumedRows, rowCursorContext) : undefined;
+
+    // Map ONLY the requested window. Per-row mapping cost is therefore O(window),
+    // not O(rowCount). warnings/ambiguousRowCount are accordingly page-scoped on
+    // paginated calls (caveat B1) and byte-identical to the old full-set values when
+    // no maxRows/cursor narrows the window.
+    const rows: ClassApiMatrixRow[] = [];
+    let ambiguousRowCount = 0;
+    for (const baseRecord of windowBase) {
       let rowHadAmbiguity = false;
 
       const row: ClassApiMatrixRow = {
@@ -852,27 +892,6 @@ export class MappingService {
       }
     }
 
-    const rowCount = rows.length;
-    const rowLimit = clampRowLimit(input.maxRows);
-    // Offset cursor over the stable row order; the context key ties a cursor to
-    // this exact query so a stale cursor restarts from the first page.
-    const rowCursorContext = buildPageContextKey([
-      version,
-      className,
-      classNameMapping,
-      (input.includeKinds ?? []).join(","),
-      input.sourcePriority
-    ]);
-    const { offset: rowOffset, cursorIgnored: rowCursorIgnored } = resolveCursorOffset(
-      input.cursor,
-      rowCursorContext
-    );
-    const limitedRows =
-      rowLimit != null ? rows.slice(rowOffset, rowOffset + rowLimit) : rows.slice(rowOffset);
-    const consumedRows = rowOffset + limitedRows.length;
-    const rowsTruncated = consumedRows < rowCount;
-    const nextCursor = rowsTruncated ? encodeOffsetCursor(consumedRows, rowCursorContext) : undefined;
-
     return {
       version,
       className,
@@ -883,7 +902,7 @@ export class MappingService {
         intermediary: classByMapping.intermediary?.symbol,
         yarn: classByMapping.yarn?.symbol
       },
-      rows: limitedRows,
+      rows,
       rowCount,
       rowsTruncated: rowsTruncated ? true : undefined,
       ...(nextCursor ? { nextCursor } : {}),
@@ -1151,6 +1170,9 @@ export class MappingService {
     if (sourceMapping === targetMapping) {
       return [record];
     }
+    // Count genuine cross-namespace path walks (the per-row cost getClassApiMatrix
+    // now scopes to the requested window); test seam via apiMatrixStats.
+    this.apiMatrixRowMaps += 1;
     const path = resolvedPath ?? namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       return [];

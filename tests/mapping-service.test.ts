@@ -1641,6 +1641,57 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
   }
 });
 
+test("MappingService getClassApiMatrix maps only the windowed rows (per-row mapping scales with maxRows, not rowCount)", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-windowmap-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: "https://example.test/mappings/client.txt"
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+    const query = { version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated" } as const;
+
+    const beforeWindow = service.apiMatrixStats.rowMaps;
+    const windowed = await withCwd(root, () => service.getClassApiMatrix({ ...query, maxRows: 1 } as never));
+    const windowMaps = service.apiMatrixStats.rowMaps - beforeWindow;
+
+    const beforeFull = service.apiMatrixStats.rowMaps;
+    const full = await withCwd(root, () => service.getClassApiMatrix({ ...query } as never));
+    const fullMaps = service.apiMatrixStats.rowMaps - beforeFull;
+
+    // rowCount stays the full deduped count regardless of the window.
+    assert.equal(windowed.rowCount, full.rowCount);
+    assert.equal(full.rowCount > 1, true);
+    // The single-row window maps far fewer rows than the whole class.
+    assert.equal(windowMaps < fullMaps, true);
+    // Bounded by ~ window rows * (SUPPORTED_MAPPINGS-1) + class-identity hops.
+    assert.equal(windowMaps <= 1 * 3 + 6, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("MappingService getClassApiMatrix paginates rows with a stable nextCursor", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-cursor-"));
@@ -2930,6 +2981,63 @@ test("MappingService getClassApiMatrix includes competing candidates in ambiguit
     const competingWarnings = result.warnings.filter((w: string) => w.includes("competing="));
     assert.equal(result.ambiguousRowCount, 1);
     assert.ok(competingWarnings.length >= 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService getClassApiMatrix scopes ambiguity warnings to the returned page (B1)", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-page-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+
+    // Class row (a/b/C, non-ambiguous) sorts before the ambiguous method row.
+    const ambiguousTiny = [
+      "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+      "c\ta/b/C\tinter/pkg/C\tyarn/pkg/C",
+      "\tm\t(I)V\te\tinterMethod1\tnamedMethod",
+      "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
+    ].join("\n");
+
+    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
+    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
+    await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+
+    const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: "https://example.test/versions/1.21.10.json",
+          mappingsUrl: undefined
+        };
+      }
+    };
+
+    const service = new MappingService(config, versionServiceStub, fetchStub) as unknown as {
+      getClassApiMatrix: (input: {
+        version: string;
+        className: string;
+        classNameMapping: SourceMapping;
+        maxRows?: number;
+        cursor?: string;
+      }) => Promise<{ warnings: string[]; ambiguousRowCount?: number; rowCount: number; nextCursor?: string }>;
+    };
+    const query = { version: "1.21.10" as const, className: "a.b.C", classNameMapping: "obfuscated" as const };
+
+    // Page 1 (the non-ambiguous class row): ambiguity is NOT reported for rows the caller cannot see.
+    const page1 = await withCwd(root, () => service.getClassApiMatrix({ ...query, maxRows: 1 }));
+    assert.equal(page1.rowCount, 2, "rowCount stays the full deduped count");
+    assert.equal(page1.ambiguousRowCount, undefined);
+    assert.equal(page1.warnings.filter((w) => w.includes("competing=")).length, 0);
+    assert.ok(page1.nextCursor);
+
+    // Page 2 (the ambiguous method row): now the page-scoped ambiguity surfaces.
+    const page2 = await withCwd(root, () => service.getClassApiMatrix({ ...query, maxRows: 1, cursor: page1.nextCursor }));
+    assert.equal(page2.ambiguousRowCount, 1);
+    assert.ok(page2.warnings.filter((w) => w.includes("competing=")).length >= 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -18,6 +18,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - **Breaking:** `analyze-symbol` (and the `inspect-minecraft`-adjacent mapping flows `exists`/`map`/`exact-map`/`workspace`) now reuse the expert-tool candidate projection: when a lookup resolves to a single exact candidate that just duplicates `match`, the `candidates` block is omitted; for unresolved results with more than three candidates the tail is slimmed and `candidateDetailsTruncated: true` is surfaced. Read the resolved symbol from `match` rather than `candidates[0]`.
 - **Breaking:** `validate-mixin` (and `validate-project` task=`mixin`/`project-summary`) now default `reportMode` to `summary-first` (was `full`) — for every caller, not just the MCP wire boundary. The default response hoists shared provenance/warnings/incomplete reasons and omits per-result `resolvedMembers`, `toolHealth`, `structuredWarnings`, `aggregatedWarnings`, and `confidenceBreakdown`; `summary`, `issues`, `issueSummary`, and top-level provenance/toolHealth are retained. Pass `reportMode="full"` or `explain=true` to restore per-result `resolvedMembers`/`toolHealth`/`resolutionTrace`. `explain=true` now also preserves `resolutionTrace` under `reportMode="compact"`.
 
+### Performance
+
+- `get-class-api-matrix` now computes per-row cross-namespace mappings only for the requested page (`maxRows`/`cursor` window) instead of the whole class on every request, so paginated/deep-page calls scale with the window rather than the full member set. `rows`, row order, `rowCount`, `nextCursor`, and `cursorIgnored` are byte-identical. **Behavior change:** on paginated calls, `warnings` (per-row ambiguity notes) and `ambiguousRowCount` now reflect only the returned page; an unpaginated call (no `maxRows`) still reports them for the whole class.
+
 ## [4.2.1] - 2026-05-23
 
 ### Fixed
