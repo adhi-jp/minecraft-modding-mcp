@@ -1636,6 +1636,20 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
     assert.equal(result.rowCount > 2, true);
     assert.equal(result.rows.length, 2);
     assert.equal(result.rowsTruncated, true);
+
+    // An over-cap maxRows is silently clamped to 5000 downstream; surface a clamp warning.
+    const clamped = await withCwd(root, () =>
+      service.getClassApiMatrix({
+        version: "1.21.10",
+        className: "a.b.C",
+        classNameMapping: "obfuscated",
+        maxRows: 100000
+      } as never)
+    );
+    assert.ok(
+      clamped.warnings.some((w: string) => /maxRows was clamped to 5000 from 100000\./.test(w)),
+      "expected a maxRows clamp warning"
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

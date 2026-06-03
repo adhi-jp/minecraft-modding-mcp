@@ -166,6 +166,37 @@ test("InspectMinecraftService preserves gradleUserHome through schema parsing an
   assert.equal(seenGradleUserHome, "/tmp/explicit-gradle-home");
 });
 
+test("InspectMinecraftService task=versions surfaces the listVersions clamp warning", async () => {
+  const service = new InspectMinecraftService({
+    listVersions: async () => ({
+      latest: { release: "1.21.10" },
+      releases: [{ id: "1.21.10", unobfuscated: true }],
+      cached: [],
+      totalAvailable: 1,
+      warnings: ["limit was clamped to 200 from 100000."]
+    }),
+    resolveArtifact: async () => ({} as any),
+    findClass: async () => ({ matches: [], total: 0, warnings: [] }),
+    getClassSource: async () => ({} as any),
+    getClassMembers: async () => ({} as any),
+    searchClassSource: async () => ({} as any),
+    getArtifactFile: async () => ({} as any),
+    listArtifactFiles: async () => ({} as any),
+    detectProjectMinecraftVersion: async () => undefined
+  } as any);
+
+  const result = (await service.execute({
+    task: "versions",
+    detail: "summary",
+    limit: 100000
+  } as any)) as { warnings?: string[] };
+
+  assert.ok(
+    (result.warnings ?? []).some((w) => /limit was clamped to 200 from 100000\./.test(w)),
+    "inspect-minecraft task=versions must surface the listVersions clamp warning"
+  );
+});
+
 test("InspectMinecraftService returns ambiguous class overview with follow-up candidates", async () => {
   const service = new InspectMinecraftService({
     listVersions: async () => {

@@ -52,6 +52,6 @@ deps: InspectMinecraftDeps,
         }
       }
     }),
-    warnings: []
+    warnings: versions.warnings ?? []
   };
 }

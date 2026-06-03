@@ -189,6 +189,29 @@ test("listVersions includes snapshots, clamps limit, and returns sorted unique c
   });
 });
 
+test("listVersions warns when limit is clamped above 200 and omits warnings otherwise", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-list-versions-clamp-"));
+  const config = buildTestConfig(root);
+  const fetchFn = createFetchStub({
+    [DEFAULT_MANIFEST_URL]: () =>
+      jsonResponse({
+        latest: { release: "1.21.4" },
+        versions: [{ id: "1.21.4", type: "release", url: "https://example.invalid/detail.json" }]
+      })
+  });
+  const svc = new VersionService(config, fetchFn);
+
+  const clamped = await svc.listVersions({ limit: 100000 });
+  assert.ok(
+    (clamped.warnings ?? []).some((w) => /limit was clamped to 200 from 100000\./.test(w)),
+    "expected an input-clamp warning for an over-cap limit"
+  );
+
+  // In-range and below-min limits emit no clamp warning (field omitted).
+  assert.equal((await svc.listVersions({ limit: 50 })).warnings, undefined);
+  assert.equal((await svc.listVersions({ limit: 0 })).warnings, undefined);
+});
+
 test("version manifest fetch is cached across list operations", async () => {
   const root = await mkdtemp(join(tmpdir(), "vs-manifest-cache-"));
   const fetchFn = createFetchStub({

@@ -206,6 +206,13 @@ export class VersionDiffService {
     }
 
     const warnings: string[] = [];
+    if (
+      input.maxClassResults != null &&
+      Number.isFinite(input.maxClassResults) &&
+      input.maxClassResults > MAX_CLASS_RESULTS_LIMIT
+    ) {
+      warnings.push(`maxClassResults was clamped to ${MAX_CLASS_RESULTS_LIMIT} from ${input.maxClassResults}.`);
+    }
     const startedAt = Date.now();
     log("info", "version-diff.start", { fromVersion, toVersion, category });
 

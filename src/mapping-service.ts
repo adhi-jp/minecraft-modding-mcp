@@ -804,6 +804,9 @@ export class MappingService {
 
     const rowCount = dedupedBase.length;
     const rowLimit = clampRowLimit(input.maxRows);
+    if (input.maxRows != null && Number.isFinite(input.maxRows) && input.maxRows > 5000) {
+      warnings.push(`maxRows was clamped to 5000 from ${input.maxRows}.`);
+    }
     // Offset cursor over the stable row order; the context key ties a cursor to
     // this exact query so a stale cursor restarts from the first page.
     const rowCursorContext = buildPageContextKey([

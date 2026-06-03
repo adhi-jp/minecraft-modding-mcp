@@ -120,6 +120,41 @@ test("compareVersions filters class diffs, ignores nested classes, and warns on 
   ]);
 });
 
+test("compareVersions warns when maxClassResults is clamped above 5000", async () => {
+  const root = await mkdtemp(join(tmpdir(), "version-diff-maxclass-clamp-"));
+  const fromJar = join(root, "from.jar");
+  const toJar = join(root, "to.jar");
+  await createJar(fromJar, { "com/example/Alpha.class": "" });
+  await createJar(toJar, { "com/example/Beta.class": "" });
+
+  const service = new VersionDiffService(
+    buildTestConfig(root),
+    {
+      async resolveVersionJar(version: string) {
+        return {
+          version,
+          jarPath: version === "1.20.4" ? fromJar : toJar,
+          source: "downloaded",
+          clientJarUrl: "https://example.invalid/client.jar"
+        };
+      }
+    } as any,
+    {} as any
+  );
+
+  const result = await service.compareVersions({
+    fromVersion: "1.20.4",
+    toVersion: "1.21.1",
+    category: "classes",
+    maxClassResults: 100000
+  });
+
+  assert.ok(
+    result.warnings.some((w: string) => /maxClassResults was clamped to 5000 from 100000\./.test(w)),
+    "expected a maxClassResults clamp warning"
+  );
+});
+
 test("compareVersions summarizes registry additions, removals, and registry creation/removal", async () => {
   const service = new VersionDiffService(
     buildTestConfig("/tmp"),

@@ -74,6 +74,7 @@ export type ListVersionsOutput = {
   snapshots?: VersionEntry[];
   cached: string[];
   totalAvailable: number;
+  warnings?: string[];
 };
 
 export type ResolvedVersionJar = {
@@ -159,6 +160,10 @@ export class VersionService {
     const manifest = await this.fetchManifest();
     const includeSnapshots = input.includeSnapshots ?? false;
     const limit = clampLimit(input.limit, 20, 200);
+    const warnings: string[] = [];
+    if (input.limit != null && Number.isFinite(input.limit) && input.limit > 200) {
+      warnings.push(`limit was clamped to 200 from ${input.limit}.`);
+    }
     const versions = manifest.versions ?? [];
 
     const releases = versions
@@ -179,7 +184,8 @@ export class VersionService {
       releases,
       snapshots: includeSnapshots ? snapshots : undefined,
       cached: Array.from(new Set(cached)).sort((a, b) => a.localeCompare(b)),
-      totalAvailable: versions.length
+      totalAvailable: versions.length,
+      ...(warnings.length ? { warnings } : {})
     };
   }
 
