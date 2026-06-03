@@ -23,7 +23,7 @@ export type ToolMeta = {
   tool: string;
   durationMs: number;
   warnings: string[];
-  /** Structured companion to `warnings`: one classified entry per warning string. */
+  /** Structured companion to `warnings`: one classified entry per warning string, referencing its text via `warnings[detail.index]`. */
   warningDetails?: WarningDetail[];
   detailApplied?: "summary" | "standard" | "full";
   includeApplied?: string[];

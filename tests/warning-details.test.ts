@@ -30,12 +30,17 @@ test("classifyWarnings maps each high-value family to a code/category/severity",
   assert.equal(general!.category, "general");
 });
 
-test("classifyWarnings preserves the original message and is 1:1 with the input", () => {
+test("classifyWarnings references each warning by index and omits the message text", () => {
   const warnings = ["Member list was truncated to 2 entries (from 9).", "plain note"];
   const details = classifyWarnings(warnings);
   assert.equal(details.length, warnings.length);
-  assert.equal(details[0]!.message, warnings[0]);
-  assert.equal(details[1]!.message, warnings[1]);
+  // Text is not duplicated; each entry references meta.warnings[index] by position.
+  assert.equal(details[0]!.index, 0);
+  assert.equal(details[1]!.index, 1);
+  assert.equal(warnings[details[0]!.index], warnings[0]);
+  assert.equal(warnings[details[1]!.index], warnings[1]);
+  assert.ok(!("message" in details[0]!));
+  assert.ok(!("message" in details[1]!));
   // The truncation family advertises the fields a caller can tune.
   assert.ok(details[0]!.affectedFields?.includes("cursor"));
 });

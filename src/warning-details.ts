@@ -1,6 +1,7 @@
 // Structured companion to the string `meta.warnings`. Each warning string is
 // classified into a high-value family so agents can branch on category/severity
-// without parsing prose. `meta.warnings` is kept unchanged; this is additive.
+// without parsing prose. The original text is NOT duplicated here; each entry
+// references its warning by position via `index` (read `meta.warnings[index]`).
 
 export type WarningCategory = "pagination" | "mapping" | "coverage" | "validation" | "general";
 
@@ -11,8 +12,8 @@ export type WarningDetail = {
   code: string;
   category: WarningCategory;
   severity: WarningSeverity;
-  /** The original human-readable warning string. */
-  message: string;
+  /** Index into `meta.warnings[]` that holds the original human-readable text. */
+  index: number;
   /** Input fields a caller can adjust to address the warning, when applicable. */
   affectedFields?: string[];
 };
@@ -62,22 +63,26 @@ const WARNING_RULES: WarningRule[] = [
   }
 ];
 
-function classifyWarning(message: string): WarningDetail {
+function classifyWarning(message: string, index: number): WarningDetail {
   for (const rule of WARNING_RULES) {
     if (rule.test.test(message)) {
       return {
         code: rule.code,
         category: rule.category,
         severity: rule.severity,
-        message,
+        index,
         ...(rule.affectedFields ? { affectedFields: rule.affectedFields } : {})
       };
     }
   }
-  return { code: "general", category: "general", severity: "info", message };
+  return { code: "general", category: "general", severity: "info", index };
 }
 
-/** Build the structured `warningDetails[]` companion for a list of warning strings. */
+/**
+ * Build the structured `warningDetails[]` companion for a list of warning strings.
+ * The mapping is 1:1 and order-preserving, so each entry's `index` equals its
+ * position and dereferences the text via `warnings[index]`.
+ */
 export function classifyWarnings(warnings: string[]): WarningDetail[] {
-  return warnings.map(classifyWarning);
+  return warnings.map((message, index) => classifyWarning(message, index));
 }

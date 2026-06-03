@@ -1132,19 +1132,21 @@ test("get-class-members surfaces meta.warningDetails for the truncation family",
   }) as {
     structuredContent?: {
       result?: { truncated?: boolean };
-      meta?: { warnings?: string[]; warningDetails?: Array<{ code?: string; category?: string }> };
+      meta?: { warnings?: string[]; warningDetails?: Array<{ code?: string; category?: string; index?: number; message?: string }> };
     };
   };
 
   assert.equal(result.structuredContent?.result?.truncated, true);
   const details = result.structuredContent?.meta?.warningDetails;
   assert.ok(Array.isArray(details) && details.length >= 1, "expected meta.warningDetails");
-  assert.ok(
-    details!.some((d) => d.code === "result_truncated" && d.category === "pagination"),
-    "truncation warning must classify as result_truncated/pagination"
-  );
-  // The string warnings are preserved alongside the structured details.
-  assert.ok(Array.isArray(result.structuredContent?.meta?.warnings));
+  const truncationDetail = details!.find((d) => d.code === "result_truncated" && d.category === "pagination");
+  assert.ok(truncationDetail, "truncation warning must classify as result_truncated/pagination");
+  // The text lives only in meta.warnings; the detail references it by index.
+  const warnings = result.structuredContent?.meta?.warnings;
+  assert.ok(Array.isArray(warnings));
+  assert.equal(typeof truncationDetail!.index, "number");
+  assert.equal(typeof warnings![truncationDetail!.index!], "string");
+  assert.equal(truncationDetail!.message, undefined, "warningDetails must not duplicate the text");
 });
 
 test("analyze-mod remap preview returns an operation block without mutating", async () => {

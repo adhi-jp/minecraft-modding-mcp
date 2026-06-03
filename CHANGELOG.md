@@ -11,6 +11,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - **Breaking:** `get-class-members` now returns at most **150** members per page by default (was 500). The existing `nextCursor` continuation already covers paging; callers that need more in one response can pass an explicit `maxMembers` (still capped at 5000). `maxClassResults` and `maxVersions` defaults are unchanged.
 - **Breaking:** `inspect-minecraft` responses no longer echo the requested subject inside `summary.subject`. The raw requested subject still surfaces exactly once, in the always-on top-level `subject` block as `subject.requested` (paired with `subject.resolved`). Clients reading `summary.subject.requested` must switch to `subject.requested` (or correlate via `requestId`).
+- **Breaking:** `meta.warningDetails[]` entries no longer duplicate the warning text. Each entry now carries `index: number` referencing its string in `meta.warnings[]` (1:1, order-preserving) instead of a `message` field. Clients reading `warningDetails[].message` must switch to `meta.warnings[detail.index]`.
 
 ## [4.2.1] - 2026-05-23
 
