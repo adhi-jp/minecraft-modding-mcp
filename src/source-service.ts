@@ -364,6 +364,8 @@ export type GetClassMembersInput = {
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
+  /** When true, keep jvmDescriptor on FIELD members (always kept on methods/constructors). */
+  includeDescriptors?: boolean;
 };
 
 export type DecompiledMember = {

@@ -1026,8 +1026,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const fields = sliced.fields;
   const methods = sliced.methods;
   // Slim the wire member shape: hoist a shared ownerFqn, drop accessFlags, omit
-  // isSynthetic:false. Internal SignatureMember arrays above stay intact.
-  const projectedMembers = projectMembersForWire({ constructors, fields, methods }, includeInherited);
+  // isSynthetic:false, and drop FIELD jvmDescriptor unless includeDescriptors.
+  // Internal SignatureMember arrays above stay intact.
+  const projectedMembers = projectMembersForWire(
+    { constructors, fields, methods },
+    includeInherited,
+    input.includeDescriptors ?? false
+  );
   const truncated = sliced.truncated;
   const nextCursor =
     sliced.nextOffset != null ? encodeOffsetCursor(sliced.nextOffset, memberCursorContext) : undefined;

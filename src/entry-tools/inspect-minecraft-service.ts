@@ -18,7 +18,7 @@ import { handleSearch } from "./inspect-minecraft/handlers/search.js";
 import { handleFile } from "./inspect-minecraft/handlers/file.js";
 import { handleListFiles } from "./inspect-minecraft/handlers/list-files.js";
 
-const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "source", "files", "samples", "artifact", "timings"] as const;
+const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "descriptors", "source", "files", "samples", "artifact", "timings"] as const;
 
 const nonEmptyString = z.string().trim().min(1);
 

@@ -946,7 +946,8 @@ expertTool("get-class-members",
       gradleUserHome: input.gradleUserHome,
       scope: input.scope as ArtifactScope | undefined,
       preferProjectVersion: input.preferProjectVersion,
-      strictVersion: input.strictVersion
+      strictVersion: input.strictVersion,
+      includeDescriptors: input.includeDescriptors
     }) as Promise<Record<string, unknown>>
     );
   })

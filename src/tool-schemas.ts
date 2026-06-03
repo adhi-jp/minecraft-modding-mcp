@@ -224,6 +224,9 @@ export const getClassMembersShape = {
   ),
   includeProvenance: z.boolean().default(false).describe(
     "When true, include diagnostic metadata (provenance, qualityFlags, artifactContents) in the response. Default false — these fields are omitted by default to keep the common path lean."
+  ),
+  includeDescriptors: z.boolean().default(false).describe(
+    "When true, also emit jvmDescriptor on FIELD members. Default false: field descriptors are omitted (the type is already in javaSignature). Method/constructor descriptors are always present for overload disambiguation."
   )
 };
 export const getClassMembersSchema = z.object(getClassMembersShape);

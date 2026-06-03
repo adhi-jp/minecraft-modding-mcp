@@ -130,8 +130,13 @@ export function sliceMembersWithLimit(
 export type WireMember = {
   name: string;
   javaSignature: string;
-  /** Kept for overload disambiguation (@At/@Shadow descriptor matching). */
-  jvmDescriptor: string;
+  /**
+   * JVM descriptor. Always present on methods/constructors (overload
+   * disambiguation for @At/@Shadow matching); omitted on FIELD members by
+   * default (the single type is already in javaSignature) unless
+   * keepFieldDescriptors is set.
+   */
+  jvmDescriptor?: string;
   /** Present only when members span multiple owners (includeInherited). */
   ownerFqn?: string;
   /** Present only when true. */
@@ -152,30 +157,33 @@ export type WireMembersBlock = {
  * (so it is not repeated per member); when members span multiple owners — the
  * includeInherited case — it stays per member and the block-level field is omitted.
  * `accessFlags` is dropped (javaSignature already encodes the modifiers);
- * `isSynthetic` is emitted only when true. `jvmDescriptor` is always kept.
+ * `isSynthetic` is emitted only when true. `jvmDescriptor` is always kept on
+ * methods/constructors (overload disambiguation) and, on FIELD members, only when
+ * keepFieldDescriptors is set (the field's single type is already in javaSignature).
  *
  * The owner anchor is derived from the members themselves (not from the looked-up
  * class name) so it is correct in the requested namespace regardless of remapping.
  */
 export function projectMembersForWire(
   slice: { constructors: SignatureMember[]; fields: SignatureMember[]; methods: SignatureMember[] },
-  includeInherited: boolean
+  includeInherited: boolean,
+  keepFieldDescriptors = false
 ): WireMembersBlock {
   const owners = new Set(
     [...slice.constructors, ...slice.fields, ...slice.methods].map((m) => m.ownerFqn)
   );
   const hoistOwner = !includeInherited && owners.size === 1;
-  const toWire = (m: SignatureMember): WireMember => ({
+  const toWire = (m: SignatureMember, keepDescriptor: boolean): WireMember => ({
     name: m.name,
     javaSignature: m.javaSignature,
-    jvmDescriptor: m.jvmDescriptor,
+    ...(keepDescriptor ? { jvmDescriptor: m.jvmDescriptor } : {}),
     ...(hoistOwner ? {} : { ownerFqn: m.ownerFqn }),
     ...(m.isSynthetic ? { isSynthetic: true } : {})
   });
   return {
     ...(hoistOwner ? { ownerFqn: [...owners][0]! } : {}),
-    constructors: slice.constructors.map(toWire),
-    fields: slice.fields.map(toWire),
-    methods: slice.methods.map(toWire)
+    constructors: slice.constructors.map((m) => toWire(m, true)),
+    fields: slice.fields.map((m) => toWire(m, keepFieldDescriptors)),
+    methods: slice.methods.map((m) => toWire(m, true))
   };
 }

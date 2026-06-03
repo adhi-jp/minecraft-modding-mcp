@@ -1157,6 +1157,42 @@ test("get-class-source/get-class-members schemas default includeProvenance to fa
   const members = getClassMembersSchema.parse({ className: "a.B", target });
   assert.equal(members.includeProvenance, false);
   assert.equal(getClassMembersSchema.parse({ className: "a.B", target, includeProvenance: true }).includeProvenance, true);
+  // includeDescriptors defaults false and is accepted.
+  assert.equal(members.includeDescriptors, false);
+  assert.equal(getClassMembersSchema.parse({ className: "a.B", target, includeDescriptors: true }).includeDescriptors, true);
+});
+
+test("get-class-members drops FIELD jvmDescriptor by default and restores it with includeDescriptors (methods always keep it)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "field-descriptor-members-"));
+  const jarPath = join(root, "lib.jar");
+  await createJar(jarPath, {
+    "com/example/Widget.class": buildClassFile({
+      internalName: "com/example/Widget",
+      accessFlags: 0x0001,
+      fields: [{ name: "count", descriptor: "I", accessFlags: 0x0001 }],
+      methods: [{ name: "run", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId");
+
+  type MembersResult = { structuredContent?: { result?: { members?: { fields?: Array<Record<string, unknown>>; methods?: Array<Record<string, unknown>> } } } };
+  const base = { target: { type: "artifact", artifactId }, className: "com.example.Widget", access: "all" } as const;
+
+  const def = await callTool("get-class-members", base) as MembersResult;
+  const defMembers = def.structuredContent?.result?.members ?? {};
+  assert.equal(defMembers.fields?.[0]?.jvmDescriptor, undefined, "field descriptor omitted by default");
+  assert.equal(defMembers.methods?.[0]?.jvmDescriptor, "()V", "method descriptor always present");
+
+  const opted = await callTool("get-class-members", { ...base, includeDescriptors: true }) as MembersResult;
+  const optedMembers = opted.structuredContent?.result?.members ?? {};
+  assert.equal(optedMembers.fields?.[0]?.jvmDescriptor, "I", "field descriptor restored with includeDescriptors");
+  assert.equal(optedMembers.methods?.[0]?.jvmDescriptor, "()V");
 });
 
 test("get-class-members omits provenance/qualityFlags/artifactContents by default and restores them with includeProvenance", async () => {

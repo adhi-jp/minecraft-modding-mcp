@@ -221,6 +221,7 @@ export type InspectMinecraftDeps = {
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
     maxMembers?: number;
+    includeDescriptors?: boolean;
   }) => Promise<GetClassMembersOutput>;
   searchClassSource: (input: {
     artifactId: string;

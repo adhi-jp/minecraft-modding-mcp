@@ -7,6 +7,7 @@ export const CANONICAL_INCLUDE_GROUPS = [
   "provenance",
   "candidates",
   "members",
+  "descriptors",
   "source",
   "files",
   "samples",

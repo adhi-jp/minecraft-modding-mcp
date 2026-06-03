@@ -22,7 +22,8 @@ deps: InspectMinecraftDeps,
     gradleUserHome: classSubject.gradleUserHome,
     preferProjectVersion: classSubject.preferProjectVersion,
     strictVersion: classSubject.strictVersion,
-    maxMembers: limit
+    maxMembers: limit,
+    includeDescriptors: include.includes("descriptors")
   });
   const summary: Summary = {
     status: members.truncated ? "partial" : "ok",
