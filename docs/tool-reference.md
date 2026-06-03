@@ -385,7 +385,7 @@ If `find-class` or `get-class-source` returns no hit on an `obfuscated` artifact
 
 Method descriptor precision is best on Tiny-backed paths (`intermediary` and `yarn`). For `obfuscated <-> mojang`, Mojang `client_mappings` do not carry JVM descriptors, so descriptor queries may fall back to name matching and emit a warning.
 
-Use `resolve-method-mapping-exact` when candidate ranking is not enough and the workflow needs strict `owner + name + descriptor` certainty.
+Use `resolve-method-mapping-exact` when candidate ranking is not enough and the workflow needs strict `owner + name + descriptor` certainty. It is a strict shortcut for `find-mapping` (kind=method, signatureMode=exact) that additionally requires a **complete** descriptor projection — it returns `mapping_unavailable` when the descriptor's class references cannot all be projected to the target namespace, whereas `find-mapping`'s exact mode resolves those leniently. Prefer `find-mapping kind=method signatureMode=exact` unless you specifically need that strict-completeness guarantee.
 
 Use `find-mapping` `disambiguation.ownerHint` and `disambiguation.descriptorHint` to narrow ambiguous candidate sets.
 

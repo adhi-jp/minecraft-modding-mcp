@@ -301,7 +301,7 @@ Minecraft バージョン間でのクラス / レジストリ変更比較と、�
 | ツール | 役割 |
 | --- | --- |
 | `find-mapping` | クラス、フィールド、メソッドのシンボルに対するマッピング候補を調べる |
-| `resolve-method-mapping-exact` | owner、name、descriptor の厳密一致で 1 つのメソッドマッピングを解決する |
+| `resolve-method-mapping-exact` | `find-mapping`（kind=method, signatureMode=exact）の厳密版ショートカット。owner+name+descriptor の三つ組が必須 |
 | `get-class-api-matrix` | 1 つのクラス API を `obfuscated`、`mojang`、`intermediary`、`yarn` で見比べる |
 | `resolve-workspace-symbol` | Gradle ワークスペースからコンパイル時に見えるシンボル名を解決する |
 | `check-symbol-exists` | 名前空間内でクラス、フィールド、メソッドが存在するかを確認する |

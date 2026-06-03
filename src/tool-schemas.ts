@@ -587,6 +587,10 @@ export const findMappingSchema = z.object(findMappingShape).superRefine((value, 
   }
 });
 
+// Strict shortcut for find-mapping(kind=method, signatureMode=exact): identical inputs,
+// but requires a COMPLETE descriptor projection and returns mapping_unavailable when the
+// descriptor's class references cannot all be projected (find-mapping's exact mode is more
+// lenient there). Prefer find-mapping unless you need that strict-completeness guarantee.
 export const resolveMethodMappingExactShape = {
   version: nonEmptyString,
   name: nonEmptyString,

@@ -307,7 +307,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | Tool | Purpose |
 | --- | --- |
 | `find-mapping` | Look up mapping candidates for class, field, or method symbols |
-| `resolve-method-mapping-exact` | Resolve one method mapping with strict owner, name, and descriptor matching |
+| `resolve-method-mapping-exact` | Strict shortcut for `find-mapping` (kind=method, signatureMode=exact); requires the full owner+name+descriptor triple |
 | `get-class-api-matrix` | Show one class API across `obfuscated`, `mojang`, `intermediary`, and `yarn` |
 | `resolve-workspace-symbol` | Resolve compile-visible symbol names from a Gradle workspace |
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |

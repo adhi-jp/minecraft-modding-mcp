@@ -1083,7 +1083,7 @@ expertTool("find-mapping",
 registerToolSchema("find-mapping", findMappingSchema);
 
 expertTool("resolve-method-mapping-exact",
-  "Resolve one method mapping exactly by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous.",
+  "Strict shortcut for find-mapping(kind=method, signatureMode=exact): resolve one method mapping by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous. Stricter than find-mapping's exact mode — it requires a COMPLETE descriptor projection and returns mapping_unavailable when the descriptor's class references cannot all be projected to the target namespace (find-mapping is more lenient there). Use find-mapping kind=method signatureMode=exact unless you specifically need that strict-completeness guarantee.",
   resolveMethodMappingExactShape,
   { readOnlyHint: true },
   async (args) => runTool("resolve-method-mapping-exact", args, resolveMethodMappingExactSchema, async (input) =>
