@@ -3121,3 +3121,112 @@ test("MappingService getClassApiMatrix scopes ambiguity warnings to the returned
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("resolveTinyMappingFile yarn re-resolves the newest build after the metadata TTL, reuses within it, and falls back on outage", async () => {
+  const { resolveTinyMappingFile } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "resolve-yarn-ttl-"));
+  try {
+    const tinyJarPath = join(root, "yarn-tiny.jar");
+    await createJar(tinyJarPath, { "mappings/mappings.tiny": `${TEST_TINY}\n` });
+    const tinyJarBuffer = await readFile(tinyJarPath);
+
+    // The fetch stub is reconfigured per phase via these closures.
+    let builds: string[] = ["1.21.1+build.10"];
+    let metadataReachable = true;
+    let metadataFetches = 0;
+
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        metadataFetches += 1;
+        if (!metadataReachable) {
+          return new Response("unavailable", { status: 503 });
+        }
+        return new Response(
+          ["<metadata><versioning><versions>",
+            ...builds.map((b) => `<version>${b}</version>`),
+            "</versions></versioning></metadata>"].join(""),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(".jar")) {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const clock = { t: 1_000_000 };
+    const now = () => clock.t;
+
+    // Phase 1: first resolve -> fetches metadata, picks build.10, coordinate-keyed.
+    const first = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
+    assert.equal(first.coordinate, "1.21.1+build.10");
+    assert.match(first.path, /1\.21\.1\+build\.10\.tiny$/);
+    assert.equal(metadataFetches, 1);
+
+    // Phase 2: within TTL -> zero network, same coordinate (metadata fetch count unchanged).
+    const second = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
+    assert.equal(second.coordinate, "1.21.1+build.10");
+    assert.equal(metadataFetches, 1, "within TTL must not re-fetch maven metadata");
+
+    // Phase 3: TTL expires + Fabric publishes build.11 -> re-resolves to build.11.
+    clock.t += 25 * 60 * 60 * 1000; // > 24h TTL
+    builds = ["1.21.1+build.10", "1.21.1+build.11"];
+    const third = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
+    assert.equal(third.coordinate, "1.21.1+build.11");
+    assert.match(third.path, /1\.21\.1\+build\.11\.tiny$/);
+    assert.equal(metadataFetches, 2);
+
+    // Phase 4: TTL expires again but Maven is unreachable -> fall back to last-known-good
+    // build.11 instead of throwing MAPPING_UNAVAILABLE.
+    clock.t += 25 * 60 * 60 * 1000;
+    metadataReachable = false;
+    const fourth = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
+    assert.equal(fourth.coordinate, "1.21.1+build.11", "must serve last-known-good on metadata outage");
+    assert.equal(metadataFetches, 3, "outage still attempts one metadata fetch before falling back");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveTinyMappingFile yarn forceRefresh bypasses the metadata TTL", async () => {
+  const { resolveTinyMappingFile } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "resolve-yarn-force-"));
+  try {
+    const tinyJarPath = join(root, "yarn-tiny.jar");
+    await createJar(tinyJarPath, { "mappings/mappings.tiny": `${TEST_TINY}\n` });
+    const tinyJarBuffer = await readFile(tinyJarPath);
+
+    let builds: string[] = ["1.21.1+build.10"];
+    let metadataFetches = 0;
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/net/fabricmc/yarn/maven-metadata.xml")) {
+        metadataFetches += 1;
+        return new Response(
+          ["<metadata><versioning><versions>",
+            ...builds.map((b) => `<version>${b}</version>`),
+            "</versions></versioning></metadata>"].join(""),
+          { status: 200 }
+        );
+      }
+      if (url.endsWith(".jar")) {
+        return new Response(tinyJarBuffer, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const now = () => 5_000_000; // fixed clock: TTL would normally keep build.10
+    const first = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
+    assert.equal(first.coordinate, "1.21.1+build.10");
+    assert.equal(metadataFetches, 1);
+
+    // Same clock (within TTL) but forceRefresh must re-fetch and pick the new build.
+    builds = ["1.21.1+build.10", "1.21.1+build.11"];
+    const forced = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now, forceRefresh: true });
+    assert.equal(forced.coordinate, "1.21.1+build.11");
+    assert.equal(metadataFetches, 2, "forceRefresh must re-fetch metadata even within TTL");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

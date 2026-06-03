@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -1741,29 +1741,78 @@ async function extractTinyFromJar(
 }
 
 /**
+ * How long a resolved yarn build coordinate is trusted before re-checking the
+ * Fabric Maven metadata for a newer build. Within this window, resolving a yarn
+ * tiny is zero-network (it reuses the recorded coordinate); after it expires the
+ * next resolve does ONE metadata fetch. This fence keeps the metadata fetch off
+ * the remap cache-hit fast path while still picking up new yarn builds.
+ */
+const YARN_METADATA_TTL_MS = 24 * 60 * 60 * 1000;
+
+type YarnCoordinateMeta = { coordinate: string; fetchedAt: number };
+
+function yarnMetaPath(cacheDir: string, version: string): string {
+  return join(cacheDir, "mappings", "yarn", `${version}.meta.json`);
+}
+
+function yarnCoordinateTinyPath(cacheDir: string, coordinate: string): string {
+  return join(cacheDir, "mappings", "yarn", `${coordinate}.tiny`);
+}
+
+function readYarnCoordinateMeta(metaPath: string): YarnCoordinateMeta | undefined {
+  if (!existsSync(metaPath)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(metaPath, "utf8")) as Partial<YarnCoordinateMeta>;
+    if (typeof parsed.coordinate === "string" && typeof parsed.fetchedAt === "number") {
+      return { coordinate: parsed.coordinate, fetchedAt: parsed.fetchedAt };
+    }
+  } catch {
+    // Corrupt marker -> treat as absent and re-resolve.
+  }
+  return undefined;
+}
+
+function writeYarnCoordinateMeta(metaPath: string, meta: YarnCoordinateMeta): void {
+  mkdirSync(dirname(metaPath), { recursive: true });
+  writeFileSync(metaPath, JSON.stringify(meta));
+}
+
+export type ResolvedTinyMapping = { path: string; coordinate?: string };
+
+/**
  * Resolve and cache a Tiny v2 mapping file for the given Minecraft version.
+ *
+ * Intermediary is version-keyed (immutable per release). Yarn is coordinate-keyed:
+ * Fabric publishes incrementing yarn builds for the same MC version, so the tiny
+ * is cached at `mappings/yarn/${coordinate}.tiny` and the newest coordinate is
+ * re-checked once per {@link YARN_METADATA_TTL_MS}. The resolved yarn coordinate
+ * is returned so callers can key their own caches on the actual mappings used.
  *
  * @param version - Minecraft version (e.g. "1.20.4")
  * @param mapping - "intermediary" or "yarn"
  * @param cacheDir - The application cache directory
  * @param fetchFn - Optional fetch implementation for testing
- * @returns Path to the extracted Tiny v2 file
+ * @param options - forceRefresh bypasses the yarn metadata TTL; now overrides the clock (testing)
+ * @returns The extracted Tiny v2 path and, for yarn, the resolved build coordinate
  */
 export async function resolveTinyMappingFile(
   version: string,
   mapping: "intermediary" | "yarn",
   cacheDir: string,
-  fetchFn?: typeof fetch
-): Promise<string> {
-  const cachedTiny = join(cacheDir, "mappings", `${version}-${mapping}.tiny`);
-
-  if (existsSync(cachedTiny)) {
-    return cachedTiny;
-  }
-
+  fetchFn?: typeof fetch,
+  options?: { forceRefresh?: boolean; now?: () => number }
+): Promise<ResolvedTinyMapping> {
   const effectiveFetch = fetchFn ?? globalThis.fetch;
 
   if (mapping === "intermediary") {
+    // Intermediary is immutable per MC release: version-keyed cache is correct.
+    const cachedTiny = join(cacheDir, "mappings", `${version}-intermediary.tiny`);
+    if (existsSync(cachedTiny)) {
+      return { path: cachedTiny };
+    }
+
     const url = `${FABRIC_MAVEN}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`;
     const jarDest = defaultDownloadPath(cacheDir, url);
     const downloaded = await downloadToCache(url, jarDest, {
@@ -1789,12 +1838,34 @@ export async function resolveTinyMappingFile(
       });
     }
 
-    return cachedTiny;
+    return { path: cachedTiny };
   }
 
-  // yarn
+  // yarn: coordinate-keyed + metadata-TTL fenced.
+  const nowFn = options?.now ?? Date.now;
+  const metaPath = yarnMetaPath(cacheDir, version);
+  const existingMeta = readYarnCoordinateMeta(metaPath);
+
+  // Within-TTL fast path: reuse the recorded coordinate with zero network.
+  if (!options?.forceRefresh && existingMeta && nowFn() - existingMeta.fetchedAt < YARN_METADATA_TTL_MS) {
+    const cachedCoordTiny = yarnCoordinateTinyPath(cacheDir, existingMeta.coordinate);
+    if (existsSync(cachedCoordTiny)) {
+      return { path: cachedCoordTiny, coordinate: existingMeta.coordinate };
+    }
+  }
+
   const yarnCoordinates = await fetchYarnCoordinatesStandalone(version, effectiveFetch);
+
+  // Network fallback: the metadata fetch failed/empty (fetchYarnCoordinatesStandalone
+  // swallows errors -> []). Serve the last-known-good coordinate rather than failing,
+  // so a transient Fabric Maven outage after TTL expiry does not break cache hits.
   if (yarnCoordinates.length === 0) {
+    if (existingMeta) {
+      const cachedCoordTiny = yarnCoordinateTinyPath(cacheDir, existingMeta.coordinate);
+      if (existsSync(cachedCoordTiny)) {
+        return { path: cachedCoordTiny, coordinate: existingMeta.coordinate };
+      }
+    }
     throw createError({
       code: ERROR_CODES.MAPPING_UNAVAILABLE,
       message: `No yarn builds found for Minecraft ${version}.`,
@@ -1803,6 +1874,13 @@ export async function resolveTinyMappingFile(
   }
 
   for (const coordinate of yarnCoordinates) {
+    const coordTiny = yarnCoordinateTinyPath(cacheDir, coordinate);
+    if (existsSync(coordTiny)) {
+      // Already have this build's tiny; just refresh the TTL marker.
+      writeYarnCoordinateMeta(metaPath, { coordinate, fetchedAt: nowFn() });
+      return { path: coordTiny, coordinate };
+    }
+
     const url = `${FABRIC_MAVEN}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}-v2.jar`;
     const jarDest = defaultDownloadPath(cacheDir, url);
     const downloaded = await downloadToCache(url, jarDest, {
@@ -1815,9 +1893,12 @@ export async function resolveTinyMappingFile(
       continue;
     }
 
-    const extracted = await extractTinyFromJar(downloaded.path, cachedTiny);
+    const extracted = await extractTinyFromJar(downloaded.path, coordTiny);
     if (extracted) {
-      return cachedTiny;
+      // Ordering matters: the tiny exists before the marker is written, so a
+      // crash never leaves a TTL-valid marker pointing at a missing tiny.
+      writeYarnCoordinateMeta(metaPath, { coordinate, fetchedAt: nowFn() });
+      return { path: coordTiny, coordinate };
     }
   }
 

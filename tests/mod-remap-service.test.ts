@@ -55,19 +55,29 @@ function legacyCachePath(cacheDir: string, inputJar: string, targetMapping: "yar
 }
 
 // Must mirror buildCacheKey() in src/mod-remap-service.ts, including the
-// REMAP_PIPELINE_VERSION prefix ("v2").
-const REMAP_PIPELINE_VERSION = "v2";
+// REMAP_PIPELINE_VERSION prefix ("v3") and the mapping-identity token. For a
+// mojang target the identity is the deterministic version-keyed tiny path
+// string; for yarn it is the resolved build coordinate (pass it explicitly).
+const REMAP_PIPELINE_VERSION = "v3";
 function scopedCachePath(
   cacheDir: string,
   inputJar: string,
   fromNamespace: string,
   targetNamespace: string,
-  mcVersion: string
+  mcVersion: string,
+  mappingIdentity?: string
 ): string {
   const stat = statSync(inputJar, { throwIfNoEntry: false });
   const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "unknown";
+  const identity =
+    mappingIdentity ??
+    (targetNamespace === "mojang"
+      ? `${mcVersion}-mojang-merged.tiny`
+      : `copy:${targetNamespace}`);
   const key = createHash("sha256")
-    .update(`${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
+    .update(
+      `${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}|${identity}`
+    )
     .digest("hex");
   return join(cacheDir, "remapped-mods", `${key}.jar`);
 }
@@ -236,7 +246,7 @@ test("remapModJar remaps an intermediary jar to mojang in two passes with valid 
         resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
         resolveTinyMappingFile: async (_v, mapping) => {
           assert.equal(mapping, "intermediary");
-          return intermediaryTiny;
+          return { path: intermediaryTiny };
         },
         resolveMojangTinyFile: async () => ({ path: mojangTiny, warnings: [] }),
         remapJar: async (_jar, opts) => {
@@ -594,6 +604,126 @@ test("remapModJar exposes a numeric durationMs on cache-hit results", async () =
     );
     assert.equal(typeof (result as any).durationMs, "number");
     assert.ok((result as any).durationMs >= 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar re-remaps when a newer yarn build is published (cache key tracks coordinate)", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
+
+    const yarnTinyA = join(tempDir, "build.10.tiny");
+    const yarnTinyB = join(tempDir, "build.11.tiny");
+    writeFileSync(yarnTinyA, "tiny\t2\t0\tintermediary\tnamed\n");
+    writeFileSync(yarnTinyB, "tiny\t2\t0\tintermediary\tnamed\n");
+
+    const config = makeTestConfig(tempDir);
+    const remapCalls: string[] = [];
+    let resolveCount = 0;
+    const deps = {
+      resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+      // Simulate Fabric publishing build.11 between the two remaps.
+      resolveTinyMappingFile: async (_v: string, mapping: string) => {
+        assert.equal(mapping, "yarn");
+        resolveCount += 1;
+        return resolveCount === 1
+          ? { path: yarnTinyA, coordinate: "1.21.1+build.10" }
+          : { path: yarnTinyB, coordinate: "1.21.1+build.11" };
+      },
+      remapJar: async (_jar: string, opts: { outputJar: string; mappingsFile: string }) => {
+        remapCalls.push(opts.mappingsFile);
+        writeFileSync(opts.outputJar, "remapped");
+        return { outputJar: opts.outputJar, durationMs: 0 };
+      }
+    };
+
+    const input: ModRemapInput = { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "yarn" };
+    await remapModJar(input, config, deps);
+    await remapModJar(input, config, deps);
+
+    assert.equal(
+      remapCalls.length,
+      2,
+      "a newer yarn coordinate must produce a new cache key and re-remap, not serve the stale jar"
+    );
+    assert.deepEqual(remapCalls, [yarnTinyA, yarnTinyB]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar serves the cache when the yarn coordinate is unchanged (no always-remap regression)", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
+
+    const yarnTiny = join(tempDir, "build.11.tiny");
+    writeFileSync(yarnTiny, "tiny\t2\t0\tintermediary\tnamed\n");
+
+    const config = makeTestConfig(tempDir);
+    const remapCalls: string[] = [];
+    const deps = {
+      resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+      resolveTinyMappingFile: async () => ({ path: yarnTiny, coordinate: "1.21.1+build.11" }),
+      remapJar: async (_jar: string, opts: { outputJar: string; mappingsFile: string }) => {
+        remapCalls.push(opts.mappingsFile);
+        writeFileSync(opts.outputJar, "remapped");
+        return { outputJar: opts.outputJar, durationMs: 0 };
+      }
+    };
+
+    const input: ModRemapInput = { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "yarn" };
+    await remapModJar(input, config, deps);
+    const second = await remapModJar(input, config, deps);
+
+    assert.equal(remapCalls.length, 1, "identical coordinate must serve the cache, not re-remap");
+    assert.ok(second.warnings.some((w) => w.includes("cache")), "second call should report a cache hit");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("remapModJar forceRemap bypasses the cache and re-resolves", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
+
+    const yarnTiny = join(tempDir, "build.11.tiny");
+    writeFileSync(yarnTiny, "tiny\t2\t0\tintermediary\tnamed\n");
+
+    const config = makeTestConfig(tempDir);
+    const remapCalls: string[] = [];
+    let sawForceRefresh = false;
+    const deps = {
+      resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+      resolveTinyMappingFile: async (
+        _v: string,
+        _m: string,
+        _c: string,
+        _f?: unknown,
+        options?: { forceRefresh?: boolean }
+      ) => {
+        if (options?.forceRefresh) sawForceRefresh = true;
+        return { path: yarnTiny, coordinate: "1.21.1+build.11" };
+      },
+      remapJar: async (_jar: string, opts: { outputJar: string; mappingsFile: string }) => {
+        remapCalls.push(opts.mappingsFile);
+        writeFileSync(opts.outputJar, "remapped");
+        return { outputJar: opts.outputJar, durationMs: 0 };
+      }
+    };
+
+    const base: ModRemapInput = { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "yarn" };
+    await remapModJar(base, config, deps);
+    await remapModJar({ ...base, forceRemap: true }, config, deps);
+
+    assert.equal(remapCalls.length, 2, "forceRemap must bypass the cache-hit short-circuit and re-remap");
+    assert.ok(sawForceRefresh, "forceRemap must request a yarn coordinate re-resolution (forceRefresh)");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

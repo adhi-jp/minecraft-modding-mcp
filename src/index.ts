@@ -1409,7 +1409,8 @@ expertTool("remap-mod-jar",
         inputJar: input.inputJar,
         outputJar: input.outputJar,
         mcVersion: input.mcVersion,
-        targetMapping: input.targetMapping
+        targetMapping: input.targetMapping,
+        forceRemap: input.forceRemap
       },
       config
     );

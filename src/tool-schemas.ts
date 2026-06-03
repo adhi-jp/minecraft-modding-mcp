@@ -987,7 +987,11 @@ export const remapModJarShape = {
   inputJar: nonEmptyString.describe("Path to the mod JAR file"),
   outputJar: optionalNonEmptyString.describe("Output path for remapped JAR (auto-generated if omitted)"),
   mcVersion: optionalNonEmptyString.describe("Minecraft version (auto-detected from mod metadata if omitted)"),
-  targetMapping: remapTargetSchema.describe("yarn | mojang")
+  targetMapping: remapTargetSchema.describe("yarn | mojang"),
+  forceRemap: z
+    .boolean()
+    .optional()
+    .describe("Skip the cache and re-resolve the newest yarn build (busts a stale remap)")
 };
 export const remapModJarSchema = z.object(remapModJarShape);
 

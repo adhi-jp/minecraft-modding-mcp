@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { log } from "./logger.js";
-import { resolveTinyMappingFile } from "./mapping-service.js";
+import { resolveTinyMappingFile, type ResolvedTinyMapping } from "./mapping-service.js";
 import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { analyzeModJar, type ModLoader } from "./mod-analyzer.js";
 import { normalizePathForHost } from "./path-converter.js";
@@ -19,6 +19,11 @@ export interface ModRemapInput {
   outputJar?: string;
   mcVersion?: string;
   targetMapping: "yarn" | "mojang";
+  /**
+   * Skip the remap cache and force re-resolution of the newest yarn build
+   * (bypasses both the output-jar cache hit and the yarn metadata TTL).
+   */
+  forceRemap?: boolean;
 }
 
 export interface ModRemapResult {
@@ -45,8 +50,10 @@ export interface RemapModJarDeps {
 // Bumped whenever the remap pipeline changes in a way that makes previously
 // cached output jars wrong. The v1 pipeline mis-mapped intermediary jars to
 // mojang using an obfuscated<->mojang tiny (no intermediary namespace), so any
-// cached mojang output is invalid and must not be reused.
-const REMAP_PIPELINE_VERSION = "v2";
+// cached mojang output is invalid and must not be reused. v3 adds the resolved
+// mapping identity (yarn build coordinate) to the cache key so a newer yarn
+// build no longer serves the stale jar; the bump invalidates v2 outputs once.
+const REMAP_PIPELINE_VERSION = "v3";
 
 function normalizeTargetNamespace(target: ModRemapInput["targetMapping"]): "yarn" | "mojang" {
   return target === "yarn" ? "yarn" : "mojang";
@@ -117,12 +124,15 @@ function buildCacheKey(
   inputJar: string,
   fromNamespace: string,
   targetNamespace: "yarn" | "mojang",
-  mcVersion: string
+  mcVersion: string,
+  mappingIdentity: string
 ): string {
   const stat = statSync(inputJar, { throwIfNoEntry: false });
   const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "unknown";
   return createHash("sha256")
-    .update(`${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}`)
+    .update(
+      `${REMAP_PIPELINE_VERSION}|${inputJar}|${signature}|${fromNamespace}|${targetNamespace}|${mcVersion}|${mappingIdentity}`
+    )
     .digest("hex");
 }
 
@@ -194,18 +204,39 @@ export async function remapModJar(
     analysis.modVersion
   );
 
-  // 4. Check cache after mapping context is known
+  // 4. Resolve the mapping identity BEFORE the cache key so the key reflects
+  // which mappings produced the jar. Yarn builds are mutable (Fabric publishes
+  // new builds per MC version), so the resolved yarn coordinate is the identity;
+  // mojang is immutable per release so its version-keyed path string suffices.
+  // The yarn resolution is TTL-fenced (see resolveTinyMappingFile), so on the
+  // common warm path this is zero-network and stays off the cache-hit fast path.
+  let mappingIdentity: string;
+  let resolvedYarnTiny: ResolvedTinyMapping | undefined;
+  if (fromNamespace === resolvedTargetNamespace) {
+    // No remap will run (input already in target namespace); the output is a
+    // copy of the input, so no mapping identity is involved.
+    mappingIdentity = `copy:${resolvedTargetNamespace}`;
+  } else if (resolvedTargetNamespace === "yarn") {
+    resolvedYarnTiny = await resolveTinyMappingFileFn(mcVersion, "yarn", config.cacheDir, undefined, {
+      forceRefresh: input.forceRemap
+    });
+    mappingIdentity = resolvedYarnTiny.coordinate ?? resolvedYarnTiny.path;
+  } else {
+    mappingIdentity = `${mcVersion}-mojang-merged.tiny`;
+  }
+
   const cacheKey = buildCacheKey(
     normalizedInput,
     fromNamespace,
     resolvedTargetNamespace,
-    mcVersion
+    mcVersion,
+    mappingIdentity
   );
   const cacheDir = join(config.cacheDir, "remapped-mods");
   mkdirSync(cacheDir, { recursive: true });
   const cachedOutput = join(cacheDir, `${cacheKey}.jar`);
 
-  if (existsSync(cachedOutput)) {
+  if (!input.forceRemap && existsSync(cachedOutput)) {
     const cacheHitOutputJar = input.outputJar
       ? outputJar
       : cachedOutput;
@@ -264,8 +295,11 @@ export async function remapModJar(
   if (resolvedTargetNamespace === "yarn") {
     // The Fabric yarn v2 tiny declares both intermediary and named, so a single
     // intermediary -> named pass is sufficient.
-    const yarnTiny = await resolveTinyMappingFileFn(mcVersion, "yarn", config.cacheDir);
-    passes.push({ mappingsFile: yarnTiny, fromNamespace, toNamespace: "named" });
+    // Reuse the coordinate resolved for the cache key (already TTL-fenced).
+    const yarnTiny = resolvedYarnTiny ?? await resolveTinyMappingFileFn(mcVersion, "yarn", config.cacheDir, undefined, {
+      forceRefresh: input.forceRemap
+    });
+    passes.push({ mappingsFile: yarnTiny.path, fromNamespace, toNamespace: "named" });
   } else {
     // Mojang target. The merged mojang tiny only bridges obfuscated <-> mojang,
     // but a Fabric/Quilt jar is intermediary-named, so a direct intermediary ->
@@ -276,7 +310,7 @@ export async function remapModJar(
     warnings.push(...mojangTiny.warnings);
     if (fromNamespace === "intermediary") {
       const intermediaryTiny = await resolveTinyMappingFileFn(mcVersion, "intermediary", config.cacheDir);
-      passes.push({ mappingsFile: intermediaryTiny, fromNamespace: "intermediary", toNamespace: "official" });
+      passes.push({ mappingsFile: intermediaryTiny.path, fromNamespace: "intermediary", toNamespace: "official" });
       passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
     } else {
       // Defensive: an already-obfuscated input maps directly. (mojang -> mojang is
