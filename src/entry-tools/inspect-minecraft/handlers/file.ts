@@ -23,7 +23,6 @@ deps: InspectMinecraftDeps,
     headline: `Read ${file.filePath}.`,
     subject: createSummarySubject({
       task: "file",
-      requested: subject,
       filePath: file.filePath,
       artifactId: artifact.artifactId
     }),

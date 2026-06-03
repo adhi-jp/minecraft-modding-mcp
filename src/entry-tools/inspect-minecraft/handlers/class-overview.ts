@@ -22,7 +22,6 @@ deps: InspectMinecraftDeps,
       headline: `Could not resolve artifact context for ${className}.`,
       subject: createSummarySubject({
         task: "class-overview",
-        requested: subject,
         className
       })
     };
@@ -75,7 +74,6 @@ deps: InspectMinecraftDeps,
         headline: `Resolved class overview for ${partialSourceFallback.className}.`,
         subject: createSummarySubject({
           task: "class-overview",
-          requested: subject,
           className: partialSourceFallback.className,
           artifactId: metadata.artifactId
         }),
@@ -122,7 +120,6 @@ deps: InspectMinecraftDeps,
       headline: `No class match was found for ${className}.`,
       subject: createSummarySubject({
         task: "class-overview",
-        requested: subject,
         className,
         artifactId: artifact.artifactId
       })
@@ -167,7 +164,6 @@ deps: InspectMinecraftDeps,
       headline: `Found ${matches.total} class matches for ${className}.`,
       subject: createSummarySubject({
         task: "class-overview",
-        requested: subject,
         className,
         artifactId: artifact.artifactId
       }),
@@ -208,7 +204,6 @@ deps: InspectMinecraftDeps,
     headline: `Resolved class overview for ${match.qualifiedName}.`,
     subject: createSummarySubject({
       task: "class-overview",
-      requested: subject,
       className: match.qualifiedName,
       artifactId: artifact.artifactId
     }),

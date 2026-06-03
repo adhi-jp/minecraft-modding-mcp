@@ -60,7 +60,6 @@ deps: InspectMinecraftDeps,
     headline: `Listed ${files.items.length} files for ${artifact.artifactId}.`,
     subject: createSummarySubject({
       task: "list-files",
-      requested: subject,
       artifactId: artifact.artifactId
     }),
     counts: {

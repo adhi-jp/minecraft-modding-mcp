@@ -29,7 +29,6 @@ deps: InspectMinecraftDeps,
     headline: `Resolved source for ${source.className}.`,
     subject: createSummarySubject({
       task: "class-source",
-      requested: subject,
       className: source.className,
       artifactId: source.artifactId
     }),

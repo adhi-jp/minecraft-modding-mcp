@@ -14,8 +14,7 @@ deps: InspectMinecraftDeps,
       status: "blocked",
       headline: "Could not resolve an artifact without a Minecraft version.",
       subject: createSummarySubject({
-        task: "artifact",
-        requested: subject
+        task: "artifact"
       }),
       nextActions: nextActionsOrUndefined([
         createNextAction("inspect-minecraft", {
@@ -49,7 +48,6 @@ deps: InspectMinecraftDeps,
     headline: `Resolved artifact ${resolved.artifactId}.`,
     subject: createSummarySubject({
       task: "artifact",
-      requested: subject,
       artifactId: resolved.artifactId,
       version: resolved.version
     }),

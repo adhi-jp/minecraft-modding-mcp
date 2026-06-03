@@ -341,19 +341,20 @@ test("InspectMinecraftService auto routes workspace search focus through project
   assert.equal(pagination?.cursorIgnored, true);
   assert.deepEqual(result.summary.subject, {
     task: "search",
-    requested: {
-      kind: "workspace",
-      projectPath: "/workspace/demo-mod",
-      mapping: "mojang",
-      scope: "merged",
-      preferProjectVersion: true,
-      focus: {
-        kind: "search",
-        query: "tickServer"
-      }
-    },
     query: "tickServer",
     artifactId: "artifact-search"
+  });
+  // The raw requested subject survives exactly once, in the always-on subject block.
+  assert.deepEqual((result as { subject?: { requested?: unknown } }).subject?.requested, {
+    kind: "workspace",
+    projectPath: "/workspace/demo-mod",
+    mapping: "mojang",
+    scope: "merged",
+    preferProjectVersion: true,
+    focus: {
+      kind: "search",
+      query: "tickServer"
+    }
   });
   assert.deepEqual(resolveArtifactCalls, [
     {
@@ -1344,6 +1345,25 @@ test("InspectMinecraftService preserves workspace context for class source witho
   });
 
   assert.equal(result.summary.status, "ok");
+  // summary.subject is a compact resolved identity: no echoed `requested` block.
+  assert.equal((result.summary.subject as Record<string, unknown>).requested, undefined);
+  assert.deepEqual(result.summary.subject, {
+    task: "class-source",
+    className: "net.minecraft.server.MinecraftServer",
+    artifactId: "artifact-class-source"
+  });
+  // The raw requested subject still survives once, in the always-on subject block.
+  assert.deepEqual((result as { subject?: { requested?: unknown } }).subject?.requested, {
+    kind: "workspace",
+    projectPath: "/workspace/demo-mod",
+    mapping: "mojang",
+    scope: "merged",
+    preferProjectVersion: true,
+    focus: {
+      kind: "class",
+      className: "net.minecraft.server.MinecraftServer"
+    }
+  });
   assert.deepEqual(resolveArtifactCalls, [
     {
       target: { kind: "version", value: "1.21.10" },

@@ -96,7 +96,6 @@ deps: InspectMinecraftDeps,
       : `No source hits were found for ${searchSubject.query}.`,
     subject: createSummarySubject({
       task: "search",
-      requested: requestedSubject,
       query: searchSubject.query,
       artifactId: artifact.artifactId
     }),

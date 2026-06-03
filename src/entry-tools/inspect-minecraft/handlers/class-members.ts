@@ -29,7 +29,6 @@ deps: InspectMinecraftDeps,
     headline: `Collected ${members.counts.total} members for ${members.className}.`,
     subject: createSummarySubject({
       task: "class-members",
-      requested: subject,
       className: members.className,
       artifactId: members.artifactId
     }),
