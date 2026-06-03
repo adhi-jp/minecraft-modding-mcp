@@ -17,8 +17,26 @@ import {
   type Summary
 } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { compactMappingResponse } from "../response-utils.js";
 
 const nonEmptyString = z.string().trim().min(1);
+
+/**
+ * Reuse the expert-tool compactMappingResponse candidate projection so the entry
+ * tool is as terse as the low-level one: drop the lone exact candidate that just
+ * duplicates `match` (resolved-exact), and slim the tail of unresolved candidate
+ * lists. Returns block fields to spread into buildEntryToolResult's `blocks`.
+ */
+function projectMappingCandidates(output: { candidates?: unknown }): {
+  candidates: unknown;
+  candidateDetailsTruncated?: boolean;
+} {
+  const projected = compactMappingResponse(output as unknown as Record<string, unknown>);
+  return {
+    candidates: projected.candidates,
+    ...(projected.candidateDetailsTruncated === true ? { candidateDetailsTruncated: true } : {})
+  };
+}
 // Descriptor field that treats empty/whitespace strings as omitted so callers can pass
 // `descriptor: ""` interchangeably with omitting the field when signatureMode="name-only".
 const optionalDescriptorString = z
@@ -224,7 +242,7 @@ export class AnalyzeSymbolService {
             },
             blocks: {
               match: output.resolvedSymbol ?? output.querySymbol,
-              candidates: output.candidates,
+              ...projectMappingCandidates(output),
               ambiguity: output.ambiguityReasons ? { reasons: output.ambiguityReasons } : undefined
             }
           }),
@@ -270,7 +288,7 @@ export class AnalyzeSymbolService {
             },
             blocks: {
               match: output.resolvedSymbol,
-              candidates: output.candidates,
+              ...projectMappingCandidates(output),
               ambiguity: output.ambiguityReasons ? { reasons: output.ambiguityReasons } : undefined
             }
           }),
@@ -320,7 +338,7 @@ export class AnalyzeSymbolService {
             },
             blocks: {
               match: output.resolvedSymbol,
-              candidates: output.candidates
+              ...projectMappingCandidates(output)
             }
           }),
           warnings: output.warnings
@@ -406,7 +424,7 @@ export class AnalyzeSymbolService {
             },
             blocks: {
               match: output.resolvedSymbol,
-              candidates: output.candidates,
+              ...projectMappingCandidates(output),
               workspace: output.workspaceDetection
             }
           }),

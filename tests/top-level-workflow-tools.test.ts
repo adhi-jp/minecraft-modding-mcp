@@ -1778,6 +1778,118 @@ test("AnalyzeSymbolService includes summary.subject for mapping flows", async ()
   });
 });
 
+const throwingAnalyzeDeps = () => ({
+  checkSymbolExists: async () => { throw new Error("not used"); },
+  findMapping: async () => { throw new Error("not used"); },
+  resolveMethodMappingExact: async () => { throw new Error("not used"); },
+  traceSymbolLifecycle: async () => { throw new Error("not used"); },
+  resolveWorkspaceSymbol: async () => { throw new Error("not used"); },
+  getClassApiMatrix: async () => { throw new Error("not used"); }
+});
+
+test("AnalyzeSymbolService omits the redundant lone exact candidate on a resolved map", async () => {
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    findMapping: async () => ({
+      status: "resolved",
+      resolved: true,
+      candidateCount: 1,
+      candidatesTruncated: false,
+      querySymbol: { kind: "class", name: "a.A" },
+      resolvedSymbol: { kind: "class", name: "b.B" },
+      mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "mojang" },
+      candidates: [{ kind: "class", symbol: { kind: "class", name: "b.B" }, name: "b.B", matchKind: "exact", confidence: 1 }],
+      warnings: []
+    })
+  } as never);
+
+  const result = await service.execute({
+    task: "map",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang",
+    subject: { kind: "class", name: "a.A" }
+  });
+
+  assert.deepEqual(result.match, { kind: "class", name: "b.B" });
+  // The lone exact candidate duplicates `match`, so it is suppressed.
+  assert.equal((result as { candidates?: unknown }).candidates, undefined);
+});
+
+test("AnalyzeSymbolService slims the unresolved candidate tail and flags candidateDetailsTruncated", async () => {
+  const candidate = (n: string) => ({
+    kind: "method",
+    symbol: { kind: "method", name: n },
+    owner: "o",
+    name: n,
+    descriptor: "()V",
+    confidence: 0.5,
+    matchKind: "heuristic",
+    provenance: { foo: "bar" },
+    ambiguityReasons: ["x"]
+  });
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    findMapping: async () => ({
+      status: "ambiguous",
+      resolved: false,
+      candidateCount: 5,
+      candidatesTruncated: false,
+      querySymbol: { kind: "method", name: "m" },
+      resolvedSymbol: undefined,
+      mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "mojang" },
+      candidates: [candidate("c0"), candidate("c1"), candidate("c2"), candidate("c3"), candidate("c4")],
+      warnings: []
+    })
+  } as never);
+
+  const result = await service.execute({
+    task: "map",
+    detail: "full",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang",
+    subject: { kind: "method", name: "m" }
+  });
+
+  const cands = (result as { candidates?: Array<Record<string, unknown>> }).candidates!;
+  assert.equal(cands.length, 5);
+  // Head keeps full metadata; tail (index >= 3) is slimmed (provenance dropped).
+  assert.deepEqual(cands[0]!.provenance, { foo: "bar" });
+  assert.equal(cands[4]!.provenance, undefined);
+  assert.equal(cands[4]!.name, "c4");
+  assert.equal((result as { candidateDetailsTruncated?: boolean }).candidateDetailsTruncated, true);
+});
+
+test("AnalyzeSymbolService keeps candidates for an exists query that did not resolve", async () => {
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    checkSymbolExists: async () => ({
+      status: "not_found",
+      resolved: false,
+      candidateCount: 1,
+      candidatesTruncated: false,
+      querySymbol: { kind: "class", name: "a.A" },
+      resolvedSymbol: undefined,
+      mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "obfuscated" },
+      candidates: [{ kind: "class", symbol: { kind: "class", name: "a.A" }, name: "a.A", matchKind: "exact", confidence: 1 }],
+      warnings: []
+    })
+  } as never);
+
+  const result = await service.execute({
+    task: "exists",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    subject: { kind: "class", name: "a.A" }
+  });
+
+  // No resolvedSymbol => the resolved-exact suppression must NOT fire.
+  assert.equal((result as { candidates?: unknown[] }).candidates?.length, 1);
+});
+
 test("CompareMinecraftService summarizes changed versions without full class lists by default", async () => {
   const service = new CompareMinecraftService({
     compareVersions: async () => ({
