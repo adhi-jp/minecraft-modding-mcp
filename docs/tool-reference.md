@@ -23,7 +23,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
 | "Does this Mixin target the right class and descriptor?" | `validate-mixin` (works standalone with `version=1.21.10`; provide inline source, a path, or a mixin config). |
 | "Validate every Mixin / Access Widener / Access Transformer in a workspace." | `validate-project` (`task="project-summary"` discovers everything; `task="mixin"|"access-widener"|"access-transformer"` validates a single subject). |
 | "Inspect the Minecraft workspace or an artifact without picking a lower-level tool." | `inspect-minecraft` — use this when you want the server to resolve the artifact and pick the right sub-tool. |
-| "Trace when a symbol was added, renamed, or removed across versions." | `trace-symbol-lifecycle` (or `analyze-symbol task="lifecycle"` for the summarized 5-version window). |
+| "Trace when a symbol was added, renamed, or removed across versions." | `trace-symbol-lifecycle` (or `analyze-symbol task="lifecycle"`, which now exposes `fromVersion`/`toVersion`/`maxVersions`/`includeTimeline`). |
 | "Compare two MC versions or two class versions." | `compare-minecraft` (`task="class-diff"` for a single class diff; `task="versions"` for a full summary). |
 | "Inspect or remap an existing `.jar` file." | `analyze-mod` / `analyze-mod-jar` / `remap-mod-jar`. |
 
@@ -266,7 +266,8 @@ These environment variables are read once at worker startup and provide rollback
 
 - Start with `inspect-minecraft` for version, artifact, class, file, and search workflows before dropping to `list-versions`, `resolve-artifact`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, or `list-artifact-files`.
 - Start with `analyze-symbol` for symbol mapping, existence, lifecycle, workspace, and API overview workflows before using `find-mapping`, `resolve-method-mapping-exact`, `check-symbol-exists`, `trace-symbol-lifecycle`, `resolve-workspace-symbol`, or `get-class-api-matrix` directly.
-- `analyze-symbol task="lifecycle"` treats its required `version` as the upper bound for the lifecycle scan and intentionally limits the high-level helper to a recent 5-version window. Use `trace-symbol-lifecycle` directly when you need explicit `fromVersion` / `toVersion` control or a wider history.
+- `analyze-symbol task="lifecycle"` accepts `fromVersion`/`toVersion`/`maxVersions`/`includeTimeline`/`includeSnapshots` (lifecycle-only; rejected on other tasks). The legacy `version` field is a back-compat alias for `toVersion` (range end). The default scan window is the service default of 120 versions (max 400); pass `maxVersions: 5` for the old narrow window. Use `trace-symbol-lifecycle` directly only for parity with the expert tool.
+- `analyze-symbol` `subject.kind` accepts `"symbol"` to auto-detect the concrete kind from the selector (owner+descriptor ⇒ method, owner only ⇒ field, otherwise ⇒ class); the inferred kind is surfaced as a warning. For `task="api-overview"` the inferred kind is always class.
 - Start with `compare-minecraft` for version-pair, class diff, registry diff, and migration-summary flows before using `compare-versions`, `diff-class-signatures`, or `get-registry-data` directly.
 - Start with `analyze-mod` for metadata-first mod inspection and safe remap preview/apply flows before using `analyze-mod-jar`, `decompile-mod-jar`, `get-mod-class-source`, `search-mod-source`, or `remap-mod-jar` directly.
 - Start with `validate-project` for workspace summaries and direct Mixin, Access Widener, or Access Transformer validation before using `validate-mixin`, `validate-access-widener`, or `validate-access-transformer` directly.

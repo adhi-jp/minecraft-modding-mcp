@@ -37,6 +37,8 @@ test("top-level workflow tool schemas expose explicit defaults on safe public pa
   assert.match(analyzeSymbolSource, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
   assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("auto"\)/);
   assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(5\)/);
+  // subject.kind documents the 'symbol' auto-detect contract via .describe().
+  assert.match(analyzeSymbolSource, /\.enum\(\["class", "method", "field", "symbol"\]\)\s*\.describe\(/);
   assert.match(compareMinecraftSource, /maxClassResults:\s*positiveIntSchema\.default\(500\)/);
   assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
   assert.match(inspectMinecraftSource, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
@@ -1960,6 +1962,127 @@ test("AnalyzeSymbolService keeps candidates for an exists query that did not res
 
   // No resolvedSymbol => the resolved-exact suppression must NOT fire.
   assert.equal((result as { candidates?: unknown[] }).candidates?.length, 1);
+});
+
+const resolvedMapOutput = () => ({
+  status: "resolved" as const,
+  resolved: true,
+  candidateCount: 1,
+  candidatesTruncated: false,
+  querySymbol: { kind: "method", name: "copy" },
+  resolvedSymbol: { kind: "method", name: "copy" },
+  mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "mojang" },
+  candidates: [{ kind: "method", symbol: { kind: "method", name: "copy" }, name: "copy", matchKind: "exact", confidence: 1 }],
+  warnings: [] as string[]
+});
+
+const existsOutput = (kind: string, name: string) => ({
+  status: "not_found" as const,
+  resolved: false,
+  candidateCount: 0,
+  candidatesTruncated: false,
+  querySymbol: { kind, name },
+  resolvedSymbol: undefined,
+  mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "obfuscated" },
+  candidates: [],
+  warnings: [] as string[]
+});
+
+test("AnalyzeSymbolService task=map kind=symbol with owner+descriptor auto-detects method and warns", async () => {
+  let seenKind: string | undefined;
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    findMapping: async (input: { kind?: string }) => {
+      seenKind = input.kind;
+      return resolvedMapOutput();
+    }
+  } as never);
+
+  const result = await service.execute({
+    task: "map",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang",
+    subject: { kind: "symbol", name: "copy", owner: "net.minecraft.world.item.ItemStack", descriptor: "()Lnet/minecraft/world/item/ItemStack;" }
+  });
+
+  assert.equal(seenKind, "method", "owner+descriptor must infer method (not coerced to class)");
+  assert.equal((result.summary as { subject?: { kind?: string } }).subject?.kind, "method");
+  assert.ok((result.warnings ?? []).some((w) => /auto-detected as "method"/.test(w)));
+});
+
+test("AnalyzeSymbolService task=exists kind=symbol with owner only auto-detects field", async () => {
+  let seenKind: string | undefined;
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    checkSymbolExists: async (input: { kind?: string }) => {
+      seenKind = input.kind;
+      return existsOutput("field", "count");
+    }
+  } as never);
+
+  const result = await service.execute({
+    task: "exists",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    subject: { kind: "symbol", name: "count", owner: "a.A" }
+  });
+
+  assert.equal(seenKind, "field");
+  assert.equal((result.summary as { subject?: { kind?: string } }).subject?.kind, "field");
+  assert.ok((result.warnings ?? []).some((w) => /auto-detected as "field"/.test(w)));
+});
+
+test("AnalyzeSymbolService task=exists kind=symbol with no owner auto-detects class", async () => {
+  let seenKind: string | undefined;
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    checkSymbolExists: async (input: { kind?: string }) => {
+      seenKind = input.kind;
+      return existsOutput("class", "a.A");
+    }
+  } as never);
+
+  const result = await service.execute({
+    task: "exists",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    subject: { kind: "symbol", name: "a.A" }
+  });
+
+  assert.equal(seenKind, "class");
+  assert.equal((result.summary as { subject?: { kind?: string } }).subject?.kind, "class");
+  assert.ok((result.warnings ?? []).some((w) => /auto-detected as "class"/.test(w)));
+});
+
+test("analyzeSymbolSchema accepts kind=symbol for task=api-overview (infers class)", () => {
+  const parsed = analyzeSymbolSchema.safeParse({
+    task: "api-overview",
+    version: "1.21.10",
+    subject: { kind: "symbol", name: "net.minecraft.world.item.ItemStack" }
+  });
+  assert.equal(parsed.success, true, "kind=symbol must no longer be parse-rejected for api-overview");
+});
+
+test("AnalyzeSymbolService explicit kind=class emits no inference warning", async () => {
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    findMapping: async () => resolvedMapOutput()
+  } as never);
+
+  const result = await service.execute({
+    task: "map",
+    detail: "standard",
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang",
+    subject: { kind: "class", name: "a.A" }
+  });
+
+  assert.ok(!(result.warnings ?? []).some((w) => /auto-detected/.test(w)), "explicit kinds must not warn");
 });
 
 test("CompareMinecraftService summarizes changed versions without full class lists by default", async () => {

@@ -47,13 +47,49 @@ const optionalDescriptorString = z
     const trimmed = value.trim();
     return trimmed.length === 0 ? undefined : trimmed;
   });
+/**
+ * Resolve subject.kind to a concrete kind. `"symbol"` is auto-detected from the
+ * selector (owner+descriptor => method, owner only => field, otherwise => class)
+ * and the inference is surfaced as a warning so the caller can see what ran.
+ */
+function inferSubjectKind(subject: {
+  kind: "class" | "method" | "field" | "symbol";
+  owner?: string;
+  descriptor?: string;
+}): { kind: "class" | "field" | "method"; warning?: string } {
+  if (subject.kind !== "symbol") {
+    return { kind: subject.kind };
+  }
+  let inferred: "class" | "field" | "method";
+  if (subject.owner && subject.descriptor) {
+    inferred = "method";
+  } else if (subject.owner) {
+    inferred = "field";
+  } else {
+    inferred = "class";
+  }
+  const selectorNote = subject.owner
+    ? subject.descriptor
+      ? "owner+descriptor"
+      : "owner only"
+    : "no owner/descriptor";
+  return {
+    kind: inferred,
+    warning: `subject.kind="symbol" was auto-detected as "${inferred}" (${selectorNote}). Pass an explicit kind to override.`
+  };
+}
+
 const INCLUDE_GROUPS = ["warnings", "candidates", "matrix", "workspace", "timings"] as const;
 const TASKS = ["exists", "map", "exact-map", "lifecycle", "workspace", "api-overview"] as const;
 
 export const analyzeSymbolShape = {
   task: z.enum(TASKS),
   subject: z.object({
-    kind: z.enum(["class", "method", "field", "symbol"]),
+    kind: z
+      .enum(["class", "method", "field", "symbol"])
+      .describe(
+        "Symbol kind. Use 'symbol' to auto-detect from the selector: owner+descriptor => method, owner only => field, otherwise => class. The inferred kind is reported as a warning. For task=api-overview the inferred kind must be class."
+      ),
     name: nonEmptyString,
     owner: nonEmptyString.optional(),
     descriptor: optionalDescriptorString
@@ -136,11 +172,15 @@ export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((val
       message: "projectPath is required for task=workspace."
     });
   }
-  if (value.task === "api-overview" && value.subject.kind !== "class") {
+  if (
+    value.task === "api-overview" &&
+    value.subject.kind !== "class" &&
+    value.subject.kind !== "symbol"
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["subject", "kind"],
-      message: "task=api-overview requires subject.kind=class."
+      message: "task=api-overview requires subject.kind=class (or 'symbol', which infers class)."
     });
   }
   if (value.task === "api-overview" && value.subject.owner) {
@@ -251,9 +291,7 @@ export class AnalyzeSymbolService {
   async execute(input: AnalyzeSymbolInput): Promise<Record<string, unknown> & { warnings?: string[] }> {
     const detail = resolveDetail(input.detail);
     const include = resolveInclude(input.include);
-    const subjectKind = input.subject.kind === "symbol"
-      ? "class"
-      : input.subject.kind;
+    const { kind: subjectKind, warning: inferenceWarning } = inferSubjectKind(input.subject);
 
     switch (input.task) {
       case "exists": {
@@ -281,7 +319,7 @@ export class AnalyzeSymbolService {
                 : `The symbol could not be resolved in ${output.mappingContext.version}.`,
               subject: createSummarySubject({
                 task: "exists",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
@@ -298,7 +336,7 @@ export class AnalyzeSymbolService {
               ambiguity: output.ambiguityReasons ? { reasons: output.ambiguityReasons } : undefined
             }
           }),
-          warnings: output.warnings
+          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
         };
       }
       case "map": {
@@ -326,7 +364,7 @@ export class AnalyzeSymbolService {
                 : `Found ${output.candidateCount} candidate mappings.`,
               subject: createSummarySubject({
                 task: "map",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
@@ -344,7 +382,7 @@ export class AnalyzeSymbolService {
               ambiguity: output.ambiguityReasons ? { reasons: output.ambiguityReasons } : undefined
             }
           }),
-          warnings: output.warnings
+          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
         };
       }
       case "exact-map": {
@@ -376,7 +414,7 @@ export class AnalyzeSymbolService {
                 : "Could not resolve the exact method mapping.",
               subject: createSummarySubject({
                 task: "exact-map",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
@@ -393,7 +431,7 @@ export class AnalyzeSymbolService {
               ...projectMappingCandidates(output)
             }
           }),
-          warnings: output.warnings
+          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
         };
       }
       case "lifecycle": {
@@ -422,7 +460,7 @@ export class AnalyzeSymbolService {
                 : "The symbol was not found in the scanned version range.",
               subject: createSummarySubject({
                 task: "lifecycle",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
@@ -438,7 +476,7 @@ export class AnalyzeSymbolService {
               timeline: output.timeline
             }
           }),
-          warnings: output.warnings
+          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
         };
       }
       case "workspace": {
@@ -465,7 +503,7 @@ export class AnalyzeSymbolService {
                 : "Workspace compile mapping could not be detected confidently.",
               subject: createSummarySubject({
                 task: "workspace",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
@@ -483,7 +521,9 @@ export class AnalyzeSymbolService {
               workspace: output.workspaceDetection
             }
           }),
-          warnings: [...output.warnings, ...output.workspaceDetection.warnings]
+          warnings: inferenceWarning
+            ? [inferenceWarning, ...output.warnings, ...output.workspaceDetection.warnings]
+            : [...output.warnings, ...output.workspaceDetection.warnings]
         };
       }
       case "api-overview": {
@@ -506,7 +546,7 @@ export class AnalyzeSymbolService {
               headline: `Built an API overview for ${output.className}.`,
               subject: createSummarySubject({
                 task: "api-overview",
-                kind: input.subject.kind,
+                kind: subjectKind,
                 name: input.subject.name,
                 version: input.version,
                 classNameMapping
@@ -530,7 +570,7 @@ export class AnalyzeSymbolService {
                 : undefined
             }
           }),
-          warnings: output.warnings
+          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
         };
       }
     }
