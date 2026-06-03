@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
-import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema, verifyMixinTargetMemberSchema } from "../src/tool-schemas.ts";
+import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema, verifyMixinTargetMemberSchema, findMappingSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
 
@@ -181,6 +181,55 @@ test("check-symbol-exists accepts a dotless class name with the default nameMode
   assert.ok(
     parsed.success,
     parsed.success ? "" : `dotless class name should parse by default: ${JSON.stringify(parsed.error.issues)}`
+  );
+});
+
+test("check-symbol-exists kind=method without descriptor is accepted by the default signatureMode", () => {
+  // Default signatureMode is now name-only (was exact), so a method query needs no descriptor.
+  const parsed = checkSymbolExistsSchema.safeParse({
+    version: "1.21.10",
+    kind: "method",
+    owner: "net.minecraft.server.Main",
+    name: "tick",
+    sourceMapping: "obfuscated"
+  });
+  assert.ok(parsed.success, parsed.success ? "" : `should parse by default: ${JSON.stringify(parsed.error.issues)}`);
+
+  // signatureMode=exact still requires a descriptor for methods.
+  const strict = checkSymbolExistsSchema.safeParse({
+    version: "1.21.10",
+    kind: "method",
+    owner: "net.minecraft.server.Main",
+    name: "tick",
+    sourceMapping: "obfuscated",
+    signatureMode: "exact"
+  });
+  assert.equal(strict.success, false);
+});
+
+test("find-mapping accepts a dotless class name under the default nameMode and rejects it with nameMode=fqcn", () => {
+  // Default nameMode=auto relaxes the FQCN requirement for any sourceMapping (was obfuscated-only).
+  assert.equal(
+    findMappingSchema.safeParse({
+      version: "1.21.10",
+      kind: "class",
+      name: "ItemStack",
+      sourceMapping: "mojang",
+      targetMapping: "intermediary"
+    }).success,
+    true
+  );
+  // nameMode=fqcn still requires a fully-qualified name.
+  assert.equal(
+    findMappingSchema.safeParse({
+      version: "1.21.10",
+      kind: "class",
+      name: "ItemStack",
+      sourceMapping: "mojang",
+      targetMapping: "intermediary",
+      nameMode: "fqcn"
+    }).success,
+    false
   );
 });
 
@@ -727,6 +776,12 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
       cacheKinds?: { default?: unknown };
     };
   };
+  const checkSymbolExistsToolSchema = toolMap.get("check-symbol-exists") as {
+    properties?: { signatureMode?: { default?: string }; nameMode?: { default?: string } };
+  };
+  const findMappingToolSchema = toolMap.get("find-mapping") as {
+    properties?: { signatureMode?: { default?: string }; nameMode?: { default?: string } };
+  };
 
   function collectQueryModeDefaults(schema: unknown): string[] {
     const collected: string[] = [];
@@ -777,9 +832,15 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
   assert.equal(inspectMinecraftSchema.properties?.includeSnapshots?.default, false);
   assert.equal(inspectMinecraftSchema.properties?.limit?.default, undefined);
   assert.equal(analyzeSymbolSchema.properties?.nameMode?.default, "auto");
+  // analyze-symbol's OWN signatureMode default stays "exact" (entry tool, intentionally not flipped).
   assert.equal(analyzeSymbolSchema.properties?.signatureMode?.default, "exact");
   assert.equal(analyzeSymbolSchema.properties?.maxCandidates?.default, 5);
   assert.equal(analyzeSymbolSchema.properties?.sourceMapping?.default, undefined);
+  // Expert symbol-lookup tools now share a name-only signatureMode default + auto nameMode.
+  assert.equal(checkSymbolExistsToolSchema.properties?.signatureMode?.default, "name-only");
+  assert.equal(checkSymbolExistsToolSchema.properties?.nameMode?.default, "auto");
+  assert.equal(findMappingToolSchema.properties?.signatureMode?.default, "name-only");
+  assert.equal(findMappingToolSchema.properties?.nameMode?.default, "auto");
   assert.equal(compareMinecraftSchema.properties?.includeFullDiff?.default, true);
   assert.equal(compareMinecraftSchema.properties?.maxClassResults?.default, 500);
   assert.equal(compareMinecraftSchema.properties?.limit?.default, undefined);
@@ -1371,6 +1432,7 @@ test("find-mapping accepts short obfuscated class names", async () => {
   assert.equal(result.structuredContent?.result?.status, "resolved");
   assert.equal(result.structuredContent?.result?.resolvedSymbol?.name, "dhl");
 });
+
 
 test("find-mapping kind=method without descriptor is accepted (default signatureMode=name-only)", async () => {
   const result = await callTool("find-mapping", {

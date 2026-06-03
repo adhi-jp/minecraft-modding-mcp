@@ -1073,6 +1073,7 @@ expertTool("find-mapping",
       targetMapping: input.targetMapping,
       sourcePriority: input.sourcePriority,
       gradleUserHome: input.gradleUserHome,
+      nameMode: input.nameMode,
       signatureMode: input.signatureMode,
       disambiguation: input.disambiguation,
       maxCandidates: input.maxCandidates

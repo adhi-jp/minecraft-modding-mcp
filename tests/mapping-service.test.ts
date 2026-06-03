@@ -1943,6 +1943,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
                 name: string;
                 sourceMapping: SourceMapping;
                 descriptor?: string;
+                signatureMode?: "exact" | "name-only";
               }) => Promise<{ resolved: boolean; status: string }>;
             }
           ).checkSymbolExists({
@@ -1950,7 +1951,9 @@ test("MappingService checks symbol existence across class/field/method kinds", a
             kind: "method",
             owner: "a.b.C",
             name: "f",
-            sourceMapping: "obfuscated"
+            sourceMapping: "obfuscated",
+            // Default signatureMode is now name-only; assert the strict path explicitly.
+            signatureMode: "exact"
           })
         ),
       (error: unknown) =>
@@ -1970,6 +1973,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
             name: string;
             sourceMapping: SourceMapping;
             descriptor?: string;
+            signatureMode?: "exact" | "name-only";
           }) => Promise<{ resolved: boolean; status: string }>;
         }
       ).checkSymbolExists({
@@ -1978,6 +1982,9 @@ test("MappingService checks symbol existence across class/field/method kinds", a
         owner: "a.b.C",
         name: "f",
         descriptor: "(I)V",
+        // Default signatureMode is now name-only (would ignore the descriptor and go ambiguous);
+        // assert exact descriptor resolution explicitly.
+        signatureMode: "exact",
         sourceMapping: "obfuscated"
       })
     );
@@ -2035,6 +2042,61 @@ test("MappingService checks symbol existence across class/field/method kinds", a
     assert.equal(nameOnlyUnique.resolved, true);
     assert.equal(nameOnlyUnique.status, "resolved");
     assert.equal(nameOnlyUnique.candidates.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService.findMapping honors nameMode=auto for dotless non-obfuscated class names", async () => {
+  const { MappingService } = await import("../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-find-namemode-"));
+  try {
+    const config = buildTestConfig(root);
+    const fetchStub = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/mappings/client.txt") {
+        return new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const service = new MappingService(
+      config,
+      createVersionServiceStub("https://example.test/mappings/client.txt"),
+      fetchStub
+    );
+
+    // nameMode=auto lets a dotless non-obfuscated class name through to resolution
+    // (no ERR_INVALID_INPUT at the normalize step). It need not resolve — just not be rejected.
+    const lenient = await service.findMapping({
+      version: "1.21.10",
+      kind: "class",
+      name: "NamedClass",
+      sourceMapping: "mojang",
+      targetMapping: "obfuscated",
+      nameMode: "auto"
+    });
+    assert.ok(
+      ["resolved", "not_found", "ambiguous", "mapping_unavailable"].includes(lenient.status),
+      `expected a resolution status, got ${lenient.status}`
+    );
+
+    // nameMode=fqcn still requires a fully-qualified name for a non-obfuscated mapping.
+    await assert.rejects(
+      () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "class",
+          name: "NamedClass",
+          sourceMapping: "mojang",
+          targetMapping: "obfuscated",
+          nameMode: "fqcn"
+        }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2604,6 +2666,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
               name: string;
               sourceMapping: SourceMapping;
               descriptor?: string;
+              signatureMode?: "exact" | "name-only";
             }) => Promise<{ resolved: boolean; status: string }>;
           }
         ).checkSymbolExists({
@@ -2611,7 +2674,9 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
           kind: "method",
           owner: "a.b.C",
           name: "f",
-          sourceMapping: "obfuscated"
+          sourceMapping: "obfuscated",
+          // Default signatureMode is now name-only; assert the strict descriptor-required path.
+          signatureMode: "exact"
         }),
       (error: unknown) =>
         typeof error === "object" &&

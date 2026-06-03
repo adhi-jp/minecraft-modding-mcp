@@ -126,6 +126,13 @@ export const SOURCE_LOOKUP_TARGET_DESCRIPTION =
 export const SOURCE_SCOPE_DESCRIPTION =
   "vanilla = Mojang client jar only; merged = source-oriented merged runtime discovery; loader = loader/runtime artifact discovery when the workspace exposes transformed runtime jars.";
 
+// Shared describe() text reused by every symbol-lookup tool so the contract reads
+// identically on find-mapping and check-symbol-exists (and any future sibling).
+export const SIGNATURE_MODE_DESCRIPTION =
+  "exact: descriptor required for kind=method; name-only (default): match by owner+name only.";
+export const NAME_MODE_DESCRIPTION =
+  "auto (default): accept a fully-qualified name, or a dotless name where the tool allows it; fqcn: require a fully-qualified name.";
+
 export const listVersionsShape = {
   includeSnapshots: z.boolean().default(false),
   limit: optionalPositiveInt.default(20).describe("max 200")
@@ -492,8 +499,8 @@ export const findMappingShape = {
   targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
-  signatureMode: z.enum(["exact", "name-only"]).default("name-only")
-    .describe("exact: descriptor required for kind=method; name-only (default): match by owner+name only"),
+  nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
+  signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
   disambiguation: z
     .object({
       ownerHint: optionalNonEmptyString,
@@ -524,7 +531,7 @@ export const findMappingSchema = z.object(findMappingShape).superRefine((value, 
         path: ["descriptor"]
       });
     }
-    if (value.sourceMapping !== "obfuscated" && !value.name.includes(".")) {
+    if (value.nameMode !== "auto" && !value.name.includes(".")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "name must be fully-qualified class name when kind=class.",
@@ -716,13 +723,12 @@ export const checkSymbolExistsShape = {
   kind: workspaceSymbolKindSchema.describe("class | field | method"),
   owner: optionalNonEmptyString,
   name: nonEmptyString,
-  descriptor: optionalDescriptorString.describe("required for kind=method unless signatureMode=name-only. Empty strings are treated as omitted."),
+  descriptor: optionalDescriptorString.describe("JVM descriptor. Optional when signatureMode='name-only' (default). Empty strings are treated as omitted."),
   sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
-  nameMode: classNameModeSchema.default("auto").describe("auto (default) infers fqcn when the name contains a dot and simple-name lookup otherwise; fqcn requires a fully-qualified name"),
-  signatureMode: z.enum(["exact", "name-only"]).default("exact")
-    .describe("exact: require descriptor for methods; name-only: match by owner+name only"),
+  nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
+  signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
   compact: z.boolean().default(true).describe(
     "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "

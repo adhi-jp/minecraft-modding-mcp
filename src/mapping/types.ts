@@ -67,6 +67,7 @@ export type FindMappingInput = {
   name: string;
   owner?: string;
   descriptor?: string;
+  nameMode?: "fqcn" | "auto";
   signatureMode?: "exact" | "name-only";
   sourceMapping: SourceMapping;
   targetMapping: SourceMapping;

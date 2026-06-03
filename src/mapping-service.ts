@@ -232,7 +232,8 @@ export class MappingService {
     const effectiveSignatureMode: "exact" | "name-only" = input.signatureMode ?? "name-only";
 
     const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode, {
-      allowShortClassName: input.kind === "class" && input.sourceMapping === "obfuscated"
+      allowShortClassName:
+        input.kind === "class" && (input.sourceMapping === "obfuscated" || input.nameMode === "auto")
     });
 
     const cacheKey = this.buildResolutionCacheKey(version, input, querySymbol, effectiveSignatureMode);
@@ -942,6 +943,11 @@ export class MappingService {
     } satisfies SymbolExistenceOutput["mappingContext"];
 
     const classNameMode = input.nameMode === "auto" ? "auto" : "fqcn";
+    // Normalize the effective signatureMode exactly once (mirrors findMapping) so an omitted
+    // signatureMode reaching the service — direct/internal callers, MCP resource handlers, and
+    // batch-symbol-exists entries — defaults to name-only instead of taking the strict
+    // descriptor-required path. Callers needing strict matching pass signatureMode: "exact".
+    const effectiveSignatureMode: "exact" | "name-only" = input.signatureMode ?? "name-only";
     const normalizedQuery:
       | {
           mode: "auto-class";
@@ -984,7 +990,7 @@ export class MappingService {
             };
           })()
         : (() => {
-            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, input.signatureMode);
+            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode);
             return {
               mode: "strict",
               queryRecord,
@@ -1089,7 +1095,7 @@ export class MappingService {
     );
 
     // name-only mode: skip descriptor matching, resolve by owner+name
-    if (input.signatureMode === "name-only") {
+    if (effectiveSignatureMode === "name-only") {
       const status: SymbolResolutionStatus =
         methodCandidates.length === 1 ? "resolved" : methodCandidates.length > 1 ? "ambiguous" : "not_found";
       if (status === "ambiguous") {
