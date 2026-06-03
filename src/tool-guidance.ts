@@ -49,7 +49,7 @@ export const SUGGESTED_CALL_DEFAULTS = {
   explain: false,
   preferProjectMapping: false,
   minSeverity: "all",
-  reportMode: "full",
+  reportMode: "summary-first",
   treatInfoAsWarning: true,
   includeIssues: true
 } as const;

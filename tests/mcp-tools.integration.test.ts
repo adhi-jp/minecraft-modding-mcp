@@ -392,6 +392,7 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
           params?: {
             input?: { mode?: string; source?: string };
             version?: string;
+            reportMode?: string;
           };
         };
       };
@@ -409,7 +410,10 @@ test("validate-mixin invalid input returns problem details with a retryable sugg
       mode: "inline",
       source: "@Mixin(Player.class) class ExampleMixin {}"
     },
-    version: "1.21.10"
+    version: "1.21.10",
+    // reportMode="full" is now a non-default explicit value, so it survives the
+    // recovery suggestedCall (default is "summary-first").
+    reportMode: "full"
   });
 });
 
