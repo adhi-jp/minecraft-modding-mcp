@@ -79,7 +79,6 @@ import { BatchMappingsService } from "./entry-tools/batch-mappings-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 import { registerToolSchema } from "./tool-schema-registry.js";
-import { buildSuggestedCall } from "./build-suggested-call.js";
 import {
   applyErrorMetaExtensions,
   mapErrorToProblem,
@@ -588,11 +587,16 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
             code: "invalid_enum_value"
           })),
           nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
+          // Construct the raw suggestedCall and let the single mapErrorToProblem
+          // gate (extractValidatedSuggestionAndExamples -> buildSuggestedCall)
+          // validate it, instead of pre-validating here and re-validating there.
           ...(suggestedReplacementInput
-            ? buildSuggestedCall({
-                tool,
-                params: suggestedReplacementInput as Record<string, unknown>
-              })
+            ? {
+                suggestedCall: {
+                  tool,
+                  params: suggestedReplacementInput as Record<string, unknown>
+                }
+              }
             : {})
         }
       });

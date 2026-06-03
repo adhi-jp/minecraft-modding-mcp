@@ -575,6 +575,7 @@ test("validate-mixin removed-namespace mapping=\"official\" carries failedStage=
       error?: {
         code?: string;
         failedStage?: string;
+        suggestedCall?: { tool?: string; params?: { mapping?: string } };
       };
     };
   };
@@ -582,6 +583,41 @@ test("validate-mixin removed-namespace mapping=\"official\" carries failedStage=
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
   assert.equal(result.structuredContent?.error?.failedStage, "input-validation");
+});
+
+test("validate-mixin removed-namespace surfaces a validated obfuscated suggestedCall via the single gate", async () => {
+  // Regression lock for the double-validation removal: index.ts no longer
+  // pre-validates the suggestedCall, so the sole mapErrorToProblem gate must
+  // still emit the obfuscated replacement with no leaked internal marker.
+  const result = await callTool("validate-mixin", {
+    input: { mode: "inline", source: "@Mixin(Player.class) class ExampleMixin {}" },
+    version: "1.21.10",
+    mapping: "official"
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: Record<string, unknown> & {
+        code?: string;
+        suggestedCall?: { tool?: string; params?: Record<string, unknown> };
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  const error = result.structuredContent?.error;
+  assert.equal(error?.code, "ERR_INVALID_INPUT");
+  assert.equal(error?.suggestedCall?.tool, "validate-mixin");
+  assert.equal(
+    error?.suggestedCall?.params?.mapping,
+    "obfuscated",
+    "the single validation gate must rewrite official -> obfuscated in the suggestedCall"
+  );
+  // The internal buildSuggestedCall marker must never leak into the envelope.
+  assert.equal(
+    "_suggestedCallPrimaryDropped" in (error ?? {}),
+    false,
+    "the _suggestedCallPrimaryDropped marker must not appear in the error envelope"
+  );
 });
 
 test("validate-project invalid legacy workspace payload returns a structured suggestedCall", async () => {
