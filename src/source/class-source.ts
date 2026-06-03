@@ -818,7 +818,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const includeInherited = input.includeInherited ?? false;
   const memberPattern = normalizeOptionalString(input.memberPattern);
   const parsedMaxMembers = normalizeStrictPositiveInt(input.maxMembers, "maxMembers");
-  const maxMembers = parsedMaxMembers == null ? 500 : Math.min(parsedMaxMembers, 5000);
+  const maxMembers = parsedMaxMembers == null ? 150 : Math.min(parsedMaxMembers, 5000);
 
   const normalizedArtifactId = normalizeOptionalString(input.artifactId);
   if (normalizedArtifactId && input.target) {

@@ -616,6 +616,56 @@ test("SourceService getClassMembers paginates with a stable nextCursor and rejec
   assert.deepEqual(names(foreign), ["method0", "method1"]);
 });
 
+test("SourceService getClassMembers caps the default first page at 150 members and advertises a continuation cursor", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-default-cap-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "net/minecraft/world/item/Item.java": ["package net.minecraft.world.item;", "public class Item {}"].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "obfuscated"
+  });
+
+  const makeMethod = (i: number) => ({
+    ownerFqn: "net.minecraft.world.item.Item",
+    name: `method${i}`,
+    javaSignature: `public void method${i}()`,
+    jvmDescriptor: "()V",
+    accessFlags: 0x0001,
+    isSynthetic: false
+  });
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return {
+        constructors: [],
+        fields: [],
+        methods: Array.from({ length: 200 }, (_, i) => makeMethod(i)),
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const page = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "obfuscated"
+  });
+  assert.equal(page.counts.total, 200);
+  assert.equal(page.members.methods.length, 150);
+  assert.equal(page.truncated, true);
+  assert.ok(page.nextCursor, "default first page must carry a continuation cursor");
+});
+
 test("SourceService getClassMembers enriches a binary-path CLASS_NOT_FOUND with recovery guidance", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-notfound-"));

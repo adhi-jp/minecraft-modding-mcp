@@ -209,7 +209,7 @@ export const getClassMembersShape = {
   includeSynthetic: z.boolean().default(false),
   includeInherited: z.boolean().default(false),
   memberPattern: optionalNonEmptyString,
-  maxMembers: optionalPositiveInt.describe("default 500, max 5000"),
+  maxMembers: optionalPositiveInt.describe("default 150, max 5000. Page beyond the first 150 with cursor."),
   cursor: optionalNonEmptyString.describe("Continuation cursor from a previous response's nextCursor; resumes the member list after the last returned page."),
   projectPath: optionalNonEmptyString,
   gradleUserHome: gradleUserHomeSchema,
