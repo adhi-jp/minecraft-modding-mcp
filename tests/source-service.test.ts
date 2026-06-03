@@ -1751,7 +1751,7 @@ test("SourceService getClassSource truncation reports nextStartLine and an execu
   // does not read past line 7.
   assert.equal(suggested?.params?.endLine, 7);
   assert.deepEqual(suggested?.params?.target, {
-    type: "artifact",
+    kind: "artifact",
     artifactId: resolved.artifactId
   });
 });

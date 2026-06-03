@@ -230,8 +230,8 @@ test("E7: per-entry error.suggestedCall proposes get-class-source with shared ar
   const error = (out.results[0] as { error: { suggestedCall?: { tool: string; params: Record<string, unknown> } } }).error;
   assert.ok(error.suggestedCall, "expected suggestedCall on per-entry error");
   assert.equal(error.suggestedCall!.tool, "get-class-source");
-  const target = error.suggestedCall!.params.target as { type: string; artifactId: string };
-  assert.equal(target.type, "artifact");
+  const target = error.suggestedCall!.params.target as { kind: string; artifactId: string };
+  assert.equal(target.kind, "artifact");
   assert.equal(target.artifactId, "art-shared");
   assert.equal(error.suggestedCall!.params.className, "boom");
 });

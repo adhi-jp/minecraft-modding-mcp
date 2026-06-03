@@ -258,7 +258,7 @@ export function validateParsedMixin(
           if (version) {
             assignSuggested(issue, "get-class-source", {
               className: issue.target,
-              target: { type: "resolve" as const, kind: "version" as const, value: version },
+              target: { kind: "version" as const, value: version },
               ...(mapping ? { mapping } : {}),
               mode: "metadata",
               ...classSourceContext
@@ -285,7 +285,7 @@ export function validateParsedMixin(
           if (version) {
             assignSuggested(issue, "get-class-source", {
               className,
-              target: { type: "resolve" as const, kind: "version" as const, value: version },
+              target: { kind: "version" as const, value: version },
               ...(mapping ? { mapping } : {}),
               mode: "metadata",
               ...classSourceContext

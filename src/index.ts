@@ -479,11 +479,10 @@ function normalizeSourceLookupTarget(
   artifactId?: string;
   target?: ResolveArtifactTargetInput;
 } {
-  if (target.type === "artifact") {
+  if (target.kind === "artifact") {
     return { artifactId: target.artifactId };
   }
-  const { type: _type, ...rest } = target;
-  return { target: rest as ResolveArtifactTargetInput };
+  return { target: target as ResolveArtifactTargetInput };
 }
 
 function parseClassApiKinds(value: string | undefined): WorkspaceSymbolKind[] | undefined {
@@ -892,7 +891,7 @@ expertTool("find-class",
 registerToolSchema("find-class", findClassSchema);
 
 expertTool("get-class-source",
-  "Get Java source for a class by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }). To read source text, pass mode=snippet (bounded excerpt) or mode=full (entire source); the default mode=metadata returns a symbol outline only, not the body. Not read-only: outputFile writes the source to disk.",
+  "Get Java source for a class by target ({ kind: 'artifact', artifactId } or { kind: 'version'|'jar'|'coordinate'|'workspace'|'dependency', ... } — same shape as resolve-artifact). To read source text, pass mode=snippet (bounded excerpt) or mode=full (entire source); the default mode=metadata returns a symbol outline only, not the body. Not read-only: outputFile writes the source to disk.",
   getClassSourceShape,
   { readOnlyHint: false },
   async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) => {
@@ -923,7 +922,7 @@ expertTool("get-class-source",
 registerToolSchema("get-class-source", getClassSourceSchema);
 
 expertTool("get-class-members",
-  "Get fields/methods/constructors for one class from binary bytecode by target ({ type: 'artifact', artifactId } or { type: 'resolve', kind, value }).",
+  "Get fields/methods/constructors for one class from binary bytecode by target ({ kind: 'artifact', artifactId } or { kind: 'version'|'jar'|'coordinate'|'workspace'|'dependency', ... } — same shape as resolve-artifact).",
   getClassMembersShape,
   { readOnlyHint: true },
   async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) => {

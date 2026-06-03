@@ -537,12 +537,10 @@ export function buildSourceLookupSuggestedParams(
 
   result.target = targetValue
     ? {
-        type: "resolve",
         kind: inferTargetKindFromString(targetValue),
         value: targetValue
       }
     : {
-        type: "resolve",
         kind: "version",
         value: "<minecraft-version>"
       };
@@ -827,8 +825,8 @@ export function buildInvalidInputGuidance(
     return gatedGuidance(
       tool,
       [
-        `${tool}.target must be an object: {"type":"resolve","kind":"version|jar|coordinate","value":"..."} or {"type":"artifact","artifactId":"..."}.`,
-        "Bare string targets are not accepted; wrap the value under target.type/target.kind/target.value."
+        `${tool}.target must be an object: {"kind":"version|jar|coordinate","value":"..."} or {"kind":"artifact","artifactId":"..."} (same shape as resolve-artifact).`,
+        "Bare string targets are not accepted; wrap the value under target.kind/target.value."
       ],
       buildSourceLookupSuggestedParams(tool, normalizedInput)
     );

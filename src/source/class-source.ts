@@ -760,7 +760,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
           tool: "get-class-source",
           params: {
             className,
-            target: { type: "artifact", artifactId: activeArtifactId },
+            target: { kind: "artifact", artifactId: activeArtifactId },
             mode,
             startLine: nextStartLine,
             ...(input.endLine != null ? { endLine: input.endLine } : {}),
@@ -1094,7 +1094,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       suggestedCall = buildSuggestedCall({
         tool: "get-class-source",
         params: {
-          target: { type: "artifact", artifactId },
+          target: { kind: "artifact", artifactId },
           className,
           mode: "snippet",
           mapping: requestedMapping

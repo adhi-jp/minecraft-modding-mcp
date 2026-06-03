@@ -34,7 +34,7 @@ test("Tool reference owns exact contract, migration, and environment details", a
   assert.match(toolReference, /`resolve-artifact` uses `target: \{ kind, value \}`/);
   assert.match(
     toolReference,
-    /`get-class-source` and `get-class-members` use `target: \{ type: "artifact", artifactId \}`/
+    /`get-class-source` and `get-class-members` use `target: \{ kind, value \}`/
   );
   assert.match(
     toolReference,
@@ -123,7 +123,7 @@ test("Example docs use the current get-class-members target schema", async () =>
 
   assert.match(
     block,
-    /"tool": "get-class-members"[\s\S]*"arguments": \{[\s\S]*"target": \{[\s\S]*"type": "artifact"[\s\S]*"artifactId": "<artifact-id>"/
+    /"tool": "get-class-members"[\s\S]*"arguments": \{[\s\S]*"target": \{[\s\S]*"kind": "artifact"[\s\S]*"artifactId": "<artifact-id>"/
   );
   assert.doesNotMatch(
     block,

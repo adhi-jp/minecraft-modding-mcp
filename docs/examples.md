@@ -105,7 +105,7 @@ Start with these top-level workflow tools when possible. They cover the common w
   "tool": "get-class-source",
   "arguments": {
     "target": {
-      "type": "artifact",
+      "kind": "artifact",
       "artifactId": "<artifact-id>"
     },
     "className": "net.minecraft.server.Main",
@@ -137,7 +137,7 @@ Start with these top-level workflow tools when possible. They cover the common w
   "tool": "get-class-members",
   "arguments": {
     "target": {
-      "type": "artifact",
+      "kind": "artifact",
       "artifactId": "<artifact-id>"
     },
     "className": "net.minecraft.server.Main",

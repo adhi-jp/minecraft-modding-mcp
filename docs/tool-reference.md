@@ -31,7 +31,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
 
 - Start with the top-level workflow tools when possible. `inspect-minecraft`, `analyze-symbol`, `compare-minecraft`, `analyze-mod`, `validate-project`, and `manage-cache` cover the common workflows and return summary-first results with follow-up hints.
 - `resolve-artifact` uses `target: { kind, value }`. `kind` is one of `"version"`, `"jar"`, `"coordinate"`, `"workspace"`, or `"dependency"` (see "Workspace and dependency target shapes" below).
-- `get-class-source` and `get-class-members` use `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }` (the same `kind` set as `resolve-artifact`).
+- `get-class-source` and `get-class-members` use `target: { kind, value }` — the same `kind`-based shape as `resolve-artifact` (`"version"`, `"jar"`, `"coordinate"`, `"workspace"`, `"dependency"`), plus `target: { kind: "artifact", artifactId }` to reuse an already-resolved artifact.
 - `find-class`, `search-class-source`, `list-artifact-files`, and `find-mapping` keep their existing input shapes (an `artifactId` or a `version`); they do not currently accept `target.kind="workspace"` or `target.kind="dependency"`.
 - `validate-mixin` and `validate-project task="mixin"` use `input.mode="inline" | "path" | "paths" | "config" | "project"`.
 - Positive integer tool arguments accept numeric strings such as `"10"` for documented top-level parameters.
@@ -46,7 +46,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
   | --- | --- | --- |
   | `"ok"` | `counts.total > 0`, OR `counts.total === 0` AND binary extraction succeeded AND `decompiledFallback` did not fire (genuinely empty class). | none |
   | `"partial"` | `decompiledFallback` is populated (bytecode returned zero but the indexed decompiled source supplied member names; `qualityFlags` includes `"members-from-decompiled-source"`). | `decompiledFallback`, `decompiledMemberCounts` |
-  | `"members_unavailable"` | Binary signature extraction threw a non-`ERR_CLASS_NOT_FOUND` error AND no decompiled fallback was available. | `unavailableReason: string`, `suggestedCall: { tool: "get-class-source", params: { target: { type: "artifact", artifactId }, className, mode: "snippet", mapping } }` (the params validate against `get-class-source`'s input schema). |
+  | `"members_unavailable"` | Binary signature extraction threw a non-`ERR_CLASS_NOT_FOUND` error AND no decompiled fallback was available. | `unavailableReason: string`, `suggestedCall: { tool: "get-class-source", params: { target: { kind: "artifact", artifactId }, className, mode: "snippet", mapping } }` (the params validate against `get-class-source`'s input schema). |
 
   The shape is purely additive: `members` / `counts` / `decompiledFallback` / `decompiledMemberCounts` / `qualityFlags` are unchanged for callers that ignore `status`. `ERR_CLASS_NOT_FOUND` still propagates as a thrown error rather than as `members_unavailable`. Set `MEMBERS_STATUS_LEGACY=1` at process start to omit `status` / `unavailableReason` / `suggestedCall` entirely (legacy shape).
 - `search-class-source` accepts `queryNamespace`. When set and the artifact's `mappingApplied` differs, `intent="symbol"` queries for fully-qualified class names are translated through `find-mapping` (source=`queryNamespace`, target=artifact namespace) before the indexed search runs; the response carries a `translatedQuery` block describing the rewrite. `intent="text"` / `intent="path"` do not translate — text search is a literal match against the artifact namespace; the response surfaces a `warnings` array instead. `sourcePriority` is only consulted during translation.
@@ -192,8 +192,8 @@ Per-entry retry semantics: each `error.suggestedCall` proposes the **matching si
 
 | Batch tool | Single tool retry |
 |---|---|
-| `batch-class-source` | `get-class-source` (with `target: { type: "artifact", artifactId: <shared> }`) |
-| `batch-class-members` | `get-class-members` (with `target: { type: "artifact", artifactId: <shared> }`) |
+| `batch-class-source` | `get-class-source` (with `target: { kind: "artifact", artifactId: <shared> }`) |
+| `batch-class-members` | `get-class-members` (with `target: { kind: "artifact", artifactId: <shared> }`) |
 | `batch-symbol-exists` | `check-symbol-exists` (with `version` derived from the resolved artifact) |
 | `batch-mappings` | `find-mapping` (with `version` carried from the top-level batch input) |
 
@@ -290,7 +290,7 @@ These environment variables are read once at worker startup and provide rollback
 - `validate-access-transformer` accepts `atNamespace="srg" | "mojang" | "obfuscated"`. When `projectPath` points at a Forge or NeoForge workspace, the tool can infer that namespace automatically and validate against loader/runtime artifacts for `scope="loader"`.
 - Start with `manage-cache` for cache inventory and safe cleanup. Use `executionMode="preview"` before `executionMode="apply"`.
 - Replace `resolve-artifact` `targetKind` and `targetValue` with `target: { kind, value }`.
-- Replace `get-class-source` and `get-class-members` top-level `artifactId`, `targetKind`, and `targetValue` with `target: { type: "artifact", artifactId }` or `target: { type: "resolve", kind, value }`.
+- Replace `get-class-source` and `get-class-members` top-level `artifactId`, `targetKind`, and `targetValue` with `target: { kind, value }` (same shape as `resolve-artifact`) or `target: { kind: "artifact", artifactId }`. The earlier `target: { type: "artifact", artifactId }` form is gone — use `{ kind: "artifact", artifactId }`; the redundant `{ type: "resolve", ... }` wrapper is still accepted but `type` is ignored.
 - `resolve-method-mapping-exact` is method-only and no longer accepts `kind`.
 - Replace `validate-mixin` `source`, `sourcePath`, `sourcePaths`, `mixinConfigPath`, and `sourceRoot` with `input.mode` plus `input.source`, `input.path`, `input.paths[]`, `input.configPaths[]`, and `sourceRoots[]`.
 - `search-class-source` removed snippet, definition, and relation expansion. Responses now contain compact `hits[]` plus `nextCursor?`, and `symbolKind` is only valid with `intent="symbol"`.

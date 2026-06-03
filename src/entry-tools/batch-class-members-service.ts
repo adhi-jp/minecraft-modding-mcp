@@ -131,7 +131,7 @@ export class BatchClassMembersService {
       buildErrorSuggestedCall: (entry, sharedArtifact): SuggestedCall | undefined => {
         if (!sharedArtifact) return undefined;
         const params: Record<string, unknown> = {
-          target: { type: "artifact", artifactId: sharedArtifact.artifactId },
+          target: { kind: "artifact", artifactId: sharedArtifact.artifactId },
           className: entry.className
         };
         if (entry.access !== undefined) params.access = entry.access;

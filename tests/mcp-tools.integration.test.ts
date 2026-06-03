@@ -1063,7 +1063,6 @@ test("get-class-source invalid string target returns resolve-target suggestedCal
   assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
     className: "net.minecraft.server.Main",
     target: {
-      type: "resolve",
       kind: "version",
       value: "1.21.10"
     }
@@ -1098,13 +1097,29 @@ test("get-class-members invalid string target suggestedCall preserves valid fiel
   assert.deepEqual(result.structuredContent?.error?.suggestedCall?.params, {
     className: "net.minecraft.server.Main",
     target: {
-      type: "resolve",
       kind: "version",
       value: "1.21.10"
     },
     access: "all",
     memberPattern: "tick"
   });
+});
+
+test("get-class-source/get-class-members targets use the unified kind shape and reject the legacy type:artifact shape", () => {
+  // New unified shape: same kind-based vocabulary as resolve-artifact, plus kind:"artifact".
+  assert.equal(getClassSourceSchema.safeParse({ className: "a.B", target: { kind: "artifact", artifactId: "x" } }).success, true);
+  assert.equal(getClassSourceSchema.safeParse({ className: "a.B", target: { kind: "version", value: "1.21.10" } }).success, true);
+  assert.equal(getClassMembersSchema.safeParse({ className: "a.B", target: { kind: "artifact", artifactId: "x" } }).success, true);
+  assert.equal(getClassMembersSchema.safeParse({ className: "a.B", target: { kind: "dependency", group: "g", name: "n" } }).success, true);
+
+  // The legacy `{type:"artifact",artifactId}` form (no `kind` discriminator) no longer validates —
+  // it must migrate to `{kind:"artifact",artifactId}`.
+  assert.equal(getClassSourceSchema.safeParse({ className: "a.B", target: { type: "artifact", artifactId: "x" } }).success, false);
+  assert.equal(getClassMembersSchema.safeParse({ className: "a.B", target: { type: "artifact", artifactId: "x" } }).success, false);
+
+  // Back-compat: the redundant `{type:"resolve",...}` wrapper still validates — the discriminated
+  // union keys on `kind` and the now-ignored `type` key is stripped.
+  assert.equal(getClassSourceSchema.safeParse({ className: "a.B", target: { type: "resolve", kind: "version", value: "1.21.10" } }).success, true);
 });
 
 test("get-class-members surfaces meta.warningDetails for the truncation family", async () => {
@@ -1130,7 +1145,7 @@ test("get-class-members surfaces meta.warningDetails for the truncation family",
   assert.ok(artifactId, "resolve-artifact must return an artifactId");
 
   const result = await callTool("get-class-members", {
-    target: { type: "artifact", artifactId },
+    target: { kind: "artifact", artifactId },
     className: "com.example.Widget",
     access: "all",
     maxMembers: 1
@@ -1155,7 +1170,7 @@ test("get-class-members surfaces meta.warningDetails for the truncation family",
 });
 
 test("get-class-source/get-class-members schemas default includeProvenance to false and accept true", () => {
-  const target = { type: "artifact", artifactId: "x" } as const;
+  const target = { kind: "artifact", artifactId: "x" } as const;
   const source = getClassSourceSchema.parse({ className: "a.B", target });
   assert.equal(source.includeProvenance, false);
   assert.equal(getClassSourceSchema.parse({ className: "a.B", target, includeProvenance: true }).includeProvenance, true);
@@ -1187,7 +1202,7 @@ test("get-class-members drops FIELD jvmDescriptor by default and restores it wit
   assert.ok(artifactId, "resolve-artifact must return an artifactId");
 
   type MembersResult = { structuredContent?: { result?: { members?: { fields?: Array<Record<string, unknown>>; methods?: Array<Record<string, unknown>> } } } };
-  const base = { target: { type: "artifact", artifactId }, className: "com.example.Widget", access: "all" } as const;
+  const base = { target: { kind: "artifact", artifactId }, className: "com.example.Widget", access: "all" } as const;
 
   const def = await callTool("get-class-members", base) as MembersResult;
   const defMembers = def.structuredContent?.result?.members ?? {};
@@ -1219,7 +1234,7 @@ test("get-class-members omits provenance/qualityFlags/artifactContents by defaul
   assert.ok(artifactId, "resolve-artifact must return an artifactId");
 
   const defaultResult = await callTool("get-class-members", {
-    target: { type: "artifact", artifactId },
+    target: { kind: "artifact", artifactId },
     className: "com.example.Widget",
     access: "all"
   }) as { structuredContent?: { result?: Record<string, unknown> } };
@@ -1232,7 +1247,7 @@ test("get-class-members omits provenance/qualityFlags/artifactContents by defaul
   assert.ok("context" in defaulted, "context survives the default strip");
 
   const withProvenance = await callTool("get-class-members", {
-    target: { type: "artifact", artifactId },
+    target: { kind: "artifact", artifactId },
     className: "com.example.Widget",
     access: "all",
     includeProvenance: true

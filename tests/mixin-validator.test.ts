@@ -758,7 +758,6 @@ test("validateParsedMixin explain mode adds representative guidance and suggeste
         assert.equal(issue.suggestedCall!.tool, "get-class-source");
         assert.equal(issue.suggestedCall!.params.mode, "metadata");
         assert.deepEqual(issue.suggestedCall!.params.target, {
-          type: "resolve",
           kind: "version",
           value: "1.21"
         });

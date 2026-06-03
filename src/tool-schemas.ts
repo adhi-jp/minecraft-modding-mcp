@@ -78,12 +78,10 @@ export type ResolveArtifactTargetInput =
 
 export type SourceLookupTargetInput =
   | {
-      type: "artifact";
+      kind: "artifact";
       artifactId: string;
     }
-  | ({
-      type: "resolve";
-    } & ResolveArtifactTargetInput);
+  | ResolveArtifactTargetInput;
 
 export const workspaceTargetSchema = z.object({
   kind: z.literal("workspace"),
@@ -107,34 +105,24 @@ export const resolveArtifactTargetSchema = z.discriminatedUnion("kind", [
   dependencyTargetSchema
 ]);
 
-export const sourceLookupTargetSchema = z.union([
-  z.object({
-    type: z.literal("artifact"),
-    artifactId: nonEmptyString
-  }),
-  z.object({ type: z.literal("resolve"), kind: z.literal("version"), value: nonEmptyString }),
-  z.object({ type: z.literal("resolve"), kind: z.literal("jar"), value: nonEmptyString }),
-  z.object({ type: z.literal("resolve"), kind: z.literal("coordinate"), value: nonEmptyString }),
-  z.object({
-    type: z.literal("resolve"),
-    kind: z.literal("workspace"),
-    scope: artifactScopeSchema.optional(),
-    strict: z.boolean().optional()
-  }),
-  z.object({
-    type: z.literal("resolve"),
-    kind: z.literal("dependency"),
-    group: nonEmptyString,
-    name: nonEmptyString,
-    version: z.string().trim().min(1).optional(),
-    versionFromProject: z.boolean().optional()
-  })
+// Extended target schema for the source-lookup tools (get-class-source / get-class-members):
+// the same kind-based shape as resolveArtifactTargetSchema, PLUS a `kind:"artifact"` variant
+// that short-circuits resolution by reusing an already-resolved artifactId. The shared
+// resolveArtifactTargetSchema is intentionally NOT widened — the artifact kind has no
+// resolution meaning for resolve-artifact / verify-mixin-target / the batch tools.
+export const sourceLookupTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("version"), value: nonEmptyString }),
+  z.object({ kind: z.literal("jar"), value: nonEmptyString }),
+  z.object({ kind: z.literal("coordinate"), value: nonEmptyString }),
+  workspaceTargetSchema,
+  dependencyTargetSchema,
+  z.object({ kind: z.literal("artifact"), artifactId: nonEmptyString })
 ]);
 
 export const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
   'Object with kind. Examples: {"kind":"version","value":"1.21.10"}, {"kind":"workspace"} (uses projectPath), or {"kind":"dependency","group":"dev.architectury","name":"architectury"}. Must be an object, not a string.';
 export const SOURCE_LOOKUP_TARGET_DESCRIPTION =
-  'Object: {"type":"resolve","kind":"version","value":"1.21.10"} or {"type":"resolve","kind":"workspace"} or {"type":"resolve","kind":"dependency","group":"...","name":"..."} or {"type":"artifact","artifactId":"..."}. Must be an object, not a string.';
+  'Object with kind (same shape as resolve-artifact). Examples: {"kind":"version","value":"1.21.10"}, {"kind":"workspace"} (uses projectPath), {"kind":"dependency","group":"...","name":"..."}, or {"kind":"artifact","artifactId":"..."} to reuse an already-resolved artifact. Must be an object, not a string.';
 export const SOURCE_SCOPE_DESCRIPTION =
   "vanilla = Mojang client jar only; merged = source-oriented merged runtime discovery; loader = loader/runtime artifact discovery when the workspace exposes transformed runtime jars.";
 

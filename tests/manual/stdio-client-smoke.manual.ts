@@ -654,7 +654,7 @@ async function main(): Promise<void> {
       name: "get-class-source",
       arguments: {
         target: {
-          type: "artifact",
+          kind: "artifact",
           artifactId
         },
         className: "net.minecraft.server.Main"
