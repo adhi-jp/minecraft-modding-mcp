@@ -15,7 +15,8 @@ import {
 import { ManageCacheService } from "../src/entry-tools/manage-cache-service.ts";
 import {
   discoverWorkspaceAccessTransformers,
-  ValidateProjectService
+  ValidateProjectService,
+  validateProjectSchema
 } from "../src/entry-tools/validate-project-service.ts";
 
 test("top-level workflow tool schemas expose explicit defaults on safe public parameters", async () => {
@@ -2219,6 +2220,29 @@ test("AnalyzeModService validates remap preview without mutating", async () => {
   assert.equal(remapCalls, 0);
   assert.equal(result.summary.status, "unchanged");
   assert.equal(result.operation?.executionMode, "preview");
+});
+
+test("ValidateProjectService forwards the default reportMode (summary-first) to validateMixin", async () => {
+  let seenReportMode: string | undefined = "UNSET";
+  const service = new ValidateProjectService({
+    validateMixin: async (input: { reportMode?: string }) => {
+      seenReportMode = input.reportMode;
+      return { summary: { total: 1, valid: 1, partial: 0, invalid: 0 }, results: [], warnings: [] } as never;
+    },
+    validateAccessWidener: async () => { throw new Error("not used"); },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  // execute() does not run the Zod schema, so parse first to apply the default.
+  const parsed = validateProjectSchema.parse({
+    task: "mixin",
+    version: "1.21.10",
+    subject: { kind: "mixin", input: { mode: "inline", source: "class M {}" } }
+  });
+  await service.execute(parsed);
+
+  assert.equal(seenReportMode, "summary-first");
 });
 
 test("ValidateProjectService validates direct access widener inline input", async () => {

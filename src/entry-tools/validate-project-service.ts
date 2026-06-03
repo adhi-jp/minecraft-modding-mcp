@@ -102,7 +102,9 @@ export const validateProjectShape = {
   warningMode: z.enum(["full", "aggregated"]).optional(),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional(),
   treatInfoAsWarning: z.boolean().default(true),
-  includeIssues: z.boolean().default(true)
+  includeIssues: z.boolean().default(true),
+  reportMode: z.enum(["compact", "full", "summary-first"]).default("summary-first")
+    .describe("Mixin report shape forwarded to validate-mixin. Default 'summary-first'; pass 'full' (or explain=true) for per-result resolvedMembers/toolHealth/resolutionTrace.")
 };
 
 export const validateProjectSchema = z.object(validateProjectShape).superRefine((value, ctx) => {

@@ -2645,9 +2645,9 @@ test("validateMixinSchema accepts every Phase 1A–3C parameter value (reportMod
     version: "1.21.10"
   } as const;
 
-  // reportMode default is "full"
+  // reportMode default is "summary-first" (lean report by default)
   const defaults = validateMixinSchema.parse(base);
-  assert.equal(defaults.reportMode, "full");
+  assert.equal(defaults.reportMode, "summary-first");
   assert.equal(defaults.treatInfoAsWarning, true);
   assert.equal(defaults.preferProjectMapping, false);
   assert.equal(defaults.includeIssues, true);

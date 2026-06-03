@@ -871,8 +871,8 @@ export const validateMixinShape = {
     .describe("'full'=all warnings; 'aggregated'=group warnings by category with counts and samples. Single validation uses the provided value as-is; batch validation defaults to 'aggregated'"),
   preferProjectMapping: z.boolean().default(false)
     .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
-  reportMode: z.enum(["compact", "full", "summary-first"]).default("full")
-    .describe("'compact' omits heavy per-result detail, 'summary-first' hoists shared provenance/warnings/incomplete reasons, 'full'=everything"),
+  reportMode: z.enum(["compact", "full", "summary-first"]).default("summary-first")
+    .describe("Default 'summary-first': hoists shared provenance/warnings/incomplete reasons and drops per-result resolvedMembers/toolHealth/structuredWarnings. 'compact' omits heavy per-result detail; 'full'=everything. resolvedMembers/per-result toolHealth/resolutionTrace require reportMode='full' or explain=true."),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
     .describe("Only include warnings/issues matching these categories (default: all)"),
   treatInfoAsWarning: z.boolean().default(true)

@@ -7978,7 +7978,8 @@ test("SourceService validateMixin handles representative scope and mapping resol
               path: uncSourcePath
             },
             version: "1.21",
-            mapping: "obfuscated"
+            mapping: "obfuscated",
+            reportMode: "full"
           } as never);
 
           assert.equal(result.mode, "path");
@@ -8043,7 +8044,8 @@ test("SourceService validateMixin handles representative scope and mapping resol
           version: "1.21",
           mapping: "mojang",
           scope: "merged",
-          projectPath: root
+          projectPath: root,
+          reportMode: "full"
         });
 
         const single = result.results[0]?.result;
@@ -8204,7 +8206,8 @@ test("SourceService validateMixin handles representative scope and mapping resol
         const result = await service.validateMixin({
           input: { mode: "inline", source: buildMixinSource("tick") },
           version: "1.21",
-          mapping: "mojang"
+          mapping: "mojang",
+          reportMode: "full"
         });
 
         const single = result.results[0]?.result;
@@ -8258,7 +8261,8 @@ test("SourceService validateMixin handles representative scope and mapping resol
         const result = await service.validateMixin({
           input: { mode: "inline", source: buildMixinSource() },
           version: "1.21",
-          projectPath: root
+          projectPath: root,
+          reportMode: "full"
         });
 
         const single = result.results[0]?.result;
@@ -8386,7 +8390,8 @@ test("SourceService validateMixin handles representative scope fallback and repo
           version: "1.21",
           mapping: "obfuscated",
           scope: "merged",
-          projectPath: root
+          projectPath: root,
+          reportMode: "full"
         });
 
         const single = result.results[0]?.result;
@@ -8440,7 +8445,8 @@ test("SourceService validateMixin handles representative scope fallback and repo
           version: "1.21",
           mapping: "obfuscated",
           scope: "loader",
-          projectPath: root
+          projectPath: root,
+          reportMode: "full"
         });
 
         const single = result.results[0]?.result;
@@ -8715,6 +8721,56 @@ test("SourceService validateMixin handles representative report-shaping flows", 
         assert.equal(single?.issues.length, 0);
         assert.equal(single?.summary.warnings, 1);
         assert.equal(result.issueSummary?.[0]?.count, 1);
+      }
+    },
+    {
+      name: "default reportMode (summary-first) strips per-result resolvedMembers/toolHealth",
+      rootPrefix: "service-validate-mixin-default-strip-",
+      run: async ({ root, service }) => {
+        (service as any).validateMixinSingle = async ({ sourcePath }: { sourcePath?: string }) => ({
+          ...buildSummaryFirstSingleResult(root, sourcePath, { warning: "Shared validation warning" }),
+          resolvedMembers: [{ target: "tick", annotation: "@Inject", status: "resolved", resolvedTo: "m_1", descriptor: "()V" }],
+          toolHealth: { overallHealthy: true, degradations: [], tinyMappingsAvailable: true }
+        });
+
+        // No reportMode => service-level default of summary-first applies.
+        const result = await service.validateMixin({
+          input: { mode: "inline", source: "class M {}" },
+          version: "1.21",
+          mapping: "mojang"
+        } as never);
+
+        const single = result.results[0]?.result;
+        assert.equal(single?.resolvedMembers, undefined);
+        assert.equal(single?.toolHealth, undefined);
+        // summary + issues still surface.
+        assert.equal(result.summary.total, 1);
+        assert.ok((single?.issues?.length ?? 0) >= 1);
+      }
+    },
+    {
+      name: "explain=true keeps per-result resolvedMembers/toolHealth under the summary-first default",
+      rootPrefix: "service-validate-mixin-default-explain-",
+      run: async ({ root, service }) => {
+        (service as any).validateMixinSingle = async ({ sourcePath }: { sourcePath?: string }) => ({
+          ...buildSummaryFirstSingleResult(root, sourcePath, { warning: "Shared validation warning" }),
+          resolvedMembers: [{ target: "tick", annotation: "@Inject", status: "resolved", resolvedTo: "m_1", descriptor: "()V" }],
+          toolHealth: { overallHealthy: true, degradations: [], tinyMappingsAvailable: true }
+        });
+
+        // summary-first default + explain keeps the heavy per-result detail.
+        const result = await service.validateMixin({
+          input: { mode: "inline", source: "class M {}" },
+          version: "1.21",
+          mapping: "mojang",
+          explain: true
+        } as never);
+
+        const single = result.results[0]?.result;
+        assert.ok(single?.resolvedMembers, "explain keeps resolvedMembers under summary-first");
+        assert.ok(single?.toolHealth, "explain keeps toolHealth under summary-first");
+        // The shared resolutionTrace is hoisted to the top level.
+        assert.ok((result.provenance?.resolutionTrace?.length ?? 0) >= 1);
       }
     }
   ];
@@ -10475,7 +10531,8 @@ test("SourceService validateMixin quickSummary surfaces mapping-health probe fai
       ].join("\n")
     },
     version: "1.21",
-    mapping: "obfuscated"
+    mapping: "obfuscated",
+    reportMode: "full"
   });
 
   const single = result.results[0]?.result;
@@ -10733,6 +10790,63 @@ test("SourceService validateMixin preserves mapping-health quickSummary note eve
   assert.ok(single?.quickSummary);
   assert.match(single!.quickSummary!, /Mapping health degraded/);
   assert.match(single!.quickSummary!, /Mojang mappings unavailable/);
+});
+
+test("SourceService validateMixin reportMode='compact' keeps resolutionTrace when explain=true", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-compact-explain-trace-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).workspaceMappingService = {
+    async detectCompileMapping() {
+      return { resolved: false, evidence: [], warnings: [] };
+    },
+    async detectProjectMinecraftVersion() {
+      return undefined;
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "inline",
+      source: [
+        "import net.minecraft.server.Main;",
+        "import org.spongepowered.asm.mixin.Mixin;",
+        "",
+        "@Mixin(Main.class)",
+        "public abstract class MainMixin {}"
+      ].join("\n")
+    },
+    version: "1.21",
+    mapping: "obfuscated",
+    reportMode: "compact",
+    explain: true
+  });
+
+  const single = result.results[0]?.result;
+  // compact strips the heavy arrays...
+  assert.equal(single?.resolvedMembers, undefined);
+  assert.equal(single?.toolHealth, undefined);
+  // ...but explain=true keeps the resolutionTrace so the diagnostic opt-in still works.
+  assert.ok((single?.provenance?.resolutionTrace?.length ?? 0) >= 1, "explain must preserve resolutionTrace under compact");
 });
 
 test("SourceService validateMixin quickSummary surfaces vanilla fallback after scope resolution failure", async () => {

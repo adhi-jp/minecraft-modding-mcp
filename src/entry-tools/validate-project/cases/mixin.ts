@@ -57,7 +57,8 @@ const output = await deps.validateMixin({
   warningMode: input.warningMode,
   warningCategoryFilter: input.warningCategoryFilter,
   treatInfoAsWarning: input.treatInfoAsWarning,
-  includeIssues: input.includeIssues
+  includeIssues: input.includeIssues,
+  reportMode: input.reportMode
 });
 const summary = output.summary as {
   total?: number;

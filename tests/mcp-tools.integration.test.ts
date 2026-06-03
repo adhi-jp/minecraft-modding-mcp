@@ -767,7 +767,7 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
   assert.equal(validateMixinSchema.properties?.explain?.default, false);
   assert.equal(validateMixinSchema.properties?.warningMode?.default, undefined);
   assert.equal(validateMixinSchema.properties?.preferProjectMapping?.default, false);
-  assert.equal(validateMixinSchema.properties?.reportMode?.default, "full");
+  assert.equal(validateMixinSchema.properties?.reportMode?.default, "summary-first");
   assert.equal(validateMixinSchema.properties?.treatInfoAsWarning?.default, true);
   assert.equal(validateMixinSchema.properties?.includeIssues?.default, true);
   assert.equal(inspectMinecraftSchema.properties?.includeSnapshots?.default, false);
@@ -790,6 +790,7 @@ test("tools/list schemas expose explicit defaults for public input parameters", 
   assert.equal(validateProjectSchema.properties?.warningMode?.default, undefined);
   assert.equal(validateProjectSchema.properties?.treatInfoAsWarning?.default, true);
   assert.equal(validateProjectSchema.properties?.includeIssues?.default, true);
+  assert.equal(validateProjectSchema.properties?.reportMode?.default, "summary-first");
   assert.equal(manageCacheSchema.properties?.executionMode?.default, "preview");
   assert.equal(manageCacheSchema.properties?.limit?.default, 50);
   assert.equal(manageCacheSchema.properties?.cacheKinds?.default, undefined);

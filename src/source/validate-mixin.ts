@@ -290,7 +290,13 @@ async function runValidateMixinDispatcher(
   options: ValidateMixinOptions = {}
 ): Promise<ValidateMixinOutput> {
   const requestedVersion = await resolveRequestedMinecraftVersion(svc, rawInput);
-  const input: VersionedValidateMixinInput = { ...rawInput, version: requestedVersion };
+  // Service-level default so direct/internal/entry-tool callers (not just the MCP
+  // wire boundary, where Zod applies it) get the lean summary-first report shape.
+  const input: VersionedValidateMixinInput = {
+    ...rawInput,
+    version: requestedVersion,
+    reportMode: rawInput.reportMode ?? "summary-first"
+  };
   const { input: sourceInput, ...sharedInput } = input;
   const mode = sourceInput.mode;
   const stageEmitter = options.stageEmitter ?? NOOP_STAGE_EMITTER;
@@ -687,7 +693,9 @@ async function finalizeValidateMixinPipeline(svc: SourceService, ctx: MutableMix
     result.aggregatedWarnings = undefined;
     result.toolHealth = undefined;
     result.confidenceBreakdown = undefined;
-    if (result.provenance) {
+    // resolutionTrace only exists when explain=true; keep it then so explain still
+    // delivers the per-issue trace even under the compact report shape.
+    if (result.provenance && input.explain !== true) {
       result.provenance.resolutionTrace = undefined;
     }
   } else {
@@ -896,6 +904,9 @@ function applyValidateMixinOutputCompaction(
     : warningCandidates.every((entry) => sameStringArray(entry, warningCandidates[0]));
 
   if (input.reportMode === "summary-first") {
+    // explain=true keeps the per-result heavy detail (resolvedMembers/toolHealth)
+    // even under summary-first, so the diagnostic opt-in still works.
+    const keepHeavyDetail = input.explain === true;
     nextOutput = {
       ...nextOutput,
       results: nextOutput.results.map((entry) => (
@@ -907,8 +918,8 @@ function applyValidateMixinOutputCompaction(
                 warnings: canHoistWarnings ? [] : entry.result.warnings,
                 structuredWarnings: undefined,
                 aggregatedWarnings: undefined,
-                resolvedMembers: undefined,
-                toolHealth: undefined,
+                resolvedMembers: keepHeavyDetail ? entry.result.resolvedMembers : undefined,
+                toolHealth: keepHeavyDetail ? entry.result.toolHealth : undefined,
                 confidenceBreakdown: undefined,
                 provenance: canHoistProvenance ? undefined : entry.result.provenance
               }

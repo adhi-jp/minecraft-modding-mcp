@@ -253,7 +253,8 @@ for (const [mixinIndex, configPath] of mixinConfigs.entries()) {
       warningMode: input.warningMode,
       warningCategoryFilter: input.warningCategoryFilter,
       treatInfoAsWarning: input.treatInfoAsWarning,
-      includeIssues: input.includeIssues
+      includeIssues: input.includeIssues,
+      reportMode: input.reportMode
     }, {
       stageEmitter: wrappedEmitter
     });
