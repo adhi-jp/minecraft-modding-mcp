@@ -150,7 +150,11 @@ test("errorResource returns structured problem details instead of a bare string"
     detail: "Resource failed.",
     status: 400,
     code: "ERR_INVALID_INPUT",
-    instance: "mc://artifact/test"
+    instance: "mc://artifact/test",
+    // String form defaults to ERR_INVALID_INPUT, so it now also carries the
+    // always-present recovery classifiers (no details => no conditional fields).
+    retryClass: "input",
+    issueOrigin: "code_issue"
   });
 });
 
@@ -335,4 +339,86 @@ test("remaining resources delegate to the expected source-service methods", asyn
     artifactId: "artifact-1",
     origin: "cache"
   });
+});
+
+test("class-source-json resource error envelope forwards AppError details (hints + suggestedCall)", async () => {
+  const registrations = captureResources({
+    async getClassSource() {
+      throw createError({
+        code: ERROR_CODES.CLASS_NOT_FOUND,
+        message: "no class",
+        details: {
+          nextAction: "Resolve the artifact first.",
+          suggestedCall: {
+            tool: "get-class-source",
+            params: {
+              target: { kind: "version", value: "1.21.10" },
+              className: "net.minecraft.Foo"
+            }
+          },
+          artifactId: "artifact-1"
+        }
+      });
+    }
+  });
+
+  const handler = registrations.get("class-source-json")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://source-json/artifact-1/net.minecraft.Foo"),
+    { artifactId: "artifact-1", className: "net.minecraft.Foo" }
+  );
+  const payload = parseJsonResource(result);
+
+  assert.equal(payload.error.code, ERROR_CODES.CLASS_NOT_FOUND);
+  assert.equal(payload.error.retryClass, "permanent");
+  assert.equal(payload.error.issueOrigin, "code_issue");
+  assert.deepEqual(payload.error.hints, ["Resolve the artifact first."]);
+  assert.equal(payload.error.suggestedCall.tool, "get-class-source");
+  assert.equal(payload.error.context.artifactId, "artifact-1");
+});
+
+test("all 9 resource handlers forward AppError details into the error envelope", async () => {
+  const fail = () => {
+    throw createError({
+      code: ERROR_CODES.CLASS_NOT_FOUND,
+      message: "boom",
+      details: { nextAction: "Resolve the artifact first." }
+    });
+  };
+  const registrations = captureResources({
+    listVersions: async () => fail(),
+    getRuntimeMetrics: () => fail(),
+    getClassSource: async () => fail(),
+    getArtifactFile: async () => fail(),
+    findMapping: async () => fail(),
+    getClassMembers: async () => fail(),
+    getArtifact: () => fail()
+  });
+
+  const cases: Array<{ name: string; url: string; params?: Record<string, string> }> = [
+    { name: "versions-list", url: "mc://versions/list" },
+    { name: "runtime-metrics", url: "mc://metrics" },
+    { name: "class-source", url: "mc://source/artifact-1/a.Example", params: { artifactId: "artifact-1", className: "a.Example" } },
+    { name: "class-source-json", url: "mc://source-json/artifact-1/a.Example", params: { artifactId: "artifact-1", className: "a.Example" } },
+    { name: "artifact-file", url: "mc://artifact/artifact-1/files/src%2FMain.java", params: { artifactId: "artifact-1", filePath: "src%2FMain.java" } },
+    { name: "find-mapping", url: "mc://mappings/1.21.4/obfuscated/mojang/class/com.example%2FMain", params: { version: "1.21.4", kind: "class", name: "com.example%2FMain", sourceMapping: "obfuscated", targetMapping: "mojang" } },
+    { name: "find-member-mapping", url: "mc://mappings/1.21.4/obfuscated/mojang/method/com.example%2FOwner/foo", params: { version: "1.21.4", kind: "method", owner: "com.example%2FOwner", name: "foo", sourceMapping: "obfuscated", targetMapping: "mojang" } },
+    { name: "class-members", url: "mc://artifact/artifact-1/members/com.example%2FMain", params: { artifactId: "artifact-1", className: "com.example%2FMain" } },
+    { name: "artifact-metadata", url: "mc://artifact/artifact-1", params: { artifactId: "artifact-1" } }
+  ];
+
+  for (const c of cases) {
+    const handler = registrations.get(c.name)?.handler;
+    assert.ok(handler, `${c.name} must be registered`);
+    const result = await handler(new URL(c.url), c.params);
+    const payload = parseJsonResource(result);
+    assert.equal(payload.error.code, ERROR_CODES.CLASS_NOT_FOUND, `${c.name} code`);
+    assert.deepEqual(
+      payload.error.hints,
+      ["Resolve the artifact first."],
+      `${c.name} must forward details.nextAction into error.hints`
+    );
+    assert.equal(payload.error.retryClass, "permanent", `${c.name} retryClass`);
+  }
 });

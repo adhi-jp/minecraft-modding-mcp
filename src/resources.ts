@@ -39,7 +39,7 @@ export function registerResources(
         const result = await sourceService.listVersions();
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -52,7 +52,7 @@ export function registerResources(
         const result = sourceService.getRuntimeMetrics();
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -74,7 +74,7 @@ export function registerResources(
         });
         return textResource(uri.href, result.sourceText);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -92,7 +92,7 @@ export function registerResources(
         });
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -109,7 +109,7 @@ export function registerResources(
         });
         return textResource(uri.href, result.content);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -129,7 +129,7 @@ export function registerResources(
         });
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -150,7 +150,7 @@ export function registerResources(
         });
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -167,7 +167,7 @@ export function registerResources(
         });
         return objectResource(uri.href, result as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }
@@ -181,7 +181,7 @@ export function registerResources(
         const artifact = sourceService.getArtifact(params.artifactId as string);
         return objectResource(uri.href, artifact as unknown as Record<string, unknown>);
       } catch (e: unknown) {
-        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code });
+        if (isAppError(e)) return errorResource(uri.href, { message: e.message, code: e.code, details: e.details });
         throw e;
       }
     }

@@ -133,3 +133,61 @@ test("errorResource maps ErrorCode values to documented status (404 / 422 / 400 
     assert.equal(parsed.error.status, status, `expected ${code} -> ${status}, got ${parsed.error.status}`);
   }
 });
+
+test("errorResource carries retryClass + issueOrigin for a coded AppError", () => {
+  const entry = errorResource("mc://x", {
+    message: "gone",
+    code: ERROR_CODES.CLASS_NOT_FOUND
+  }).contents[0]!;
+  const parsed = JSON.parse(entry.text!);
+  assert.equal(parsed.error.retryClass, "permanent");
+  assert.equal(parsed.error.issueOrigin, "code_issue");
+});
+
+test("errorResource(string detail) carries the input/code_issue classifiers", () => {
+  const parsed = JSON.parse(errorResource("mc://x", "bad path").contents[0]!.text!);
+  assert.equal(parsed.error.retryClass, "input");
+  assert.equal(parsed.error.issueOrigin, "code_issue");
+  // String form has no details, so no recovery fields are added.
+  assert.equal("hints" in parsed.error, false);
+  assert.equal("suggestedCall" in parsed.error, false);
+  assert.equal("context" in parsed.error, false);
+});
+
+test("errorResource extracts hints/suggestedCall/context from AppError details", () => {
+  const entry = errorResource("mc://x", {
+    message: "m",
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    details: {
+      nextAction: "Call resolve-artifact first.",
+      suggestedCall: {
+        tool: "get-class-source",
+        params: {
+          target: { kind: "version", value: "1.21.10" },
+          className: "net.minecraft.Foo"
+        }
+      },
+      artifactId: "a1"
+    }
+  }).contents[0]!;
+  const parsed = JSON.parse(entry.text!);
+  assert.deepEqual(parsed.error.hints, ["Call resolve-artifact first."]);
+  assert.equal(parsed.error.suggestedCall.tool, "get-class-source");
+  assert.equal(parsed.error.context.artifactId, "a1");
+});
+
+test("errorResource drops a placeholder-only suggestedCall via the shared validation gate", () => {
+  const entry = errorResource("mc://x", {
+    message: "m",
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    details: {
+      suggestedCall: {
+        tool: "get-class-source",
+        params: { className: "<fill-in>", target: "<fill-in>" }
+      }
+    }
+  }).contents[0]!;
+  const parsed = JSON.parse(entry.text!);
+  // The placeholder primary fails schema validation, so no suggestedCall is emitted.
+  assert.equal("suggestedCall" in parsed.error, false);
+});

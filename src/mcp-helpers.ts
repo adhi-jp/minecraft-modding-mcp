@@ -1,5 +1,15 @@
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { ERROR_CODES, type ErrorCode } from "./errors.js";
+import {
+  retryClassForErrorCode,
+  issueOriginForErrorCode,
+  extractAllowlistedContext
+} from "./error-mapping.js";
+import {
+  toHints,
+  extractValidatedSuggestionAndExamples,
+  extractFieldErrorsFromDetails
+} from "./tool-guidance.js";
 
 type ObjectResultOptions = {
   isError?: boolean;
@@ -60,10 +70,20 @@ function statusForResourceErrorCode(code: ErrorCode): number {
 
 export function errorResource(
   uri: string,
-  error: string | { message: string; code?: ErrorCode }
+  error: string | { message: string; code?: ErrorCode; details?: unknown }
 ): ReadResourceResult {
-  const detail = typeof error === "string" ? error : error.message;
-  const code = typeof error === "string" ? ERROR_CODES.INVALID_INPUT : error.code ?? ERROR_CODES.INTERNAL;
+  const isStr = typeof error === "string";
+  const detail = isStr ? error : error.message;
+  const code = isStr ? ERROR_CODES.INVALID_INPUT : error.code ?? ERROR_CODES.INTERNAL;
+  // Resource reads carry the same AppError as the equivalent tool call, so they
+  // get the same recovery metadata. Classifiers are always present; the rest is
+  // extracted from the AppError details (reusing the tool-error helpers as-is so
+  // the suggestedCall is validated through the single buildSuggestedCall gate).
+  const details = isStr ? undefined : error.details;
+  const hints = toHints(details);
+  const { suggestedCall, exampleCalls } = extractValidatedSuggestionAndExamples(details);
+  const fieldErrors = extractFieldErrorsFromDetails(details);
+  const context = extractAllowlistedContext(details);
   return {
     contents: [
       {
@@ -71,12 +91,22 @@ export function errorResource(
         mimeType: "application/json",
         text: JSON.stringify({
           error: {
+            // Keep the generic resource type/title (asserted by tests and
+            // intentionally distinct from the per-code tool ProblemDetails) so
+            // the two access paths stay distinguishable.
             type: "https://minecraft-modding-mcp.dev/problems/resource",
             title: "Resource read failed",
             detail,
             status: statusForResourceErrorCode(code),
             code,
-            instance: uri
+            instance: uri,
+            retryClass: retryClassForErrorCode(code),
+            issueOrigin: issueOriginForErrorCode(code),
+            ...(fieldErrors ? { fieldErrors } : {}),
+            ...(hints ? { hints } : {}),
+            ...(suggestedCall ? { suggestedCall } : {}),
+            ...(exampleCalls ? { exampleCalls } : {}),
+            ...(context ? { context } : {})
           },
           meta: { uri }
         })
