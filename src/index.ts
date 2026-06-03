@@ -730,7 +730,7 @@ server.tool("inspect-minecraft",
 registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
 server.tool("analyze-symbol",
-  "Top-level workflow tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview.",
+  "Top-level workflow tool for symbol existence, mapping, lifecycle (with fromVersion/toVersion/maxVersions/includeTimeline range controls), workspace analysis, and API overview.",
   analyzeSymbolShape,
   { readOnlyHint: true },
   async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>

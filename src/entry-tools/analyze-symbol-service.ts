@@ -58,7 +58,29 @@ export const analyzeSymbolShape = {
     owner: nonEmptyString.optional(),
     descriptor: optionalDescriptorString
   }),
-  version: nonEmptyString.optional(),
+  version: nonEmptyString
+    .optional()
+    .describe(
+      "Point-in-time MC version for task=exists/map/exact-map/api-overview. For task=lifecycle it is accepted as a back-compat alias for toVersion (range end)."
+    ),
+  fromVersion: nonEmptyString
+    .optional()
+    .describe("task=lifecycle only: range start (oldest) version; defaults to the oldest version in the manifest."),
+  toVersion: nonEmptyString
+    .optional()
+    .describe("task=lifecycle only: range end (newest) version; takes precedence over version. Defaults to latest."),
+  maxVersions: positiveIntSchema
+    .max(400)
+    .optional()
+    .describe("task=lifecycle only: cap on scanned versions (service default 120, max 400)."),
+  includeTimeline: z
+    .boolean()
+    .optional()
+    .describe("task=lifecycle only: include per-version timeline entries."),
+  includeSnapshots: z
+    .boolean()
+    .optional()
+    .describe("task=lifecycle only: include snapshot versions in the scan."),
   sourceMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   targetMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
   classNameMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
@@ -73,13 +95,39 @@ export const analyzeSymbolShape = {
   include: buildIncludeSchema(INCLUDE_GROUPS)
 };
 
+const LIFECYCLE_ONLY_FIELDS = [
+  "fromVersion",
+  "toVersion",
+  "maxVersions",
+  "includeTimeline",
+  "includeSnapshots"
+] as const;
+
 export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((value, ctx) => {
-  if (value.task !== "workspace" && !value.version) {
+  if (value.task !== "workspace" && value.task !== "lifecycle" && !value.version) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["version"],
       message: "version is required for non-workspace tasks."
     });
+  }
+  if (value.task === "lifecycle" && !value.version && !value.toVersion) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["toVersion"],
+      message: "task=lifecycle requires toVersion (or version as a back-compat alias) as the range end."
+    });
+  }
+  if (value.task !== "lifecycle") {
+    for (const field of LIFECYCLE_ONLY_FIELDS) {
+      if (value[field] !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `${field} is only supported for task=lifecycle.`
+        });
+      }
+    }
   }
   if (value.task === "workspace" && !value.projectPath) {
     ctx.addIssue({
@@ -153,9 +201,13 @@ type AnalyzeSymbolDeps = {
     symbol: string;
     descriptor?: string;
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
+    fromVersion?: string;
     toVersion?: string;
     maxVersions?: number;
+    includeSnapshots?: boolean;
+    includeTimeline?: boolean;
   }) => Promise<TraceSymbolLifecycleOutput>;
   resolveWorkspaceSymbol: (input: {
     projectPath: string;
@@ -352,8 +404,11 @@ export class AnalyzeSymbolService {
           descriptor: input.subject.descriptor,
           mapping: input.sourceMapping,
           ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
-          toVersion: input.version,
-          maxVersions: 5
+          ...(input.fromVersion !== undefined ? { fromVersion: input.fromVersion } : {}),
+          toVersion: input.toVersion ?? input.version,
+          ...(input.maxVersions !== undefined ? { maxVersions: input.maxVersions } : {}),
+          ...(input.includeSnapshots !== undefined ? { includeSnapshots: input.includeSnapshots } : {}),
+          ...(input.includeTimeline !== undefined ? { includeTimeline: input.includeTimeline } : {})
         });
         return {
           ...buildEntryToolResult({
@@ -371,7 +426,7 @@ export class AnalyzeSymbolService {
                 name: input.subject.name,
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
-                version: input.version,
+                version: input.toVersion ?? input.version,
                 sourceMapping: input.sourceMapping ?? "obfuscated"
               }),
               counts: {

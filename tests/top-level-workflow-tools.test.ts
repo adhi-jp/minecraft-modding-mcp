@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
 import { AnalyzeModService } from "../src/entry-tools/analyze-mod-service.ts";
-import { AnalyzeSymbolService } from "../src/entry-tools/analyze-symbol-service.ts";
+import { AnalyzeSymbolService, analyzeSymbolSchema } from "../src/entry-tools/analyze-symbol-service.ts";
 import { CompareMinecraftService } from "../src/entry-tools/compare-minecraft-service.ts";
 import {
   InspectMinecraftService,
@@ -1648,8 +1648,11 @@ test("AnalyzeSymbolService lifecycle scopes traceSymbolLifecycle to the requeste
         symbol: string;
         descriptor?: string;
         mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+        fromVersion?: string;
         toVersion?: string;
         maxVersions?: number;
+        includeSnapshots?: boolean;
+        includeTimeline?: boolean;
       }
     | undefined;
 
@@ -1707,14 +1710,82 @@ test("AnalyzeSymbolService lifecycle scopes traceSymbolLifecycle to the requeste
     }
   });
 
+  // version is forwarded as the toVersion back-compat alias; maxVersions is no longer
+  // forced to 5 (the service applies its own 120 default / 400 clamp).
   assert.deepEqual(seenInput, {
     symbol: "net.minecraft.world.item.Item.use",
     descriptor: "(Lnet/minecraft/world/item/ItemStack;)V",
     mapping: "mojang",
-    toVersion: "1.21.10",
-    maxVersions: 5
+    toVersion: "1.21.10"
   });
   assert.equal(result.summary.status, "ok");
+});
+
+test("AnalyzeSymbolService lifecycle forwards fromVersion/toVersion/maxVersions/includeTimeline range controls", async () => {
+  let seenInput: Record<string, unknown> | undefined;
+  const service = new AnalyzeSymbolService({
+    checkSymbolExists: async () => { throw new Error("not used"); },
+    findMapping: async () => { throw new Error("not used"); },
+    resolveMethodMappingExact: async () => { throw new Error("not used"); },
+    traceSymbolLifecycle: async (input) => {
+      seenInput = input as Record<string, unknown>;
+      return {
+        query: { className: "net.minecraft.world.item.Item", methodName: "use", mapping: "mojang" },
+        range: { fromVersion: "1.20", toVersion: "1.21.10", scannedCount: 8 },
+        presence: { firstSeen: "1.20", lastSeen: "1.21.10", missingBetween: [], existsNow: true },
+        warnings: []
+      };
+    },
+    resolveWorkspaceSymbol: async () => { throw new Error("not used"); },
+    getClassApiMatrix: async () => { throw new Error("not used"); }
+  });
+
+  await service.execute({
+    task: "lifecycle",
+    detail: "summary",
+    sourceMapping: "mojang",
+    fromVersion: "1.20",
+    toVersion: "1.21.10",
+    maxVersions: 200,
+    includeTimeline: true,
+    subject: { kind: "method", owner: "net.minecraft.world.item.Item", name: "use" }
+  });
+
+  assert.equal(seenInput?.fromVersion, "1.20");
+  assert.equal(seenInput?.toVersion, "1.21.10");
+  assert.equal(seenInput?.maxVersions, 200, "maxVersions must be forwarded, not forced to 5");
+  assert.equal(seenInput?.includeTimeline, true);
+});
+
+test("analyzeSymbolSchema rejects lifecycle-only range fields on non-lifecycle tasks", () => {
+  for (const field of ["fromVersion", "toVersion", "maxVersions", "includeTimeline", "includeSnapshots"] as const) {
+    const value = field === "maxVersions" ? 5 : field.startsWith("include") ? true : "1.21.10";
+    const parsed = analyzeSymbolSchema.safeParse({
+      task: "exists",
+      version: "1.21.10",
+      subject: { kind: "class", name: "net.minecraft.server.Main" },
+      [field]: value
+    });
+    assert.equal(parsed.success, false, `${field} must be rejected on task=exists`);
+    if (!parsed.success) {
+      assert.ok(parsed.error.issues.some((i) => i.path[0] === field), `issue path should name ${field}`);
+    }
+  }
+});
+
+test("analyzeSymbolSchema accepts a toVersion-only lifecycle request without version", () => {
+  const parsed = analyzeSymbolSchema.safeParse({
+    task: "lifecycle",
+    toVersion: "1.21.10",
+    subject: { kind: "method", owner: "net.minecraft.world.item.Item", name: "use" }
+  });
+  assert.equal(parsed.success, true);
+  // And a lifecycle request with neither version nor toVersion is rejected (end anchor required).
+  const missing = analyzeSymbolSchema.safeParse({
+    task: "lifecycle",
+    subject: { kind: "method", owner: "net.minecraft.world.item.Item", name: "use" }
+  });
+  assert.equal(missing.success, false);
 });
 
 test("AnalyzeSymbolService includes summary.subject for mapping flows", async () => {
