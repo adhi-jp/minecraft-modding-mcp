@@ -112,6 +112,10 @@ test("errorResource falls back to ERR_INTERNAL + status 500 when error.code is u
   assert.equal(parsed.error.code, ERROR_CODES.INTERNAL);
   assert.equal(parsed.error.status, 500);
   assert.equal(parsed.error.detail, "boom");
+  // Resource-side parity for the breaking retryClass change: an internal fault
+  // is a non-recoverable server fault here too, not transient.
+  assert.equal(parsed.error.retryClass, "server");
+  assert.equal(parsed.error.issueOrigin, "tool_issue");
 });
 
 test("errorResource maps ErrorCode values to documented status (404 / 422 / 400 / 500)", () => {
@@ -190,4 +194,28 @@ test("errorResource drops a placeholder-only suggestedCall via the shared valida
   const parsed = JSON.parse(entry.text!);
   // The placeholder primary fails schema validation, so no suggestedCall is emitted.
   assert.equal("suggestedCall" in parsed.error, false);
+});
+
+test("errorResource forwards validated exampleCalls from AppError details", () => {
+  const entry = errorResource("mc://x", {
+    message: "ambiguous",
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    details: {
+      exampleCalls: [
+        {
+          tool: "get-class-source",
+          params: {
+            target: { kind: "version", value: "1.21.10" },
+            className: "net.minecraft.world.entity.LivingEntity"
+          },
+          reason: "Fetch the resolved class source."
+        }
+      ]
+    }
+  }).contents[0]!;
+  const parsed = JSON.parse(entry.text!);
+  assert.equal(Array.isArray(parsed.error.exampleCalls), true);
+  assert.equal(parsed.error.exampleCalls.length, 1);
+  assert.equal(parsed.error.exampleCalls[0].tool, "get-class-source");
+  assert.equal(parsed.error.exampleCalls[0].reason, "Fetch the resolved class source.");
 });
