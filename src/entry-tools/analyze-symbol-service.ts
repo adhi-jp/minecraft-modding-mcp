@@ -224,6 +224,7 @@ type AnalyzeSymbolDeps = {
     sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
     gradleUserHome?: string;
+    nameMode?: "fqcn" | "auto";
     signatureMode?: "exact" | "name-only";
     maxCandidates?: number;
   }) => Promise<FindMappingOutput>;
@@ -349,6 +350,7 @@ export class AnalyzeSymbolService {
           sourceMapping: input.sourceMapping ?? "obfuscated",
           targetMapping: input.targetMapping ?? "mojang",
           ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
+          nameMode: input.nameMode,
           signatureMode: input.signatureMode,
           maxCandidates: input.maxCandidates
         });

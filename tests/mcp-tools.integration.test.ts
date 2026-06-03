@@ -1274,6 +1274,44 @@ test("get-class-members drops FIELD jvmDescriptor by default and restores it wit
   const optedMembers = opted.structuredContent?.result?.members ?? {};
   assert.equal(optedMembers.fields?.[0]?.jvmDescriptor, "I", "field descriptor restored with includeDescriptors");
   assert.equal(optedMembers.methods?.[0]?.jvmDescriptor, "()V");
+
+  // The new include:["descriptors"] array form must be an equivalent alias on the expert tool.
+  const viaInclude = await callTool("get-class-members", { ...base, include: ["descriptors"] }) as MembersResult;
+  const viaIncludeMembers = viaInclude.structuredContent?.result?.members ?? {};
+  assert.equal(viaIncludeMembers.fields?.[0]?.jvmDescriptor, "I", "field descriptor restored with include:[\"descriptors\"]");
+});
+
+test("get-class-source / get-class-members include:[\"provenance\"] round-trips diagnostics (alias of includeProvenance)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "include-provenance-roundtrip-"));
+  const jarPath = join(root, "lib.jar");
+  await createJar(jarPath, {
+    "com/example/Widget.class": buildClassFile({
+      internalName: "com/example/Widget",
+      accessFlags: 0x0001,
+      methods: [{ name: "run", descriptor: "()V", accessFlags: 0x0001 }]
+    })
+  });
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId");
+
+  type Res = { structuredContent?: { result?: Record<string, unknown> } };
+  const target = { kind: "artifact", artifactId } as const;
+
+  // Default (no include) omits diagnostics; include:["provenance"] restores them — for both tools.
+  const memDefault = await callTool("get-class-members", { target, className: "com.example.Widget", access: "all" }) as Res;
+  assert.equal("provenance" in (memDefault.structuredContent?.result ?? {}), false, "members provenance omitted by default");
+  const memInc = await callTool("get-class-members", { target, className: "com.example.Widget", access: "all", include: ["provenance"] }) as Res;
+  for (const key of ["provenance", "qualityFlags", "artifactContents"]) {
+    assert.ok(key in (memInc.structuredContent?.result ?? {}), `members ${key} restored with include:["provenance"]`);
+  }
+  const srcInc = await callTool("get-class-source", { target, className: "com.example.Widget", mode: "metadata", include: ["provenance"] }) as Res;
+  for (const key of ["provenance", "qualityFlags", "artifactContents"]) {
+    assert.ok(key in (srcInc.structuredContent?.result ?? {}), `source ${key} restored with include:["provenance"]`);
+  }
 });
 
 test("get-class-members omits provenance/qualityFlags/artifactContents by default and restores them with includeProvenance", async () => {

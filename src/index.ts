@@ -946,7 +946,11 @@ expertTool("get-class-members",
       scope: input.scope as ArtifactScope | undefined,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion,
-      includeDescriptors: input.includeDescriptors
+      // includeDescriptors is the documented alias for include:["descriptors"]; honor both
+      // (mirror batch-class-members-service / inspect-minecraft class-members handler).
+      includeDescriptors:
+        input.includeDescriptors === true ||
+        (Array.isArray(input.include) && input.include.includes("descriptors"))
     }) as Promise<Record<string, unknown>>
     );
   })
