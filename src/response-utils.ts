@@ -142,11 +142,36 @@ const ARTIFACT_COMPACT_OMIT_KEYS = new Set([
   "resolvedSourceJarPath"
 ]);
 
-/** resolve-artifact compact: omit debug/diagnostic fields. */
+/**
+ * include-group => the resolve-artifact fields that group re-adds (un-omits) when present.
+ * Used by the detail/include projection so callers can opt specific diagnostics back in.
+ */
+const ARTIFACT_INCLUDE_PROTECTS: Record<string, readonly string[]> = {
+  provenance: ["provenance"],
+  artifact: ["artifactContents"],
+  samples: ["sampleEntries"],
+  candidates: ["adjacentSourceCandidates"],
+  paths: ["binaryJarPath", "resolvedSourceJarPath", "coordinate", "repoUrl"]
+};
+
+/**
+ * resolve-artifact compact: omit debug/diagnostic fields. When `include` is provided,
+ * any field protected by a present include group is kept (re-added).
+ */
 export function compactArtifactResponse(
-  obj: Record<string, unknown>
+  obj: Record<string, unknown>,
+  include?: ReadonlySet<string>
 ): Record<string, unknown> {
-  return projectOmitKeys(obj, ARTIFACT_COMPACT_OMIT_KEYS);
+  if (!include || include.size === 0) {
+    return projectOmitKeys(obj, ARTIFACT_COMPACT_OMIT_KEYS);
+  }
+  const omit = new Set(ARTIFACT_COMPACT_OMIT_KEYS);
+  for (const group of include) {
+    for (const protectedKey of ARTIFACT_INCLUDE_PROTECTS[group] ?? []) {
+      omit.delete(protectedKey);
+    }
+  }
+  return projectOmitKeys(obj, omit);
 }
 
 /** Fields to omit from get-class-source in compact mode. */
@@ -202,10 +227,17 @@ const LIGHT_COMPACT_OMIT_KEYS = new Set([
   "artifactContents"
 ]);
 
-/** Light compact projection: drop the artifactContents summary only. */
+/**
+ * Light compact projection: drop the artifactContents summary only. When `include`
+ * contains "artifact", the summary is kept (re-added).
+ */
 export function compactLightResponse(
-  obj: Record<string, unknown>
+  obj: Record<string, unknown>,
+  include?: ReadonlySet<string>
 ): Record<string, unknown> {
+  if (include?.has("artifact")) {
+    return obj;
+  }
   return projectOmitKeys(obj, LIGHT_COMPACT_OMIT_KEYS);
 }
 
@@ -285,4 +317,78 @@ export function compactMappingResponse(
   }
 
   return projected;
+}
+
+// ---------------------------------------------------------------------------
+// detail / include projection
+//
+// The expert and batch tools now share the entry-tool response-shaping
+// vocabulary (`detail: summary|standard|full` + `include[]`) instead of a
+// per-tool `compact` boolean. projectByDetail() maps (tool, detail, include)
+// onto the existing compact omit-sets so the DEFAULT wire output is
+// byte-identical to the previous compact defaults:
+//   - resolution/mapping tools + batch defaulted compact:true  -> default summary
+//   - source/file tools defaulted compact:false (post Phase 4) -> default standard
+// summary == old compact:true; standard == old compact:false; full keeps
+// everything (incl. diagnostics). include groups opt specific fields back in.
+// ---------------------------------------------------------------------------
+
+export type ResponseDetailLevel = "summary" | "standard" | "full";
+
+/** Expert + batch tools that accept the detail/include response contract. */
+export const DETAIL_ENABLED_TOOL_NAMES = COMPACT_ENABLED_TOOL_NAMES;
+
+/** Per-tool default detail level, chosen so default output is byte-identical to the old compact defaults. */
+export const DEFAULT_DETAIL_BY_TOOL: Record<string, ResponseDetailLevel> = {
+  "resolve-artifact": "summary",
+  "find-mapping": "summary",
+  "resolve-method-mapping-exact": "summary",
+  "resolve-workspace-symbol": "summary",
+  "check-symbol-exists": "summary",
+  "get-class-source": "standard",
+  "get-class-members": "standard",
+  "search-class-source": "standard",
+  "list-artifact-files": "standard"
+};
+
+/** Extra keys omitted from get-class-members at detail=summary (beyond the diagnostic strip). */
+const MEMBERS_SUMMARY_EXTRA_OMIT = new Set(["context"]);
+
+/**
+ * Project an expert/batch tool result for the requested detail level + include set.
+ * Reuses the existing compact omit-sets; see the block comment above for the mapping.
+ */
+export function projectByDetail(
+  tool: string,
+  result: Record<string, unknown>,
+  detail: ResponseDetailLevel,
+  include: ReadonlySet<string>
+): Record<string, unknown> {
+  let out = result;
+
+  // Phase-4 diagnostic strip for source/members, now detail/include-aware:
+  // kept at detail=full or when include opts provenance back in.
+  const keepDiagnostics = detail === "full" || include.has("provenance");
+  if (!keepDiagnostics) {
+    if (tool === "get-class-source") out = stripSourceDiagnostics(out);
+    if (tool === "get-class-members") out = stripMembersDiagnostics(out);
+  }
+
+  if (detail === "summary") {
+    if (tool === "resolve-artifact") {
+      out = compactArtifactResponse(out, include);
+    }
+    if (COMPACT_MAPPING_TOOL_NAMES.has(tool) && !include.has("candidates")) {
+      out = compactMappingResponse(out);
+    }
+    if (tool === "get-class-members") {
+      out = projectOmitKeys(out, MEMBERS_SUMMARY_EXTRA_OMIT);
+    }
+    if (COMPACT_LIGHT_TOOL_NAMES.has(tool)) {
+      out = compactLightResponse(out, include);
+    }
+    out = compactResponse(out, TOOL_PRESERVE_PAYLOAD_KEYS[tool]);
+  }
+
+  return out;
 }

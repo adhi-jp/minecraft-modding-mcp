@@ -104,7 +104,8 @@ export type ResolveArtifactInput = {
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
   strictVersion?: boolean;
-  compact?: boolean;
+  /** When true, compute the optional `sampleEntries` listing (detail=full / include=samples). */
+  includeSampleEntries?: boolean;
 };
 
 export type ResolveArtifactOutput = {

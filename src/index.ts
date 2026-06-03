@@ -10,20 +10,10 @@ import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 import { objectResult } from "./mcp-helpers.js";
 import { prepareToolInput } from "./tool-input.js";
 import {
-  isCompactEnabled,
-  COMPACT_MAPPING_TOOL_NAMES,
-  COMPACT_SOURCE_TOOL_NAMES,
-  COMPACT_MEMBERS_TOOL_NAMES,
-  COMPACT_LIGHT_TOOL_NAMES,
-  TOOL_PRESERVE_PAYLOAD_KEYS,
-  compactResponse,
-  compactArtifactResponse,
-  compactMappingResponse,
-  compactSourceResponse,
-  compactMembersResponse,
-  compactLightResponse,
-  stripSourceDiagnostics,
-  stripMembersDiagnostics
+  DETAIL_ENABLED_TOOL_NAMES,
+  DEFAULT_DETAIL_BY_TOOL,
+  projectByDetail,
+  type ResponseDetailLevel
 } from "./response-utils.js";
 
 import { loadConfig } from "./config.js";
@@ -197,6 +187,13 @@ const ENTRY_TOOL_NAMES = new Set([
   "analyze-mod",
   "validate-project",
   "manage-cache"
+]);
+// Batch tools self-project per entry but report the applied detail at the top level.
+const BATCH_DETAIL_TOOL_NAMES = new Set([
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
 ]);
 const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });
 
@@ -537,6 +534,35 @@ function splitWarnings(data: Record<string, unknown>): {
   };
 }
 
+/**
+ * Read the detail/include response-shape controls from a parsed tool input.
+ * Folds the legacy includeProvenance/includeDescriptors flags into the include
+ * set as aliases so the migration off `compact` preserves Phase-4 behavior.
+ */
+function readResponseShapeInput(parsedInput: unknown): {
+  detail?: ResponseDetailLevel;
+  include: Set<string>;
+} {
+  const include = new Set<string>();
+  if (parsedInput === null || typeof parsedInput !== "object" || Array.isArray(parsedInput)) {
+    return { include };
+  }
+  const record = parsedInput as Record<string, unknown>;
+  if (Array.isArray(record.include)) {
+    for (const group of record.include) {
+      if (typeof group === "string") include.add(group);
+    }
+  }
+  if (record.includeProvenance === true) include.add("provenance");
+  if (record.includeDescriptors === true) include.add("descriptors");
+  const detail =
+    typeof record.detail === "string" &&
+    (record.detail === "summary" || record.detail === "standard" || record.detail === "full")
+      ? (record.detail as ResponseDetailLevel)
+      : undefined;
+  return { detail, include };
+}
+
 async function runTool<TInput, TResult extends Record<string, unknown>>(
   tool: string,
   rawInput: unknown,
@@ -580,64 +606,36 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
     );
     const { result, warnings, meta: resultMeta } = splitWarnings(payload);
 
-    const isCompact = isCompactEnabled(tool, parsedInput);
+    // Expert tools share the entry-tool detail/include response contract (the old
+    // per-tool `compact` boolean is gone). projectByDetail reproduces the previous
+    // compact defaults byte-identically: resolution tools default detail=summary
+    // (old compact:true), source/file tools default detail=standard (old compact:false).
+    // The legacy includeProvenance/includeDescriptors flags are folded into the
+    // include set as aliases so Phase-4 behavior is preserved.
+    const shapeInput = readResponseShapeInput(parsedInput);
+    const effectiveDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+      ? (shapeInput.detail ?? "summary")
+      : (shapeInput.detail ?? DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary");
     let projectedResult = result;
-    // Diagnostic metadata (provenance/qualityFlags/artifactContents) is omitted by
-    // default on the source tools; callers opt back in via includeProvenance:true.
-    // (compact still drops these too, and additionally strips members `context`.)
-    const includeProvenance =
-      parsedInput !== null &&
-      typeof parsedInput === "object" &&
-      !Array.isArray(parsedInput) &&
-      (parsedInput as { includeProvenance?: unknown }).includeProvenance === true;
-    if (!includeProvenance) {
-      if (tool === "get-class-source") {
-        projectedResult = stripSourceDiagnostics(projectedResult);
-      }
-      if (tool === "get-class-members") {
-        projectedResult = stripMembersDiagnostics(projectedResult);
-      }
-    }
-    if (isCompact) {
-      if (tool === "resolve-artifact") {
-        projectedResult = compactArtifactResponse(projectedResult);
-      }
-      if (COMPACT_MAPPING_TOOL_NAMES.has(tool)) {
-        projectedResult = compactMappingResponse(projectedResult);
-      }
-      if (COMPACT_SOURCE_TOOL_NAMES.has(tool)) {
-        projectedResult = compactSourceResponse(projectedResult);
-      }
-      if (COMPACT_MEMBERS_TOOL_NAMES.has(tool)) {
-        projectedResult = compactMembersResponse(projectedResult);
-      }
-      if (COMPACT_LIGHT_TOOL_NAMES.has(tool)) {
-        projectedResult = compactLightResponse(projectedResult);
-      }
-      projectedResult = compactResponse(
-        projectedResult,
-        TOOL_PRESERVE_PAYLOAD_KEYS[tool]
+    if (DETAIL_ENABLED_TOOL_NAMES.has(tool)) {
+      projectedResult = projectByDetail(
+        tool,
+        projectedResult as Record<string, unknown>,
+        effectiveDetail,
+        shapeInput.include
       );
     }
 
-    const entryMeta = ENTRY_TOOL_NAMES.has(tool)
-      ? buildEntryToolMeta({
-          detail:
-            normalizedInput &&
-            typeof normalizedInput === "object" &&
-            !Array.isArray(normalizedInput) &&
-            typeof (normalizedInput as { detail?: unknown }).detail === "string"
-              ? (normalizedInput as { detail?: "summary" | "standard" | "full" }).detail ?? "summary"
-              : "summary",
-          include:
-            normalizedInput &&
-            typeof normalizedInput === "object" &&
-            !Array.isArray(normalizedInput) &&
-            Array.isArray((normalizedInput as { include?: unknown }).include)
-              ? (normalizedInput as { include?: string[] }).include
-              : undefined
-        })
-      : undefined;
+    // Entry, expert, and batch tools all report the applied detail/include shape in meta.
+    const entryMeta =
+      ENTRY_TOOL_NAMES.has(tool) ||
+      DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
+      BATCH_DETAIL_TOOL_NAMES.has(tool)
+        ? buildEntryToolMeta({
+            detail: effectiveDetail,
+            include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
+          })
+        : undefined;
 
     const durationMs = Date.now() - startedAt;
     sourceService.recordToolCall(tool, durationMs);
@@ -863,7 +861,9 @@ expertTool("resolve-artifact",
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion,
       strictVersion: input.strictVersion,
-      compact: input.compact
+      includeSampleEntries:
+        input.detail === "full" ||
+        (Array.isArray(input.include) && input.include.includes("samples"))
     }) as Promise<Record<string, unknown>>
   )
 );

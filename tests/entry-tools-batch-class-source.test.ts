@@ -236,26 +236,26 @@ test("E7: per-entry error.suggestedCall proposes get-class-source with shared ar
   assert.equal(error.suggestedCall!.params.className, "boom");
 });
 
-test("E8: compact:true strips provenance/artifactContents/qualityFlags from per-entry result", async () => {
+test("E8: detail=summary strips provenance/artifactContents/qualityFlags from per-entry result", async () => {
   const { deps } = buildDeps({});
   const service = new BatchClassSourceService(deps);
   const out = await service.execute({
     ...baseInput,
-    compact: true,
+    detail: "summary",
     entries: [{ className: "a.A" }]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;
-  assert.ok(!("provenance" in result), "provenance should be stripped under compact");
-  assert.ok(!("artifactContents" in result), "artifactContents should be stripped under compact");
-  assert.ok(!("qualityFlags" in result), "qualityFlags should be stripped under compact");
+  assert.ok(!("provenance" in result), "provenance should be stripped at detail=summary");
+  assert.ok(!("artifactContents" in result), "artifactContents should be stripped at detail=summary");
+  assert.ok(!("qualityFlags" in result), "qualityFlags should be stripped at detail=summary");
 });
 
-test("E8: compact:false preserves all single-tool fields", async () => {
+test("E8: detail=full preserves all single-tool fields", async () => {
   const { deps } = buildDeps({});
   const service = new BatchClassSourceService(deps);
   const out = await service.execute({
     ...baseInput,
-    compact: false,
+    detail: "full",
     entries: [{ className: "a.A" }]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;

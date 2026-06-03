@@ -7429,7 +7429,7 @@ test("SourceService resolveArtifact returns sampleEntries for source JAR", async
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
     mapping: "obfuscated",
-    compact: false
+    includeSampleEntries: true
   });
 
   assert.ok(resolved.sampleEntries);

@@ -45,7 +45,7 @@ test("resolve-artifact compact response is bounded (live)", async () => {
   const result = await callTool("resolve-artifact", {
     target: { kind: "version", value: "1.21.4" },
     mapping: "mojang",
-    compact: true
+    detail: "summary"
   }) as ToolResult;
 
   assert.notEqual(result.isError, true, "resolve-artifact should not error");
@@ -59,12 +59,12 @@ test("resolve-artifact compact is significantly smaller than full (live)", async
     callTool("resolve-artifact", {
       target: { kind: "version", value: "1.21.4" },
       mapping: "mojang",
-      compact: true
+      detail: "summary"
     }) as Promise<ToolResult>,
     callTool("resolve-artifact", {
       target: { kind: "version", value: "1.21.4" },
       mapping: "mojang",
-      compact: false
+      detail: "full"
     }) as Promise<ToolResult>
   ]);
 
@@ -92,7 +92,7 @@ test("find-mapping compact omits candidates for resolved identity match (live)",
     name: "net.minecraft.world.level.Level",
     sourceMapping: "mojang",
     targetMapping: "mojang",
-    compact: true
+    detail: "summary"
   }) as ToolResult;
 
   assert.notEqual(result.isError, true);

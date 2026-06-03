@@ -1,9 +1,5 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
-import {
-  compactResponse,
-  compactSourceResponse,
-  TOOL_PRESERVE_PAYLOAD_KEYS
-} from "../response-utils.js";
+import { projectByDetail, type ResponseDetailLevel } from "../response-utils.js";
 import type { SuggestedCall } from "../error-mapping.js";
 import type {
   GetClassSourceInput,
@@ -47,7 +43,8 @@ export type BatchClassSourceInput = {
   strictVersion?: boolean;
   concurrency?: number;
   failFast?: boolean;
-  compact?: boolean;
+  detail?: ResponseDetailLevel;
+  include?: readonly string[];
   entries: readonly BatchClassSourceEntry[];
 };
 
@@ -68,7 +65,8 @@ export class BatchClassSourceService {
   async execute(input: BatchClassSourceInput): Promise<BatchOutput<Record<string, unknown>>> {
     const concurrency = input.concurrency ?? 4;
     const failFast = input.failFast ?? false;
-    const compact = input.compact ?? true;
+    const detail = input.detail ?? "summary";
+    const include = new Set(input.include ?? []);
 
     return runBatch<BatchClassSourceEntry, Record<string, unknown>, SharedArtifact>({
       entries: input.entries,
@@ -124,12 +122,12 @@ export class BatchClassSourceService {
           strictVersion: input.strictVersion
         })) as unknown as Record<string, unknown>;
         const { result, warnings } = splitEntryWarnings(raw);
-        const projected = compact
-          ? compactResponse(
-              compactSourceResponse(result),
-              TOOL_PRESERVE_PAYLOAD_KEYS["get-class-source"]
-            )
-          : (result as Record<string, unknown>);
+        const projected = projectByDetail(
+          "get-class-source",
+          result as Record<string, unknown>,
+          detail,
+          include
+        );
         return { result: projected, warnings };
       },
       buildErrorSuggestedCall: (entry, sharedArtifact): SuggestedCall | undefined => {

@@ -1715,10 +1715,62 @@ test("index.ts wires check-symbol-exists into inspect-minecraft partial-source f
 });
 
 // ---------------------------------------------------------------------------
+// detail/include response contract (replaces the per-tool compact boolean)
+// ---------------------------------------------------------------------------
+
+test("expert and batch tools expose detail/include and no longer expose compact", async () => {
+  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
+  const detailTools = [
+    "resolve-artifact",
+    "find-mapping",
+    "resolve-method-mapping-exact",
+    "resolve-workspace-symbol",
+    "check-symbol-exists",
+    "get-class-source",
+    "get-class-members",
+    "search-class-source",
+    "list-artifact-files",
+    "batch-class-source",
+    "batch-class-members",
+    "batch-symbol-exists",
+    "batch-mappings"
+  ];
+  for (const name of detailTools) {
+    const schema = toolMap.get(name) as { properties?: Record<string, { enum?: string[]; default?: string }> };
+    assert.ok(schema?.properties, `${name} must have an input schema`);
+    assert.equal("compact" in (schema.properties ?? {}), false, `${name} must not expose compact`);
+    const detail = schema.properties?.detail;
+    assert.ok(detail, `${name} must expose detail`);
+    assert.deepEqual(detail.enum, ["summary", "standard", "full"], `${name} detail enum`);
+    assert.ok("include" in (schema.properties ?? {}), `${name} must expose include`);
+  }
+  // resolution/mapping + batch default summary; source/file default standard.
+  const expectDefault: Record<string, string> = {
+    "resolve-artifact": "summary",
+    "find-mapping": "summary",
+    "resolve-method-mapping-exact": "summary",
+    "resolve-workspace-symbol": "summary",
+    "check-symbol-exists": "summary",
+    "batch-class-source": "summary",
+    "batch-class-members": "summary",
+    "batch-symbol-exists": "summary",
+    "batch-mappings": "summary",
+    "get-class-source": "standard",
+    "get-class-members": "standard",
+    "search-class-source": "standard",
+    "list-artifact-files": "standard"
+  };
+  for (const [name, want] of Object.entries(expectDefault)) {
+    const schema = toolMap.get(name) as { properties?: { detail?: { default?: string } } };
+    assert.equal(schema.properties?.detail?.default, want, `${name} default detail`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // compact mode integration (P1)
 // ---------------------------------------------------------------------------
 
-test("find-mapping compact:true does not corrupt identity-branch result and preserves meta.warnings", async () => {
+test("find-mapping detail=summary does not corrupt identity-branch result and preserves meta.warnings", async () => {
   type ToolResult = {
     isError?: boolean;
     structuredContent?: {
@@ -1736,8 +1788,8 @@ test("find-mapping compact:true does not corrupt identity-branch result and pres
   };
 
   const [withCompact, withoutCompact] = await Promise.all([
-    callTool("find-mapping", { ...baseArgs, compact: true }) as Promise<ToolResult>,
-    callTool("find-mapping", { ...baseArgs, compact: false }) as Promise<ToolResult>
+    callTool("find-mapping", { ...baseArgs, detail: "summary" }) as Promise<ToolResult>,
+    callTool("find-mapping", { ...baseArgs, detail: "full" }) as Promise<ToolResult>
   ]);
 
   assert.notEqual(withCompact.isError, true);
@@ -1802,11 +1854,11 @@ test("resolve-artifact compact:true omits diagnostic fields from local-jar resul
   const [withCompact, withoutCompact] = await Promise.all([
     callTool("resolve-artifact", {
       target: { kind: "jar", value: jarPath },
-      compact: true
+      detail: "summary"
     }) as Promise<ToolResult>,
     callTool("resolve-artifact", {
       target: { kind: "jar", value: jarPath },
-      compact: false
+      detail: "full"
     }) as Promise<ToolResult>
   ]);
 
@@ -1870,8 +1922,8 @@ test("list-artifact-files compact:true drops artifactContents and preserves item
   };
 
   const [withCompact, withoutCompact] = await Promise.all([
-    callTool("list-artifact-files", { artifactId, compact: true }) as Promise<ToolResult>,
-    callTool("list-artifact-files", { artifactId, compact: false }) as Promise<ToolResult>
+    callTool("list-artifact-files", { artifactId, detail: "summary" }) as Promise<ToolResult>,
+    callTool("list-artifact-files", { artifactId, detail: "full" }) as Promise<ToolResult>
   ]);
 
   assert.notEqual(withCompact.isError, true);
@@ -1914,13 +1966,13 @@ test("search-class-source compact:true preserves hits and drops empty arrays", a
       artifactId,
       query: "Example",
       intent: "symbol",
-      compact: true
+      detail: "summary"
     }) as Promise<ToolResult>,
     callTool("search-class-source", {
       artifactId,
       query: "Example",
       intent: "symbol",
-      compact: false
+      detail: "full"
     }) as Promise<ToolResult>
   ]);
 

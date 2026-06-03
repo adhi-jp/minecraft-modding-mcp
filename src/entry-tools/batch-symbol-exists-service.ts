@@ -1,9 +1,6 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES } from "../errors.js";
-import {
-  compactResponse,
-  compactMappingResponse
-} from "../response-utils.js";
+import { projectByDetail, type ResponseDetailLevel } from "../response-utils.js";
 import type { SuggestedCall } from "../error-mapping.js";
 import type {
   CheckSymbolExistsInput,
@@ -63,7 +60,8 @@ export type BatchSymbolExistsInput = {
   strictVersion?: boolean;
   concurrency?: number;
   failFast?: boolean;
-  compact?: boolean;
+  detail?: ResponseDetailLevel;
+  include?: readonly string[];
   entries: readonly BatchSymbolExistsEntry[];
 };
 
@@ -100,7 +98,8 @@ export class BatchSymbolExistsService {
   async execute(input: BatchSymbolExistsInput): Promise<BatchOutput<Record<string, unknown>>> {
     const concurrency = input.concurrency ?? 4;
     const failFast = input.failFast ?? false;
-    const compact = input.compact ?? true;
+    const detail = input.detail ?? "summary";
+    const include = new Set(input.include ?? []);
 
     return runBatch<BatchSymbolExistsEntry, Record<string, unknown>, SharedArtifact>({
       entries: input.entries,
@@ -160,9 +159,12 @@ export class BatchSymbolExistsService {
           projectPath: input.projectPath
         } as unknown as CheckSymbolExistsInput)) as unknown as Record<string, unknown>;
         const { result, warnings } = splitEntryWarnings(raw);
-        const projected = compact
-          ? compactResponse(compactMappingResponse(result))
-          : (result as Record<string, unknown>);
+        const projected = projectByDetail(
+          "check-symbol-exists",
+          result as Record<string, unknown>,
+          detail,
+          include
+        );
         return { result: projected, warnings };
       },
       buildErrorSuggestedCall: (entry, sharedArtifact): SuggestedCall | undefined => {

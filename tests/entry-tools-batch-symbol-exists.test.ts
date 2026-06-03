@@ -199,11 +199,11 @@ test("E7: per-entry suggestedCall proposes check-symbol-exists and validates", a
   assert.equal(validateToolParams(suggested!.tool, suggested!.params).valid, true);
 });
 
-test("E8: compact:true strips empty arrays and applies mapping projection", async () => {
+test("E8: detail=summary strips empty arrays and applies mapping projection", async () => {
   const service = new BatchSymbolExistsService(buildDeps({}));
   const out = await service.execute({
     ...baseInput,
-    compact: true,
+    detail: "summary",
     entries: [{ kind: "class", name: "a.A" }]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;

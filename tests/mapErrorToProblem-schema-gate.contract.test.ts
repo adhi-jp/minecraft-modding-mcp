@@ -81,7 +81,7 @@ test("D13: byte-identical envelope for valid suggestions (no key additions, no d
   const { mapErrorToProblem } = await import("../src/index.ts");
 
   // Two-key input; the published payload must retain exactly those two keys
-  // so the get-class-source schema defaults (mode, allowDecompile, compact)
+  // so the get-class-source schema defaults (mode, allowDecompile, detail)
   // do not slip into the agent-visible payload.
   const callerParams: Record<string, unknown> = {
     className: "net.minecraft.world.entity.LivingEntity",

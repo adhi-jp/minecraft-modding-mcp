@@ -14,18 +14,18 @@ test.before(async () => {
 test("D5: valid params return suggestedCall with caller-supplied params (no safeParse re-emit)", async () => {
   await import("../src/index.ts");
   const { buildSuggestedCall } = await import("../src/build-suggested-call.ts");
-  // Omit `mode` and `compact` so the assertions below can confirm schema
+  // Omit `mode` and `detail` so the assertions below can confirm schema
   // defaults are NOT injected into the published payload.
   const callerParams = {
     className: "net.minecraft.world.entity.LivingEntity",
-    target: { type: "resolve" as const, kind: "version" as const, value: "1.21.10" }
+    target: { kind: "version" as const, value: "1.21.10" }
   };
   const out = buildSuggestedCall({ tool: "get-class-source", params: callerParams });
   assert.ok(out.suggestedCall, "expected suggestedCall to be present");
   assert.equal(out.suggestedCall!.tool, "get-class-source");
   assert.equal(out.suggestedCall!.params, callerParams);
   assert.equal((out.suggestedCall!.params as Record<string, unknown>).mode, undefined);
-  assert.equal((out.suggestedCall!.params as Record<string, unknown>).compact, undefined);
+  assert.equal((out.suggestedCall!.params as Record<string, unknown>).detail, undefined);
   assert.equal(out.exampleCalls, undefined);
 });
 

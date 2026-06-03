@@ -313,7 +313,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-Several lookup tools support `compact` result shaping for shorter responses. See [docs/tool-reference.md](docs/tool-reference.md) for defaults and the full per-tool field list.
+Expert and batch tools share the `detail` (`summary` | `standard` | `full`) + `include[]` response contract for shorter responses (replacing the old per-tool `compact` flag). See [docs/tool-reference.md](docs/tool-reference.md) for per-tool defaults and the full field list.
 
 ### NBT Utilities
 

@@ -1,8 +1,5 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
-import {
-  compactResponse,
-  compactMappingResponse
-} from "../response-utils.js";
+import { projectByDetail, type ResponseDetailLevel } from "../response-utils.js";
 import type { SuggestedCall } from "../error-mapping.js";
 import type {
   FindMappingInput,
@@ -43,7 +40,8 @@ export type BatchMappingsInput = {
   gradleUserHome?: string;
   concurrency?: number;
   failFast?: boolean;
-  compact?: boolean;
+  detail?: ResponseDetailLevel;
+  include?: readonly string[];
   entries: readonly BatchMappingsEntry[];
 };
 
@@ -53,7 +51,8 @@ export class BatchMappingsService {
   async execute(input: BatchMappingsInput): Promise<BatchOutput<Record<string, unknown>>> {
     const concurrency = input.concurrency ?? 4;
     const failFast = input.failFast ?? false;
-    const compact = input.compact ?? true;
+    const detail = input.detail ?? "summary";
+    const include = new Set(input.include ?? []);
 
     return runBatch<BatchMappingsEntry, Record<string, unknown>, undefined>({
       entries: input.entries,
@@ -77,9 +76,12 @@ export class BatchMappingsService {
           maxCandidates: entry.maxCandidates
         })) as unknown as Record<string, unknown>;
         const { result, warnings } = splitEntryWarnings(raw);
-        const projected = compact
-          ? compactResponse(compactMappingResponse(result))
-          : (result as Record<string, unknown>);
+        const projected = projectByDetail(
+          "find-mapping",
+          result as Record<string, unknown>,
+          detail,
+          include
+        );
         return { result: projected, warnings };
       },
       buildErrorSuggestedCall: (entry): SuggestedCall | undefined => {

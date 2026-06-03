@@ -1591,7 +1591,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     await svc.ingestIfNeeded(resolved);
 
     let sampleEntries: string[] | undefined;
-    if (input.compact === false && resolved.sourceJarPath) {
+    if (input.includeSampleEntries && resolved.sourceJarPath) {
       try {
         const javaEntries = await listJavaEntries(resolved.sourceJarPath);
         const MAX_SAMPLE = 10;

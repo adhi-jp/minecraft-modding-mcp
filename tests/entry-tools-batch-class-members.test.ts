@@ -149,11 +149,11 @@ test("E7: per-entry retry suggestedCall validates against get-class-members sche
   assert.equal(validateToolParams(suggested!.tool, suggested!.params).valid, true);
 });
 
-test("E8: compact:true strips provenance/artifactContents/qualityFlags/context", async () => {
+test("E8: detail=summary strips provenance/artifactContents/qualityFlags/context", async () => {
   const service = new BatchClassMembersService(buildDeps({}));
   const out = await service.execute({
     ...baseInput,
-    compact: true,
+    detail: "summary",
     entries: [{ className: "a.A" }]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;

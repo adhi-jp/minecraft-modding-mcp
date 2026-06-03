@@ -1,9 +1,5 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
-import {
-  compactResponse,
-  compactMembersResponse,
-  TOOL_PRESERVE_PAYLOAD_KEYS
-} from "../response-utils.js";
+import { projectByDetail, type ResponseDetailLevel } from "../response-utils.js";
 import type { SuggestedCall } from "../error-mapping.js";
 import type {
   GetClassMembersInput,
@@ -49,7 +45,8 @@ export type BatchClassMembersInput = {
   strictVersion?: boolean;
   concurrency?: number;
   failFast?: boolean;
-  compact?: boolean;
+  detail?: ResponseDetailLevel;
+  include?: readonly string[];
   entries: readonly BatchClassMembersEntry[];
 };
 
@@ -65,7 +62,8 @@ export class BatchClassMembersService {
   async execute(input: BatchClassMembersInput): Promise<BatchOutput<Record<string, unknown>>> {
     const concurrency = input.concurrency ?? 4;
     const failFast = input.failFast ?? false;
-    const compact = input.compact ?? true;
+    const detail = input.detail ?? "summary";
+    const include = new Set(input.include ?? []);
 
     return runBatch<BatchClassMembersEntry, Record<string, unknown>, SharedArtifact>({
       entries: input.entries,
@@ -110,6 +108,7 @@ export class BatchClassMembersService {
           includeInherited: entry.includeInherited,
           memberPattern: entry.memberPattern,
           maxMembers: entry.maxMembers,
+          includeDescriptors: include.has("descriptors"),
           mapping: input.mapping,
           sourcePriority: input.sourcePriority,
           allowDecompile: input.allowDecompile,
@@ -120,12 +119,12 @@ export class BatchClassMembersService {
           strictVersion: input.strictVersion
         })) as unknown as Record<string, unknown>;
         const { result, warnings } = splitEntryWarnings(raw);
-        const projected = compact
-          ? compactResponse(
-              compactMembersResponse(result),
-              TOOL_PRESERVE_PAYLOAD_KEYS["get-class-members"]
-            )
-          : (result as Record<string, unknown>);
+        const projected = projectByDetail(
+          "get-class-members",
+          result as Record<string, unknown>,
+          detail,
+          include
+        );
         return { result: projected, warnings };
       },
       buildErrorSuggestedCall: (entry, sharedArtifact): SuggestedCall | undefined => {

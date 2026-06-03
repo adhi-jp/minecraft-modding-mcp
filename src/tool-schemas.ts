@@ -3,6 +3,23 @@ import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path"
 import { z } from "zod";
 
 import type { SourceTargetInput } from "./types.js";
+import { DETAIL_LEVELS, CANONICAL_INCLUDE_GROUPS } from "./entry-tools/response-contract.js";
+
+// Shared response-shape controls for the expert + batch tools (replacing the old
+// per-tool `compact` boolean). detail: summary|standard|full + include[] mirrors the
+// entry-tool contract. Defaults are per-tool (see DEFAULT_DETAIL_BY_TOOL in response-utils):
+// resolution/mapping tools + batch default "summary"; source/file tools default "standard".
+const DETAIL_DESCRIPTION =
+  "Response detail: 'summary' (terse: drops diagnostics/empties, slims candidates), 'standard' (default for source/file tools: keeps fields but drops heavy diagnostics), 'full' (everything). Replaces the old `compact` flag.";
+const RESPONSE_INCLUDE_DESCRIPTION =
+  "Opt specific field groups back in regardless of detail, e.g. [\"provenance\"], [\"candidates\"], [\"samples\"], [\"artifact\"], [\"descriptors\"].";
+function detailParam(defaultLevel: (typeof DETAIL_LEVELS)[number]) {
+  return z.enum(DETAIL_LEVELS).default(defaultLevel).describe(DETAIL_DESCRIPTION);
+}
+const responseIncludeParam = z
+  .array(z.enum(CANONICAL_INCLUDE_GROUPS))
+  .optional()
+  .describe(RESPONSE_INCLUDE_DESCRIPTION);
 
 export type SearchIntent = "symbol" | "text" | "path";
 export type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -149,11 +166,8 @@ export const resolveArtifactShape = {
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
-  compact: z.boolean().default(true).describe(
-    "Return minimal fields (artifactId, origin, isDecompiled, version, requestedMapping, mappingApplied, qualityFlags). "
-    + "Omit provenance, artifactContents, sampleEntries, adjacentSourceCandidates, binaryJarPath, coordinate, repoUrl, resolvedSourceJarPath. "
-    + "Enabled by default; set to false for full output."
-  )
+  detail: detailParam("summary"),
+  include: responseIncludeParam
 };
 export const resolveArtifactSchema = z.object(resolveArtifactShape);
 
@@ -174,11 +188,10 @@ export const getClassSourceShape = {
   maxLines: optionalPositiveInt,
   maxChars: optionalPositiveInt.describe("Hard character limit on sourceText; truncates if exceeded"),
   outputFile: optionalNonEmptyString.describe("Write source to this file path and return metadata-only response"),
-  compact: z.boolean().default(false).describe(
-    "When true, strip empty fields from the response. Default false. (provenance/artifactContents/qualityFlags are omitted by default regardless; pass includeProvenance:true to keep them.)"
-  ),
+  detail: detailParam("standard"),
+  include: responseIncludeParam,
   includeProvenance: z.boolean().default(false).describe(
-    "When true, include diagnostic metadata (provenance, qualityFlags, artifactContents) in the response. Default false — these fields are omitted by default to keep the common path lean."
+    "Alias for include:[\"provenance\"]. When true, include diagnostic metadata (provenance, qualityFlags, artifactContents). Default false — omitted to keep the common path lean."
   )
 };
 export const getClassSourceSchema = z
@@ -214,14 +227,13 @@ export const getClassMembersShape = {
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
   preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
   strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
-  compact: z.boolean().default(false).describe(
-    "When true, strip empty fields and members `context` from the response. Default false. (provenance/artifactContents/qualityFlags are omitted by default regardless; pass includeProvenance:true to keep them.)"
-  ),
+  detail: detailParam("standard"),
+  include: responseIncludeParam,
   includeProvenance: z.boolean().default(false).describe(
-    "When true, include diagnostic metadata (provenance, qualityFlags, artifactContents) in the response. Default false — these fields are omitted by default to keep the common path lean."
+    "Alias for include:[\"provenance\"]. When true, include diagnostic metadata (provenance, qualityFlags, artifactContents). Default false — omitted to keep the common path lean."
   ),
   includeDescriptors: z.boolean().default(false).describe(
-    "When true, also emit jvmDescriptor on FIELD members. Default false: field descriptors are omitted (the type is already in javaSignature). Method/constructor descriptors are always present for overload disambiguation."
+    "Alias for include:[\"descriptors\"]. When true, also emit jvmDescriptor on FIELD members. Default false: field descriptors are omitted (the type is already in javaSignature). Method/constructor descriptors are always present for overload disambiguation."
   )
 };
 export const getClassMembersSchema = z.object(getClassMembersShape);
@@ -289,7 +301,8 @@ export const batchClassSourceShape = {
   strictVersion: z.boolean().optional(),
   concurrency: z.number().int().min(1).max(8).optional().describe("1..8, default 4"),
   failFast: z.boolean().optional().describe("default false"),
-  compact: z.boolean().optional().describe("default true"),
+  detail: detailParam("summary"),
+  include: responseIncludeParam,
   entries: z
     .array(batchClassSourceEntrySchema)
     .min(1)
@@ -343,7 +356,8 @@ export const batchClassMembersShape = {
   strictVersion: z.boolean().optional(),
   concurrency: z.number().int().min(1).max(8).optional(),
   failFast: z.boolean().optional(),
-  compact: z.boolean().optional(),
+  detail: detailParam("summary"),
+  include: responseIncludeParam,
   entries: z.array(batchClassMembersEntrySchema).min(1).max(50)
 };
 export const batchClassMembersSchema = z.object(batchClassMembersShape);
@@ -377,7 +391,8 @@ export const batchSymbolExistsShape = {
   strictVersion: z.boolean().optional(),
   concurrency: z.number().int().min(1).max(8).optional(),
   failFast: z.boolean().optional(),
-  compact: z.boolean().optional(),
+  detail: detailParam("summary"),
+  include: responseIncludeParam,
   entries: z.array(batchSymbolExistsEntrySchema).min(1).max(50)
 };
 export const batchSymbolExistsSchema = z.object(batchSymbolExistsShape);
@@ -411,7 +426,8 @@ export const batchMappingsShape = {
   gradleUserHome: gradleUserHomeSchema,
   concurrency: z.number().int().min(1).max(8).optional(),
   failFast: z.boolean().optional(),
-  compact: z.boolean().optional(),
+  detail: detailParam("summary"),
+  include: responseIncludeParam,
   entries: z.array(batchMappingsEntrySchema).min(1).max(50)
 };
 export const batchMappingsSchema = z.object(batchMappingsShape);
@@ -432,9 +448,8 @@ export const searchClassSourceShape = {
   ),
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first. Used only when queryNamespace triggers translation."),
   gradleUserHome: gradleUserHomeSchema,
-  compact: z.boolean().default(false).describe(
-    "When true, strip the artifactContents summary and empty fields from the response. Default false."
-  )
+  detail: detailParam("standard"),
+  include: responseIncludeParam
 };
 export const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
   if (value.symbolKind && value.intent && value.intent !== "symbol") {
@@ -458,9 +473,8 @@ export const listArtifactFilesShape = {
   prefix: optionalNonEmptyString,
   limit: optionalPositiveInt,
   cursor: optionalNonEmptyString,
-  compact: z.boolean().default(false).describe(
-    "When true, strip the artifactContents summary and empty fields from the response. Default false."
-  )
+  detail: detailParam("standard"),
+  include: responseIncludeParam
 };
 export const listArtifactFilesSchema = z.object(listArtifactFilesShape);
 
@@ -509,11 +523,8 @@ export const findMappingShape = {
     .partial()
     .optional(),
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
-  compact: z.boolean().default(true).describe(
-    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
-    + "Enabled by default; set to false for full output."
-  )
+  detail: detailParam("summary"),
+  include: responseIncludeParam
 };
 export const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
   if (value.kind === "class") {
@@ -586,11 +597,8 @@ export const resolveMethodMappingExactShape = {
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
-  compact: z.boolean().default(true).describe(
-    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
-    + "Enabled by default; set to false for full output."
-  )
+  detail: detailParam("summary"),
+  include: responseIncludeParam
 };
 export const resolveMethodMappingExactSchema = z
   .object(resolveMethodMappingExactShape)
@@ -652,11 +660,8 @@ export const resolveWorkspaceSymbolShape = {
   sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
   gradleUserHome: gradleUserHomeSchema,
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates for field/method lookups (default 5, max 200). Raise when you need the full candidate list."),
-  compact: z.boolean().default(true).describe(
-    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
-    + "Enabled by default; set to false for full output."
-  )
+  detail: detailParam("summary"),
+  include: responseIncludeParam
 };
 export const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
@@ -730,11 +735,8 @@ export const checkSymbolExistsShape = {
   nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
   signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
   maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
-  compact: z.boolean().default(true).describe(
-    "Omit top-level empty arrays, null/undefined values, and empty objects from the response. "
-    + "Also omit redundant candidates array for single full-confidence exact-match resolutions. "
-    + "Enabled by default; set to false for full output."
-  )
+  detail: detailParam("summary"),
+  include: responseIncludeParam
 };
 export const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
   if (value.kind === "class") {

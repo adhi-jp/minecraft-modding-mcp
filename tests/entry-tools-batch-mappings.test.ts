@@ -208,21 +208,21 @@ test("F4: schema rejects batch-mappings call with omitted top-level version", as
   }
 });
 
-test("E8: batch-mappings compact:true strips empty arrays and applies mapping projection", async () => {
+test("E8: batch-mappings detail=summary strips empty arrays and applies mapping projection", async () => {
   const service = new BatchMappingsService(buildDeps({}));
   const out = await service.execute({
     ...baseInput,
-    compact: true,
+    detail: "summary",
     entries: [
       { kind: "class", name: "a.A", sourceMapping: "obfuscated", targetMapping: "mojang" }
     ]
   });
   const result = (out.results[0] as { result: Record<string, unknown> }).result;
-  // The fixture resolves with empty candidates / warnings; compact strips
+  // The fixture resolves with empty candidates / warnings; detail=summary strips
   // empty arrays via compactResponse before the mapping projection runs.
   assert.ok(!("warnings" in result));
   assert.ok(!("ambiguityReasons" in result));
-  assert.ok(!("candidates" in result), "empty candidates array should be dropped under compact");
+  assert.ok(!("candidates" in result), "empty candidates array should be dropped at detail=summary");
 });
 
 test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABORTED", async () => {
