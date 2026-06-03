@@ -79,6 +79,7 @@ import { BatchMappingsService } from "./entry-tools/batch-mappings-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
 import { registerToolSchema } from "./tool-schema-registry.js";
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import {
   applyErrorMetaExtensions,
   mapErrorToProblem,
@@ -587,16 +588,16 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
             code: "invalid_enum_value"
           })),
           nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
-          // Construct the raw suggestedCall and let the single mapErrorToProblem
-          // gate (extractValidatedSuggestionAndExamples -> buildSuggestedCall)
-          // validate it, instead of pre-validating here and re-validating there.
+          // Route construction through buildSuggestedCall to satisfy the D12
+          // invariant (tests/suggested-call-invariant.test.ts): every emitted
+          // suggestedCall must be built by the helper. The downstream
+          // mapErrorToProblem gate re-validates on emission; that second pass is
+          // the intentional, cheap cost of the two complementary safety gates.
           ...(suggestedReplacementInput
-            ? {
-                suggestedCall: {
-                  tool,
-                  params: suggestedReplacementInput as Record<string, unknown>
-                }
-              }
+            ? buildSuggestedCall({
+                tool,
+                params: suggestedReplacementInput as Record<string, unknown>
+              })
             : {})
         }
       });
