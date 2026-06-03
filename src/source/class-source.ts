@@ -32,7 +32,7 @@ import type {
 import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
-import { remapAndCountMembers, sliceMembersWithLimit } from "./class-source/members-builder.js";
+import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire } from "./class-source/members-builder.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
@@ -1025,6 +1025,9 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const constructors = sliced.constructors;
   const fields = sliced.fields;
   const methods = sliced.methods;
+  // Slim the wire member shape: hoist a shared ownerFqn, drop accessFlags, omit
+  // isSynthetic:false. Internal SignatureMember arrays above stay intact.
+  const projectedMembers = projectMembersForWire({ constructors, fields, methods }, includeInherited);
   const truncated = sliced.truncated;
   const nextCursor =
     sliced.nextOffset != null ? encodeOffsetCursor(sliced.nextOffset, memberCursorContext) : undefined;
@@ -1104,11 +1107,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
 
   return {
     className,
-    members: {
-      constructors,
-      fields,
-      methods
-    },
+    members: projectedMembers,
     counts,
     truncated,
     ...(nextCursor ? { nextCursor } : {}),

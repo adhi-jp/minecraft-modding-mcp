@@ -478,3 +478,69 @@ test("B8: stripping status leaves byte-identical primary fields across normal/em
     assert.equal(result.status, "partial");
   }
 });
+
+test("get-class-members keeps per-member ownerFqn and omits the block-level ownerFqn when includeInherited", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "members-wire-inherited-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "wire-inherited",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    binaryJarPath: join(root, "minecraft.jar"),
+    version: "1.21.10",
+    files: [],
+    symbols: []
+  });
+  stubExplorer(service, {
+    methods: [
+      { ownerFqn: "com.example.Child", name: "own", javaSignature: "public void own()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false },
+      { ownerFqn: "com.example.Parent", name: "inherited", javaSignature: "public void inherited()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
+    ]
+  });
+  const result = await service.getClassMembers({
+    artifactId: "wire-inherited",
+    className: "com.example.Child",
+    mapping: "obfuscated",
+    includeInherited: true
+  });
+  // Members span multiple owners: no hoisting, ownerFqn stays per member.
+  assert.equal(result.members.ownerFqn, undefined);
+  assert.ok(result.members.methods.some((m) => m.ownerFqn === "com.example.Parent"));
+  assert.ok(result.members.methods.some((m) => m.ownerFqn === "com.example.Child"));
+});
+
+test("get-class-members emits isSynthetic only for synthetic members", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "members-wire-synthetic-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "wire-synthetic",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    binaryJarPath: join(root, "minecraft.jar"),
+    version: "1.21.10",
+    files: [],
+    symbols: []
+  });
+  stubExplorer(service, {
+    methods: [
+      { ownerFqn: "com.example.Widget", name: "real", javaSignature: "public void real()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false },
+      { ownerFqn: "com.example.Widget", name: "bridge", javaSignature: "public void bridge()", jvmDescriptor: "()V", accessFlags: 0x1041, isSynthetic: true }
+    ]
+  });
+  const result = await service.getClassMembers({
+    artifactId: "wire-synthetic",
+    className: "com.example.Widget",
+    mapping: "obfuscated",
+    includeSynthetic: true
+  });
+  const real = result.members.methods.find((m) => m.name === "real")!;
+  const bridge = result.members.methods.find((m) => m.name === "bridge")!;
+  assert.equal("isSynthetic" in real, false, "non-synthetic member omits isSynthetic");
+  assert.equal(bridge.isSynthetic, true, "synthetic member carries isSynthetic:true");
+});

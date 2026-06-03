@@ -125,3 +125,57 @@ export function sliceMembersWithLimit(
     ...(truncated ? { nextOffset: consumed } : {})
   };
 }
+
+/** Slim per-member wire shape: only what an agent reading Java needs. */
+export type WireMember = {
+  name: string;
+  javaSignature: string;
+  /** Kept for overload disambiguation (@At/@Shadow descriptor matching). */
+  jvmDescriptor: string;
+  /** Present only when members span multiple owners (includeInherited). */
+  ownerFqn?: string;
+  /** Present only when true. */
+  isSynthetic?: boolean;
+};
+
+export type WireMembersBlock = {
+  /** Hoisted owner when every member shares one owner (the common, non-inherited case). */
+  ownerFqn?: string;
+  constructors: WireMember[];
+  fields: WireMember[];
+  methods: WireMember[];
+};
+
+/**
+ * Project the internal six-field SignatureMember arrays to the slim wire shape.
+ * `ownerFqn` is hoisted to the block level when all members share a single owner
+ * (so it is not repeated per member); when members span multiple owners — the
+ * includeInherited case — it stays per member and the block-level field is omitted.
+ * `accessFlags` is dropped (javaSignature already encodes the modifiers);
+ * `isSynthetic` is emitted only when true. `jvmDescriptor` is always kept.
+ *
+ * The owner anchor is derived from the members themselves (not from the looked-up
+ * class name) so it is correct in the requested namespace regardless of remapping.
+ */
+export function projectMembersForWire(
+  slice: { constructors: SignatureMember[]; fields: SignatureMember[]; methods: SignatureMember[] },
+  includeInherited: boolean
+): WireMembersBlock {
+  const owners = new Set(
+    [...slice.constructors, ...slice.fields, ...slice.methods].map((m) => m.ownerFqn)
+  );
+  const hoistOwner = !includeInherited && owners.size === 1;
+  const toWire = (m: SignatureMember): WireMember => ({
+    name: m.name,
+    javaSignature: m.javaSignature,
+    jvmDescriptor: m.jvmDescriptor,
+    ...(hoistOwner ? {} : { ownerFqn: m.ownerFqn }),
+    ...(m.isSynthetic ? { isSynthetic: true } : {})
+  });
+  return {
+    ...(hoistOwner ? { ownerFqn: [...owners][0]! } : {}),
+    constructors: slice.constructors.map(toWire),
+    fields: slice.fields.map(toWire),
+    methods: slice.methods.map(toWire)
+  };
+}

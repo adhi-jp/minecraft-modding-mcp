@@ -666,6 +666,69 @@ test("SourceService getClassMembers caps the default first page at 150 members a
   assert.ok(page.nextCursor, "default first page must carry a continuation cursor");
 });
 
+test("SourceService getClassMembers slims the wire member shape (hoist ownerFqn, drop accessFlags, keep jvmDescriptor)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-wire-"));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+
+  await createJar(sourceJarPath, {
+    "net/minecraft/world/item/Item.java": ["package net.minecraft.world.item;", "public class Item {}"].join("\n")
+  });
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourceJarPath },
+    mapping: "obfuscated"
+  });
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return {
+        constructors: [],
+        fields: [
+          { ownerFqn: "net.minecraft.world.item.Item", name: "field", javaSignature: "public int field", jvmDescriptor: "I", accessFlags: 0x0001, isSynthetic: false }
+        ],
+        methods: [
+          { ownerFqn: "net.minecraft.world.item.Item", name: "use", javaSignature: "public void use()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
+        ],
+        warnings: [],
+        context: { classExistedInJar: true }
+      };
+    }
+  };
+
+  const result = await service.getClassMembers({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.world.item.Item",
+    mapping: "obfuscated"
+  }) as unknown as {
+    members: {
+      ownerFqn?: string;
+      fields: Array<Record<string, unknown>>;
+      methods: Array<Record<string, unknown>>;
+    };
+  };
+
+  // ownerFqn hoisted to the block level, omitted per member (non-inherited, single owner).
+  assert.equal(result.members.ownerFqn, "net.minecraft.world.item.Item");
+  assert.equal(result.members.fields[0]!.ownerFqn, undefined);
+  assert.equal(result.members.methods[0]!.ownerFqn, undefined);
+  // accessFlags dropped from the wire (javaSignature already encodes modifiers).
+  assert.equal(result.members.fields[0]!.accessFlags, undefined);
+  assert.equal(result.members.methods[0]!.accessFlags, undefined);
+  // isSynthetic:false is omitted.
+  assert.equal("isSynthetic" in result.members.methods[0]!, false);
+  // jvmDescriptor kept for overload disambiguation.
+  assert.equal(result.members.methods[0]!.jvmDescriptor, "()V");
+  assert.equal(result.members.fields[0]!.jvmDescriptor, "I");
+  // Readable signature preserved.
+  assert.equal(result.members.methods[0]!.javaSignature, "public void use()");
+});
+
 test("SourceService getClassMembers enriches a binary-path CLASS_NOT_FOUND with recovery guidance", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-notfound-"));
@@ -6325,8 +6388,9 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
       className: string;
       mappingApplied: string;
       members: {
-        fields: Array<{ name: string; ownerFqn: string }>;
-        methods: Array<{ name: string; ownerFqn: string }>;
+        ownerFqn?: string;
+        fields: Array<{ name: string; ownerFqn?: string }>;
+        methods: Array<{ name: string; ownerFqn?: string }>;
       };
     }>;
   }).getClassMembers({
@@ -6340,9 +6404,12 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
   assert.equal(result.mappingApplied, "obfuscated");
   // Member names should be remapped to mojang
   assert.equal(result.members.fields[0].name, "serverPort");
-  assert.equal(result.members.fields[0].ownerFqn, "net.minecraft.server.MojangMain");
   assert.equal(result.members.methods[0].name, "tickServer");
-  assert.equal(result.members.methods[0].ownerFqn, "net.minecraft.server.MojangMain");
+  // All members share one owner (non-inherited), so ownerFqn is hoisted to the
+  // block level (in the requested mojang namespace) and dropped per member.
+  assert.equal(result.members.ownerFqn, "net.minecraft.server.MojangMain");
+  assert.equal(result.members.fields[0].ownerFqn, undefined);
+  assert.equal(result.members.methods[0].ownerFqn, undefined);
 });
 
 test("SourceService getClassMembers with non-obfuscated mapping applies memberPattern post-remap", async () => {

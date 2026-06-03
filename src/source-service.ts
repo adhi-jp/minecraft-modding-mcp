@@ -40,6 +40,7 @@ import * as accessValidate from "./source/access-validate.js";
 import * as validateMixinModule from "./source/validate-mixin.js";
 import * as artifactResolver from "./source/artifact-resolver.js";
 import * as classSource from "./source/class-source.js";
+import type { WireMembersBlock } from "./source/class-source/members-builder.js";
 import * as symbolResolver from "./source/symbol-resolver.js";
 import * as fileAccess from "./source/file-access.js";
 import { type StageEmitter } from "./stage-emitter.js";
@@ -382,11 +383,7 @@ export type GetClassMembersStatus = "ok" | "members_unavailable" | "partial";
 
 export type GetClassMembersOutput = {
   className: string;
-  members: {
-    constructors: SignatureMember[];
-    fields: SignatureMember[];
-    methods: SignatureMember[];
-  };
+  members: WireMembersBlock;
   counts: {
     constructors: number;
     fields: number;
