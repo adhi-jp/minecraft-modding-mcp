@@ -719,7 +719,7 @@ export function searchTextIntent(
   // FAST PATH: an ASCII, non-regex needle narrows candidates via a content LIKE
   // prefilter (a proven superset of the JS match), so only matching files are
   // hydrated instead of scanning the whole corpus. The unchanged JS post-verify in
-  // emitIfMatch removes any over-included rows, so results are identical.
+  // emitIfMatch removes any over-included rows.
   if (match !== "regex" && isAsciiNeedle(query)) {
     const candidateLimit = indexedCandidateLimitForMatch(svc, match);
     const { filePaths, scannedRows } = svc.filesRepo.searchContentLikeCandidatePaths(
@@ -729,27 +729,35 @@ export function searchTextIntent(
     );
     svc.metrics.recordSearchDbRoundtrip();
     svc.metrics.recordSearchRowsScanned(scannedRows);
-    svc.metrics.recordSearchLikePrefilter();
 
-    const scopedPaths = filePaths.filter(passesScope);
-    const rows = svc.filesRepo.getFileContentsByPaths(artifactId, scopedPaths);
-    svc.metrics.recordSearchDbRoundtrip();
-    svc.metrics.recordSearchRowsScanned(rows.length);
+    // The prefilter caps candidates at candidateLimit ordered by file_path. Below the
+    // cap the candidate set is exhaustive, so the JS post-verify yields exactly the old
+    // full-scan hits. AT the cap more matches may exist beyond the path-ordered cut, and
+    // dropping them would change the scored top-K page and totalApprox/cursor — so fall
+    // through to the exhaustive paged scan below to preserve identical results.
+    if (scannedRows < candidateLimit) {
+      svc.metrics.recordSearchLikePrefilter();
+      const scopedPaths = filePaths.filter(passesScope);
+      const rows = svc.filesRepo.getFileContentsByPaths(artifactId, scopedPaths);
+      svc.metrics.recordSearchDbRoundtrip();
+      svc.metrics.recordSearchRowsScanned(rows.length);
 
-    for (const row of rows) {
-      if (scannedBytes >= byteBudget) {
-        truncated = true;
-        break;
+      for (const row of rows) {
+        if (scannedBytes >= byteBudget) {
+          truncated = true;
+          break;
+        }
+        scannedBytes += row.contentBytes;
+        emitIfMatch(row.filePath, row.content);
       }
-      scannedBytes += row.content.length;
-      emitIfMatch(row.filePath, row.content);
-    }
 
-    if (truncated) {
-      svc.metrics.recordSearchScanTruncated();
-      onWarning?.(searchScanBudgetWarning(byteBudget));
+      if (truncated) {
+        svc.metrics.recordSearchScanTruncated();
+        onWarning?.(searchScanBudgetWarning(byteBudget));
+      }
+      return;
     }
-    return;
+    // Cap overflow: fall through to the exhaustive scan (rare; only common-token queries).
   }
 
   // SLOW PATH: regex (cannot be pushed to SQL) or non-ASCII needles (SQLite LIKE
@@ -770,7 +778,7 @@ export function searchTextIntent(
         truncated = true;
         break outer;
       }
-      scannedBytes += row.content.length;
+      scannedBytes += row.contentBytes;
       emitIfMatch(row.filePath, row.content);
     }
 

@@ -1313,3 +1313,68 @@ test("fallback non-ASCII needle skips the LIKE prefilter and stays correct", asy
   assert.ok(hitPaths.has("net/minecraft/a/LowerAccent.java"));
   assert.equal(readSearchScanMetrics(service).likePrefilter, 0);
 });
+
+test("fallback ASCII search recovers high-score matches beyond the LIKE candidate cap", async () => {
+  // 501 files match the needle; the LIKE prefilter caps candidates at 500 (prefix/exact)
+  // ordered by file_path ASC, so the late-sorting zzz/High.java is excluded from the cap.
+  // But High.java has the needle at index 0 (highest score), so the old exhaustive scan
+  // would rank it #1. The fast path must detect the cap overflow and fall through to the
+  // exhaustive scan instead of silently dropping it.
+  const padding = "x".repeat(220);
+  const sourceEntries: Record<string, string> = {};
+  for (let i = 1; i <= 500; i += 1) {
+    const n = String(i).padStart(4, "0");
+    // needle appears LATE -> low score
+    sourceEntries[`aaa/Low${n}.java`] = `// ${padding} needletoken`;
+  }
+  // needle at index 0 -> highest score; path sorts last so the cap would drop it
+  sourceEntries["zzz/High.java"] = `needletoken ${padding}`;
+
+  const { service, resolved } = await createResolvedSearchFixture({
+    rootPrefix: "service-search-overflow-",
+    jarBaseName: "server-overflow",
+    sourceEntries,
+    configOverrides: { indexedSearchEnabled: false }
+  });
+
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "needletoken",
+    intent: "text",
+    match: "prefix",
+    queryMode: "literal",
+    limit: 1
+  });
+
+  assert.equal(result.hits[0]?.filePath, "zzz/High.java");
+});
+
+test("fallback byte budget counts UTF-8 bytes, not UTF-16 code units", async () => {
+  // Each file is 50 multibyte chars = 50 UTF-16 units but 150 UTF-8 bytes. With a 200-byte
+  // budget, a byte-accurate budget truncates at the 3rd file (>=200 after 2x150); a
+  // char-length budget (50 each) would never reach 200 across 3 files and never truncate.
+  const body = "あ".repeat(50);
+  const sourceEntries = {
+    "a/F1.java": body,
+    "a/F2.java": body,
+    "a/F3.java": body
+  };
+  const { service, resolved } = await createResolvedSearchFixture({
+    rootPrefix: "service-search-budget-bytes-",
+    jarBaseName: "server-budget-bytes",
+    sourceEntries,
+    configOverrides: { indexedSearchEnabled: false, searchScanMaxBytes: 200 }
+  });
+
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "あ",
+    intent: "text",
+    match: "contains",
+    queryMode: "literal",
+    limit: 10
+  });
+
+  assert.ok(result.warnings && result.warnings.some((w) => /scan budget/.test(w)));
+  assert.equal(readSearchScanMetrics(service).scanTruncated, 1);
+});
