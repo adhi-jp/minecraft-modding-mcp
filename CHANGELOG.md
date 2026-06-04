@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-06-04
+
 ### Changed
 
 - **Breaking:** `get-class-members` now returns at most **150** members per page by default (was 500). The existing `nextCursor` continuation already covers paging; callers that need more in one response can pass an explicit `maxMembers` (still capped at 5000). `maxClassResults` and `maxVersions` defaults are unchanged.
