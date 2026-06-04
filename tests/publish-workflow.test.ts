@@ -71,26 +71,20 @@ test("publish workflow runs install, check, test, build, then publish in that or
     "expected order install → check → test → build → publish");
 });
 
-test("package.json version is reflected in CHANGELOG and the [Unreleased] section is never empty-headed", async () => {
+test("package.json version is reflected in CHANGELOG and [Unreleased] is a permanent placeholder (Keep a Changelog)", async () => {
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
   const changelog = await readFile("CHANGELOG.md", "utf8");
   const versionHeader = new RegExp(`^##\\s+\\[${pkg.version.replace(/\./g, "\\.")}\\]`, "m");
   assert.match(changelog, versionHeader);
 
-  // Locate the [Unreleased] section if present. If present, it must contain at
-  // least one non-blank body line before the next `## [` header — guarding the
-  // memory rule "delete [Unreleased] when no items remain".
-  const unreleasedIdx = changelog.indexOf("## [Unreleased]");
-  if (unreleasedIdx !== -1) {
-    const sliceAfter = changelog.slice(unreleasedIdx + "## [Unreleased]".length);
-    const nextSection = sliceAfter.search(/^##\s+\[/m);
-    const body = nextSection === -1 ? sliceAfter : sliceAfter.slice(0, nextSection);
-    const meaningful = body.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-    assert.ok(
-      meaningful.length > 0,
-      "CHANGELOG `## [Unreleased]` must either contain entries or be removed entirely"
-    );
-  }
+  // Keep a Changelog: `## [Unreleased]` is a permanent placeholder. On release
+  // its items move down into the new `## [x.y.z]` section, but the header
+  // itself stays — even when empty — so it is never removed.
+  assert.match(
+    changelog,
+    /^##\s+\[Unreleased\]/m,
+    "CHANGELOG must keep a permanent `## [Unreleased]` header (Keep a Changelog)"
+  );
 });
 
 test("publish workflow keeps the explanatory comment about npm 11 OIDC workaround", async () => {
