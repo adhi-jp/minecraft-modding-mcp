@@ -7,6 +7,20 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** tool responses omit `meta.warnings` entirely when there are no warnings (previously always emitted as `[]`), and omit `meta.detailApplied` when it equals the tool's default detail level (entry tools: `summary`; expert/batch tools: their per-tool default). Clients must treat a missing `meta.warnings` as "no warnings" and a missing `meta.detailApplied` as "the default detail was applied". `meta.includeApplied` semantics are unchanged (already omitted when empty).
+- `tools/list` payload slimmed by ~12% (93.2 KB → 82.2 KB, roughly 2,700 fewer tokens held in an agent's context): parameter descriptions that merely echoed enum values (e.g. `"obfuscated | mojang | intermediary | yarn"`) are removed since the JSON Schema `enum` already carries them, the shared `detail`/`include`/`target`/`scope`/`gradleUserHome` descriptions are tightened, the expert-tool steering note is shortened, and the longest tool descriptions (`resolve-method-mapping-exact`, `get-class-source`, `get-class-members`, the `batch-*` family) no longer repeat information already present in their input schemas. Wording-only — no input shapes, defaults, or validation rules changed.
+
+### Fixed
+
+- `validate-mixin` / mixin parsing: `@Mixin(My$GeneratedClass.class)` class-literal targets containing `$` (a legal Java identifier character) are now captured as the full class name; previously the target regex started the capture mid-name and produced a wrong target.
+
+### Performance
+
+- SQLite repositories cache prepared statements for dynamically built queries (cursor-paginated symbol/file lookups, scoped symbol search, count queries, `IN (...)`-list lookups) in a small per-repo LRU instead of re-preparing the SQL on every call.
+- Symbol search with regex/glob/package filters now streams rows from SQLite instead of materializing every symbol of the artifact in memory first; only matching rows are retained.
+
 ## [5.0.0] - 2026-06-04
 
 ### Changed
