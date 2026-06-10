@@ -50,7 +50,9 @@ const IMPORT_RE = /^\s*import\s+([\w.]+)\s*;/;
 // @Mixin(Foo.class)  or  @Mixin({Foo.class, Bar.class})  or  @Mixin(value = Foo.class)
 // Also handles  @Mixin(value = {Foo.class, Bar.class}, priority = 900)
 const MIXIN_ANNOTATION_START_RE = /^\s*@Mixin\s*\(/;
-const MIXIN_TARGET_RE = /(\w[\w.]*?)\.class/g;
+// `$` is a legal Java identifier character (e.g. generated classes like My$Class);
+// without it the capture would start mid-name and yield a wrong target.
+const MIXIN_TARGET_RE = /([\w$][\w.$]*?)\.class/g;
 const MIXIN_PRIORITY_RE = /priority\s*=\s*(\d+)/;
 
 // String-form targets: @Mixin(targets = "pkg.Class") or @Mixin(targets = {"pkg.A", "pkg.B"})

@@ -94,6 +94,15 @@ public abstract class PlayerMixin {
     targets: ["net.minecraft.entity.player.PlayerEntity"]
   },
   {
+    name: "target class name containing a dollar sign",
+    source: `
+@Mixin(My$GeneratedClass.class)
+public abstract class DollarMixin {
+}
+`,
+    targets: ["My$GeneratedClass"]
+  },
+  {
     name: "multi-line @Mixin with value array",
     source: `
 @Mixin(
