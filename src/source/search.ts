@@ -883,13 +883,16 @@ export function findSymbolHits(
     return result;
   }
 
-  const candidates = svc.symbolsRepo.listSymbolsForArtifact(artifactId, scope?.symbolKind);
+  // Stream rows instead of materializing every symbol: regex scans on large
+  // artifacts only keep matching rows in memory this way.
+  const candidates = svc.symbolsRepo.iterateSymbolsForArtifact(artifactId, scope?.symbolKind);
   svc.metrics.recordSearchDbRoundtrip();
-  svc.metrics.recordSearchRowsScanned(candidates.length);
+  let rowsScanned = 0;
   const result: IndexedSymbolHit[] = [];
   const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
 
   for (const symbol of candidates) {
+    rowsScanned += 1;
     if (!checkPackagePrefix(symbol.filePath, scope?.packagePrefix)) {
       continue;
     }
@@ -916,6 +919,7 @@ export function findSymbolHits(
       matchIndex: index
     });
   }
+  svc.metrics.recordSearchRowsScanned(rowsScanned);
 
   return result;
 }

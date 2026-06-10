@@ -215,6 +215,10 @@ export class FilesRepo {
   private readonly searchFtsStmt;
   private readonly getByPathsStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
   private readonly classLookupStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
+  // Fixed-SQL statements built outside the constructor; cached (LRU by SQL text)
+  // so hot paths do not re-prepare per call.
+  private readonly dynamicStmtCache = new Map<string, ReturnType<SqliteDatabase["prepare"]>>();
+  private static readonly DYNAMIC_STMT_CACHE_MAX = 64;
 
   constructor(private readonly db: SqliteDatabase) {
     this.deleteStmt = this.db.prepare(`
@@ -272,6 +276,23 @@ export class FilesRepo {
       ORDER BY rank
       LIMIT ?
     `);
+  }
+
+  private prepareCached(sql: string): ReturnType<SqliteDatabase["prepare"]> {
+    const cached = this.dynamicStmtCache.get(sql);
+    if (cached) {
+      // Refresh recency so hot statements survive eviction.
+      this.dynamicStmtCache.delete(sql);
+      this.dynamicStmtCache.set(sql, cached);
+      return cached;
+    }
+    const stmt = this.db.prepare(sql);
+    this.dynamicStmtCache.set(sql, stmt);
+    if (this.dynamicStmtCache.size > FilesRepo.DYNAMIC_STMT_CACHE_MAX) {
+      const oldest = this.dynamicStmtCache.keys().next().value;
+      if (oldest !== undefined) this.dynamicStmtCache.delete(oldest);
+    }
+    return stmt;
   }
 
   clearFilesForArtifact(artifactId: string): void {
@@ -454,7 +475,7 @@ export class FilesRepo {
     let pathRows: { file_path: string }[];
     if (includePath && cursor && cursor.score === 120) {
       // Cursor is within the path tier — only fetch paths after cursor.filePath
-      pathRows = this.db.prepare(`
+      pathRows = this.prepareCached(`
         SELECT file_path
         FROM files
         WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\' AND file_path > ?
@@ -584,7 +605,7 @@ export class FilesRepo {
       return 0;
     }
     try {
-      const row = this.db.prepare(
+      const row = this.prepareCached(
         `SELECT COUNT(*) AS cnt FROM files_fts WHERE artifact_id = ? AND files_fts MATCH ?`
       ).get(artifactId, ftsQuery) as { cnt: number } | undefined;
       return row?.cnt ?? 0;
@@ -603,7 +624,7 @@ export class FilesRepo {
       return 0;
     }
     const likeQuery = `%${normalized}%`;
-    const row = this.db.prepare(
+    const row = this.prepareCached(
       `SELECT COUNT(*) AS cnt FROM files WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\'`
     ).get(artifactId, likeQuery) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
@@ -615,8 +636,7 @@ export class FilesRepo {
       return undefined;
     }
 
-    const row = this.db
-      .prepare(`
+    const row = this.prepareCached(`
         SELECT file_path
         FROM files
         WHERE artifact_id = ?

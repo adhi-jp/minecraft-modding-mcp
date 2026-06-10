@@ -118,6 +118,10 @@ export class SymbolsRepo {
   private readonly listByArtifactStmt;
   private readonly listByArtifactKindStmt;
   private readonly listByFileStmt;
+  // Dynamic WHERE-clause builders produce a small bounded set of SQL strings;
+  // cache their prepared statements (LRU by SQL text) instead of re-preparing per call.
+  private readonly dynamicStmtCache = new Map<string, ReturnType<SqliteDatabase["prepare"]>>();
+  private static readonly DYNAMIC_STMT_CACHE_MAX = 64;
 
   constructor(private readonly db: SqliteDatabase) {
     this.deleteStmt = this.db.prepare(`
@@ -169,6 +173,23 @@ export class SymbolsRepo {
       WHERE artifact_id = ? AND file_path = ?
       ORDER BY line ASC, symbol_name ASC
     `);
+  }
+
+  private prepareCached(sql: string): ReturnType<SqliteDatabase["prepare"]> {
+    const cached = this.dynamicStmtCache.get(sql);
+    if (cached) {
+      // Refresh recency so hot statements survive eviction.
+      this.dynamicStmtCache.delete(sql);
+      this.dynamicStmtCache.set(sql, cached);
+      return cached;
+    }
+    const stmt = this.db.prepare(sql);
+    this.dynamicStmtCache.set(sql, stmt);
+    if (this.dynamicStmtCache.size > SymbolsRepo.DYNAMIC_STMT_CACHE_MAX) {
+      const oldest = this.dynamicStmtCache.keys().next().value;
+      if (oldest !== undefined) this.dynamicStmtCache.delete(oldest);
+    }
+    return stmt;
   }
 
   clearSymbolsForArtifact(artifactId: string): void {
@@ -229,7 +250,7 @@ export class SymbolsRepo {
         LIMIT ?
       `;
       const nameParam = options.exact ? symbolName : `${symbolName}%`;
-      rows = this.db.prepare(sql).all(
+      rows = this.prepareCached(sql).all(
         options.artifactId,
         options.symbolKind ?? "",
         options.symbolKind ?? "",
@@ -272,25 +293,34 @@ export class SymbolsRepo {
   }
 
   listSymbolsForArtifact(artifactId: string, symbolKind?: string): SymbolRow[] {
+    return [...this.iterateSymbolsForArtifact(artifactId, symbolKind)];
+  }
+
+  /**
+   * Streaming variant of listSymbolsForArtifact: rows are mapped lazily so callers
+   * that filter (e.g. regex symbol search) never materialize the full symbol set.
+   * Do not run other statements on this connection while consuming the iterator.
+   */
+  *iterateSymbolsForArtifact(artifactId: string, symbolKind?: string): IterableIterator<SymbolRow> {
     const rows = (symbolKind
-      ? this.listByArtifactKindStmt.all(artifactId, symbolKind)
-      : this.listByArtifactStmt.all(artifactId)) as {
+      ? this.listByArtifactKindStmt.iterate(artifactId, symbolKind)
+      : this.listByArtifactStmt.iterate(artifactId)) as Iterable<{
       file_path: string;
       symbol_kind: string;
       symbol_name: string;
       qualified_name: string | null;
       line: number;
-    }[];
+    }>;
 
-    return rows.map((row) =>
-      toSymbolRow(artifactId, {
+    for (const row of rows) {
+      yield toSymbolRow(artifactId, {
         filePath: row.file_path,
         symbolKind: row.symbol_kind,
         symbolName: row.symbol_name,
         qualifiedName: row.qualified_name ?? undefined,
         line: row.line
-      })
-    );
+      });
+    }
   }
 
   listSymbolsForFile(artifactId: string, filePath: string): SymbolRow[] {
@@ -333,7 +363,7 @@ export class SymbolsRepo {
       ORDER BY file_path ASC, line ASC, symbol_name ASC
     `;
     const params = symbolKind ? [artifactId, ...uniqueFilePaths, symbolKind] : [artifactId, ...uniqueFilePaths];
-    const rows = this.db.prepare(sql).all(...params) as {
+    const rows = this.prepareCached(sql).all(...params) as {
       file_path: string;
       symbol_kind: string;
       symbol_name: string;
@@ -366,8 +396,7 @@ export class SymbolsRepo {
     }
 
     const placeholders = unique.map(() => "?").join(", ");
-    const rows = this.db
-      .prepare(`
+    const rows = this.prepareCached(`
         SELECT file_path, symbol_kind, symbol_name, qualified_name, line
         FROM symbols
         WHERE artifact_id = ?
@@ -461,7 +490,7 @@ export class SymbolsRepo {
       ORDER BY symbol_name ASC, file_path ASC, line ASC
       LIMIT ?
     `;
-    const rows = this.db.prepare(sql).all(...params) as {
+    const rows = this.prepareCached(sql).all(...params) as {
       file_path: string;
       symbol_kind: string;
       symbol_name: string;
@@ -532,13 +561,12 @@ export class SymbolsRepo {
       WHERE artifact_id = ?
       ${where.length > 0 ? `AND ${where.join("\n      AND ")}` : ""}
     `;
-    const row = this.db.prepare(sql).get(...params) as { cnt: number } | undefined;
+    const row = this.prepareCached(sql).get(...params) as { cnt: number } | undefined;
     return row?.cnt ?? 0;
   }
 
   listDistinctFilePathsByKind(artifactId: string, symbolKind: string): string[] {
-    const rows = this.db
-      .prepare(`
+    const rows = this.prepareCached(`
         SELECT DISTINCT file_path
         FROM symbols
         WHERE artifact_id = ? AND symbol_kind = ?
@@ -555,8 +583,7 @@ export class SymbolsRepo {
       return undefined;
     }
 
-    const row = this.db
-      .prepare(`
+    const row = this.prepareCached(`
         SELECT file_path
         FROM symbols
         WHERE artifact_id = ?
