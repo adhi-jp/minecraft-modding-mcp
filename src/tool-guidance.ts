@@ -22,7 +22,8 @@ export type ToolMeta = {
   requestId: string;
   tool: string;
   durationMs: number;
-  warnings: string[];
+  /** Omitted entirely when there are no warnings (token efficiency). */
+  warnings?: string[];
   /** Structured companion to `warnings`: one classified entry per warning string, referencing its text via `warnings[detail.index]`. */
   warningDetails?: WarningDetail[];
   detailApplied?: "summary" | "standard" | "full";

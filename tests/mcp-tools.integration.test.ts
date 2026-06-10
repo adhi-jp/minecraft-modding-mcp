@@ -764,9 +764,9 @@ test("source lookup tools/list schema clarifies object target inputs and loader 
     properties?: { reportMode?: { enum?: string[]; description?: string } };
   };
 
-  assert.match(resolveArtifactSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
-  assert.match(getClassSourceSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
-  assert.match(getClassMembersSchema.properties?.target?.description ?? "", /Must be an object, not a string\./);
+  assert.match(resolveArtifactSchema.properties?.target?.description ?? "", /Object, not string\./);
+  assert.match(getClassSourceSchema.properties?.target?.description ?? "", /Object, not string\./);
+  assert.match(getClassMembersSchema.properties?.target?.description ?? "", /Object, not string\./);
   assert.match(resolveArtifactSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
   assert.match(getClassSourceSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
   assert.match(getClassMembersSchema.properties?.scope?.description ?? "", /loader.*runtime/i);
@@ -1495,7 +1495,8 @@ test("manage-cache summary normalizes apply to preview at the public contract", 
     };
   };
 
-  assert.equal(result.structuredContent?.meta?.detailApplied, "summary");
+  // detailApplied is omitted when it equals the tool default ("summary" for entry tools)
+  assert.equal(result.structuredContent?.meta?.detailApplied, undefined);
   assert.deepEqual(result.structuredContent?.meta?.includeApplied, ["warnings", "preview"]);
   assert.equal(result.structuredContent?.result?.operation?.executionMode, "preview");
 });
@@ -1952,9 +1953,11 @@ test("find-mapping detail=summary does not corrupt identity-branch result and pr
   // candidates must be dropped (P4: identity branch resolved + exact + count=1)
   assert.ok(droppedKeys.includes("candidates"), "candidates should be dropped for resolved exact identity branch");
 
-  // meta.warnings must survive — compact only applies to result, not meta
-  assert.ok(Array.isArray(withCompact.structuredContent?.meta?.warnings));
-  assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
+  // meta.warnings is omitted when empty; detail must not change what meta carries
+  assert.deepEqual(
+    withCompact.structuredContent?.meta?.warnings,
+    withoutCompact.structuredContent?.meta?.warnings
+  );
 });
 
 test("resolve-artifact compact:true omits diagnostic fields from local-jar result", async () => {
@@ -2011,9 +2014,11 @@ test("resolve-artifact compact:true omits diagnostic fields from local-jar resul
   // Normal result must have at least some of the diagnostic fields
   assert.ok("artifactContents" in normalResult, "normal result should have artifactContents");
 
-  // meta.warnings must be present in both
-  assert.ok(Array.isArray(withCompact.structuredContent?.meta?.warnings));
-  assert.ok(Array.isArray(withoutCompact.structuredContent?.meta?.warnings));
+  // meta.warnings is omitted when empty; detail must not change what meta carries
+  assert.deepEqual(
+    withCompact.structuredContent?.meta?.warnings,
+    withoutCompact.structuredContent?.meta?.warnings
+  );
 });
 
 test("list-artifact-files compact:true drops artifactContents and preserves items", async () => {

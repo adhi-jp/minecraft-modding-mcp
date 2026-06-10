@@ -125,14 +125,16 @@ export function createTruncationMeta(input: {
 
 export function buildEntryToolMeta(input: {
   detail: DetailLevel;
+  /** When set and equal to `detail`, detailApplied is omitted (the default needs no echo). */
+  defaultDetail?: DetailLevel;
   include?: readonly string[];
   warnings?: readonly string[];
   truncated?: TruncationMeta;
   pagination?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
-    warnings: [...(input.warnings ?? [])],
-    detailApplied: input.detail,
+    ...(input.warnings && input.warnings.length > 0 ? { warnings: [...input.warnings] } : {}),
+    ...(input.detail === input.defaultDetail ? {} : { detailApplied: input.detail }),
     ...(input.include && input.include.length > 0
       ? { includeApplied: normalizeIncludeGroups(input.include) }
       : {}),

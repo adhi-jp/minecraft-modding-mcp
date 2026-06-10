@@ -232,7 +232,7 @@ const server = new McpServer({
 // Entry tools, batch tools, and the NBT/runtime utilities (which have no entry
 // equivalent) keep their plain descriptions via server.tool().
 const EXPERT_TOOL_NOTE =
-  " Expert/follow-up tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first; reach for this only for the narrow operation it names.";
+  " Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.";
 
 const expertTool: typeof server.tool = ((
   name: string,
@@ -631,13 +631,18 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       );
     }
 
-    // Entry, expert, and batch tools all report the applied detail/include shape in meta.
+    // Entry, expert, and batch tools report the applied detail/include shape in meta.
+    // detailApplied is omitted when it matches the tool's default to keep responses lean.
+    const defaultDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+      ? "summary"
+      : DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary";
     const entryMeta =
       ENTRY_TOOL_NAMES.has(tool) ||
       DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
       BATCH_DETAIL_TOOL_NAMES.has(tool)
         ? buildEntryToolMeta({
             detail: effectiveDetail,
+            defaultDetail,
             include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
           })
         : undefined;
@@ -653,7 +658,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         requestId,
         tool,
         durationMs,
-        warnings,
+        ...(warnings.length > 0 ? { warnings } : {}),
         ...(warningDetails.length > 0 ? { warningDetails } : {})
       } satisfies ToolMeta
     });
@@ -698,8 +703,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
     const errorMeta: ToolMeta = {
       requestId,
       tool,
-      durationMs: errorDurationMs,
-      warnings: []
+      durationMs: errorDurationMs
     };
     applyErrorMetaExtensions(errorMeta, caughtError);
     return objectResult({
@@ -733,7 +737,7 @@ server.tool("inspect-minecraft",
 registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
 server.tool("analyze-symbol",
-  "Top-level workflow tool for symbol existence, mapping, lifecycle (with fromVersion/toVersion/maxVersions/includeTimeline range controls), workspace analysis, and API overview. subject.kind accepts 'symbol' to auto-detect class/field/method from the selector (inferred kind is returned as a warning).",
+  "Top-level workflow tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview. subject.kind='symbol' auto-detects class/field/method from the selector.",
   analyzeSymbolShape,
   { readOnlyHint: true },
   async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>
@@ -811,7 +815,7 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
 
 if (!BATCH_TOOLS_OFF) {
   server.tool("batch-class-source",
-    "Batch lookup: read source for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-source. Not read-only: per-entry outputFile writes source files to disk.",
+    "Batch get-class-source for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary. Not read-only: per-entry outputFile writes to disk.",
     batchClassSourceShape,
     { readOnlyHint: false },
     async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
@@ -821,7 +825,7 @@ if (!BATCH_TOOLS_OFF) {
   registerToolSchema("batch-class-source", batchClassSourceSchema);
 
   server.tool("batch-class-members",
-    "Batch lookup: list members for many classes in one call, sharing a single resolved artifact. Returns per-entry { status, result?, error? } plus aggregate summary. Per-entry retry suggestions point at get-class-members.",
+    "Batch get-class-members for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary.",
     batchClassMembersShape,
     { readOnlyHint: true },
     async (args) => runTool("batch-class-members", args, batchClassMembersSchema, async (input) =>
@@ -831,7 +835,7 @@ if (!BATCH_TOOLS_OFF) {
   registerToolSchema("batch-class-members", batchClassMembersSchema);
 
   server.tool("batch-symbol-exists",
-    "Batch existence/mapping query: probe many symbols in one call against a shared Minecraft-version artifact. Accepts target.kind=workspace or version only (other kinds carry library versions, not Minecraft versions). Per-entry retry suggestions point at check-symbol-exists.",
+    "Batch check-symbol-exists for many symbols against one shared Minecraft version (target.kind=version or workspace only).",
     batchSymbolExistsShape,
     { readOnlyHint: true },
     async (args) => runTool("batch-symbol-exists", args, batchSymbolExistsSchema, async (input) =>
@@ -841,7 +845,7 @@ if (!BATCH_TOOLS_OFF) {
   registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
 
   server.tool("batch-mappings",
-    "Batch mapping translation: resolve many symbols across mapping namespaces with one shared Minecraft version. Per-entry retry suggestions point at find-mapping.",
+    "Batch find-mapping: resolve many symbols across mapping namespaces with one shared Minecraft version.",
     batchMappingsShape,
     { readOnlyHint: true },
     async (args) => runTool("batch-mappings", args, batchMappingsSchema, async (input) =>
@@ -852,7 +856,7 @@ if (!BATCH_TOOLS_OFF) {
 }
 
 expertTool("resolve-artifact",
-  "Resolve source artifact from a target object ({ kind, value }) and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted; other adjacent *-sources.jar files are informational.",
+  "Resolve a source artifact and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted.",
   resolveArtifactShape,
   { readOnlyHint: true },
   async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) =>
@@ -896,7 +900,7 @@ expertTool("find-class",
 registerToolSchema("find-class", findClassSchema);
 
 expertTool("get-class-source",
-  "Get Java source for a class by target ({ kind: 'artifact', artifactId } or { kind: 'version'|'jar'|'coordinate'|'workspace'|'dependency', ... } — same shape as resolve-artifact). To read source text, pass mode=snippet (bounded excerpt) or mode=full (entire source); the default mode=metadata returns a symbol outline only, not the body. Not read-only: outputFile writes the source to disk.",
+  "Get Java source for a class. Default mode=metadata returns a symbol outline only; pass mode=snippet or mode=full to read source text. Not read-only: outputFile writes to disk.",
   getClassSourceShape,
   { readOnlyHint: false },
   async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) => {
@@ -927,7 +931,7 @@ expertTool("get-class-source",
 registerToolSchema("get-class-source", getClassSourceSchema);
 
 expertTool("get-class-members",
-  "Get fields/methods/constructors for one class from binary bytecode by target ({ kind: 'artifact', artifactId } or { kind: 'version'|'jar'|'coordinate'|'workspace'|'dependency', ... } — same shape as resolve-artifact).",
+  "Get fields/methods/constructors for one class from binary bytecode.",
   getClassMembersShape,
   { readOnlyHint: true },
   async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) => {
@@ -1092,7 +1096,7 @@ expertTool("find-mapping",
 registerToolSchema("find-mapping", findMappingSchema);
 
 expertTool("resolve-method-mapping-exact",
-  "Strict shortcut for find-mapping(kind=method, signatureMode=exact): resolve one method mapping by owner+name+descriptor between namespaces and report resolved/not_found/ambiguous. Stricter than find-mapping's exact mode — it requires a COMPLETE descriptor projection and returns mapping_unavailable when the descriptor's class references cannot all be projected to the target namespace (find-mapping is more lenient there). Use find-mapping kind=method signatureMode=exact unless you specifically need that strict-completeness guarantee.",
+  "Strict variant of find-mapping(kind=method, signatureMode=exact): requires a COMPLETE descriptor projection and returns mapping_unavailable when any descriptor class reference cannot be projected. Prefer find-mapping unless you need that guarantee.",
   resolveMethodMappingExactShape,
   { readOnlyHint: true },
   async (args) => runTool("resolve-method-mapping-exact", args, resolveMethodMappingExactSchema, async (input) =>

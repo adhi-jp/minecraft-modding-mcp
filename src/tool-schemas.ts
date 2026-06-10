@@ -10,9 +10,9 @@ import { DETAIL_LEVELS, CANONICAL_INCLUDE_GROUPS } from "./entry-tools/response-
 // entry-tool contract. Defaults are per-tool (see DEFAULT_DETAIL_BY_TOOL in response-utils):
 // resolution/mapping tools + batch default "summary"; source/file tools default "standard".
 const DETAIL_DESCRIPTION =
-  "Response detail: 'summary' (terse: drops diagnostics/empties, slims candidates), 'standard' (default for source/file tools: keeps fields but drops heavy diagnostics), 'full' (everything). Replaces the old `compact` flag.";
+  "summary = terse (drops diagnostics/empties, slims candidates); standard = keeps fields, drops heavy diagnostics; full = everything.";
 const RESPONSE_INCLUDE_DESCRIPTION =
-  "Opt specific field groups back in regardless of detail, e.g. [\"provenance\"], [\"candidates\"], [\"samples\"], [\"artifact\"], [\"descriptors\"].";
+  'Field groups to include regardless of detail, e.g. ["provenance"].';
 function detailParam(defaultLevel: (typeof DETAIL_LEVELS)[number]) {
   return z.enum(DETAIL_LEVELS).default(defaultLevel).describe(DETAIL_DESCRIPTION);
 }
@@ -45,7 +45,7 @@ export const nonEmptyString = z.string().trim().min(1);
 export const optionalNonEmptyString = z.string().trim().min(1).optional();
 export const optionalPositiveInt = z.number().int().positive().optional();
 export const gradleUserHomeSchema = optionalNonEmptyString.describe(
-  "Gradle User Home to use for Loom/Gradle cache lookups instead of the MCP process GRADLE_USER_HOME."
+  "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
 );
 
 // Optional descriptor: "" and whitespace-only strings are normalized to undefined so that
@@ -137,18 +137,18 @@ export const sourceLookupTargetSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
-  'Object with kind. Examples: {"kind":"version","value":"1.21.10"}, {"kind":"workspace"} (uses projectPath), or {"kind":"dependency","group":"dev.architectury","name":"architectury"}. Must be an object, not a string.';
+  'Object, not string. e.g. {"kind":"version","value":"1.21.10"}, {"kind":"workspace"}, {"kind":"dependency","group":"g","name":"n"}.';
 export const SOURCE_LOOKUP_TARGET_DESCRIPTION =
-  'Object with kind (same shape as resolve-artifact). Examples: {"kind":"version","value":"1.21.10"}, {"kind":"workspace"} (uses projectPath), {"kind":"dependency","group":"...","name":"..."}, or {"kind":"artifact","artifactId":"..."} to reuse an already-resolved artifact. Must be an object, not a string.';
+  'Same shape as resolve-artifact target, plus {"kind":"artifact","artifactId":"..."} to reuse a resolved artifact. Object, not string.';
 export const SOURCE_SCOPE_DESCRIPTION =
-  "vanilla = Mojang client jar only; merged = source-oriented merged runtime discovery; loader = loader/runtime artifact discovery when the workspace exposes transformed runtime jars.";
+  "vanilla = Mojang client jar only; merged = merged runtime discovery; loader = loader-transformed runtime jars.";
 
 // Shared describe() text reused by every symbol-lookup tool so the contract reads
 // identically on find-mapping and check-symbol-exists (and any future sibling).
 export const SIGNATURE_MODE_DESCRIPTION =
   "exact: descriptor required for kind=method; name-only (default): match by owner+name only.";
 export const NAME_MODE_DESCRIPTION =
-  "auto (default): accept a fully-qualified name, or a dotless name where the tool allows it; fqcn: require a fully-qualified name.";
+  "auto (default): FQCN, or dotless name where allowed; fqcn: require FQCN.";
 
 export const listVersionsShape = {
   includeSnapshots: z.boolean().default(false),
@@ -158,14 +158,14 @@ export const listVersionsSchema = z.object(listVersionsShape);
 
 export const resolveArtifactShape = {
   target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().default(true),
-  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  projectPath: optionalNonEmptyString.describe("Workspace root for Loom cache-assisted resolution"),
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
+  preferProjectVersion: z.boolean().optional().describe("Detect MC version from gradle.properties and override target.value"),
+  strictVersion: z.boolean().optional().describe("Reject version-approximated results (default false)"),
   detail: detailParam("summary"),
   include: responseIncludeParam
 };
@@ -175,14 +175,14 @@ export const getClassSourceShape = {
   className: nonEmptyString,
   mode: sourceModeSchema.default("metadata").describe("metadata = symbol outline only; snippet = source with default maxLines=200; full = entire source"),
   target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().default(true),
-  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  projectPath: optionalNonEmptyString.describe("Workspace root for Loom cache-assisted resolution"),
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
+  preferProjectVersion: z.boolean().optional().describe("Detect MC version from gradle.properties and override target.value"),
+  strictVersion: z.boolean().optional().describe("Reject version-approximated results (default false)"),
   startLine: optionalPositiveInt,
   endLine: optionalPositiveInt,
   maxLines: optionalPositiveInt,
@@ -191,7 +191,7 @@ export const getClassSourceShape = {
   detail: detailParam("standard"),
   include: responseIncludeParam,
   includeProvenance: z.boolean().default(false).describe(
-    "Alias for include:[\"provenance\"]. When true, include diagnostic metadata (provenance, qualityFlags, artifactContents). Default false — omitted to keep the common path lean."
+    'Alias for include:["provenance"] (diagnostic metadata). Default false.'
   )
 };
 export const getClassSourceSchema = z
@@ -213,27 +213,27 @@ export const getClassSourceSchema = z
 export const getClassMembersShape = {
   className: nonEmptyString,
   target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional().describe("default obfuscated"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().default(true),
-  access: memberAccessSchema.default("public").describe("public | all"),
+  access: memberAccessSchema.default("public"),
   includeSynthetic: z.boolean().default(false),
   includeInherited: z.boolean().default(false),
   memberPattern: optionalNonEmptyString,
   maxMembers: optionalPositiveInt.describe("default 150, max 5000. Page beyond the first 150 with cursor."),
-  cursor: optionalNonEmptyString.describe("Continuation cursor from a previous response's nextCursor; resumes the member list after the last returned page."),
+  cursor: optionalNonEmptyString.describe("nextCursor from the previous response."),
   projectPath: optionalNonEmptyString,
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false."),
+  preferProjectVersion: z.boolean().optional().describe("Detect MC version from gradle.properties and override version"),
+  strictVersion: z.boolean().optional().describe("Reject version-approximated results (default false)"),
   detail: detailParam("standard"),
   include: responseIncludeParam,
   includeProvenance: z.boolean().default(false).describe(
-    "Alias for include:[\"provenance\"]. When true, include diagnostic metadata (provenance, qualityFlags, artifactContents). Default false — omitted to keep the common path lean."
+    'Alias for include:["provenance"] (diagnostic metadata). Default false.'
   ),
   includeDescriptors: z.boolean().default(false).describe(
-    "Alias for include:[\"descriptors\"]. When true, also emit jvmDescriptor on FIELD members. Default false: field descriptors are omitted (the type is already in javaSignature). Method/constructor descriptors are always present for overload disambiguation."
+    'Alias for include:["descriptors"]: also emit jvmDescriptor on FIELD members (method/constructor descriptors are always present). Default false.'
   )
 };
 export const getClassMembersSchema = z.object(getClassMembersShape);
@@ -256,24 +256,24 @@ export const verifyMixinTargetMemberSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const verifyMixinTargetShape = {
-  owner: nonEmptyString.describe("Fully-qualified class name of the target owner (e.g. net.minecraft.world.entity.LivingEntity)."),
+  owner: nonEmptyString.describe("Fully-qualified target owner class name."),
   member: verifyMixinTargetMemberSchema.describe(
-    'Member to verify. Object with kind. Examples: {"kind":"method","name":"tick","descriptor":"()V"} or {"kind":"field","name":"airSupply"}.'
+    'e.g. {"kind":"method","name":"tick","descriptor":"()V"} or {"kind":"field","name":"airSupply"}.'
   ),
   mixinMemberName: optionalNonEmptyString.describe(
-    "Optional caller-authored mixin field/method name. Drives @Accessor (getXxx/setXxx) and @Invoker (invokeXxx/callXxx) advice when the target is private."
+    "Caller-authored mixin member name; drives @Accessor/@Invoker advice when the target is private."
   ),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional(),
   autoRemap: z.boolean().optional().describe(
-    "When true and mapping differs from the artifact namespace, translate owner+member via find-mapping instead of failing ERR_NAMESPACE_MISMATCH. Requires a version-based target."
+    "Translate owner+member via find-mapping when mapping differs from the artifact namespace (requires a version-based target)."
   ),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   projectPath: optionalNonEmptyString.describe("Workspace root path for target.kind=workspace and Loom cache assistance."),
   gradleUserHome: gradleUserHomeSchema,
   target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override target.value"),
-  strictVersion: z.boolean().optional().describe("When true, reject version-approximated results instead of returning them. Default false.")
+  preferProjectVersion: z.boolean().optional().describe("Detect MC version from gradle.properties and override target.value"),
+  strictVersion: z.boolean().optional().describe("Reject version-approximated results (default false)")
 };
 export const verifyMixinTargetSchema = z.object(verifyMixinTargetShape);
 
@@ -291,7 +291,7 @@ export const batchClassSourceEntrySchema = z.object({
 
 export const batchClassSourceShape = {
   target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
+  mapping: sourceMappingSchema.optional(),
   sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().optional(),
   projectPath: optionalNonEmptyString,
@@ -366,7 +366,7 @@ export const batchSymbolExistsTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("version"), value: nonEmptyString }),
   workspaceTargetSchema
 ]).describe(
-  'Object with kind. Only kind="version" or kind="workspace" is accepted; dependency/jar/coordinate targets carry library versions, not Minecraft versions, and would corrupt the mapping query.'
+  'Only kind="version" or kind="workspace"; other kinds carry library versions, not MC versions.'
 );
 
 export const batchSymbolExistsEntrySchema = z.object({
@@ -418,9 +418,7 @@ export const batchMappingsEntrySchema = z
   .strict();
 
 export const batchMappingsShape = {
-  version: nonEmptyString.describe(
-    "Minecraft version shared by every entry. Per-entry version is rejected; this batch shape is intentionally single-version."
-  ),
+  version: nonEmptyString.describe("Minecraft version shared by every entry (single-version batch)."),
   sourcePriority: mappingSourcePrioritySchema.optional(),
   projectPath: optionalNonEmptyString,
   gradleUserHome: gradleUserHomeSchema,
@@ -435,18 +433,18 @@ export const batchMappingsSchema = z.object(batchMappingsShape);
 export const searchClassSourceShape = {
   artifactId: nonEmptyString,
   query: nonEmptyString,
-  intent: searchIntentSchema.optional().describe("symbol | text | path"),
-  match: searchMatchSchema.optional().describe("exact | prefix | contains | regex"),
+  intent: searchIntentSchema.optional(),
+  match: searchMatchSchema.optional(),
   packagePrefix: optionalNonEmptyString,
   fileGlob: optionalNonEmptyString,
-  symbolKind: searchSymbolKindSchema.optional().describe("class | interface | enum | record | method | field"),
-  queryMode: z.enum(["auto", "token", "literal"]).default("auto").describe("auto: indexed search, including separator queries like foo.bar; token: indexed-only; literal: explicit substring scan only"),
+  symbolKind: searchSymbolKindSchema.optional(),
+  queryMode: z.enum(["auto", "token", "literal"]).default("auto").describe("auto: indexed search incl. separator queries like foo.bar; token: indexed-only; literal: substring scan only"),
   limit: optionalPositiveInt.default(20),
   cursor: optionalNonEmptyString,
   queryNamespace: sourceMappingSchema.optional().describe(
-    "Namespace of the query. When set and intent='symbol' with a fully-qualified class name, the query is translated through find-mapping before searching the artifact namespace. Ignored for text/path intents (warning surfaced)."
+    "Query namespace; symbol-intent FQCN queries are translated via find-mapping first. Ignored for text/path intents."
   ),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first. Used only when queryNamespace triggers translation."),
+  sourcePriority: mappingSourcePrioritySchema.optional().describe("Used only when queryNamespace triggers translation."),
   gradleUserHome: gradleUserHomeSchema,
   detail: detailParam("standard"),
   include: responseIncludeParam
@@ -483,8 +481,8 @@ export const traceSymbolLifecycleShape = {
   descriptor: optionalDescriptorString.describe('optional JVM descriptor, e.g. "(I)V". Empty strings are treated as omitted.'),
   fromVersion: optionalNonEmptyString,
   toVersion: optionalNonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional().describe("default obfuscated"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
   includeSnapshots: z.boolean().default(false),
   maxVersions: optionalPositiveInt.default(120).describe("max 400"),
@@ -496,8 +494,8 @@ export const diffClassSignaturesShape = {
   className: nonEmptyString,
   fromVersion: nonEmptyString,
   toVersion: nonEmptyString,
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn (default obfuscated)"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional().describe("default obfuscated"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
   includeFullDiff: z.boolean().default(true).describe("When false, omit from/to snapshots from modified entries and keep only key+changed")
 };
@@ -505,13 +503,13 @@ export const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
 
 export const findMappingShape = {
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema.describe("class | field | method"),
+  kind: workspaceSymbolKindSchema,
   name: nonEmptyString,
   owner: optionalNonEmptyString,
-  descriptor: optionalDescriptorString.describe("JVM descriptor. Optional when signatureMode='name-only' (default). Empty strings are treated as omitted."),
-  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  descriptor: optionalDescriptorString.describe("JVM descriptor; optional when signatureMode='name-only'. Empty = omitted."),
+  sourceMapping: sourceMappingSchema,
+  targetMapping: sourceMappingSchema,
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
   nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
   signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
@@ -522,7 +520,7 @@ export const findMappingShape = {
     })
     .partial()
     .optional(),
-  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
+  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200"),
   detail: detailParam("summary"),
   include: responseIncludeParam
 };
@@ -596,11 +594,11 @@ export const resolveMethodMappingExactShape = {
   name: nonEmptyString,
   owner: nonEmptyString,
   descriptor: nonEmptyString.describe("required JVM descriptor"),
-  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  targetMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  sourceMapping: sourceMappingSchema,
+  targetMapping: sourceMappingSchema,
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
-  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
+  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200"),
   detail: detailParam("summary"),
   include: responseIncludeParam
 };
@@ -644,26 +642,26 @@ export const classApiKindsSchema = z.string().superRefine((value, ctx) => {
 export const getClassApiMatrixShape = {
   version: nonEmptyString,
   className: nonEmptyString,
-  classNameMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
+  classNameMapping: sourceMappingSchema,
   includeKinds: classApiKindsSchema.optional().describe("comma-separated: class,field,method"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
   maxRows: optionalPositiveInt.describe("Limit returned rows (max 5000)"),
-  cursor: optionalNonEmptyString.describe("Continuation cursor from a previous response's nextCursor; resumes after the last returned row.")
+  cursor: optionalNonEmptyString.describe("nextCursor from the previous response.")
 };
 export const getClassApiMatrixSchema = z.object(getClassApiMatrixShape);
 
 export const resolveWorkspaceSymbolShape = {
   projectPath: nonEmptyString,
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema.describe("class | field | method"),
+  kind: workspaceSymbolKindSchema,
   name: nonEmptyString,
   owner: optionalNonEmptyString,
   descriptor: optionalDescriptorString.describe("JVM descriptor. Empty strings are treated as omitted."),
-  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  sourceMapping: sourceMappingSchema,
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
-  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates for field/method lookups (default 5, max 200). Raise when you need the full candidate list."),
+  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200 (field/method lookups)"),
   detail: detailParam("summary"),
   include: responseIncludeParam
 };
@@ -729,16 +727,16 @@ export const resolveWorkspaceSymbolSchema = z
 
 export const checkSymbolExistsShape = {
   version: nonEmptyString,
-  kind: workspaceSymbolKindSchema.describe("class | field | method"),
+  kind: workspaceSymbolKindSchema,
   owner: optionalNonEmptyString,
   name: nonEmptyString,
-  descriptor: optionalDescriptorString.describe("JVM descriptor. Optional when signatureMode='name-only' (default). Empty strings are treated as omitted."),
-  sourceMapping: sourceMappingSchema.describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  descriptor: optionalDescriptorString.describe("JVM descriptor; optional when signatureMode='name-only'. Empty = omitted."),
+  sourceMapping: sourceMappingSchema,
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   gradleUserHome: gradleUserHomeSchema,
   nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
   signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
-  maxCandidates: optionalPositiveInt.default(5).describe("Limit returned candidates (default 5, max 200). Raise when you need the full candidate list."),
+  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200"),
   detail: detailParam("summary"),
   include: responseIncludeParam
 };
@@ -803,7 +801,7 @@ export const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRef
 
 export const nbtToJsonShape = {
   nbtBase64: nonEmptyString,
-  compression: decodeCompressionSchema.default("auto").describe("none | gzip | auto")
+  compression: decodeCompressionSchema.default("auto")
 };
 export const nbtToJsonSchema = z.object(nbtToJsonShape);
 
@@ -823,7 +821,7 @@ export const nbtApplyJsonPatchSchema = z.object(nbtApplyJsonPatchShape);
 
 export const jsonToNbtShape = {
   typedJson: z.unknown(),
-  compression: encodeCompressionSchema.default("none").describe("none | gzip")
+  compression: encodeCompressionSchema.default("none")
 };
 export const jsonToNbtSchema = z.object(jsonToNbtShape);
 
@@ -855,16 +853,16 @@ export const validateMixinShape = {
       mode: z.literal("project"),
       path: nonEmptyString.describe("Workspace root path used to discover *.mixins.json files automatically")
     })
-  ]).describe("One of { mode: 'inline', source }, { mode: 'path', path }, { mode: 'paths', paths[] }, { mode: 'config', configPaths[] }, or { mode: 'project', path }."),
+  ]).describe("mode = inline | path | paths | config | project"),
   sourceRoots: z.array(z.string().min(1)).optional()
-    .describe("Array of source roots for multi-module projects (e.g. ['common/src/main/java', 'neoforge/src/main/java'])"),
-  version: optionalNonEmptyString.describe("Minecraft version. Optional when input.mode='project' (detected from the workspace) or preferProjectVersion=true with projectPath set; required otherwise."),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+    .describe("Source roots for multi-module projects (e.g. ['common/src/main/java'])"),
+  version: optionalNonEmptyString.describe("Minecraft version. Optional when input.mode='project' or preferProjectVersion=true with projectPath; required otherwise."),
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
-  projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted source resolution"),
+  projectPath: optionalNonEmptyString.describe("Workspace root for Loom cache-assisted resolution"),
   gradleUserHome: gradleUserHomeSchema,
-  preferProjectVersion: z.boolean().optional().describe("When true, detect MC version from gradle.properties and override version"),
+  preferProjectVersion: z.boolean().optional().describe("Detect MC version from gradle.properties and override version"),
   minSeverity: z.enum(["error", "warning", "all"]).default("all")
     .describe("'error'=errors only, 'warning'=errors+warnings, 'all'=everything"),
   hideUncertain: z.boolean().default(false)
@@ -876,7 +874,7 @@ export const validateMixinShape = {
   preferProjectMapping: z.boolean().default(false)
     .describe("When true, auto-detect mapping from project config even if mapping is explicitly provided"),
   reportMode: z.enum(["compact", "full", "summary-first"]).default("summary-first")
-    .describe("Default 'summary-first': hoists shared provenance/warnings/incomplete reasons and drops per-result resolvedMembers/toolHealth/structuredWarnings. 'compact' omits heavy per-result detail; 'full'=everything. resolvedMembers/per-result toolHealth/resolutionTrace require reportMode='full' or explain=true."),
+    .describe("summary-first (default) hoists shared provenance/warnings, drops per-result heavy detail; compact omits heavy per-result detail; full = everything (required for resolvedMembers/toolHealth/resolutionTrace unless explain=true)."),
   warningCategoryFilter: z.array(z.enum(["mapping", "configuration", "validation", "resolution", "parse"])).optional()
     .describe("Only include warnings/issues matching these categories (default: all)"),
   treatInfoAsWarning: z.boolean().default(true)
@@ -903,8 +901,8 @@ export const validateMixinSchema = z.object(validateMixinShape).superRefine((val
 export const validateAccessWidenerShape = {
   content: nonEmptyString.describe("Access Widener file content"),
   version: nonEmptyString.describe("Minecraft version"),
-  mapping: sourceMappingSchema.optional().describe("obfuscated | mojang | intermediary | yarn"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  mapping: sourceMappingSchema.optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Loom cache-assisted runtime validation"),
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
@@ -916,8 +914,8 @@ export const validateAccessWidenerSchema = z.object(validateAccessWidenerShape);
 export const validateAccessTransformerShape = {
   content: nonEmptyString.describe("Access Transformer file content"),
   version: nonEmptyString.describe("Minecraft version"),
-  atNamespace: z.enum(["srg", "mojang", "obfuscated"]).optional().describe("srg | mojang | obfuscated"),
-  sourcePriority: mappingSourcePrioritySchema.optional().describe("loom-first | maven-first"),
+  atNamespace: z.enum(["srg", "mojang", "obfuscated"]).optional(),
+  sourcePriority: mappingSourcePrioritySchema.optional(),
   projectPath: optionalNonEmptyString.describe("Optional workspace root path for Forge/NeoForge runtime validation"),
   gradleUserHome: gradleUserHomeSchema,
   scope: artifactScopeSchema.optional().describe(SOURCE_SCOPE_DESCRIPTION),
@@ -935,7 +933,7 @@ export const analyzeModJarSchema = z.object(analyzeModJarShape);
 export const getRegistryDataShape = {
   version: nonEmptyString.describe("Minecraft version (e.g. 1.21)"),
   registry: optionalNonEmptyString.describe('Optional registry name (e.g. "block", "item", "minecraft:biome"). Omit to list all registries.'),
-  includeData: z.boolean().default(true).describe("When false, return registry names/counts only. To discover which registries exist without pulling every entry body, pass includeData:false (omitting registry with the default includeData:true returns the full data for every registry)."),
+  includeData: z.boolean().default(true).describe("false = registry names/counts only (cheap discovery); true (default) = full entry bodies."),
   maxEntriesPerRegistry: optionalPositiveInt.describe("Limit returned entries per registry body")
 };
 export const getRegistryDataSchema = z.object(getRegistryDataShape);
@@ -946,7 +944,7 @@ export const compareVersionsCategorySchema = z.enum(COMPARE_VERSIONS_CATEGORIES)
 export const compareVersionsShape = {
   fromVersion: nonEmptyString.describe("Older Minecraft version (e.g. 1.20.4)"),
   toVersion: nonEmptyString.describe("Newer Minecraft version (e.g. 1.21)"),
-  category: compareVersionsCategorySchema.default("all").describe("classes | registry | all"),
+  category: compareVersionsCategorySchema.default("all"),
   packageFilter: optionalNonEmptyString.describe("Filter classes to a package prefix (e.g. net.minecraft.world.item)"),
   maxClassResults: optionalPositiveInt.default(500).describe("Max class results per direction (max 5000)")
 };
@@ -975,7 +973,7 @@ export const modSearchTypeSchema = z.enum(MOD_SEARCH_TYPES);
 export const searchModSourceShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
   query: nonEmptyString.describe("Search pattern (regex or literal string)"),
-  searchType: modSearchTypeSchema.default("all").describe("class | method | field | content | all"),
+  searchType: modSearchTypeSchema.default("all"),
   limit: optionalPositiveInt.default(50).describe("Max results (max 200)")
 };
 export const searchModSourceSchema = z.object(searchModSourceShape);
@@ -987,7 +985,7 @@ export const remapModJarShape = {
   inputJar: nonEmptyString.describe("Path to the mod JAR file"),
   outputJar: optionalNonEmptyString.describe("Output path for remapped JAR (auto-generated if omitted)"),
   mcVersion: optionalNonEmptyString.describe("Minecraft version (auto-detected from mod metadata if omitted)"),
-  targetMapping: remapTargetSchema.describe("yarn | mojang"),
+  targetMapping: remapTargetSchema,
   forceRemap: z
     .boolean()
     .optional()
