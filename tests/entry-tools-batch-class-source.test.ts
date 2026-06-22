@@ -404,6 +404,42 @@ test("schema rejects relative-path aliases that resolve to the same canonical ou
   }
 });
 
+test("schema rejects absolute-path aliases that resolve to the same canonical outputFile", async () => {
+  // Absolute paths must be normalized too: `/tmp/dir/../out.java` and
+  // `/tmp//out.java` reach the same inode as `/tmp/out.java`.
+  const { getToolSchema } = await import("../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "version", value: "1.21.10" },
+    entries: [
+      { className: "a.A", outputFile: "/tmp/out.java" },
+      { className: "b.B", outputFile: "/tmp/dir/../out.java" },
+      { className: "c.C", outputFile: "/tmp//out.java" }
+    ]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const aliasIssues = parsed.error.issues.filter((i) =>
+      i.path.length === 3 &&
+      i.path[0] === "entries" &&
+      typeof i.path[1] === "number" &&
+      i.path[1] >= 1 &&
+      i.path[2] === "outputFile"
+    );
+    assert.ok(
+      aliasIssues.length >= 2,
+      `expected ≥2 alias issues across entries 1 and 2; got ${JSON.stringify(parsed.error.issues)}`
+    );
+    for (const issue of aliasIssues) {
+      assert.match(
+        (issue as { message: string }).message,
+        /Duplicate outputFile \(resolves to/,
+        "alias rejection should cite the canonical resolved path so the user sees what collided"
+      );
+    }
+  }
+});
+
 test("top-level resolution failure surfaces as a thrown error (no results array)", async () => {
   const { deps } = buildDeps({
     resolveError: createError({

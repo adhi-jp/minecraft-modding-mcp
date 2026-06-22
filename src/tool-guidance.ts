@@ -416,8 +416,24 @@ export function buildValidateMixinSuggestedParams(normalizedInput: unknown): Rec
     };
   }
 
+  if (inputRecord?.mode === "project") {
+    const projectInputPath = asNonEmptyString(inputRecord.path);
+    if (projectInputPath) {
+      return {
+        ...shared,
+        input: {
+          mode: "project",
+          path: projectInputPath
+        },
+        version
+      };
+    }
+  }
+
   const path =
-    asNonEmptyString(inputRecord?.path) ??
+    (inputRecord?.mode === "path" || inputRecord?.mode === undefined
+      ? asNonEmptyString(inputRecord?.path)
+      : undefined) ??
     asNonEmptyString(record.sourcePath);
   if (path) {
     return {
@@ -751,6 +767,16 @@ export function buildValidateProjectSuggestedParams(normalizedInput: unknown): R
   }
 
   const inputRecord = asObjectRecord(subjectRecord?.input) ?? asObjectRecord(record.input);
+  if (task === "access-transformer") {
+    result.subject = {
+      kind: "access-transformer",
+      input: inputRecord ?? {
+        mode: "inline",
+        content: "<access transformer contents>"
+      }
+    };
+    return result;
+  }
   result.subject = {
     kind: "access-widener",
     input: inputRecord ?? {

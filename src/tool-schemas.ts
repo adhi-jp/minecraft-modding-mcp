@@ -1,4 +1,4 @@
-import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
+import { resolve as pathResolve } from "node:path";
 
 import { z } from "zod";
 
@@ -313,15 +313,15 @@ export const batchClassSourceSchema = z.object(batchClassSourceShape).superRefin
   // Per-entry `outputFile` is forwarded into the concurrently-dispatched
   // `getClassSource` calls; two entries resolving to the same physical file
   // would race on `writeFile`. Normalize via `path.resolve` so aliases like
-  // `out.java` / `./out.java` / `dir/../out.java` collide as expected,
-  // matching the writer's `isAbsolute(p) ? p : resolvePath(p)` rule.
+  // `out.java` / `./out.java` / `dir/../out.java` / `/tmp/dir/../out.java`
+  // collide as expected, covering relative and absolute spellings alike.
   const seen = new Map<string, { index: number; raw: string }>();
   for (let i = 0; i < value.entries.length; i += 1) {
     const entry = value.entries[i];
     if (!entry || entry.outputFile === undefined) continue;
     const trimmed = entry.outputFile.trim();
     if (trimmed.length === 0) continue;
-    const canonical = pathIsAbsolute(trimmed) ? trimmed : pathResolve(trimmed);
+    const canonical = pathResolve(trimmed);
     const previous = seen.get(canonical);
     if (previous !== undefined) {
       ctx.addIssue({
