@@ -5,6 +5,7 @@ import { createError, ERROR_CODES } from "../errors.js";
 import {
   assertValidTypedNbtDocument,
   validateTypedNbtDocument,
+  validateTypedNbtNode,
   type TypedNbtDocument
 } from "./typed-json.js";
 import type { ApplyJsonPatchResult, JsonPatchOperation } from "./types.js";
@@ -173,12 +174,16 @@ function parseArrayIndex(
   return index;
 }
 
+function isTypedNbtNode(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && typeof value.type === "string";
+}
+
 function resolveParent(
   root: unknown,
   tokens: string[],
   opIndex: number,
   path: string
-): { parent: unknown; key: string } {
+): { parent: unknown; key: string; enclosingNode: unknown; enclosingPointer: string } {
   if (tokens.length === 0) {
     patchConflict("Operation path does not reference a child location.", {
       opIndex,
@@ -187,6 +192,8 @@ function resolveParent(
   }
 
   let cursor: unknown = root;
+  let enclosingNode: unknown;
+  let enclosingPointer = "";
   for (let i = 0; i < tokens.length - 1; i += 1) {
     const token = tokens[i];
     const pointer = `/${tokens.slice(0, i + 1).join("/")}`;
@@ -198,6 +205,10 @@ function resolveParent(
         path: pointer
       });
       cursor = cursor[index];
+      if (isTypedNbtNode(cursor)) {
+        enclosingNode = cursor;
+        enclosingPointer = pointer;
+      }
       continue;
     }
 
@@ -216,9 +227,13 @@ function resolveParent(
     }
 
     cursor = cursor[token];
+    if (isTypedNbtNode(cursor)) {
+      enclosingNode = cursor;
+      enclosingPointer = pointer;
+    }
   }
 
-  return { parent: cursor, key: tokens[tokens.length - 1] };
+  return { parent: cursor, key: tokens[tokens.length - 1], enclosingNode, enclosingPointer };
 }
 
 function readValueAtPath(root: unknown, tokens: string[], opIndex: number, path: string): unknown {
@@ -261,8 +276,15 @@ function readValueAtPath(root: unknown, tokens: string[], opIndex: number, path:
   return cursor;
 }
 
-function assertTypedNbtInvariant(root: unknown, opIndex: number, path: string): void {
-  const validation = validateTypedNbtDocument(root);
+function assertTypedNbtInvariant(
+  subtree: { node: unknown; pointer: string } | { root: unknown },
+  opIndex: number,
+  path: string
+): void {
+  const validation =
+    "root" in subtree
+      ? validateTypedNbtDocument(subtree.root)
+      : validateTypedNbtNode(subtree.node, subtree.pointer);
   if (!validation.ok) {
     patchConflict("JSON Patch operation produced invalid typed NBT JSON.", {
       opIndex,
@@ -302,10 +324,17 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
 
     if (operation.op === "add") {
       const nextValue = structuredClone(operation.value);
+      let subtree: { node: unknown; pointer: string } | { root: unknown } = { root: working };
       if (tokens.length === 0) {
         working = nextValue;
+        subtree = { root: working };
       } else {
-        const { parent, key } = resolveParent(working, tokens, i, operation.path);
+        const { parent, key, enclosingNode, enclosingPointer } = resolveParent(
+          working,
+          tokens,
+          i,
+          operation.path
+        );
         if (Array.isArray(parent)) {
           const index = parseArrayIndex(key, parent.length, {
             allowAppend: true,
@@ -314,17 +343,26 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
           });
           parent.splice(index, 0, nextValue);
         } else if (isRecord(parent)) {
-          parent[key] = nextValue;
+          Object.defineProperty(parent, key, {
+            value: nextValue,
+            enumerable: true,
+            writable: true,
+            configurable: true
+          });
         } else {
           patchConflict("Add target parent is not a container.", {
             opIndex: i,
             jsonPointer: operation.path
           });
         }
+        subtree =
+          enclosingNode === undefined
+            ? { root: working }
+            : { node: enclosingNode, pointer: enclosingPointer };
       }
 
       changed = true;
-      assertTypedNbtInvariant(working, i, operation.path);
+      assertTypedNbtInvariant(subtree, i, operation.path);
       continue;
     }
 
@@ -336,7 +374,12 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
         });
       }
 
-      const { parent, key } = resolveParent(working, tokens, i, operation.path);
+      const { parent, key, enclosingNode, enclosingPointer } = resolveParent(
+        working,
+        tokens,
+        i,
+        operation.path
+      );
       if (Array.isArray(parent)) {
         const index = parseArrayIndex(key, parent.length, {
           allowAppend: false,
@@ -360,16 +403,29 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
       }
 
       changed = true;
-      assertTypedNbtInvariant(working, i, operation.path);
+      assertTypedNbtInvariant(
+        enclosingNode === undefined
+          ? { root: working }
+          : { node: enclosingNode, pointer: enclosingPointer },
+        i,
+        operation.path
+      );
       continue;
     }
 
     if (operation.op === "replace") {
       const nextValue = structuredClone(operation.value);
+      let subtree: { node: unknown; pointer: string } | { root: unknown } = { root: working };
       if (tokens.length === 0) {
         working = nextValue;
+        subtree = { root: working };
       } else {
-        const { parent, key } = resolveParent(working, tokens, i, operation.path);
+        const { parent, key, enclosingNode, enclosingPointer } = resolveParent(
+          working,
+          tokens,
+          i,
+          operation.path
+        );
         if (Array.isArray(parent)) {
           const index = parseArrayIndex(key, parent.length, {
             allowAppend: false,
@@ -384,17 +440,26 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
               jsonPointer: operation.path
             });
           }
-          parent[key] = nextValue;
+          Object.defineProperty(parent, key, {
+            value: nextValue,
+            enumerable: true,
+            writable: true,
+            configurable: true
+          });
         } else {
           patchConflict("Replace target parent is not a container.", {
             opIndex: i,
             jsonPointer: operation.path
           });
         }
+        subtree =
+          enclosingNode === undefined
+            ? { root: working }
+            : { node: enclosingNode, pointer: enclosingPointer };
       }
 
       changed = true;
-      assertTypedNbtInvariant(working, i, operation.path);
+      assertTypedNbtInvariant(subtree, i, operation.path);
       continue;
     }
   }

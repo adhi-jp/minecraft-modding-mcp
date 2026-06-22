@@ -21,8 +21,8 @@ export type NbtNode =
   | { type: "short"; value: number }
   | { type: "int"; value: number }
   | { type: "long"; value: string }
-  | { type: "float"; value: number }
-  | { type: "double"; value: number }
+  | { type: "float"; value: number | "NaN" | "Infinity" | "-Infinity" }
+  | { type: "double"; value: number | "NaN" | "Infinity" | "-Infinity" }
   | { type: "byteArray"; value: number[] }
   | { type: "string"; value: string }
   | { type: "list"; elementType: NbtListElementType; value: NbtNode[] }

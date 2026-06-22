@@ -76,6 +76,44 @@ test("assertValidTypedNbtDocument rejects list element type mismatches", () => {
   );
 });
 
+test("assertValidTypedNbtDocument accepts non-finite float/double sentinels", () => {
+  for (const value of ["NaN", "Infinity", "-Infinity"]) {
+    for (const type of ["float", "double"] as const) {
+      const input = {
+        rootName: "NonFinite",
+        root: { type, value }
+      };
+
+      assert.doesNotThrow(() => assertValidTypedNbtDocument(input));
+    }
+  }
+});
+
+test("assertValidTypedNbtDocument rejects unrecognized float/double strings", () => {
+  const input = {
+    rootName: "Bad",
+    root: {
+      type: "float",
+      value: "not-a-number"
+    }
+  };
+
+  assert.throws(
+    () => assertValidTypedNbtDocument(input),
+    (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) {
+        return false;
+      }
+
+      const err = error as { code: string; details?: Record<string, unknown> };
+      return (
+        err.code === ERROR_CODES.NBT_INVALID_TYPED_JSON &&
+        err.details?.jsonPointer === "/root/value"
+      );
+    }
+  );
+});
+
 test("assertValidTypedNbtDocument rejects out-of-range byteArray values", () => {
   const input = {
     rootName: "Bad",

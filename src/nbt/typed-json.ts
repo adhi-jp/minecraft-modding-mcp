@@ -28,6 +28,8 @@ const LIST_ELEMENT_TYPES: NbtListElementType[] = ["end", ...NODE_TYPES];
 const NODE_TYPE_SET = new Set<string>(NODE_TYPES);
 const LIST_ELEMENT_TYPE_SET = new Set<string>(LIST_ELEMENT_TYPES);
 
+const NON_FINITE_FLOAT_SENTINELS = new Set<string>(["NaN", "Infinity", "-Infinity"]);
+
 const INT64_MIN = -9223372036854775808n;
 const INT64_MAX = 9223372036854775807n;
 
@@ -174,8 +176,14 @@ function validateNode(value: unknown, pointer: string): ValidationResult {
       return validateLongString(node.value, `${pointer}/value`);
     case "float":
     case "double":
-      if (typeof node.value !== "number" || !Number.isFinite(node.value)) {
-        return fail(`${pointer}/value`, "finite-number", node.value);
+      if (typeof node.value === "string") {
+        if (!NON_FINITE_FLOAT_SENTINELS.has(node.value)) {
+          return fail(`${pointer}/value`, "number-or-non-finite-sentinel", node.value);
+        }
+        return { ok: true };
+      }
+      if (typeof node.value !== "number") {
+        return fail(`${pointer}/value`, "number-or-non-finite-sentinel", node.value);
       }
       return { ok: true };
     case "string":
@@ -244,6 +252,10 @@ function validateNode(value: unknown, pointer: string): ValidationResult {
     default:
       return fail(`${pointer}/type`, "nbt-node-type", nodeType);
   }
+}
+
+export function validateTypedNbtNode(value: unknown, pointer: string): ValidationResult {
+  return validateNode(value, pointer);
 }
 
 export function validateTypedNbtDocument(value: unknown): ValidationResult {

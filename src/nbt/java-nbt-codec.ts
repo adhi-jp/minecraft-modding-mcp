@@ -243,21 +243,45 @@ class NbtWriter {
     this.chunks.push(chunk);
   }
 
-  writeFloat32(value: number): void {
+  writeFloat32(value: number | "NaN" | "Infinity" | "-Infinity"): void {
     const chunk = Buffer.allocUnsafe(4);
-    chunk.writeFloatBE(value, 0);
+    chunk.writeFloatBE(Number(value), 0);
     this.chunks.push(chunk);
   }
 
-  writeFloat64(value: number): void {
+  writeFloat64(value: number | "NaN" | "Infinity" | "-Infinity"): void {
     const chunk = Buffer.allocUnsafe(8);
-    chunk.writeDoubleBE(value, 0);
+    chunk.writeDoubleBE(Number(value), 0);
     this.chunks.push(chunk);
   }
 
   writeInt64(value: bigint): void {
     const chunk = Buffer.allocUnsafe(8);
     chunk.writeBigInt64BE(value, 0);
+    this.chunks.push(chunk);
+  }
+
+  writeInt8Array(values: readonly number[]): void {
+    const chunk = Buffer.allocUnsafe(values.length);
+    for (let i = 0; i < values.length; i += 1) {
+      chunk.writeInt8(values[i], i);
+    }
+    this.chunks.push(chunk);
+  }
+
+  writeInt32Array(values: readonly number[]): void {
+    const chunk = Buffer.allocUnsafe(values.length * 4);
+    for (let i = 0; i < values.length; i += 1) {
+      chunk.writeInt32BE(values[i], i * 4);
+    }
+    this.chunks.push(chunk);
+  }
+
+  writeInt64Array(values: readonly bigint[]): void {
+    const chunk = Buffer.allocUnsafe(values.length * 8);
+    for (let i = 0; i < values.length; i += 1) {
+      chunk.writeBigInt64BE(values[i], i * 8);
+    }
     this.chunks.push(chunk);
   }
 
@@ -287,10 +311,14 @@ function readPayload(reader: NbtReader, tagId: number, pointer: string): NbtNode
       return { type: "int", value: reader.readInt32() };
     case "long":
       return { type: "long", value: reader.readInt64().toString() };
-    case "float":
-      return { type: "float", value: reader.readFloat32() };
-    case "double":
-      return { type: "double", value: reader.readFloat64() };
+    case "float": {
+      const value = reader.readFloat32();
+      return { type: "float", value: Number.isFinite(value) ? value : Number.isNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity" };
+    }
+    case "double": {
+      const value = reader.readFloat64();
+      return { type: "double", value: Number.isFinite(value) ? value : Number.isNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity" };
+    }
     case "byteArray": {
       const length = reader.readInt32();
       if (length < 0) {
@@ -341,7 +369,12 @@ function readPayload(reader: NbtReader, tagId: number, pointer: string): NbtNode
           break;
         }
         const childName = reader.readString();
-        value[childName] = readPayload(reader, childType, `${pointer}/value/${childName}`);
+        Object.defineProperty(value, childName, {
+          value: readPayload(reader, childType, `${pointer}/value/${childName}`),
+          enumerable: true,
+          writable: true,
+          configurable: true
+        });
       }
       return { type: "compound", value };
     }
@@ -407,9 +440,7 @@ function writePayload(writer: NbtWriter, node: NbtNode, pointer: string): void {
       return;
     case "byteArray":
       writer.writeInt32(node.value.length);
-      for (const value of node.value) {
-        writer.writeInt8(value);
-      }
+      writer.writeInt8Array(node.value);
       return;
     case "string":
       writer.writeString(node.value);
@@ -431,15 +462,11 @@ function writePayload(writer: NbtWriter, node: NbtNode, pointer: string): void {
       return;
     case "intArray":
       writer.writeInt32(node.value.length);
-      for (const value of node.value) {
-        writer.writeInt32(value);
-      }
+      writer.writeInt32Array(node.value);
       return;
     case "longArray":
       writer.writeInt32(node.value.length);
-      for (const value of node.value) {
-        writer.writeInt64(BigInt(value));
-      }
+      writer.writeInt64Array(node.value.map((value) => BigInt(value)));
       return;
     default:
       throw encodeError("Unsupported typed NBT node for encoding.", {

@@ -66,6 +66,27 @@ test("encodeJavaNbt/decodeJavaNbt roundtrip preserves typed structure", () => {
   assert.deepEqual(decoded, input);
 });
 
+test("encodeJavaNbt/decodeJavaNbt round-trip preserves non-finite float/double sentinels", () => {
+  const input: TypedNbtDocument = {
+    rootName: "NonFinite",
+    root: {
+      type: "compound",
+      value: {
+        fNaN: { type: "float", value: "NaN" },
+        fInf: { type: "float", value: "Infinity" },
+        fNegInf: { type: "float", value: "-Infinity" },
+        dNaN: { type: "double", value: "NaN" },
+        dInf: { type: "double", value: "Infinity" },
+        dNegInf: { type: "double", value: "-Infinity" }
+      }
+    }
+  };
+
+  const decoded = decodeJavaNbt(encodeJavaNbt(input));
+
+  assert.deepEqual(decoded, input);
+});
+
 test("decodeJavaNbt throws structured parse errors for truncated payloads", () => {
   const truncated = Buffer.from([0x0a, 0x00]);
 
