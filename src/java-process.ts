@@ -159,7 +159,7 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
       );
     });
 
-    proc.once("exit", (code) => {
+    proc.once("close", (code) => {
       clearTimeout(timer);
       resolve({
         exitCode: code ?? -1,

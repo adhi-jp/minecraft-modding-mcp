@@ -51,6 +51,9 @@ export function encodeJsonRpcMessage(
 export class JsonRpcFrameReader {
   private mode: FramingMode = "unknown";
   private buffer = Buffer.alloc(0);
+  private pendingChunks: Buffer[] = [];
+  private pendingBytes = 0;
+  private awaitedFrameEnd = -1;
 
   get currentMode(): FramingMode {
     return this.mode;
@@ -58,11 +61,15 @@ export class JsonRpcFrameReader {
 
   reset(): void {
     this.mode = "unknown";
+    this.awaitedFrameEnd = -1;
   }
 
   clear(): void {
     this.mode = "unknown";
     this.buffer = Buffer.alloc(0);
+    this.pendingChunks = [];
+    this.pendingBytes = 0;
+    this.awaitedFrameEnd = -1;
   }
 
   processChunk(
@@ -76,7 +83,15 @@ export class JsonRpcFrameReader {
       return;
     }
 
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    this.pendingChunks.push(chunk);
+    this.pendingBytes += chunk.length;
+    if (!this.canCompleteFrame(chunk)) {
+      return;
+    }
+
+    this.buffer = Buffer.concat([this.buffer, ...this.pendingChunks]);
+    this.pendingChunks = [];
+    this.pendingBytes = 0;
 
     while (true) {
       try {
@@ -111,6 +126,13 @@ export class JsonRpcFrameReader {
         handlers.onError(asError(caughtError));
       }
     }
+  }
+
+  private canCompleteFrame(chunk: Buffer): boolean {
+    if (this.mode === "content-length" && this.awaitedFrameEnd >= 0) {
+      return this.buffer.length + this.pendingBytes >= this.awaitedFrameEnd;
+    }
+    return chunk.includes(0x0a);
   }
 
   private detectMode(): FramingMode | undefined {
@@ -177,6 +199,7 @@ export class JsonRpcFrameReader {
   }
 
   private readContentLengthMessage(): JSONRPCMessage | undefined {
+    this.awaitedFrameEnd = -1;
     const headerBoundary = findHeaderBoundary(this.buffer);
     if (!headerBoundary) {
       return undefined;
@@ -217,6 +240,7 @@ export class JsonRpcFrameReader {
     const messageStart = headerBoundary.index + headerBoundary.delimiterBytes;
     const frameEnd = messageStart + contentLength;
     if (this.buffer.length < frameEnd) {
+      this.awaitedFrameEnd = frameEnd;
       return undefined;
     }
 

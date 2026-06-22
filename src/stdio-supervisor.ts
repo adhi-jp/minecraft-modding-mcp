@@ -553,6 +553,14 @@ export class StdioSupervisor {
       return;
     }
 
+    const stale = this.child;
+    if (stale) {
+      this.detachChild();
+      if (stale.exitCode === null) {
+        stale.kill("SIGTERM");
+      }
+    }
+
     const child = spawn(process.execPath, [...process.execArgv, this.entryFile], {
       env: {
         ...process.env,
@@ -570,8 +578,8 @@ export class StdioSupervisor {
     child.stdout.on("data", this.handleWorkerData);
     child.stderr.on("data", this.handleWorkerStderr);
     child.stdin.on("error", this.handleWorkerStdinError);
-    child.once("error", this.handleWorkerProcessError);
-    child.once("exit", this.handleWorkerExit);
+    child.once("error", (error) => this.handleWorkerProcessError(child, error));
+    child.once("exit", (code, signal) => this.handleWorkerExit(child, code, signal));
 
     log("info", "supervisor.worker_spawn", { pid: child.pid });
   }
@@ -608,11 +616,30 @@ export class StdioSupervisor {
     }
   };
 
-  private readonly handleWorkerProcessError = (error: Error): void => {
+  private handleWorkerProcessError(child: ChildProcessWithoutNullStreams, error: Error): void {
     log("error", "supervisor.worker_process_error", { message: error.message });
-  };
 
-  private readonly handleWorkerExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+    if (child !== this.child) {
+      return;
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+    }
+    this.handleWorkerExit(child, null, null);
+  }
+
+  private handleWorkerExit(
+    child: ChildProcessWithoutNullStreams,
+    code: number | null,
+    signal: NodeJS.Signals | null
+  ): void {
+    if (child !== this.child) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      return;
+    }
+
     const childPid = this.child?.pid;
     this.detachChild();
 
@@ -629,7 +656,7 @@ export class StdioSupervisor {
 
     this.failPendingRequestsOnWorkerExit({ code, signal });
     this.scheduleRestart();
-  };
+  }
 
   private handleWorkerMessage(message: JSONRPCMessage): void {
     debugSupervisor("worker_message", {
@@ -758,10 +785,9 @@ export class StdioSupervisor {
   }
 
   private failPendingRequestsOnWorkerExit(exit: ExitInfo): void {
-    const preservedInitializeKey =
-      this.initializeRequest && !this.clientInitialized
-        ? requestKey(this.initializeRequest.id)
-        : undefined;
+    const preservedInitializeKey = this.initializeRequest
+      ? requestKey(this.initializeRequest.id)
+      : undefined;
 
     const now = performance.now();
 
@@ -830,8 +856,8 @@ export class StdioSupervisor {
     child.stdout.off("data", this.handleWorkerData);
     child.stderr.off("data", this.handleWorkerStderr);
     child.stdin.off("error", this.handleWorkerStdinError);
-    child.off("error", this.handleWorkerProcessError);
-    child.off("exit", this.handleWorkerExit);
+    child.removeAllListeners("error");
+    child.removeAllListeners("exit");
     this.child = undefined;
     this.childReady = false;
   }
