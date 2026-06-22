@@ -34,8 +34,26 @@ export function validateInjection(
 
     const methodNames = allMethodNames(members);
     // Strip owner prefix and JVM descriptor from the method reference
-    const methodName = extractMethodName(inj.method);
-    if (!methodNames.includes(methodName)) {
+    const rawMethodName = extractMethodName(inj.method);
+    // Strip a trailing target-selector quantifier (e.g. "tick*", "tick+", "tick{2,3}")
+    const quantifier = /(?:\*|\+|\{\d+(?:,\d+)?\})$/.exec(rawMethodName)?.[0];
+    const methodName = quantifier
+      ? rawMethodName.slice(0, rawMethodName.length - quantifier.length)
+      : rawMethodName;
+    if (quantifier && methodName === "") {
+      // Bare wildcard selector (e.g. method = "*") matches everything; unverifiable.
+      resolvedMembers.push({
+        annotation: `@${inj.annotation}`,
+        name: rawMethodName,
+        line: inj.line,
+        status: "skipped"
+      });
+      continue;
+    }
+    const matched = (quantifier === "*" || quantifier === "+")
+      ? methodNames.some((n) => n.startsWith(methodName))
+      : methodNames.includes(methodName);
+    if (!matched) {
       const suggestions = suggestSimilar(methodName, methodNames);
       const descriptor = extractMethodDescriptor(inj.method);
       const descriptorHint = descriptor ? ` (descriptor: ${descriptor})` : "";
@@ -75,7 +93,7 @@ export function validateInjection(
       // Name matched. If the reference carries a JVM descriptor, require an
       // overload to match it; otherwise a wrong-signature target (e.g. tick(D)V
       // when only tick(I)V exists) is silently reported as resolved.
-      const refDescriptor = extractMethodDescriptor(inj.method);
+      const refDescriptor = quantifier ? undefined : extractMethodDescriptor(inj.method);
       const sameNameMembers = [...members.constructors, ...members.methods].filter(
         (member) => member.name === methodName
       );

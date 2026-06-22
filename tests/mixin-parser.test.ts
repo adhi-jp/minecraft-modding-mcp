@@ -541,6 +541,17 @@ public interface PlayerAccessor {
     entry: { annotation: "Accessor", name: "getHealth", targetName: "health" }
   },
   {
+    name: "same-line declaration",
+    source: `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor("health") int getHealth();
+}
+`,
+    entry: { annotation: "Accessor", name: "getHealth", targetName: "health" },
+    warningCount: 0
+  },
+  {
     name: "getter naming convention",
     source: `
 @Mixin(PlayerEntity.class)
@@ -972,6 +983,41 @@ test("parseMixinSource parses @Invoker declarations across explicit and inferred
       `${testCase.name}: invoker entry`
     );
   }
+});
+
+test("parseMixinSource parses consecutive same-line accessor declarations and following members", () => {
+  const accessorResult = parseMixinSource(`
+@Mixin(Minecraft.class)
+public interface MinecraftAccessor {
+  @Accessor("pausePartialTick") float getPausePartialTick();
+  @Accessor("fps") int getFps();
+}
+`);
+  assert.deepEqual(
+    accessorResult.accessors.map((a) => ({ name: a.name, targetName: a.targetName })),
+    [
+      { name: "getPausePartialTick", targetName: "pausePartialTick" },
+      { name: "getFps", targetName: "fps" }
+    ]
+  );
+  assert.equal(accessorResult.parseWarnings.length, 0);
+
+  const invokerResult = parseMixinSource(`
+@Mixin(Minecraft.class)
+public abstract class MinecraftMixin {
+  @Invoker("dropItem") void callDropItem(boolean all);
+  @Shadow int fps;
+}
+`);
+  assert.deepEqual(
+    invokerResult.accessors.map((a) => ({ name: a.name, targetName: a.targetName })),
+    [{ name: "callDropItem", targetName: "dropItem" }]
+  );
+  assert.deepEqual(
+    invokerResult.shadows.map((s) => ({ kind: s.kind, name: s.name })),
+    [{ kind: "field", name: "fps" }]
+  );
+  assert.equal(invokerResult.parseWarnings.length, 0);
 });
 
 test("parseMixinSource extracts imports and ignores wildcard imports", () => {

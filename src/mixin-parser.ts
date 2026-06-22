@@ -42,7 +42,7 @@ export type ParsedMixin = {
 /*  Regex patterns                                                     */
 /* ------------------------------------------------------------------ */
 
-const CLASS_DECL_RE = /(?:public\s+)?(?:abstract\s+)?(?:class|interface)\s+(\w+)/;
+const CLASS_DECL_RE = /^\s*(?:@[\w$.]+(?:\([^)]*\))?\s+)*(?:public\s+|final\s+|abstract\s+|sealed\s+)*\b(?:class|interface)\s+(\w+)/;
 
 // import statements for FQCN resolution
 const IMPORT_RE = /^\s*import\s+([\w.]+)\s*;/;
@@ -103,6 +103,61 @@ function collectMultilineAnnotation(lines: string[], startIndex: number): { text
     }
   }
   return { text, endIndex: lines.length - 1 };
+}
+
+/**
+ * Blank out `/* *\/` block comments and `//` line comments (outside string literals)
+ * while preserving line count and line numbers, so the annotation scans never match
+ * inside commented-out code.
+ */
+function stripComments(source: string): string {
+  let out = "";
+  let inBlock = false;
+  let inString = false;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (inBlock) {
+      if (ch === "*" && next === "/") {
+        out += "  ";
+        i++;
+        inBlock = false;
+      } else {
+        out += ch === "\n" ? "\n" : " ";
+      }
+      continue;
+    }
+    if (inString) {
+      out += ch;
+      if (ch === "\\" && next !== undefined) {
+        out += next;
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      out += "  ";
+      i++;
+      inBlock = true;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") {
+        i++;
+      }
+      i--;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /**
@@ -220,7 +275,7 @@ function inferAccessorTarget(methodName: string): string {
 /* ------------------------------------------------------------------ */
 
 export function parseMixinSource(source: string): ParsedMixin {
-  const lines = source.split(/\r?\n/);
+  const lines = stripComments(source).split(/\r?\n/);
   const parseWarnings: string[] = [];
   const targets: ParsedMixinTarget[] = [];
   const injections: ParsedInjection[] = [];
@@ -376,6 +431,17 @@ export function parseMixinSource(source: string): ParsedMixin {
           explicitTarget = explicitMatch[1];
         }
         i = endIndex;
+      }
+
+      // Try same-line declaration first (e.g. `@Accessor("x") int getX();`)
+      const inlineDecl = stripInlineAnnotations(line);
+      const inlineMethodMatch = inlineDecl.includes("(") ? METHOD_DECL_RE.exec(inlineDecl) : null;
+      if (inlineMethodMatch) {
+        const methodName = inlineMethodMatch[2];
+        const targetName = explicitTarget ?? inferAccessorTarget(methodName);
+        accessors.push({ annotation, name: methodName, targetName, line: lineNum });
+        i++;
+        continue;
       }
 
       // Find the method declaration following the annotation (skip multi-line annotations)

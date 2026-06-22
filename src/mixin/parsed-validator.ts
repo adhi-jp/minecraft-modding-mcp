@@ -72,6 +72,7 @@ export function validateParsedMixin(
           resolutionPath: "target-mapping-failed",
           falsePositiveRisk: healthReport?.overallHealthy === false ? "high" : "medium"
         });
+        addSkippedMembers(parsed, resolvedMembers);
       } else if (symbolExistsButSignatureFailed?.has(target.className)) {
         // Symbol exists in mapping graph but getSignature failed — tool limitation, not code issue
         issues.push({

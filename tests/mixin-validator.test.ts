@@ -1117,6 +1117,65 @@ test("validateParsedMixin resolves an @Inject whose descriptor matches an overlo
   assert.equal(result.issues.length, 0);
 });
 
+test("validateParsedMixin resolves quantifier method selectors by name and skips bare wildcards", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "tick*", line: 10 },
+      { annotation: "Inject", method: "tick+", line: 11 },
+      { annotation: "Inject", method: "tick{1,2}", line: 12 },
+      { annotation: "Inject", method: "*", line: 13 }
+    ]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: [
+        makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor: "(I)V" }),
+        makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor: "(D)V" })
+      ],
+      fields: []
+    }]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 0, JSON.stringify(result.issues));
+  const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
+  assert.equal(resolved.length, 3);
+  const skipped = result.resolvedMembers!.filter((m) => m.status === "skipped");
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].name, "*");
+});
+
+test("validateParsedMixin resolves a prefix quantifier selector with no exact-name member", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "render*", line: 10 },
+      { annotation: "Inject", method: "render+", line: 11 }
+    ]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: [
+        makeMember({ name: "renderItem", ownerFqn: "PlayerEntity", jvmDescriptor: "()V" }),
+        makeMember({ name: "renderBlock", ownerFqn: "PlayerEntity", jvmDescriptor: "()V" })
+      ],
+      fields: []
+    }]
+  ]);
+  const warnings: string[] = [];
+
+  const result = validateParsedMixin(parsed, targetMembers, warnings);
+
+  assert.equal(result.valid, true);
+  assert.equal(result.issues.length, 0, JSON.stringify(result.issues));
+});
+
 test("validateParsedAccessTransformer treats wildcard targets as valid when the owner resolves", () => {
   const parsed = parseAccessTransformer([
     "public com.example.Foo *",
