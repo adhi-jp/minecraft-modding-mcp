@@ -184,7 +184,7 @@ function runDataGen(
     log("info", "registry.datagen.start", { version, isLegacy, serverJarPath, outputDir });
 
     const proc = spawn("java", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "pipe"],
       cwd: outputDir
     });
 
@@ -264,6 +264,7 @@ export class RegistryService {
   private readonly config: Config;
   private readonly versionService: VersionService;
   private readonly registryCache = new Map<string, Record<string, RegistryData>>();
+  private readonly loadLocks = new Map<string, Promise<Record<string, RegistryData>>>();
 
   constructor(config: Config, versionService: VersionService) {
     this.config = config;
@@ -352,6 +353,25 @@ export class RegistryService {
   }
 
   private async loadRegistries(
+    version: string,
+    warnings: string[]
+  ): Promise<Record<string, RegistryData>> {
+    const existingLock = this.loadLocks.get(version);
+    if (existingLock) {
+      return existingLock;
+    }
+
+    const loadPromise = this.loadRegistriesInternal(version, warnings);
+    this.loadLocks.set(version, loadPromise);
+
+    try {
+      return await loadPromise;
+    } finally {
+      this.loadLocks.delete(version);
+    }
+  }
+
+  private async loadRegistriesInternal(
     version: string,
     warnings: string[]
   ): Promise<Record<string, RegistryData>> {

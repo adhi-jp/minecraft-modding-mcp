@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
@@ -7,7 +8,7 @@ import { log } from "./logger.js";
 import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { analyzeModJar, type ModAnalysisResult } from "./mod-analyzer.js";
-import { validateAndNormalizeJarPath } from "./path-resolver.js";
+import { buildJarSignature, validateAndNormalizeJarPath } from "./path-resolver.js";
 import { sliceToMaxCharsSafe } from "./text-truncate.js";
 import type { Config } from "./types.js";
 
@@ -59,7 +60,8 @@ export type GetModClassSourceOutput = {
 const DECOMPILE_TIMEOUT_MS = 300_000;
 
 function modDecompileCacheKey(jarPath: string): string {
-  return createHash("sha256").update(jarPath).digest("hex");
+  const stats = statSync(jarPath);
+  return createHash("sha256").update(`${jarPath}|${buildJarSignature(stats)}`).digest("hex");
 }
 
 function classNameToFilePath(className: string): string {
@@ -83,6 +85,10 @@ export class ModDecompileService {
   private readonly decompileCache = new Map<
     string,
     { outputDir: string; files: string[]; analysis: ModAnalysisResult }
+  >();
+  private readonly inflightDecompiles = new Map<
+    string,
+    Promise<{ outputDir: string; files: string[]; analysis: ModAnalysisResult }>
   >();
 
   constructor(config: Config) {
@@ -236,6 +242,26 @@ export class ModDecompileService {
       return cached;
     }
 
+    const existingDecompile = this.inflightDecompiles.get(cacheKey);
+    if (existingDecompile) {
+      return existingDecompile;
+    }
+
+    const decompilePromise = this.decompileAndCache(jarPath, cacheKey, warnings);
+    this.inflightDecompiles.set(cacheKey, decompilePromise);
+
+    try {
+      return await decompilePromise;
+    } finally {
+      this.inflightDecompiles.delete(cacheKey);
+    }
+  }
+
+  private async decompileAndCache(
+    jarPath: string,
+    cacheKey: string,
+    warnings: string[]
+  ): Promise<{ outputDir: string; files: string[]; analysis: ModAnalysisResult }> {
     log("info", "mod-decompile.start", { jarPath });
     const startedAt = Date.now();
 

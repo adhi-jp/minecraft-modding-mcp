@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -322,8 +322,7 @@ export async function remapModJar(
   mkdirSync(dirname(outputJar), { recursive: true });
 
   // 7. Use a temporary directory for intermediate work
-  const tempDir = join(tmpdir(), `mcp-remap-${cacheKey.slice(0, 12)}`);
-  mkdirSync(tempDir, { recursive: true });
+  const tempDir = mkdtempSync(join(tmpdir(), `mcp-remap-${cacheKey.slice(0, 12)}-`));
 
   try {
     let passInput = normalizedInput;
@@ -365,7 +364,9 @@ export async function remapModJar(
 
     if (outputJar !== cachedOutput) {
       mkdirSync(dirname(cachedOutput), { recursive: true });
-      copyFileSync(tempOutput, cachedOutput);
+      const tempCachedOutput = `${cachedOutput}.${randomBytes(4).toString("hex")}.tmp`;
+      copyFileSync(tempOutput, tempCachedOutput);
+      renameSync(tempCachedOutput, cachedOutput);
     }
 
     const durationMs = Date.now() - startedAt;

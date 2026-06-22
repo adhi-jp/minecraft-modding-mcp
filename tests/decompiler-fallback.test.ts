@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -56,11 +56,74 @@ test("decompileBinaryJar returns cached result with no decompileProfile when cac
   const outputDir = join(cacheDir, "decompiled", digest);
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
+  writeFileSync(join(outputDir, ".decompile-complete"), "default");
 
   const result = await decompileBinaryJar(binaryJarPath, cacheDir, { vineflowerJarPath });
   assert.equal(result.javaFiles.length, 1);
   assert.equal(result.javaFiles[0].filePath, "Example.java");
   assert.equal(result.decompileProfile, undefined);
+});
+
+test("decompileBinaryJar re-decompiles when cached output lacks the completion marker", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "decompile-partial-cache-"));
+  const cacheDir = join(root, "cache");
+  const binaryJarPath = join(root, "test.jar");
+  const vineflowerJarPath = join(root, "vineflower.jar");
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+
+  mkdirSync(cacheDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(binaryJarPath, Buffer.from([0xca, 0xfe]));
+  writeFileSync(vineflowerJarPath, Buffer.from([0x50, 0x4b]));
+
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+const { mkdirSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const args = process.argv.slice(2);
+
+if (args[0] === "-version") {
+  process.exit(0);
+}
+
+const outputDir = args.at(-1);
+mkdirSync(outputDir, { recursive: true });
+writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  // Simulate a previous decompile that was killed mid-run: partial output, no marker.
+  const { createHash } = await import("node:crypto");
+  const signature = "partial-cache-test";
+  const digest = createHash("sha256").update(binaryJarPath).update(signature).digest("hex");
+  const outputDir = join(cacheDir, "decompiled", digest);
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, "Partial.java"), "public class Partial {}");
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  try {
+    const result = await decompileBinaryJar(binaryJarPath, cacheDir, {
+      vineflowerJarPath,
+      signature,
+      timeoutMs: 10_000
+    });
+
+    assert.equal(result.decompileProfile, "default");
+    assert.deepEqual(result.javaFiles.map((file) => file.filePath), ["Example.java"]);
+    assert.ok(existsSync(join(outputDir, ".decompile-complete")));
+  } finally {
+    process.env.PATH = originalPath;
+  }
 });
 
 test("decompileBinaryJar includes profilesAttempted in error details on full failure", async () => {

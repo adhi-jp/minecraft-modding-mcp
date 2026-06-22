@@ -1,4 +1,4 @@
-import { access, constants, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { access, constants, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { mkdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
@@ -10,6 +10,7 @@ import { log } from "../logger.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DECOMPILED_JAVA_READ_CONCURRENCY = 8;
+const DECOMPILE_COMPLETE_MARKER = ".decompile-complete";
 
 const VINEFLOWER_FLAG_PROFILES: ReadonlyArray<{ label: string; flags: string[] }> = [
   { label: "default", flags: ["-din=1", "-rbr=1", "-dgs=1"] },
@@ -183,7 +184,10 @@ export async function decompileBinaryJar(
     await mkdir(outputDir, { recursive: true });
 
     const outputDirStats = await stat(outputDir).catch(() => undefined);
-    if (outputDirStats) {
+    const markerPresent = outputDirStats
+      ? await access(join(outputDir, DECOMPILE_COMPLETE_MARKER), constants.F_OK).then(() => true, () => false)
+      : false;
+    if (outputDirStats && markerPresent) {
       const existingJavaFiles = await collectJavaFiles(outputDir);
       if (existingJavaFiles.length > 0) {
         const results = await mapWithConcurrencyLimit(
@@ -209,6 +213,8 @@ export async function decompileBinaryJar(
         };
       }
     }
+
+    clearOutputDir(outputDir);
 
     await assertVineflowerAvailable(options.vineflowerJarPath);
     await assertJavaAvailable();
@@ -254,6 +260,8 @@ export async function decompileBinaryJar(
             };
           }
         );
+
+        await writeFile(join(outputDir, DECOMPILE_COMPLETE_MARKER), profile.label, "utf8");
 
         emitDecompileLog("decompile.done", {
           durationMs: Date.now() - startedAt,

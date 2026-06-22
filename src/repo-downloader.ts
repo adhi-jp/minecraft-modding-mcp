@@ -67,7 +67,6 @@ export async function downloadToCache(
 
     try {
       const response = await fetchFn(url, { signal: timeout.signal });
-      clearTimeout(timer);
 
       const status = response.status;
       if (status === 404) {
@@ -102,7 +101,7 @@ export async function downloadToCache(
           writeFileSync(tempPath, Buffer.alloc(0));
         } else {
           const readable = Readable.fromWeb(response.body as unknown as any);
-          await pipeline(readable, createWriteStream(tempPath));
+          await pipeline(readable, createWriteStream(tempPath), { signal: timeout.signal });
         }
 
         const contentLength = statSync(tempPath).size;
@@ -125,13 +124,14 @@ export async function downloadToCache(
         throw streamError instanceof Error ? streamError : new Error(String(streamError));
       }
     } catch (caughtError) {
-      clearTimeout(timer);
       if (attempt >= maxRetries) {
         throw caughtError instanceof Error ? caughtError : new Error(String(caughtError));
       }
 
       await sleep(retryDelay(200, attempt));
       attempt += 1;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
