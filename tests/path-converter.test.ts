@@ -25,6 +25,7 @@ test("path converter detects windows, wsl mount, and unc path styles", () => {
   assert.equal(isWindowsDrivePath("C:\\Users\\adhi\\mod.jar"), true);
   assert.equal(isWslMountPath("/mnt/c/Users/adhi/mod.jar"), true);
   assert.equal(isUncWslPath("\\\\wsl$\\Ubuntu\\home\\adhi\\mod.jar"), true);
+  assert.equal(isUncWslPath("\\\\wsl.localhost\\Ubuntu\\home\\adhi\\mod.jar"), true);
 });
 
 test("normalizePathForHost converts windows drive paths to WSL mount paths", () => {
@@ -40,6 +41,28 @@ test("normalizePathForHost converts WSL mount paths to Windows drive paths", () 
 test("normalizePathForHost converts UNC WSL paths to Linux paths under WSL", () => {
   const normalized = normalizePathForHost("\\\\wsl$\\Ubuntu\\home\\adhi\\mod.jar", WSL_RUNTIME);
   assert.equal(normalized, "/home/adhi/mod.jar");
+});
+
+test("normalizePathForHost converts wsl.localhost UNC paths to Linux paths under WSL", () => {
+  const normalized = normalizePathForHost(
+    "\\\\wsl.localhost\\Ubuntu\\home\\adhi\\mod.jar",
+    WSL_RUNTIME
+  );
+  assert.equal(normalized, "/home/adhi/mod.jar");
+});
+
+test("normalizePathForHost rejects UNC WSL paths targeting a different distro", () => {
+  assert.throws(
+    () => normalizePathForHost("\\\\wsl$\\Debian\\home\\adhi\\mod.jar", WSL_RUNTIME),
+    (error: unknown) => {
+      return (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      );
+    }
+  );
 });
 
 test("normalizePathForHost rejects malformed windows drive paths", () => {

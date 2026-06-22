@@ -10,6 +10,7 @@
 export type AccessWidenerEntry = {
   line: number;
   kind: "accessible" | "extendable" | "mutable";
+  transitive?: boolean;
   targetKind: "class" | "method" | "field";
   target: string;
   owner?: string;
@@ -63,7 +64,9 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
     const kind = parts[0];
     const targetKind = parts[1];
 
-    if (!VALID_KINDS.has(kind)) {
+    const transitive = kind.startsWith("transitive-");
+    const baseKind = transitive ? kind.slice("transitive-".length) : kind;
+    if (!VALID_KINDS.has(baseKind)) {
       parseWarnings.push(`Line ${lineNum}: Unknown access kind "${kind}".`);
       continue;
     }
@@ -72,16 +75,17 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
       continue;
     }
 
-    const validKind = kind as AccessWidenerEntry["kind"];
+    const validKind = baseKind as AccessWidenerEntry["kind"];
     const validTargetKind = targetKind as AccessWidenerEntry["targetKind"];
 
     if (validTargetKind === "class") {
-      entries.push({ line: lineNum, kind: validKind, targetKind: validTargetKind, target: parts[2] });
+      entries.push({ line: lineNum, kind: validKind, transitive, targetKind: validTargetKind, target: parts[2] });
     } else if (parts.length >= 5) {
       // method/field: <kind> <targetKind> <owner> <name> <descriptor>
       entries.push({
         line: lineNum,
         kind: validKind,
+        transitive,
         targetKind: validTargetKind,
         target: parts[2],
         owner: parts[2],

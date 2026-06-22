@@ -11,7 +11,7 @@ export interface PathRuntimeInfo {
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:[\\/]/;
 const MALFORMED_WINDOWS_DRIVE_PATH = /^[A-Za-z]:(?![\\/])/;
 const WSL_MOUNT_PATH = /^\/mnt\/[a-z](?:\/|$)/i;
-const UNC_WSL_PATH = /^(?:\\\\wsl\$\\|\/\/wsl\$\/)/i;
+const UNC_WSL_PATH = /^(?:\\\\(?:wsl\$|wsl\.localhost)\\|\/\/(?:wsl\$|wsl\.localhost)\/)/i;
 
 function normalizeToUnixSlashes(value: string): string {
   return value.replace(/\\/g, "/");
@@ -23,11 +23,12 @@ function normalizeToWindowsSlashes(value: string): string {
 
 function parseUncWslPath(pathValue: string): { distro: string; innerPath: string } | undefined {
   const normalized = normalizeToUnixSlashes(pathValue);
-  if (!normalized.toLowerCase().startsWith("//wsl$/")) {
+  const prefixMatch = normalized.match(/^\/\/(?:wsl\$|wsl\.localhost)\//i);
+  if (!prefixMatch) {
     return undefined;
   }
 
-  const remainder = normalized.slice("//wsl$/".length).replace(/^\/+/, "");
+  const remainder = normalized.slice(prefixMatch[0].length).replace(/^\/+/, "");
   const slashIndex = remainder.indexOf("/");
   if (slashIndex < 0) {
     return {
@@ -134,6 +135,17 @@ function toWslPath(pathValue: string, runtime: PathRuntimeInfo, field?: string):
 
   const parsed = parseUncWslPath(pathValue);
   if (parsed) {
+    const distro = runtime.wslDistro?.trim();
+    if (!distro || parsed.distro.toLowerCase() !== distro.toLowerCase()) {
+      throwInvalidPath(
+        pathValue,
+        distro
+          ? `UNC WSL path targets distro "${parsed.distro}", but this server runs in distro "${distro}".`
+          : `Cannot resolve UNC WSL path for distro "${parsed.distro}" without a known WSL distro name.`,
+        runtime,
+        field
+      );
+    }
     const rest = parsed.innerPath.replace(/^\/+/, "");
     return rest ? `/${rest}` : "/";
   }

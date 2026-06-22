@@ -50,6 +50,32 @@ mutable field net/minecraft/server/MinecraftServer running Z
   assert.equal(result.entries[0].descriptor, "Z");
 });
 
+test("parseAccessWidener parses transitive entries", () => {
+  const content = `accessWidener v2 intermediary
+transitive-accessible class net/minecraft/server/MinecraftServer
+transitive-extendable method net/minecraft/server/MinecraftServer tick ()V
+transitive-mutable field net/minecraft/server/MinecraftServer running Z
+`;
+  const result = parseAccessWidener(content);
+  assert.equal(result.entries.length, 3);
+  assert.equal(result.parseWarnings.length, 0);
+  assert.equal(result.entries[0].kind, "accessible");
+  assert.equal(result.entries[0].transitive, true);
+  assert.equal(result.entries[1].kind, "extendable");
+  assert.equal(result.entries[1].transitive, true);
+  assert.equal(result.entries[2].kind, "mutable");
+  assert.equal(result.entries[2].transitive, true);
+});
+
+test("parseAccessWidener warns on unknown transitive kind", () => {
+  const content = `accessWidener v2 intermediary
+transitive-invalid class net/minecraft/server/MinecraftServer
+`;
+  const result = parseAccessWidener(content);
+  assert.equal(result.entries.length, 0);
+  assert.ok(result.parseWarnings.some((w) => w.includes('Unknown access kind "transitive-invalid"')));
+});
+
 test("parseAccessWidener skips comments and blank lines", () => {
   const content = `accessWidener v2 intermediary
 
