@@ -128,13 +128,17 @@ function parseSearchCursor(cursor: string | undefined): SearchCursorPayload | un
   }
 }
 
-function nextCursorFromRows(rows: { file_path: string }[]): string | undefined {
-  if (rows.length === 0) {
+function nextCursorFromRows(rows: { file_path: string }[], limit: number): string | undefined {
+  if (rows.length === 0 || rows.length < limit) {
     return undefined;
   }
 
   const last = rows[rows.length - 1];
   return buildCursor(last.file_path);
+}
+
+function compareFilePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function compareSearchOrdering(
@@ -144,7 +148,7 @@ function compareSearchOrdering(
   if (right.score !== left.score) {
     return right.score - left.score;
   }
-  return left.filePath.localeCompare(right.filePath);
+  return compareFilePaths(left.filePath, right.filePath);
 }
 
 function isAfterSearchCursor(
@@ -157,7 +161,7 @@ function isAfterSearchCursor(
   if (hit.score > cursor.score) {
     return false;
   }
-  return hit.filePath.localeCompare(cursor.filePath) > 0;
+  return compareFilePaths(hit.filePath, cursor.filePath) > 0;
 }
 
 function buildPreview(content: string, query: string): string {
@@ -240,7 +244,7 @@ export class FilesRepo {
     this.listStmt = this.db.prepare(`
       SELECT artifact_id, file_path
       FROM files
-      WHERE artifact_id = ? AND file_path > ? AND (? IS NULL OR file_path LIKE ? || '%')
+      WHERE artifact_id = ? AND file_path > ? AND (? IS NULL OR file_path LIKE ? ESCAPE '\\')
       ORDER BY file_path ASC
       LIMIT ?
     `);
@@ -248,7 +252,7 @@ export class FilesRepo {
     this.listRowsStmt = this.db.prepare(`
       SELECT artifact_id, file_path, content, content_bytes, content_hash
       FROM files
-      WHERE artifact_id = ? AND file_path > ? AND (? IS NULL OR file_path LIKE ? || '%')
+      WHERE artifact_id = ? AND file_path > ? AND (? IS NULL OR file_path LIKE ? ESCAPE '\\')
       ORDER BY file_path ASC
       LIMIT ?
     `);
@@ -355,13 +359,13 @@ export class FilesRepo {
       artifactId,
       cursor?.sortKey ?? "",
       options.prefix ?? null,
-      options.prefix ?? "",
+      options.prefix != null ? `${escapeLikeNeedle(options.prefix)}%` : "",
       Math.max(1, options.limit)
     ) as { file_path: string }[];
 
     return {
       items: rows.map((row) => row.file_path),
-      nextCursor: nextCursorFromRows(rows)
+      nextCursor: nextCursorFromRows(rows, Math.max(1, options.limit))
     };
   }
 
@@ -371,7 +375,7 @@ export class FilesRepo {
       artifactId,
       cursor?.sortKey ?? "",
       options.prefix ?? null,
-      options.prefix ?? "",
+      options.prefix != null ? `${escapeLikeNeedle(options.prefix)}%` : "",
       Math.max(1, options.limit)
     ) as {
       artifact_id: string;
@@ -389,7 +393,7 @@ export class FilesRepo {
         contentBytes: row.content_bytes,
         contentHash: row.content_hash
       })),
-      nextCursor: nextCursorFromRows(rows)
+      nextCursor: nextCursorFromRows(rows, Math.max(1, options.limit))
     };
   }
 
@@ -454,7 +458,7 @@ export class FilesRepo {
     }
 
     const cursor = parseSearchCursor(options.cursor);
-    const likeQuery = `%${normalized}%`;
+    const likeQuery = `%${escapeLikeNeedle(normalized)}%`;
     const ftsQuery = buildIndexedMatchQuery(normalized, options.match);
     const mode = options.mode ?? "mixed";
 
@@ -466,29 +470,14 @@ export class FilesRepo {
 
     // When cursor score is below all possible bands, skip both queries
     const cursorExhausted = cursor != null && cursor.score < 100;
-    // Skip path query entirely when cursor is within the content-only tier
-    const cursorPastPath = cursor != null && cursor.score < 120;
-    const includePath = mode !== "text" && !cursorExhausted && !cursorPastPath;
+    const includePath = mode !== "text" && !cursorExhausted;
     const includeContent = mode !== "path" && !cursorExhausted;
 
-    // Path query: push cursor into SQL when cursor.score == 120 (within path tier)
-    let pathRows: { file_path: string }[];
-    if (includePath && cursor && cursor.score === 120) {
-      // Cursor is within the path tier — only fetch paths after cursor.filePath
-      pathRows = this.prepareCached(`
-        SELECT file_path
-        FROM files
-        WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\' AND file_path > ?
-        ORDER BY file_path ASC
-        LIMIT ?
-      `).all(artifactId, likeQuery, cursor.filePath, fetchLimit) as { file_path: string }[];
-    } else if (includePath) {
-      pathRows = this.searchPathStmt.all(artifactId, likeQuery, fetchLimit) as {
-        file_path: string;
-      }[];
-    } else {
-      pathRows = [];
-    }
+    const pathRows: { file_path: string }[] = includePath
+      ? (this.searchPathStmt.all(artifactId, likeQuery, fetchLimit) as {
+          file_path: string;
+        }[])
+      : [];
 
     const merged: SearchFileCandidateResult[] = pathRows.map((row) => ({
       filePath: row.file_path,
@@ -623,7 +612,7 @@ export class FilesRepo {
     if (!normalized) {
       return 0;
     }
-    const likeQuery = `%${normalized}%`;
+    const likeQuery = `%${escapeLikeNeedle(normalized)}%`;
     const row = this.prepareCached(
       `SELECT COUNT(*) AS cnt FROM files WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\'`
     ).get(artifactId, likeQuery) as { cnt: number } | undefined;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -74,6 +74,42 @@ test("openDatabase fails when cache schema_version exceeds supported version", (
       (error) => {
         assert.equal((error as { code?: string }).code, "ERR_DB_FAILURE");
         assert.match(String((error as Error).message), /schema version/i);
+        return true;
+      }
+    );
+
+    assert.equal(existsSync(config.sqlitePath), true);
+    const cacheEntries = await readdir(join(root, "cache"));
+    assert.equal(cacheEntries.some((entry) => entry.includes(".corrupted.")), false);
+  }));
+
+test("openDatabase backs up and rebuilds a corrupted database file", () =>
+  withTempDir("sqlite-backend-", async (root) => {
+    const config = buildTestConfig(root);
+    await mkdir(join(root, "cache"), { recursive: true });
+    await writeFile(config.sqlitePath, "this is not a sqlite database");
+
+    const initialized = openDatabase(config);
+    assert.equal(initialized.schemaVersion, LATEST_SCHEMA_VERSION);
+    initialized.db.close();
+
+    const cacheEntries = await readdir(join(root, "cache"));
+    assert.equal(cacheEntries.some((entry) => entry.includes(".corrupted.")), true);
+  }));
+
+test("openDatabase rethrows non-corruption migration errors without recreating the database", () =>
+  withTempDir("sqlite-backend-", async (root) => {
+    const config = buildTestConfig(root);
+    const initialized = openDatabase(config);
+    initialized.db
+      .prepare("UPDATE cache_meta SET value = ? WHERE key = ?")
+      .run(["3", "schema_version"]);
+    initialized.db.close();
+
+    assert.throws(
+      () => openDatabase(config),
+      (error) => {
+        assert.match(String((error as Error).message), /duplicate column name/i);
         return true;
       }
     );

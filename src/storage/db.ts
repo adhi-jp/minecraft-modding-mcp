@@ -35,7 +35,7 @@ function runIntegrityCheck(db: SqliteDatabase): void {
     throw createError({
       code: ERROR_CODES.DB_FAILURE,
       message: "SQLite integrity check failed.",
-      details: { integrityCheck: result }
+      details: { reason: "integrity_check_failed", integrityCheck: result }
     });
   }
 }
@@ -72,6 +72,26 @@ function isSchemaVersionMismatchError(error: unknown): boolean {
     error.details?.reason === "schema_version_unsupported" ||
     error.details?.reason === "schema_version_invalid"
   );
+}
+
+const SQLITE_CORRUPT_ERRCODE = 11;
+const SQLITE_NOTADB_ERRCODE = 26;
+
+function isCorruptionError(error: unknown): boolean {
+  if (isAppError(error)) {
+    return (
+      error.code === ERROR_CODES.DB_FAILURE && error.details?.reason === "integrity_check_failed"
+    );
+  }
+  const sqliteError = error as { code?: string; errcode?: number } | undefined;
+  if (sqliteError?.code === "SQLITE_CORRUPT" || sqliteError?.code === "SQLITE_NOTADB") {
+    return true;
+  }
+  if (typeof sqliteError?.errcode !== "number") {
+    return false;
+  }
+  const primaryErrcode = sqliteError.errcode & 0xff;
+  return primaryErrcode === SQLITE_CORRUPT_ERRCODE || primaryErrcode === SQLITE_NOTADB_ERRCODE;
 }
 
 function buildDefaultLogger(): Logger {
@@ -139,6 +159,14 @@ export function openDatabase(config: Config, logger: Logger = buildDefaultLogger
     }
 
     if (!isMissingPath(config.sqlitePath)) {
+      if (!isCorruptionError(caughtError)) {
+        logger.error("SQLite initialization failed", {
+          path: config.sqlitePath,
+          reason: errorMessage
+        });
+        throw caughtError;
+      }
+
       const backupPath = backupCorruptedDb(config.sqlitePath);
       logger.warn("SQLite database integrity check failed. Recreated database after backup", {
         sqlitePath: config.sqlitePath,

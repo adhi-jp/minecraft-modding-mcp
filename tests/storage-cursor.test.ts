@@ -564,6 +564,73 @@ test("filesRepo.searchFileCandidates paginates text/path results without duplica
   assert.ok(collected.length >= 15, `expected at least 15 results, got ${collected.length}`);
 });
 
+test("filesRepo.searchFiles does not re-emit a both-tier hit as a content hit across pages", async () => {
+  const { artifacts, files } = await createRepos();
+  const artifactId = "artifact-both-tier-dedupe";
+  seedArtifact(artifacts, artifactId);
+
+  files.replaceFilesForArtifact(artifactId, [
+    { filePath: "alpha/Foo.java", content: "class Foo { void Foo() {} }", contentBytes: 27, contentHash: "bt-a" },
+    { filePath: "b/FooA.java", content: "class FooA { void noop() {} }", contentBytes: 29, contentHash: "bt-b" },
+    { filePath: "c/FooB.java", content: "class FooB { void noop() {} }", contentBytes: 29, contentHash: "bt-c" }
+  ]);
+
+  const collected: string[] = [];
+  let cursor: string | undefined = undefined;
+  for (let page = 0; page < 10; page += 1) {
+    const result = files.searchFiles(artifactId, { query: "Foo", limit: 1, cursor });
+    if (result.items.length === 0) break;
+    collected.push(...result.items.map((item) => item.filePath));
+    cursor = result.nextCursor;
+    if (!cursor) break;
+  }
+
+  assert.equal(new Set(collected).size, collected.length, "no duplicates across pages");
+  assert.ok(collected.includes("alpha/Foo.java"));
+});
+
+test("filesRepo path search treats LIKE wildcard characters literally", async () => {
+  const { artifacts, files } = await createRepos();
+  const artifactId = "artifact-path-like-escaping";
+  seedArtifact(artifacts, artifactId);
+
+  files.replaceFilesForArtifact(artifactId, [
+    { filePath: "net/minecraft/block_entity/Thing.java", content: "class Thing {}", contentBytes: 14, contentHash: "pe-a" },
+    { filePath: "net/minecraft/blockXentity/Thing.java", content: "class Thing {}", contentBytes: 14, contentHash: "pe-b" }
+  ]);
+
+  const result = files.searchFileCandidates(artifactId, {
+    query: "block_entity",
+    limit: 10,
+    mode: "path"
+  });
+  assert.deepEqual(
+    result.items.map((item) => item.filePath),
+    ["net/minecraft/block_entity/Thing.java"]
+  );
+
+  assert.equal(files.countPathCandidates(artifactId, "block_entity"), 1);
+});
+
+test("filesRepo.listFiles omits nextCursor on the final partial page", async () => {
+  const { artifacts, files } = await createRepos();
+  const artifactId = "artifact-list-last-page";
+  seedArtifact(artifacts, artifactId);
+
+  files.replaceFilesForArtifact(artifactId, [
+    { filePath: "a/A.java", content: "class A {}", contentBytes: 10, contentHash: "lp-a" },
+    { filePath: "b/B.java", content: "class B {}", contentBytes: 10, contentHash: "lp-b" }
+  ]);
+
+  const page = files.listFiles(artifactId, { limit: 100 });
+  assert.equal(page.items.length, 2);
+  assert.equal(page.nextCursor, undefined);
+
+  const rowsPage = files.listFileRows(artifactId, { limit: 100 });
+  assert.equal(rowsPage.items.length, 2);
+  assert.equal(rowsPage.nextCursor, undefined);
+});
+
 test("filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for deep pages", async () => {
   const { artifacts, files } = await createRepos();
   const artifactId = "artifact-cursor-pushdown";
