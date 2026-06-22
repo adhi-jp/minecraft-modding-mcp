@@ -107,7 +107,7 @@ export class CompareMinecraftService {
           : {
               fromVersion: input.subject.fromVersion,
               toVersion: input.subject.toVersion,
-              packageFilter: input.subject.kind === "class" ? undefined : input.subject.registry
+              packageFilter: undefined
             };
         const output = await this.deps.compareVersions({
           fromVersion: subject.fromVersion,

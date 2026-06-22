@@ -2098,6 +2098,25 @@ test("analyzeSymbolSchema accepts kind=symbol for task=api-overview (infers clas
   assert.equal(parsed.success, true, "kind=symbol must no longer be parse-rejected for api-overview");
 });
 
+test("analyzeSymbolSchema requires version for task=workspace", () => {
+  const missing = analyzeSymbolSchema.safeParse({
+    task: "workspace",
+    projectPath: "/workspace/demo-mod",
+    subject: { kind: "class", name: "net.minecraft.world.item.ItemStack" }
+  });
+  assert.equal(missing.success, false, "task=workspace without version must be rejected");
+  if (!missing.success) {
+    assert.ok(missing.error.issues.some((i) => i.path[0] === "version"), "issue path should name version");
+  }
+  const withVersion = analyzeSymbolSchema.safeParse({
+    task: "workspace",
+    version: "1.21.10",
+    projectPath: "/workspace/demo-mod",
+    subject: { kind: "class", name: "net.minecraft.world.item.ItemStack" }
+  });
+  assert.equal(withVersion.success, true, "task=workspace with version must be accepted");
+});
+
 test("AnalyzeSymbolService explicit kind=class emits no inference warning", async () => {
   const service = new AnalyzeSymbolService({
     ...throwingAnalyzeDeps(),

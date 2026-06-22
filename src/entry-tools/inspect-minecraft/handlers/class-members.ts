@@ -70,12 +70,13 @@ deps: InspectMinecraftDeps,
             include,
             warnings: [...artifact.warnings, ...members.warnings],
             truncated: createTruncationMeta({
-              omittedGroups: ["members"],
+              omittedGroups: detail === "summary" ? ["members"] : [],
               nextActions: [
                 createNextAction("inspect-minecraft", {
                   task: "class-members",
                   detail: "full",
                   include: ["members"],
+                  limit: Math.min(members.counts.total, 5000),
                   subject
                 })
               ]

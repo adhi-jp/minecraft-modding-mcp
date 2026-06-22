@@ -138,7 +138,7 @@ export type VerifyMixinTargetDeps = {
 const ACCESSOR_NAME_RE = /^(get|set|is)([A-Z]\w*)$/;
 const INVOKER_NAME_RE = /^(invoke|call)([A-Z]\w*)$/;
 
-function decodeAccessFlags(flags: number | undefined): string[] {
+function decodeAccessFlags(flags: number | undefined, kind: "method" | "field"): string[] {
   const labels: string[] = [];
   if (flags == null) {
     return labels;
@@ -149,8 +149,8 @@ function decodeAccessFlags(flags: number | undefined): string[] {
   if ((flags & 0x0008) !== 0) labels.push("static");
   if ((flags & 0x0010) !== 0) labels.push("final");
   if ((flags & 0x0020) !== 0) labels.push("synchronized");
-  if ((flags & 0x0040) !== 0) labels.push("volatile");
-  if ((flags & 0x0080) !== 0) labels.push("transient");
+  if ((flags & 0x0040) !== 0) labels.push(kind === "method" ? "bridge" : "volatile");
+  if ((flags & 0x0080) !== 0) labels.push(kind === "method" ? "varargs" : "transient");
   if ((flags & 0x0100) !== 0) labels.push("native");
   if ((flags & 0x0400) !== 0) labels.push("abstract");
   if ((flags & 0x0800) !== 0) labels.push("strictfp");
@@ -268,11 +268,11 @@ function deriveVisibility(
   return "package-private";
 }
 
-function buildMatch(member: ExplorerSignatureMember): VerifyMixinTargetMatch {
+function buildMatch(member: ExplorerSignatureMember, kind: "method" | "field"): VerifyMixinTargetMatch {
   return {
     name: member.name,
     descriptor: member.jvmDescriptor,
-    accessFlags: decodeAccessFlags(member.accessFlags),
+    accessFlags: decodeAccessFlags(member.accessFlags, kind),
     javaSignature: member.javaSignature,
     ...(member.sourceLine ? { sourceLine: member.sourceLine } : {})
   };
@@ -399,7 +399,7 @@ export class VerifyMixinTargetService {
     if (member.descriptor) {
       const descriptorHits = exactNameHits.filter((m) => m.jvmDescriptor === member.descriptor);
       if (descriptorHits.length > 0) {
-        matches = descriptorHits.map(buildMatch);
+        matches = descriptorHits.map((m) => buildMatch(m, member.kind));
       } else {
         matches = [];
         candidates = exactNameHits.map((m) => ({
@@ -409,7 +409,7 @@ export class VerifyMixinTargetService {
         }));
       }
     } else {
-      matches = exactNameHits.map(buildMatch);
+      matches = exactNameHits.map((m) => buildMatch(m, member.kind));
     }
 
     if (matches.length === 0 && candidates.length === 0) {

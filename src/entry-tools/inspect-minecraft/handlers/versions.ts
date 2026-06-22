@@ -50,7 +50,8 @@ deps: InspectMinecraftDeps,
           snapshots: input.includeSnapshots ? versions.snapshots : undefined,
           cached: versions.cached
         }
-      }
+      },
+      alwaysBlocks: ["versions"]
     }),
     warnings: versions.warnings ?? []
   };

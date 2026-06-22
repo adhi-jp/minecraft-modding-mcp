@@ -292,7 +292,8 @@ export class AnalyzeModService {
                       jarPath: input.subject.jarPath
                     },
                     executionMode: "apply",
-                    targetMapping: input.targetMapping
+                    targetMapping: input.targetMapping,
+                    ...(input.outputJar !== undefined ? { outputJar } : {})
                   })
                 ]
               },

@@ -97,7 +97,7 @@ export const analyzeSymbolShape = {
   version: nonEmptyString
     .optional()
     .describe(
-      "Point-in-time MC version for task=exists/map/exact-map/api-overview. For task=lifecycle it is accepted as a back-compat alias for toVersion (range end)."
+      "Point-in-time MC version for task=exists/map/exact-map/workspace/api-overview. For task=lifecycle it is accepted as a back-compat alias for toVersion (range end)."
     ),
   fromVersion: nonEmptyString
     .optional()
@@ -140,11 +140,11 @@ const LIFECYCLE_ONLY_FIELDS = [
 ] as const;
 
 export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((value, ctx) => {
-  if (value.task !== "workspace" && value.task !== "lifecycle" && !value.version) {
+  if (value.task !== "lifecycle" && !value.version) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["version"],
-      message: "version is required for non-workspace tasks."
+      message: "version is required for non-lifecycle tasks."
     });
   }
   if (value.task === "lifecycle" && !value.version && !value.toVersion) {
@@ -484,7 +484,7 @@ export class AnalyzeSymbolService {
       case "workspace": {
         const output = await this.deps.resolveWorkspaceSymbol({
           projectPath: input.projectPath!,
-          version: input.version ?? "unknown",
+          version: input.version!,
           kind: subjectKind,
           name: input.subject.name,
           owner: input.subject.owner,
@@ -510,7 +510,7 @@ export class AnalyzeSymbolService {
                 owner: input.subject.owner,
                 descriptor: input.subject.descriptor,
                 projectPath: input.projectPath,
-                version: input.version ?? "unknown",
+                version: input.version,
                 sourceMapping: input.sourceMapping ?? "obfuscated"
               }),
               counts: {
@@ -538,6 +538,12 @@ export class AnalyzeSymbolService {
           ...(input.gradleUserHome !== undefined ? { gradleUserHome: input.gradleUserHome } : {}),
           maxRows: input.maxRows
         });
+        const includeMatrix = include.includes("matrix") || detail !== "summary";
+        const matrixRowCap = input.maxRows ?? 25;
+        const matrixCapWarning =
+          includeMatrix && output.rows.length > matrixRowCap
+            ? `Matrix rows were truncated to ${matrixRowCap} of ${output.rowCount}. Raise maxRows to include more rows.`
+            : undefined;
         return {
           ...buildEntryToolResult({
             task: "api-overview",
@@ -563,16 +569,20 @@ export class AnalyzeSymbolService {
                 className: output.className,
                 classIdentity: output.classIdentity
               },
-              matrix: include.includes("matrix") || detail !== "summary"
+              matrix: includeMatrix
                 ? {
                     rowCount: output.rowCount,
-                    rowsTruncated: output.rowsTruncated,
-                    rows: output.rows.slice(0, 25)
+                    rowsTruncated: output.rowsTruncated || output.rows.length > matrixRowCap,
+                    rows: output.rows.slice(0, matrixRowCap)
                   }
                 : undefined
             }
           }),
-          warnings: inferenceWarning ? [inferenceWarning, ...output.warnings] : output.warnings
+          warnings: [
+            ...(inferenceWarning ? [inferenceWarning] : []),
+            ...output.warnings,
+            ...(matrixCapWarning ? [matrixCapWarning] : [])
+          ]
         };
       }
     }

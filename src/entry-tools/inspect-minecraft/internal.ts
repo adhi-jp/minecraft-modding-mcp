@@ -343,6 +343,7 @@ export async function resolveWorkspaceArtifactReference(
   return {
     artifactId: artifact.artifactId,
     artifact,
+    version: artifact.version,
     warnings: [...artifact.warnings]
   };
 }
@@ -616,7 +617,7 @@ async function resolveArtifactRef(
   deps: InspectMinecraftDeps,
   ref: ArtifactRef,
   subject: Extract<Subject, { kind: "artifact" | "class" | "file" | "search" }>
-): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; warnings: string[] }> {
+): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
   if (ref.type === "resolved-id") {
     return {
       artifactId: ref.artifactId,
@@ -636,6 +637,7 @@ async function resolveArtifactRef(
   return {
     artifactId: artifact.artifactId,
     artifact,
+    version: artifact.version,
     warnings: [...artifact.warnings]
   };
 }

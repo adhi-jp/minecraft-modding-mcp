@@ -14,6 +14,31 @@ deps: InspectMinecraftDeps,
   const artifact = subject.kind === "file"
     ? await resolveArtifactReference(deps, subject, "file")
     : await resolveWorkspaceArtifactReference(deps, subject, fileSubject.artifact);
+  if (!artifact.artifactId) {
+    const summary: Summary = {
+      status: "blocked",
+      headline: `Could not resolve artifact context for ${fileSubject.filePath}.`,
+      subject: createSummarySubject({
+        task: "file",
+        filePath: fileSubject.filePath
+      })
+    };
+    return {
+      ...buildEntryToolResult({
+        task: "file",
+        summary,
+        detail,
+        include,
+        blocks: {
+          subject: {
+            requested: subject
+          }
+        },
+        alwaysBlocks: ["subject"]
+      }),
+      warnings: artifact.warnings
+    };
+  }
   const file = await deps.getArtifactFile({
     artifactId: artifact.artifactId,
     filePath: fileSubject.filePath
@@ -51,7 +76,7 @@ deps: InspectMinecraftDeps,
           content: include.includes("source") || detail !== "summary" ? file.content : undefined
         }
       },
-      alwaysBlocks: ["subject"]
+      alwaysBlocks: ["subject", "file"]
     }),
     warnings: [...artifact.warnings]
   };
