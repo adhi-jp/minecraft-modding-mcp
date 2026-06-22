@@ -92,6 +92,34 @@ test("cache registry listEntries paginates and normalizes WSL jarPath selectors"
   assert.equal(page2.entries[0]?.entryId, "beta.jar");
 });
 
+test("cache registry listEntries pagination does not drop mixed-case entries across pages", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-case-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const names = ["another.jar", "beta.jar", "MyMod.jar", "Zeta.jar"];
+  for (const name of names) {
+    await writeFile(join(root, "downloads", name), "jar");
+  }
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const collected: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await registry.listEntries({
+      cacheKinds: ["downloads"],
+      limit: 2,
+      cursor
+    });
+    collected.push(...page.entries.map((entry) => entry.entryId));
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  assert.deepEqual([...collected].sort(), [...names].sort());
+});
+
 test("cache registry filters stale filesystem entries via olderThan and status selectors", async () => {
   const root = await mkdtemp(join(tmpdir(), "cache-registry-stale-"));
   await mkdir(join(root, "downloads"), { recursive: true });

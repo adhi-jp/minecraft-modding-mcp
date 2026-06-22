@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { readdir, rm, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { normalizeOptionalPathForHost, type PathRuntimeInfo } from "./path-converter.js";
 import Database from "./storage/sqlite.js";
@@ -88,6 +89,7 @@ type ArtifactIndexRow = {
 
 const STALE_ENTRY_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CURSOR_VERSION = 1;
+const CACHE_STAT_CONCURRENCY = 8;
 const STATUS_PRIORITY: CacheHealthState[] = ["in_use", "corrupt", "orphaned", "stale", "partial", "healthy"];
 
 function kindRoot(config: CacheRegistryConfig, cacheKind: PublicCacheKind): string {
@@ -238,12 +240,12 @@ function inferProjectPath(pathValue: string | undefined, runtimeInfo?: PathRunti
   return undefined;
 }
 
-function isCorruptRegistryJson(filePath: string): boolean {
+async function isCorruptRegistryJson(filePath: string): Promise<boolean> {
   if (!filePath.endsWith(".json")) {
     return false;
   }
   try {
-    JSON.parse(readFileSync(filePath, "utf8"));
+    JSON.parse(await readFile(filePath, "utf8"));
     return false;
   } catch {
     return true;
@@ -324,7 +326,8 @@ function entryUpdatedAt(entry: CacheEntry): string | undefined {
 function deriveEntryStatus(
   entry: CacheEntry,
   config: CacheRegistryConfig,
-  now: number
+  now: number,
+  entryPathExists = false
 ): CacheHealthState {
   const maybeMeta = entry.meta ?? {};
   if (maybeMeta.inUse === true) {
@@ -335,7 +338,9 @@ function deriveEntryStatus(
   }
 
   const candidatePaths = candidatePathsForEntry(entry);
-  const existingPaths = candidatePaths.filter((candidate) => existsSync(candidate));
+  const existingPaths = candidatePaths.filter(
+    (candidate) => (entryPathExists && candidate === entry.path) || existsSync(candidate)
+  );
   if (entry.cacheKind === "artifact-index" && !existsSync(config.sqlitePath)) {
     return "orphaned";
   }
@@ -362,10 +367,9 @@ function deriveEntryStatus(
 
 function sortEntries(entries: CacheEntry[]): CacheEntry[] {
   return [...entries].sort((left, right) => {
-    if (left.cacheKind !== right.cacheKind) {
-      return left.cacheKind.localeCompare(right.cacheKind);
-    }
-    return left.entryId.localeCompare(right.entryId);
+    const leftKey = entrySortKey(left);
+    const rightKey = entrySortKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
 }
 
@@ -461,18 +465,20 @@ function matchesSelector(entry: CacheEntry, selector: PreparedSelector | undefin
       return false;
     }
   }
-  const normalizedPaths = candidatePathsForEntry(entry)
-    .map((candidate) => normalizePathKey(candidate, runtimeInfo))
-    .filter((candidate): candidate is string => Boolean(candidate));
-  if (selector.normalizedJarPath && !normalizedPaths.includes(selector.normalizedJarPath)) {
-    return false;
-  }
-  if (selector.normalizedProjectPath) {
-    const projectMatch = normalizedPaths.some((candidate) =>
-      candidate === selector.normalizedProjectPath || candidate.startsWith(`${selector.normalizedProjectPath}/`)
-    );
-    if (!projectMatch) {
+  if (selector.normalizedJarPath || selector.normalizedProjectPath) {
+    const normalizedPaths = candidatePathsForEntry(entry)
+      .map((candidate) => normalizePathKey(candidate, runtimeInfo))
+      .filter((candidate): candidate is string => Boolean(candidate));
+    if (selector.normalizedJarPath && !normalizedPaths.includes(selector.normalizedJarPath)) {
       return false;
+    }
+    if (selector.normalizedProjectPath) {
+      const projectMatch = normalizedPaths.some((candidate) =>
+        candidate === selector.normalizedProjectPath || candidate.startsWith(`${selector.normalizedProjectPath}/`)
+      );
+      if (!projectMatch) {
+        return false;
+      }
     }
   }
   return true;
@@ -557,7 +563,8 @@ function workspaceCacheEntries(workspaceCache: WorkspaceContextCache): CacheEntr
 
 async function fileBackedEntries(
   config: CacheRegistryConfig,
-  cacheKind: Exclude<PublicCacheKind, "artifact-index" | "workspace">
+  cacheKind: Exclude<PublicCacheKind, "artifact-index" | "workspace">,
+  detectCorruption: boolean
 ): Promise<CacheEntry[]> {
   if (cacheKind === "binary-remap") {
     return binaryRemapEntries(config);
@@ -565,12 +572,11 @@ async function fileBackedEntries(
 
   const root = kindRoot(config, cacheKind);
   const files = await listFilesRecursive(root);
-  const entries: CacheEntry[] = [];
-  for (const filePath of files) {
+  return mapWithConcurrencyLimit(files, CACHE_STAT_CONCURRENCY, async (filePath): Promise<CacheEntry> => {
     const fileStat = await stat(filePath);
     const normalizedEntryId = filePath.slice(root.length + 1);
     const inferredScope = inferScope(filePath, normalizedEntryId) ?? (cacheKind === "decompiled-source" ? "vanilla" : undefined);
-    entries.push({
+    return {
       cacheKind,
       entryId: normalizedEntryId,
       path: filePath,
@@ -583,7 +589,7 @@ async function fileBackedEntries(
         scope: inferredScope,
         projectPath: inferProjectPath(filePath, config.pathRuntimeInfo),
         partial: fileStat.size === 0,
-        corrupt: cacheKind === "registry" ? isCorruptRegistryJson(filePath) : false,
+        corrupt: cacheKind === "registry" && detectCorruption ? await isCorruptRegistryJson(filePath) : false,
         inUse:
           filePath.endsWith(".lock") ||
           filePath.endsWith(".wal") ||
@@ -592,9 +598,8 @@ async function fileBackedEntries(
           ? { jarPath: filePath }
           : {})
       }
-    });
-  }
-  return entries;
+    };
+  });
 }
 
 /**
@@ -729,10 +734,12 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
 
   async function collectEntries(
     cacheKinds: PublicCacheKind[] | undefined,
-    selector: CacheSelector | undefined
+    selector: CacheSelector | undefined,
+    detectCorruption = false
   ): Promise<CacheEntry[]> {
     const selectedKinds = cacheKinds?.length ? cacheKinds : [...PUBLIC_CACHE_KINDS];
     const preparedSelector = prepareSelector(selector, config.pathRuntimeInfo);
+    const detectCorruptionForKinds = detectCorruption || selector?.status === "corrupt";
     const now = Date.now();
     const entries = await Promise.all(
       selectedKinds.map((cacheKind) => {
@@ -742,7 +749,7 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
         if (cacheKind === "workspace") {
           return Promise.resolve(workspaceCacheEntries(workspaceCache));
         }
-        return fileBackedEntries(config, cacheKind);
+        return fileBackedEntries(config, cacheKind, detectCorruptionForKinds);
       })
     );
 
@@ -750,7 +757,9 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
       .flat()
       .map((entry) => ({
         ...entry,
-        status: entry.cacheKind === "workspace" ? entry.status : deriveEntryStatus(entry, config, now)
+        status: entry.cacheKind === "workspace"
+          ? entry.status
+          : deriveEntryStatus(entry, config, now, entry.cacheKind !== "artifact-index")
       }));
 
     return sortEntries(enriched.filter((entry) => matchesSelector(entry, preparedSelector, config.pathRuntimeInfo)));
@@ -798,7 +807,7 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
     },
 
     async verifyEntries(input) {
-      const entries = await collectEntries(input.cacheKinds, input.selector);
+      const entries = await collectEntries(input.cacheKinds, input.selector, true);
       const unhealthy = entries.filter((entry) => entry.status !== "healthy");
       const warningStatuses = [...new Set(unhealthy.map((entry) => entry.status))];
       return {
