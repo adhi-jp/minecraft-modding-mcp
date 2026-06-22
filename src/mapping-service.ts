@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
@@ -72,6 +73,7 @@ import {
   applyDisambiguationHints,
   clampCandidateLimit,
   clampRowLimit,
+  collectExactRecordIndex,
   collectTargetRecords,
   consumeFieldType,
   effectiveLoomSearchProjectPath,
@@ -80,6 +82,10 @@ import {
   isValidMethodDescriptor,
   limitResolutionCandidates,
   lookupCandidates,
+  lookupExactClassBySimpleName,
+  lookupExactClassBySymbol,
+  lookupExactMembers,
+  lookupExactMembersByOwner,
   mappingPriorityFromInput,
   mappingSourceOrder,
   namespacePath,
@@ -599,7 +605,19 @@ export class MappingService {
     const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
 
     const strictDescriptor = projectedDescriptor ?? descriptor;
-    const strictCandidates = rawCandidates.filter((candidate) => candidate.descriptor === strictDescriptor);
+    const acceptedDescriptors = new Set<string>([descriptor, strictDescriptor]);
+    const toObfuscatedPath = namespacePath(graph, sourceMapping, "obfuscated");
+    if (toObfuscatedPath) {
+      const obfuscatedProjection = this.projectMethodDescriptorToTarget(
+        graph,
+        toObfuscatedPath,
+        descriptor
+      );
+      acceptedDescriptors.add(obfuscatedProjection.descriptor);
+    }
+    const strictCandidates = rawCandidates.filter(
+      (candidate) => candidate.descriptor !== undefined && acceptedDescriptors.has(candidate.descriptor)
+    );
     if (strictCandidates.length === 1) {
       const resolved = toResolutionCandidate(strictCandidates[0]!);
       return {
@@ -757,18 +775,18 @@ export class MappingService {
       };
     }
 
-    const baseRecords = collectTargetRecords(graph, baseMapping).filter((record) => {
-      if (record.kind === "class") {
-        return includeKinds.has("class") && record.symbol === baseClass.symbol;
+    const exactIndex = collectExactRecordIndex(graph, baseMapping);
+    const baseRecords: MappingSymbolRecord[] = [];
+    if (includeKinds.has("class")) {
+      for (const record of lookupExactClassBySymbol(exactIndex, baseClass.symbol)) {
+        baseRecords.push(record);
       }
-      if (record.owner !== baseClass.symbol) {
-        return false;
+    }
+    for (const record of lookupExactMembersByOwner(exactIndex, baseClass.symbol)) {
+      if (record.kind === "field" ? includeKinds.has("field") : includeKinds.has("method")) {
+        baseRecords.push(record);
       }
-      if (record.kind === "field") {
-        return includeKinds.has("field");
-      }
-      return includeKinds.has("method");
-    });
+    }
 
     const rowKindOrder: Record<ClassApiMatrixKind, number> = {
       class: 0,
@@ -814,7 +832,8 @@ export class MappingService {
       className,
       classNameMapping,
       (input.includeKinds ?? []).join(","),
-      input.sourcePriority
+      input.sourcePriority,
+      resolveGradleUserHomePath(input.gradleUserHome)
     ]);
     const { offset: rowOffset, cursorIgnored: rowCursorIgnored } = resolveCursorOffset(
       input.cursor,
@@ -993,7 +1012,9 @@ export class MappingService {
             };
           })()
         : (() => {
-            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode);
+            const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode, {
+              allowShortClassName: input.kind === "class" && sourceMapping === "obfuscated"
+            });
             return {
               mode: "strict",
               queryRecord,
@@ -1021,6 +1042,7 @@ export class MappingService {
         warnings
       };
     }
+    const exactIndex = collectExactRecordIndex(graph, sourceMapping);
 
     const buildOutput = (
       querySymbol: SymbolReference,
@@ -1050,17 +1072,13 @@ export class MappingService {
     if (normalizedQuery.mode === "auto-class") {
       const autoClassName = normalizedQuery.className;
       if (autoClassName.includes(".")) {
-        const matched = records.filter(
-          (record) => record.kind === "class" && record.symbol === autoClassName
-        );
+        const matched = lookupExactClassBySymbol(exactIndex, autoClassName);
         const status: SymbolResolutionStatus =
           matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
         return buildOutput(normalizedQuery.querySymbol, matched, status);
       }
 
-      const matched = records.filter(
-        (record) => record.kind === "class" && record.name === autoClassName
-      );
+      const matched = lookupExactClassBySimpleName(exactIndex, autoClassName);
       const status: SymbolResolutionStatus =
         matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
       if (status === "ambiguous") {
@@ -1074,27 +1092,24 @@ export class MappingService {
     const { queryRecord, querySymbol } = normalizedQuery;
 
     if (queryRecord.kind === "class") {
-      const matched = records.filter(
-        (record) => record.kind === "class" && record.symbol === queryRecord.symbol
-      );
+      const matched = lookupExactClassBySymbol(exactIndex, queryRecord.symbol);
       const status: SymbolResolutionStatus =
         matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
       return buildOutput(querySymbol, matched, status);
     }
 
     if (queryRecord.kind === "field") {
-      const matched = records.filter(
-        (record) =>
-          record.kind === "field" && record.owner === queryRecord.owner && record.name === queryRecord.name
-      );
+      const matched = lookupExactMembers(exactIndex, "field", queryRecord.owner ?? "", queryRecord.name);
       const status: SymbolResolutionStatus =
         matched.length === 1 ? "resolved" : matched.length > 1 ? "ambiguous" : "not_found";
       return buildOutput(querySymbol, matched, status);
     }
 
-    const methodCandidates = records.filter(
-      (record) =>
-        record.kind === "method" && record.owner === queryRecord.owner && record.name === queryRecord.name
+    const methodCandidates = lookupExactMembers(
+      exactIndex,
+      "method",
+      queryRecord.owner ?? "",
+      queryRecord.name
     );
 
     // name-only mode: skip descriptor matching, resolve by owner+name
@@ -1509,6 +1524,7 @@ export class MappingService {
         adjacency: new Map(),
         pathCache: new Map(),
         recordsByTarget: new Map(),
+        exactRecordIndex: new Map(),
         classProjectionCache: new Map(),
         warnings: [
           `Version ${version} is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names.`
@@ -1524,6 +1540,7 @@ export class MappingService {
       adjacency: new Map(),
       pathCache: new Map(),
       recordsByTarget: new Map(),
+      exactRecordIndex: new Map(),
       classProjectionCache: new Map(),
       warnings: []
     };
@@ -1736,7 +1753,9 @@ async function extractTinyFromJar(
   }
 
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, tinyEntry.content, "utf8");
+  const tempPath = `${outputPath}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(tempPath, tinyEntry.content, "utf8");
+  await rename(tempPath, outputPath);
   return true;
 }
 

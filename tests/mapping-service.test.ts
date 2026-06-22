@@ -819,20 +819,19 @@ test("MappingService resolves mojang named namespace paths through official tiny
   }
 });
 
-test("MappingService fetches Maven tiny jars in parallel during fallback loading", async () => {
+test("MappingService stops Maven tiny fallback at the first successful jar per artifact", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-parallel-"));
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-sequential-"));
   try {
     const config = buildTestConfig(root);
 
-    const tinyJarPath = join(root, "parallel-tiny.jar");
+    const tinyJarPath = join(root, "sequential-tiny.jar");
     await createJar(tinyJarPath, {
       "mappings/mappings.tiny": `${TEST_TINY}\n`
     });
     const tinyJarBuffer = await readFile(tinyJarPath);
 
-    let activeJarFetches = 0;
-    let maxActiveJarFetches = 0;
+    const fetchedJarUrls: string[] = [];
 
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -843,6 +842,8 @@ test("MappingService fetches Maven tiny jars in parallel during fallback loading
             "<versioning>",
             "<versions>",
             "<version>1.21.10+build.1</version>",
+            "<version>1.21.10+build.2</version>",
+            "<version>1.21.10+build.3</version>",
             "</versions>",
             "</versioning>",
             "</metadata>"
@@ -851,10 +852,7 @@ test("MappingService fetches Maven tiny jars in parallel during fallback loading
         );
       }
       if (url.endsWith(".jar")) {
-        activeJarFetches += 1;
-        maxActiveJarFetches = Math.max(maxActiveJarFetches, activeJarFetches);
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        activeJarFetches -= 1;
+        fetchedJarUrls.push(url);
         return new Response(tinyJarBuffer, { status: 200 });
       }
       return new Response("not found", { status: 404 });
@@ -881,7 +879,10 @@ test("MappingService fetches Maven tiny jars in parallel during fallback loading
       })
     );
 
-    assert.ok(maxActiveJarFetches > 1, `expected parallel jar fetches, got ${maxActiveJarFetches}`);
+    assert.deepEqual(fetchedJarUrls, [
+      "https://maven.fabricmc.net/net/fabricmc/intermediary/1.21.10/intermediary-1.21.10-v2.jar",
+      "https://maven.fabricmc.net/net/fabricmc/yarn/1.21.10+build.3/yarn-1.21.10+build.3-v2.jar"
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1807,6 +1808,7 @@ test("MappingService getClassApiMatrix prefers the explicit classNameMapping ove
       adjacency: new Map(),
       pathCache: new Map(),
       classProjectionCache: new Map(),
+      exactRecordIndex: new Map(),
       warnings: [],
       recordsByTarget: new Map([
         [

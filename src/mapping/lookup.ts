@@ -4,6 +4,7 @@ import type { MappingSourcePriority, SourceMapping } from "../types.js";
 import type {
   CandidateAccumulator,
   DirectionIndex,
+  ExactRecordIndex,
   LoadedGraph,
   MappingLookupSource,
   MappingSymbolRecord,
@@ -563,7 +564,68 @@ export function effectiveLoomSearchProjectPath(projectPath: string | undefined):
 }
 
 export function collectTargetRecords(graph: LoadedGraph, targetMapping: SourceMapping): MappingSymbolRecord[] {
-  return [...(graph.recordsByTarget.get(targetMapping) ?? [])];
+  return graph.recordsByTarget.get(targetMapping) ?? [];
+}
+
+function exactRecordKey(kind: MappingSymbolRecord["kind"], owner: string, name: string): string {
+  return `${kind}|${owner}|${name}`;
+}
+
+/**
+ * Lazily build (and memoize on the graph) an O(1) exact-lookup index for a
+ * target namespace. Classes key on their FQCN symbol (owner left empty) and are
+ * additionally indexed by simple name for the auto-class short-name path;
+ * fields/methods key on `kind|owner|name`.
+ */
+export function collectExactRecordIndex(graph: LoadedGraph, targetMapping: SourceMapping): ExactRecordIndex {
+  const cached = graph.exactRecordIndex.get(targetMapping);
+  if (cached) {
+    return cached;
+  }
+  const byKey = new Map<string, MappingSymbolRecord[]>();
+  const classBySimpleName = new Map<string, MappingSymbolRecord[]>();
+  const membersByOwner = new Map<string, MappingSymbolRecord[]>();
+  const push = (map: Map<string, MappingSymbolRecord[]>, key: string, record: MappingSymbolRecord): void => {
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.push(record);
+    } else {
+      map.set(key, [record]);
+    }
+  };
+  for (const record of collectTargetRecords(graph, targetMapping)) {
+    if (record.kind === "class") {
+      push(byKey, exactRecordKey("class", "", record.symbol), record);
+      push(classBySimpleName, record.name, record);
+    } else {
+      push(byKey, exactRecordKey(record.kind, record.owner ?? "", record.name), record);
+      push(membersByOwner, record.owner ?? "", record);
+    }
+  }
+  const index: ExactRecordIndex = { byKey, classBySimpleName, membersByOwner };
+  graph.exactRecordIndex.set(targetMapping, index);
+  return index;
+}
+
+export function lookupExactClassBySymbol(index: ExactRecordIndex, symbol: string): MappingSymbolRecord[] {
+  return index.byKey.get(exactRecordKey("class", "", symbol)) ?? [];
+}
+
+export function lookupExactMembersByOwner(index: ExactRecordIndex, owner: string): MappingSymbolRecord[] {
+  return index.membersByOwner.get(owner) ?? [];
+}
+
+export function lookupExactClassBySimpleName(index: ExactRecordIndex, name: string): MappingSymbolRecord[] {
+  return index.classBySimpleName.get(name) ?? [];
+}
+
+export function lookupExactMembers(
+  index: ExactRecordIndex,
+  kind: "field" | "method",
+  owner: string,
+  name: string
+): MappingSymbolRecord[] {
+  return index.byKey.get(exactRecordKey(kind, owner, name)) ?? [];
 }
 
 export function normalizeIncludedKinds(inputKinds: ClassApiMatrixKind[] | undefined): Set<ClassApiMatrixKind> {

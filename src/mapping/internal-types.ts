@@ -26,6 +26,19 @@ export type DirectionIndex = {
   records: Map<string, MappingSymbolRecord>;
 };
 
+/**
+ * O(1) exact-lookup index over a single target namespace's records, used by
+ * existence checks. `byKey` is keyed by `kind|owner|name` (owner empty for
+ * classes, which key on their FQCN symbol); `classBySimpleName` resolves the
+ * auto-class short-name path. Values are arrays so callers can still tell a
+ * unique match (resolved) from multiple (ambiguous).
+ */
+export type ExactRecordIndex = {
+  byKey: Map<string, MappingSymbolRecord[]>;
+  classBySimpleName: Map<string, MappingSymbolRecord[]>;
+  membersByOwner: Map<string, MappingSymbolRecord[]>;
+};
+
 export type MappingLookupSource = "loom-cache" | "maven" | "mojang-client-mappings";
 
 export type PairRecord = {
@@ -62,6 +75,11 @@ export type LoadedGraph = {
   adjacency: Map<import("../types.js").SourceMapping, import("../types.js").SourceMapping[]>;
   pathCache: Map<PairKey, import("../types.js").SourceMapping[] | undefined>;
   recordsByTarget: Map<import("../types.js").SourceMapping, MappingSymbolRecord[]>;
+  /**
+   * Graph-scoped, lazily-built exact-lookup indexes keyed by target namespace.
+   * Populated on first existence check for a namespace; dies with graph eviction.
+   */
+  exactRecordIndex: Map<import("../types.js").SourceMapping, ExactRecordIndex>;
   /**
    * Graph-scoped cache of class-to-class descriptor projections, keyed by
    * `path.join(">") + NUL + internalName`. Value is the projected internal name,

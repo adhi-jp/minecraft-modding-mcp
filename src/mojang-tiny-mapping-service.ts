@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
@@ -461,7 +462,9 @@ export async function resolveMojangTinyFile(
   const tinyContent = renderTinyV2(classMap, membersByOwner);
 
   await mkdir(dirname(cachedTiny), { recursive: true });
-  await writeFile(cachedTiny, tinyContent, "utf8");
+  const tempTiny = `${cachedTiny}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(tempTiny, tinyContent, "utf8");
+  await rename(tempTiny, cachedTiny);
 
   log("info", "mojang-tiny.generated", {
     version,

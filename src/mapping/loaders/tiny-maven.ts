@@ -71,8 +71,7 @@ export async function loadTinyPairsFromMaven(
   const merged = new Map<PairKey, DirectionIndex>();
 
   const repos = deps.config.sourceRepos;
-  const intermediaryUrls: string[] = [];
-  const yarnUrls: string[] = [];
+  const attemptedUrls: string[] = [];
 
   const repoBases = repos.map((repo) => repo.replace(/\/+$/, ""));
   const yarnCoordinatesByRepo = await Promise.all(
@@ -82,41 +81,59 @@ export async function loadTinyPairsFromMaven(
     }))
   );
 
+  const tryUrls = async (urls: string[]): Promise<Map<PairKey, DirectionIndex> | undefined> => {
+    for (const url of urls) {
+      attemptedUrls.push(url);
+      try {
+        const downloaded = await downloadToCache(url, defaultDownloadPath(deps.config.cacheDir, url), {
+          fetchFn: deps.fetchFn,
+          retries: deps.config.fetchRetries,
+          timeoutMs: deps.config.fetchTimeoutMs
+        });
+        if (!downloaded.ok || !downloaded.path) {
+          continue;
+        }
+        const parsed = await parseTinyFromJar(downloaded.path);
+        if (parsed.size > 0) {
+          return parsed;
+        }
+      } catch {
+        // try the next candidate URL
+      }
+    }
+    return undefined;
+  };
+
+  let intermediaryParsed: Map<PairKey, DirectionIndex> | undefined;
+  let yarnParsed: Map<PairKey, DirectionIndex> | undefined;
   for (const { base, yarnCoordinates } of yarnCoordinatesByRepo) {
-    intermediaryUrls.push(
-      `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`,
-      `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}.jar`
-    );
+    if (!intermediaryParsed) {
+      intermediaryParsed = await tryUrls([
+        `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`,
+        `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}.jar`
+      ]);
+    }
 
     for (const coordinate of yarnCoordinates) {
-      yarnUrls.push(
+      if (yarnParsed) {
+        break;
+      }
+      yarnParsed = await tryUrls([
         `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}-v2.jar`,
         `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}.jar`
-      );
+      ]);
+    }
+
+    if (intermediaryParsed && yarnParsed) {
+      break;
     }
   }
 
-  const allUrls = [...intermediaryUrls, ...yarnUrls];
-  const parsedResults = await Promise.allSettled(
-    allUrls.map(async (url) => {
-      const downloaded = await downloadToCache(url, defaultDownloadPath(deps.config.cacheDir, url), {
-        fetchFn: deps.fetchFn,
-        retries: deps.config.fetchRetries,
-        timeoutMs: deps.config.fetchTimeoutMs
-      });
-      if (!downloaded.ok || !downloaded.path) {
-        return undefined;
-      }
-
-      return parseTinyFromJar(downloaded.path);
-    })
-  );
-
-  for (const result of parsedResults) {
-    if (result.status !== "fulfilled" || !result.value) {
+  for (const parsed of [intermediaryParsed, yarnParsed]) {
+    if (!parsed) {
       continue;
     }
-    for (const [key, index] of result.value.entries()) {
+    for (const [key, index] of parsed.entries()) {
       const existing = merged.get(key);
       if (!existing) {
         merged.set(key, index);
@@ -133,6 +150,6 @@ export async function loadTinyPairsFromMaven(
   return {
     pairs: merged,
     warnings,
-    mappingArtifact: allUrls[0] ?? "maven:none"
+    mappingArtifact: attemptedUrls[0] ?? "maven:none"
   };
 }
