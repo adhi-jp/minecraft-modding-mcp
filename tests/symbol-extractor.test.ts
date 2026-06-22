@@ -139,3 +139,35 @@ test("extractSymbolsFromSource normalizes the file path once even for multiple s
   assert.equal(replaceCalls, 1);
   assert.equal(replaceAllCalls, 1);
 });
+
+test("extractSymbolsFromSource indexes sealed and non-sealed types without phantom fields", () => {
+  const sealedSource = [
+    "public sealed class Foo permits A, B {",
+    "}"
+  ].join("\n");
+  const sealedSymbols = extractSymbolsFromSource("net/minecraft/Foo.java", sealedSource);
+  assert.deepEqual(
+    sealedSymbols.map((s) => ({ symbolKind: s.symbolKind, symbolName: s.symbolName })),
+    [{ symbolKind: "class", symbolName: "Foo" }]
+  );
+
+  const nonSealedSource = [
+    "public non-sealed class Bar extends Foo {",
+    "}"
+  ].join("\n");
+  const nonSealedSymbols = extractSymbolsFromSource("net/minecraft/Bar.java", nonSealedSource);
+  assert.deepEqual(
+    nonSealedSymbols.map((s) => ({ symbolKind: s.symbolKind, symbolName: s.symbolName })),
+    [{ symbolKind: "class", symbolName: "Bar" }]
+  );
+
+  const sealedInterfaceSource = [
+    "public sealed interface Baz permits Qux {",
+    "}"
+  ].join("\n");
+  const interfaceSymbols = extractSymbolsFromSource("net/minecraft/Baz.java", sealedInterfaceSource);
+  assert.deepEqual(
+    interfaceSymbols.map((s) => ({ symbolKind: s.symbolKind, symbolName: s.symbolName })),
+    [{ symbolKind: "interface", symbolName: "Baz" }]
+  );
+});

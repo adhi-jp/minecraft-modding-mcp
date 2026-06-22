@@ -54,6 +54,7 @@ export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPa
     });
   }
 
+  const latest = svc.workspaceContextCache.read(projectPath);
   const ctx: WorkspaceContext = {
     projectPath,
     minecraftVersion,
@@ -61,7 +62,7 @@ export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPa
     loader: loaderResult?.resolved ? loaderResult.loader : undefined,
     detectedAt: Date.now(),
     evidence,
-    dependencyVersions: cached?.dependencyVersions ?? new Map<string, string>(),
+    dependencyVersions: latest?.dependencyVersions ?? cached?.dependencyVersions ?? new Map<string, string>(),
     partial: false
   };
   svc.workspaceContextCache.write(ctx);

@@ -363,7 +363,7 @@ export async function resolveSourceTarget(
           ? false
           : download.statusCode !== 404 && isTransientFailure(download.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
-        if (hasNextAttempt && transient) {
+        if (hasNextAttempt && (transient || download.ok)) {
           options.onRepoFailover?.({
             stage: "source",
             repoUrl: sourceUrl,
@@ -426,7 +426,7 @@ export async function resolveSourceTarget(
           ? false
           : downloaded.statusCode !== 404 && isTransientFailure(downloaded.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
-        if (hasNextAttempt && transient) {
+        if (hasNextAttempt && (transient || downloaded.ok)) {
           options.onRepoFailover?.({
             stage: "binary",
             repoUrl: binaryUrl,

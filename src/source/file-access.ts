@@ -84,12 +84,13 @@ export async function listArtifactFiles(svc: SourceService, input: ListArtifactF
     const artifact = svc.getArtifact(input.artifactId);
     const limit = clampLimit(input.limit, 200, 2000);
     const warnings: string[] = [];
+    const prefix = input.prefix === undefined ? undefined : normalizePathStyle(input.prefix);
     const page = svc.filesRepo.listFiles(artifact.artifactId, {
       limit,
       cursor: input.cursor,
-      prefix: input.prefix
+      prefix
     });
-    const normalizedPrefix = normalizeOptionalString(input.prefix);
+    const normalizedPrefix = normalizeOptionalString(prefix);
     if (
       normalizedPrefix &&
       page.items.length === 0 &&

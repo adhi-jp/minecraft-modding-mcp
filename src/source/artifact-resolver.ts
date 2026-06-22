@@ -132,7 +132,7 @@ export function hasExactVersionToken(path: string, version: string): boolean {
     ?? rememberCachedRegex(
       VERSION_TOKEN_REGEX_CACHE,
       normalizedVersion,
-      new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}([^0-9a-z]|$)`, "i")
+      new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}(?![0-9a-z]|\\.[0-9])`, "i")
     );
   return pattern.test(normalizedPath);
 }

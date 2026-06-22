@@ -47,10 +47,21 @@ export async function runResolveStage(svc: SourceService, ctx: MutableMixinPipel
         scope: ctx.input.scope,
         preferProjectVersion: false
       });
-      ctx.jarPath = ctx.resolvedArtifact.binaryJarPath ?? (await svc.versionService.resolveVersionJar(ctx.version)).jarPath;
       ctx.warnings.push(...ctx.resolvedArtifact.warnings);
-      ctx.mappingApplied = ctx.resolvedArtifact.mappingApplied;
-      ctx.signatureLookupMapping = ctx.resolvedArtifact.mappingApplied;
+      if (ctx.resolvedArtifact.binaryJarPath) {
+        ctx.jarPath = ctx.resolvedArtifact.binaryJarPath;
+        ctx.mappingApplied = ctx.resolvedArtifact.mappingApplied;
+        ctx.signatureLookupMapping = ctx.resolvedArtifact.mappingApplied;
+      } else {
+        ctx.jarPath = (await svc.versionService.resolveVersionJar(ctx.version)).jarPath;
+        ctx.signatureLookupMapping = "obfuscated";
+        ctx.scopeFallback = {
+          requested: ctx.input.scope,
+          applied: "vanilla",
+          reason: "Resolved artifact had no binary jar (sources only); falling back to vanilla client jar."
+        };
+        ctx.warnings.push(`Scope "${ctx.input.scope}" resolved without a binary jar; falling back to vanilla client jar.`);
+      }
       if (ctx.resolvedArtifact.version) {
         ctx.version = ctx.resolvedArtifact.version;
       }
@@ -64,6 +75,14 @@ export async function runResolveStage(svc: SourceService, ctx: MutableMixinPipel
       ctx.jarPath = (await svc.versionService.resolveVersionJar(ctx.version)).jarPath;
     }
   } else {
+    if (ctx.input.scope && ctx.input.scope !== "vanilla") {
+      ctx.scopeFallback = {
+        requested: ctx.input.scope,
+        applied: "vanilla",
+        reason: "projectPath required for merged/loader scope; falling back to vanilla client jar."
+      };
+      ctx.warnings.push(`Scope "${ctx.input.scope}" requires projectPath; falling back to vanilla client jar.`);
+    }
     ctx.jarPath = (await svc.versionService.resolveVersionJar(ctx.version)).jarPath;
   }
 

@@ -138,7 +138,8 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
   }
 
   const methodCandidates = signature.methods.filter((method) => method.name === name);
-  if (input.signatureMode === "name-only") {
+  const signatureMode = input.signatureMode ?? "name-only";
+  if (signatureMode === "name-only") {
     if (methodCandidates.length !== 1) {
       return buildUnresolved(methodCandidates.length > 1 ? "ambiguous" : "not_found");
     }

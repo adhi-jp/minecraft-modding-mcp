@@ -933,6 +933,43 @@ test("SourceService searchClassSource warns when queryNamespace used with intent
   assert.equal(result.translatedQuery, undefined);
 });
 
+test("SourceService searchClassSource warns when symbol intent query is not a fully-qualified class name", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-search-queryns-symbol-nonfqcn-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const repos = service as unknown as {
+    artifactsRepo: {
+      upsertArtifact: (value: Record<string, unknown>) => void;
+    };
+  };
+  repos.artifactsRepo.upsertArtifact({
+    artifactId: "artifact-symbol-nonfqcn-warn",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    artifactSignature: "sig",
+    isDecompiled: false,
+    version: "1.21.10",
+    timestamp: new Date().toISOString()
+  });
+
+  const result = await service.searchClassSource({
+    artifactId: "artifact-symbol-nonfqcn-warn",
+    query: "Level",
+    intent: "symbol",
+    queryNamespace: "mojang"
+  });
+
+  assert.ok(Array.isArray(result.warnings), "warnings should be present");
+  assert.ok(
+    result.warnings!.some((warning) => warning.includes("queryNamespace=mojang") && warning.includes("fully-qualified")),
+    `expected non-FQCN symbol-intent warning, got: ${JSON.stringify(result.warnings)}`
+  );
+  assert.equal(result.translatedQuery, undefined);
+});
+
 test("SourceService searchClassSource warns when queryNamespace cannot be applied because artifact has no version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-no-version-"));

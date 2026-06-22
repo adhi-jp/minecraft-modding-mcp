@@ -211,6 +211,11 @@ test("buildClassSourceSnippet applies maxChars after maxLines and flags charsTru
   assert.equal(result.sourceText.length, 200);
   assert.equal(result.truncated, true);
   assert.equal(result.charsTruncated, true);
+  // The 200-char cut lands mid line 3, so returnedEnd must reflect the last
+  // (partial) line actually returned, not the pre-cut 10-line window.
+  assert.equal(result.returnedStart, 1);
+  assert.equal(result.returnedEnd, 3);
+  assert.equal(result.nextStartLine, 3);
 });
 
 test("buildClassSourceSnippet maxChars only (no maxLines) still truncates and flags both", async () => {
@@ -325,6 +330,11 @@ test("getClassSource snippet mode applies default maxLines=200 when no range or 
   assert.equal(result.returnedRange.end, 200);
   assert.equal(result.truncated, true);
   assert.equal(result.totalLines, 300);
+  // The continuation must carry the effective default maxLines so replaying it
+  // re-applies the 200-line cap instead of reading the remaining lines at once.
+  const suggested = result.suggestedCall as { params?: Record<string, unknown> } | undefined;
+  assert.equal(suggested?.params?.startLine, 201);
+  assert.equal(suggested?.params?.maxLines, 200);
 });
 
 test("getClassSource snippet mode default 200 is disabled when startLine alone is provided", async () => {

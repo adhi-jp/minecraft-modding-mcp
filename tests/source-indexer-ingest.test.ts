@@ -274,3 +274,54 @@ test("maybeRemapBinaryForMojang removes a corrupt final directory before shared 
     assert.equal(service.state.remappedJarBytes.get("artifact"), (await stat(remappedJarPath)).size);
   });
 });
+
+test("maybeRemapBinaryForMojang re-resolves the client jar when binaryJarPath is the missing remap output", async () => {
+  await withTempDir("source-remap-self-input-", async (root) => {
+    const service = createMinimalSourceService(root);
+    const remappedDir = join(root, "remapped");
+    const remappedJarPath = join(remappedDir, "artifact.jar");
+    const clientJar = join(root, "client.jar");
+    await writeFile(clientJar, "obfuscated client");
+
+    let resolveVersionJarCalls = 0;
+    (service as unknown as { versionService: unknown }).versionService = {
+      async resolveVersionJar(version: string) {
+        resolveVersionJarCalls += 1;
+        assert.equal(version, "1.21.10");
+        return { version, jarPath: clientJar, source: "downloaded", clientJarUrl: "cache:test" };
+      }
+    };
+
+    const inputJars: string[] = [];
+    const deps = createFakeRemapDeps(async (_tinyRemapperJarPath, options) => {
+      inputJars.push(options.inputJar);
+      await createJar(options.outputJar, {
+        "net/minecraft/client/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+      });
+      return { outputJar: options.outputJar, durationMs: 1 };
+    });
+
+    const resolved: ResolvedSourceArtifact = {
+      artifactId: "artifact",
+      artifactSignature: "sig-artifact",
+      origin: "local-jar",
+      binaryJarPath: remappedJarPath,
+      version: "1.21.10",
+      requestedMapping: "mojang",
+      mappingApplied: "mojang",
+      provenance: {
+        transformChain: ["binary-remap:obf->mojang"]
+      },
+      qualityFlags: ["binary-remapped"],
+      isDecompiled: true,
+      resolvedAt: new Date().toISOString()
+    };
+
+    const outputPath = await maybeRemapBinaryForMojang(service, resolved, deps);
+
+    assert.equal(outputPath, remappedJarPath);
+    assert.equal(resolveVersionJarCalls, 1);
+    assert.deepEqual(inputJars, [clientJar]);
+    assert.equal((await stat(remappedJarPath)).isFile(), true);
+  });
+});

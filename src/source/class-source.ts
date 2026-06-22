@@ -71,19 +71,6 @@ function normalizeMemberAccess(access: MemberAccess | undefined): MemberAccess {
   });
 }
 
-function buildResolveArtifactParams(
-  target: SourceTargetInput,
-  extra: Record<string, unknown> = {}
-): Record<string, unknown> {
-  return {
-    target: {
-      kind: target.kind,
-      value: target.value
-    },
-    ...extra
-  };
-}
-
 function looksLikeDeobfuscatedClassName(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -304,7 +291,7 @@ export function buildClassSourceNotFoundError(_svc: SourceService, input: {
   });
 }
 
-export function buildDecompiledFallback(svc: SourceService, artifactId: string, lookupClassName: string, memberPattern: string | undefined, maxMembers: number): { fallback: DecompiledFallback; counts: NonNullable<GetClassMembersOutput["decompiledMemberCounts"]> } | undefined {
+export function buildDecompiledFallback(svc: SourceService, artifactId: string, lookupClassName: string, memberPattern: string | undefined, maxMembers: number): { fallback: DecompiledFallback; counts: NonNullable<GetClassMembersOutput["decompiledMemberCounts"]>; truncated: boolean } | undefined {
   const filePath = resolveClassFilePath(svc, artifactId, lookupClassName);
   if (!filePath) {
     return undefined;
@@ -324,7 +311,10 @@ export function buildDecompiledFallback(svc: SourceService, artifactId: string, 
   let constructors = filterByPattern(extracted.constructors);
   let fields = filterByPattern(extracted.fields);
   let methods = filterByPattern(extracted.methods);
-  const totalBefore = constructors.length + fields.length + methods.length;
+  const constructorsBefore = constructors.length;
+  const fieldsBefore = fields.length;
+  const methodsBefore = methods.length;
+  const totalBefore = constructorsBefore + fieldsBefore + methodsBefore;
   if (totalBefore === 0) {
     return undefined;
   }
@@ -348,11 +338,12 @@ export function buildDecompiledFallback(svc: SourceService, artifactId: string, 
       origin: "source-extracted"
     },
     counts: {
-      constructors: constructors.length,
-      fields: fields.length,
-      methods: methods.length,
-      total: constructors.length + fields.length + methods.length
-    }
+      constructors: constructorsBefore,
+      fields: fieldsBefore,
+      methods: methodsBefore,
+      total: totalBefore
+    },
+    truncated: totalBefore > maxMembers
   };
 }
 
@@ -564,7 +555,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     const artifact = svc.getArtifact(artifactId);
     artifactId = artifact.artifactId;
     origin = artifact.origin;
-    requestedMapping = artifact.requestedMapping ?? requestedMapping;
+    requestedMapping = input.mapping != null ? requestedMapping : (artifact.requestedMapping ?? requestedMapping);
     mappingApplied = artifact.mappingApplied ?? requestedMapping;
     provenance = artifact.provenance;
     qualityFlags = artifact.qualityFlags;
@@ -764,7 +755,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
             mode,
             startLine: nextStartLine,
             ...(input.endLine != null ? { endLine: input.endLine } : {}),
-            ...(input.maxLines != null ? { maxLines: input.maxLines } : {}),
+            ...(maxLines != null ? { maxLines } : {}),
             ...(input.maxChars != null ? { maxChars: input.maxChars } : {})
           }
         })
@@ -905,10 +896,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         mapping: requestedMapping,
         nextAction:
           "Resolve with target: { kind: \"version\", value: ... } or specify a versioned coordinate.",
-        ...buildSuggestedCall({
-          tool: "resolve-artifact",
-          params: buildResolveArtifactParams({ kind: "version", value: "latest" })
-        })
+        ...buildSuggestedCall({ tool: "list-versions", params: {} })
       }
     });
   }
@@ -1069,6 +1057,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         + "Descriptors and access modifiers are unavailable — use get-class-source for full details."
         + namespaceNote
       );
+      if (sourceFallback.truncated) {
+        const returnedTotal =
+          decompiledFallback.constructors.length
+          + decompiledFallback.fields.length
+          + decompiledFallback.methods.length;
+        warnings.push(`Member list was truncated to ${returnedTotal} entries (from ${sourceFallback.counts.total}).`);
+      }
       if (namespaceMismatch && memberPattern) {
         warnings.push(
           `memberPattern="${memberPattern}" was not applied to decompiledFallback because the artifact namespace (${mappingApplied}) differs from the requested namespace (${requestedMapping}); filter the response client-side after mapping.`

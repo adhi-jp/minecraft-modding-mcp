@@ -94,6 +94,12 @@ export function buildClassSourceSnippet(input: SnippetBuildInput): SnippetBuildR
     sourceText = sliceToMaxCharsSafe(sourceText, input.maxChars);
     charsTruncated = true;
     truncated = true;
+    if (input.mode !== "metadata") {
+      const survivingNewlines = (sourceText.match(/\n/g) ?? []).length;
+      returnedEnd = sourceText.endsWith("\n")
+        ? returnedStart + survivingNewlines - 1
+        : returnedStart + survivingNewlines;
+    }
   }
 
   let nextStartLine: number | undefined;

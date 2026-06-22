@@ -438,6 +438,13 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
   const inflight = svc.state.inflightArtifactIngests.get(resolved.artifactId);
   if (inflight) {
     await inflight;
+    const transformChain = resolved.provenance?.transformChain ?? [];
+    if (transformChain.includes("binary-remap:obf->mojang") && resolved.binaryJarPath) {
+      const reconciledBinaryJarPath = await maybeRemapBinaryForMojang(svc, resolved);
+      if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
+        resolved.binaryJarPath = reconciledBinaryJarPath;
+      }
+    }
     return;
   }
 
@@ -548,9 +555,18 @@ export async function maybeRemapBinaryForMojang(
     return inflight;
   }
 
+  // When a prior index-artifact persisted the remapped jar back into the
+  // artifacts row, binaryJarPath already equals remappedJarPath. Remapping that
+  // missing/corrupt path onto itself would fail permanently, so re-resolve the
+  // original obfuscated client jar to recover from out-of-band cache loss.
+  const inputJar =
+    binaryJarPath === remappedJarPath
+      ? (await svc.versionService.resolveVersionJar(resolved.version)).jarPath
+      : binaryJarPath;
+
   const remapPromise = runBinaryRemapWithDeps(svc, {
     version: resolved.version,
-    inputJar: binaryJarPath,
+    inputJar,
     remappedDir,
     remappedJarPath
   }, deps);

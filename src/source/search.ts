@@ -109,11 +109,12 @@ export function buildGlobRegex(pattern: string): RegExp {
   while (i < pattern.length) {
     const ch = pattern[i]!;
     if (ch === "*" && pattern[i + 1] === "*") {
-      result += ".*";
-      i += 2;
-      if (pattern[i] === "/") {
-        result += "(?:/)?";
-        i += 1;
+      if (pattern[i + 2] === "/") {
+        result += "(?:.*/)?";
+        i += 3;
+      } else {
+        result += ".*";
+        i += 2;
       }
     } else if (ch === "*") {
       result += "[^/]*";
@@ -385,6 +386,10 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
             `queryNamespace=${input.queryNamespace}: translation failed (${caughtError instanceof Error ? caughtError.message : String(caughtError)}); running literal search instead.`
           );
         }
+      } else if (intent === "symbol") {
+        searchWarnings.push(
+          `queryNamespace=${input.queryNamespace} requires a fully-qualified class name for translation; running literal search in ${artifactMapping} instead. Resolve "${originalQuery}" to an FQCN with find-class or find-mapping first.`
+        );
       } else if (intent === "text" || intent === "path") {
         searchWarnings.push(
           `queryNamespace=${input.queryNamespace} has no effect when intent="${intent}" — ${intent} search is a literal match against the artifact's ${artifactMapping} index. Use intent="symbol" for namespace translation.`
@@ -852,7 +857,10 @@ export function findSymbolHits(
   regexPattern: RegExp | undefined
 ): IndexedSymbolHit[] {
   if (match !== "regex") {
-    const filePathLike = scope?.fileGlob ? globToSqlLike(normalizePathStyle(scope.fileGlob)) : undefined;
+    const filePathLike =
+      scope?.fileGlob && !scope.fileGlob.includes("**")
+        ? globToSqlLike(normalizePathStyle(scope.fileGlob))
+        : undefined;
     const scoped = svc.symbolsRepo.findScopedSymbols({
       artifactId,
       query,
@@ -865,8 +873,12 @@ export function findSymbolHits(
     svc.metrics.recordSearchDbRoundtrip();
     svc.metrics.recordSearchRowsScanned(scoped.items.length);
 
+    const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
     const result: IndexedSymbolHit[] = [];
     for (const symbol of scoped.items) {
+      if (globFilter && !globFilter.test(symbol.filePath)) {
+        continue;
+      }
       if (!isSymbolKind(symbol.symbolKind)) {
         continue;
       }

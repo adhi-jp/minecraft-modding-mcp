@@ -14,6 +14,7 @@ type AnySourceService = SourceService & {
     input: Record<string, unknown>,
     workspace: Record<string, unknown>
   ) => Promise<unknown>;
+  loadOrDetectWorkspaceContext: (projectPath: string) => Promise<unknown>;
   workspaceMappingService: { detectProjectMinecraftVersion: (path: string) => Promise<string | undefined> };
   workspaceContextCache: ReturnType<typeof createWorkspaceContextCache>;
 };
@@ -183,6 +184,38 @@ test("synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second c
 
   assert.equal(calls, 1);
   assert.equal(second.provenance.cacheHit, true);
+});
+
+test("loadOrDetectWorkspaceContext preserves dependency versions written during the detection window", async () => {
+  const projectPath = await makeProject({ minecraft_version: "1.21.10" }, "");
+  const root = await mkdtemp(join(tmpdir(), "ws-target-race-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const cache = createWorkspaceContextCache();
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const original = service.workspaceMappingService.detectProjectMinecraftVersion.bind(
+    service.workspaceMappingService
+  );
+  service.workspaceMappingService.detectProjectMinecraftVersion = async (path: string) => {
+    const existing = cache.read(path);
+    cache.write({
+      projectPath: path,
+      detectedAt: Date.now(),
+      evidence: [],
+      dependencyVersions: new Map([["com.example:lib", "1.2.3"]]),
+      partial: existing ? existing.partial : true
+    });
+    return original(path);
+  };
+
+  await service.loadOrDetectWorkspaceContext(projectPath);
+
+  const stored = cache.read(projectPath);
+  assert.equal(stored?.dependencyVersions.get("com.example:lib"), "1.2.3");
 });
 
 test("getClassMembers and getClassSource pass input.mapping (raw, possibly undefined) to resolveArtifact symmetrically", async () => {

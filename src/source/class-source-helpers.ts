@@ -45,13 +45,14 @@ export function extractDecompiledMembers(
   const symbols = extractSymbolsFromSource(filePath, content);
   const simpleName = className.split(/[.$]/).at(-1) ?? className;
   const lines = content.split(/\r?\n/);
-  const body = computeBraceRange(lines, symbols, simpleName);
+  const stripped = stripBraceNoise(lines);
+  const body = computeBraceRange(lines, symbols, simpleName, stripped);
   if (!body) {
     return { constructors: [], fields: [], methods: [] };
   }
-  const depths = computeLineBraceDepths(lines);
+  const depths = computeLineBraceDepths(lines, stripped);
   const baseDepth = depths[body.declarationLine - 1] ?? 0;
-  const nestedRanges = computeNestedTypeRanges(lines, symbols, body);
+  const nestedRanges = computeNestedTypeRanges(lines, symbols, body, stripped);
   const constructors: DecompiledMember[] = [];
   const fields: DecompiledMember[] = [];
   const methods: DecompiledMember[] = [];
@@ -140,8 +141,8 @@ function stripBraceNoise(lines: string[]): string[] {
   return out;
 }
 
-export function computeLineBraceDepths(lines: string[]): number[] {
-  const stripped = stripBraceNoise(lines);
+export function computeLineBraceDepths(lines: string[], strippedLines?: string[]): number[] {
+  const stripped = strippedLines ?? stripBraceNoise(lines);
   const depths: number[] = new Array(lines.length).fill(0);
   let depth = 0;
   for (let i = 0; i < stripped.length; i += 1) {
@@ -161,7 +162,8 @@ export function computeLineBraceDepths(lines: string[]): number[] {
 export function computeBraceRange(
   lines: string[],
   symbols: Array<{ symbolKind: string; symbolName: string; line: number }>,
-  simpleName: string
+  simpleName: string,
+  strippedLines?: string[]
 ): { declarationLine: number; endLine: number } | undefined {
   const classSymbol = symbols.find((symbol) =>
     (symbol.symbolKind === "class" || symbol.symbolKind === "interface"
@@ -171,16 +173,17 @@ export function computeBraceRange(
   if (!classSymbol) {
     return undefined;
   }
-  return scanBraceRange(lines, classSymbol.line);
+  return scanBraceRange(lines, classSymbol.line, strippedLines);
 }
 
 export function scanBraceRange(
   lines: string[],
-  declarationLine: number
+  declarationLine: number,
+  strippedLines?: string[]
 ): { declarationLine: number; endLine: number } {
   // Strip from the start of the file so multi-line block-comment state is correct
   // by the time we reach declarationLine; indices stay aligned with `lines`.
-  const stripped = stripBraceNoise(lines);
+  const stripped = strippedLines ?? stripBraceNoise(lines);
   let depth = 0;
   let started = false;
   for (let i = declarationLine - 1; i < stripped.length; i += 1) {
@@ -202,7 +205,8 @@ export function scanBraceRange(
 export function computeNestedTypeRanges(
   lines: string[],
   symbols: Array<{ symbolKind: string; line: number }>,
-  outerBody: { declarationLine: number; endLine: number }
+  outerBody: { declarationLine: number; endLine: number },
+  strippedLines?: string[]
 ): Array<{ declarationLine: number; endLine: number }> {
   const ranges: Array<{ declarationLine: number; endLine: number }> = [];
   for (const candidate of symbols) {
@@ -216,7 +220,7 @@ export function computeNestedTypeRanges(
     if (ranges.some((range) => candidate.line >= range.declarationLine && candidate.line <= range.endLine)) {
       continue;
     }
-    const nestedRange = scanBraceRange(lines, candidate.line);
+    const nestedRange = scanBraceRange(lines, candidate.line, strippedLines);
     ranges.push(nestedRange);
   }
   return ranges;
