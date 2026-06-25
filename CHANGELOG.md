@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-06-25
+
 ### Changed
 
 - **Breaking:** tool responses omit `meta.warnings` entirely when there are no warnings (previously always emitted as `[]`), and omit `meta.detailApplied` when it equals the tool's default detail level (entry tools: `summary`; expert/batch tools: their per-tool default). Clients must treat a missing `meta.warnings` as "no warnings" and a missing `meta.detailApplied` as "the default detail was applied". `meta.includeApplied` semantics are unchanged (already omitted when empty).
