@@ -1,30 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "brainstorming": {
-      "source": "obra/superpowers",
-      "sourceType": "github",
-      "skillPath": "skills/brainstorming/SKILL.md",
-      "computedHash": "8df9b47092524833138b58682d03f2e153a242e550d1693657afdbee0cc9cdb0"
-    },
-    "codex-review-cycle": {
-      "source": "adhi-jp/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/codex-review-cycle/SKILL.md",
-      "computedHash": "b8fc923402f97ee624809a8089312e58a6d45d6e74f2ccaa6aa79cd9cf4b8d9c"
-    },
-    "create-readme": {
-      "source": "github/awesome-copilot",
-      "sourceType": "github",
-      "skillPath": "skills/create-readme/SKILL.md",
-      "computedHash": "d0ece1b2164ce1376e4ab6e98d6ac079df3a2a94f5f02224362b6a1ce2516ae9"
-    },
-    "git-commit": {
-      "source": "github/awesome-copilot",
-      "sourceType": "github",
-      "skillPath": "skills/git-commit/SKILL.md",
-      "computedHash": "2607fc60629b82b257136dd2a7a373f0a4466c0b49df7746d845d59313c99b21"
-    },
     "javascript-testing-patterns": {
       "source": "wshobson/agents",
       "sourceType": "github",
@@ -36,24 +12,6 @@
       "sourceType": "github",
       "skillPath": "skills/mcp-builder/SKILL.md",
       "computedHash": "826e46adf81e1372282e205c34e1a2ee876e72148007726e4a2512599d2fef7b"
-    },
-    "receiving-code-review": {
-      "source": "obra/superpowers",
-      "sourceType": "github",
-      "skillPath": "skills/receiving-code-review/SKILL.md",
-      "computedHash": "2760c85d4f4117b0006e7ba755f4bbd61f8f4c185f347999763c97f507274e30"
-    },
-    "review-fix-cascade-guard": {
-      "source": "adhi-jp/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/review-fix-cascade-guard/SKILL.md",
-      "computedHash": "2471236a693f514384e344a97d8a2d626110d3c64e3637929c191cc88677511b"
-    },
-    "review-scope-guard": {
-      "source": "adhi-jp/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/review-scope-guard/SKILL.md",
-      "computedHash": "2ff797a42410500f64bc8ec7900887744a40def67adda577414fe1c55368b9da"
     },
     "systematic-debugging": {
       "source": "obra/superpowers",
@@ -73,35 +31,71 @@
       "skillPath": "plugins/javascript-typescript/skills/typescript-advanced-types/SKILL.md",
       "computedHash": "3a3be8c925f96ac4e1280db28a01677e7ca5197f3792de2bbf35ab3bb324b6dd"
     },
-    "verification-before-completion": {
-      "source": "obra/superpowers",
-      "sourceType": "github",
-      "skillPath": "skills/verification-before-completion/SKILL.md",
-      "computedHash": "9b446f0c7fe1cfb560b1d34439523b1a76d5f177290007b2c053a1c749a4a8ba"
-    },
-    "vibe-commit-message": {
+    "vibe-brainstorm": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
-      "skillPath": "skills/vibe-commit-message/SKILL.md",
-      "computedHash": "0b10f2f6d79d756a19b840704261729fe41d2e8fa8e9c4ddc45ff9cd489713a5"
+      "skillPath": "skills/vibe-brainstorm/SKILL.md",
+      "computedHash": "3ee9452aac4e3f3523031315255a44e01dc85f8a9e3bca2a756220026b79eded"
+    },
+    "vibe-code-research": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-code-research/SKILL.md",
+      "computedHash": "e0a4c60175aec7cc018366fd6e2d690b21fa37ff2fbbbdea009a222200d35942"
+    },
+    "vibe-coding": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-coding/SKILL.md",
+      "computedHash": "d8c1ac38b85892c4b5023b5f4e2f5ebe706bb78cf8f36ebe1d4dce5b0ef0cdf5"
+    },
+    "vibe-commit": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-commit/SKILL.md",
+      "computedHash": "451b38e16f77c57b9941ea32809bd17ca7ed930f6e4b7428c454c0c237dbaf7c"
+    },
+    "vibe-debug": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-debug/SKILL.md",
+      "computedHash": "cc28076c9ab8b8485fc0a63be313b1fe94c05d35ae272410c6050156e667c235"
     },
     "vibe-plan-execution": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-plan-execution/SKILL.md",
-      "computedHash": "5511d9be806aa0102e66d5e7790996fb2246bb63f3d94c05a5ff866144677614"
+      "computedHash": "9862804aff22d19b56cabf5b6963330a96e17ddbc2a7d33af65cac8de54128b8"
+    },
+    "vibe-plan-review": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-plan-review/SKILL.md",
+      "computedHash": "3ef04051bfd4726d062b8c1e99de062473427139e24bf18544b404f5ed7daf28"
     },
     "vibe-planning": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-planning/SKILL.md",
-      "computedHash": "b805fa6492488d66b4fba08bf9b9c9c5057d845043e2043cba36aa0c850b13a7"
+      "computedHash": "449d6a36d098addd0604951eb6a4258e1902fc2f15b46be3aec93ba138af5fc4"
     },
-    "writing-style-guide": {
+    "vibe-requirements-spec": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
-      "skillPath": "skills/writing-style-guide/SKILL.md",
-      "computedHash": "5ea60c0f3c1ab7ca1327bc3dce756d0e5349462290981076a3d8ccf41cc9a5cd"
+      "skillPath": "skills/vibe-requirements-spec/SKILL.md",
+      "computedHash": "310a83a54becadd6b9303ac066c895fcaa0098c5df6d992519c639cadea7cf68"
+    },
+    "vibe-review": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-review/SKILL.md",
+      "computedHash": "570d63262bc9cbf6be3f833ce048ee143d592a09a93f7a972786e7bb0076fb4c"
+    },
+    "vibe-writing": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-writing/SKILL.md",
+      "computedHash": "f1eee1979b935d042e74b49bb667845f017badb6ac4e4d4fec4f760be2b91f5d"
     }
   }
 }
