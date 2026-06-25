@@ -35,8 +35,42 @@ import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire } from "./class-source/members-builder.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
+import { isUnobfuscatedVersion } from "../version-service.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
+
+/**
+ * Unobfuscated Minecraft versions (26.1+) ship their runtime and decompiled source
+ * in deobfuscated (mojang) names directly — there is no real obfuscated namespace to
+ * map to. An artifact whose stored namespace label is "obfuscated" is therefore a
+ * mislabel for a mojang request: the bytes already carry mojang names.
+ *
+ * Without this reconciliation, requestedMapping="mojang" !== mappingApplied="obfuscated"
+ * triggers a cascade of doomed work: resolveClassNameForLookup attempts a mojang->obfuscated
+ * class remap, remapSignatureMembers tries to remap every member obfuscated->mojang and drops
+ * them all (counts.total===0), which forces a spurious decompiledFallback, disables
+ * memberPattern, and floods the response with one "Could not remap ..." warning per member.
+ *
+ * Collapsing mappingApplied to the requested mojang namespace makes the whole pipeline an
+ * identity no-op: members are returned from bytecode with correct mojang names, memberPattern
+ * applies, and the per-member warning flood disappears. This is the single highest-impact
+ * token-efficiency fix for unobfuscated versions.
+ */
+export function reconcileUnobfuscatedNamespace(
+  version: string | undefined,
+  requestedMapping: SourceMapping,
+  mappingApplied: SourceMapping
+): SourceMapping {
+  if (
+    version &&
+    requestedMapping === "mojang" &&
+    mappingApplied === "obfuscated" &&
+    isUnobfuscatedVersion(version)
+  ) {
+    return "mojang";
+  }
+  return mappingApplied;
+}
 
 type MemberAccess = "public" | "all";
 
@@ -574,6 +608,8 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     warnings
   });
 
+  mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+
   let activeArtifactId = artifactId;
   let activeOrigin = origin;
   let activeProvenance = provenance;
@@ -887,6 +923,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     preferProjectVersion: input.preferProjectVersion,
     warnings
   });
+
+  mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
 
   if (requestedMapping !== "obfuscated" && !version) {
     throw createError({

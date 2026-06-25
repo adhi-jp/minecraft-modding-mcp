@@ -86,3 +86,25 @@ function classifyWarning(message: string, index: number): WarningDetail {
 export function classifyWarnings(warnings: string[]): WarningDetail[] {
   return warnings.map((message, index) => classifyWarning(message, index));
 }
+
+/**
+ * Cap of structured warningDetails entries emitted at `detail:"summary"`.
+ */
+export const SUMMARY_WARNING_DETAIL_CAP = 5;
+
+/**
+ * At `detail:"summary"` the structured warningDetails companion is capped to a small
+ * representative set to keep responses lean. The full human-readable text still lives
+ * in `meta.warnings[]`, and each kept entry's `index` continues to dereference it, so
+ * no information is lost — only the redundant structured duplicate is trimmed. Standard
+ * and full detail return the companion unchanged.
+ */
+export function capWarningDetailsForSummary(
+  warningDetails: WarningDetail[],
+  isSummary: boolean
+): WarningDetail[] {
+  if (!isSummary || warningDetails.length <= SUMMARY_WARNING_DETAIL_CAP) {
+    return warningDetails;
+  }
+  return warningDetails.slice(0, SUMMARY_WARNING_DETAIL_CAP);
+}

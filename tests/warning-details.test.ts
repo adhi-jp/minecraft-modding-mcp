@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyWarnings } from "../src/warning-details.ts";
+import {
+  SUMMARY_WARNING_DETAIL_CAP,
+  capWarningDetailsForSummary,
+  classifyWarnings
+} from "../src/warning-details.ts";
 
 test("classifyWarnings maps each high-value family to a code/category/severity", () => {
   const [truncated, clamped, resource, namespace, coverage, general] = classifyWarnings([
@@ -60,4 +64,36 @@ test("classifyWarnings classifies remap and mapping-lookup failures as mapping/w
 
 test("classifyWarnings returns an empty array for no warnings", () => {
   assert.deepEqual(classifyWarnings([]), []);
+});
+
+test("classifyWarnings classifies the AGGREGATED remap warning as namespace_fallback", () => {
+  // mapping-helpers now collapses N per-member remap failures into a single line;
+  // the aggregated format must still classify as a mapping warning (not "general").
+  const [aggRemap, aggFailed] = classifyWarnings([
+    "Could not remap 12 methods from obfuscated to mojang (foo, bar, baz, +9 more).",
+    "Remap failed for 3 fields from obfuscated to mojang (a, b, c)."
+  ]);
+  assert.equal(aggRemap!.code, "namespace_fallback");
+  assert.equal(aggRemap!.category, "mapping");
+  assert.equal(aggFailed!.code, "namespace_fallback");
+  assert.equal(aggFailed!.category, "mapping");
+});
+
+test("capWarningDetailsForSummary caps the structured companion only at summary detail", () => {
+  const many = classifyWarnings(
+    Array.from({ length: SUMMARY_WARNING_DETAIL_CAP + 4 }, (_, i) => `plain note ${i}`)
+  );
+
+  // summary: capped to SUMMARY_WARNING_DETAIL_CAP, preserving leading entries + their indices.
+  const summary = capWarningDetailsForSummary(many, true);
+  assert.equal(summary.length, SUMMARY_WARNING_DETAIL_CAP);
+  assert.equal(summary[0]!.index, 0);
+  assert.equal(summary.at(-1)!.index, SUMMARY_WARNING_DETAIL_CAP - 1);
+
+  // standard/full (isSummary=false): untouched, same array reference.
+  assert.equal(capWarningDetailsForSummary(many, false), many);
+
+  // At or below the cap: returned unchanged even at summary.
+  const few = classifyWarnings(["a", "b"]);
+  assert.equal(capWarningDetailsForSummary(few, true), few);
 });

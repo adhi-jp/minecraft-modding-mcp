@@ -862,8 +862,17 @@ export class SourceService {
 
   async checkSymbolExists(input: CheckSymbolExistsInput): Promise<CheckSymbolExistsOutput> {
     const result = await this.mappingService.checkSymbolExists(input);
+    // On unobfuscated versions the mapping graph is empty, so the mapping service can
+    // only ever report symbols as missing. We then validate against runtime bytecode.
+    // Classes/fields surface as `mapping_unavailable` when the graph yields nothing, but
+    // a method query with a non-empty graph returns `not_found` (empty member lookup) —
+    // which previously skipped the runtime fallback and produced false negatives for
+    // methods that genuinely exist (B1). Treat `not_found` methods as fallback-eligible.
+    const fallbackEligible =
+      result.status === "mapping_unavailable" ||
+      (result.status === "not_found" && input.kind === "method");
     if (
-      result.status !== "mapping_unavailable" ||
+      !fallbackEligible ||
       !isUnobfuscatedVersion(input.version) ||
       (input.sourceMapping !== "mojang" && input.sourceMapping !== "obfuscated")
     ) {

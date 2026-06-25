@@ -135,6 +135,18 @@ function buildDependencyPropertyKeys(group: string, name: string): string[] {
     `${groupSegment}_${name}_version`,
     `${camelGroupName}Version`
   ];
+  // Umbrella fallback: submodules of an umbrella package (e.g. Fabric API's
+  // net.fabricmc.fabric-api:fabric-screen-handler-api-v1) rarely declare their own
+  // version — the parent declares a single umbrella property (fabric_api_version /
+  // fabricApiVersion) that all submodules inherit. When the artifact name differs from
+  // the group's last segment, append the umbrella's keys as LOWER-priority candidates so
+  // submodule version detection no longer fails with ERR_DEPENDENCY_VERSION_UNRESOLVED.
+  if (groupSegment !== name) {
+    keys.push(
+      `${groupSegment.replace(/-/g, "_")}_version`,
+      `${camelCaseDependencyName(groupSegment)}Version`
+    );
+  }
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const key of keys) {

@@ -143,6 +143,32 @@ test("detectDependencyVersion reads camelCase property fabricApiVersion", async 
   }
 });
 
+test("detectDependencyVersion resolves a fabric-api submodule via the umbrella property (B5)", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-fabric-submodule-"));
+  // Only the umbrella version is declared, as is conventional for Fabric API submodules.
+  await writeFile(join(root, "gradle.properties"), "fabricApiVersion=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-fabric-submodule-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "0.131.0");
+      assert.match(result.source, /fabricApiVersion/);
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
 test("detectDependencyVersion enumerates 4 dedup'd property keys in order", async () => {
   const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "dep-version-keys-"));

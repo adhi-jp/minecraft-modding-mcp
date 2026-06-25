@@ -33,6 +33,32 @@ function looksLikeClassSegment(name: string): boolean {
   return /^[A-Z_$]/.test(trimmed);
 }
 
+/**
+ * Collapse N per-member remap failures into a single warning line. Preserves the
+ * original "Could not remap" / "Remap failed for" prefix so downstream classifiers
+ * (e.g. REMAP_WARNING_RE in validate-mixin, warningDetails coding) still recognise it,
+ * while bounding the per-member flood to one line plus a short sample of names.
+ */
+function pushAggregatedRemapWarning(
+  warnings: string[],
+  prefix: "Could not remap" | "Remap failed for",
+  names: string[],
+  kind: "field" | "method",
+  sourceMapping: SourceMapping,
+  targetMapping: SourceMapping
+): void {
+  if (names.length === 0) {
+    return;
+  }
+  const unique = [...new Set(names)];
+  const sample = unique.slice(0, 3).join(", ");
+  const more = unique.length > 3 ? `, +${unique.length - 3} more` : "";
+  const plural = names.length === 1 ? "" : "s";
+  warnings.push(
+    `${prefix} ${names.length} ${kind}${plural} from ${sourceMapping} to ${targetMapping} (${sample}${more}).`
+  );
+}
+
 export function rejectLifecycleClassLikeInput(svc: SourceService, input: {
   symbol: string;
   className: string;
@@ -299,6 +325,13 @@ export async function remapSignatureMembers(
     typeof svc.mappingService.resolveMethodMappingExact === "function";
 
   const memberEntries = [...memberKeyToRemapped.entries()];
+  // Collect per-member remap failures and emit a SINGLE aggregated warning each
+  // after the loop instead of one line per member. On namespace mismatches a large
+  // class can fail to remap every one of its ~150 members, which previously flooded
+  // both warnings[] and the 1:1 warningDetails[] with hundreds of near-identical
+  // lines (the dominant token sink for these responses).
+  const unremappedNames: string[] = [];
+  const remapErrorNames: string[] = [];
   await Promise.all(
     memberEntries.map(async ([key, _sourceName]) => {
       const [ownerFqn, name, descriptor] = key.split("\0");
@@ -369,19 +402,22 @@ export async function remapSignatureMembers(
               failedNames.add(name!);
             }
           } else {
-            warnings.push(`Could not remap ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
+            unremappedNames.push(name!);
             failedNames.add(name!);
           }
         } else {
-          warnings.push(`Could not remap ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
+          unremappedNames.push(name!);
           failedNames.add(name!);
         }
       } catch {
-        warnings.push(`Remap failed for ${kind} "${name}" from ${sourceMapping} to ${targetMapping}.`);
+        remapErrorNames.push(name!);
         failedNames.add(name!);
       }
     })
   );
+
+  pushAggregatedRemapWarning(warnings, "Could not remap", unremappedNames, kind, sourceMapping, targetMapping);
+  pushAggregatedRemapWarning(warnings, "Remap failed for", remapErrorNames, kind, sourceMapping, targetMapping);
 
   const isField = kind === "field";
   return {

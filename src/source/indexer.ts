@@ -305,19 +305,22 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
       }));
     } catch (caughtError) {
       if (isAppError(caughtError) && caughtError.code === ERROR_CODES.DECOMPILER_FAILED) {
+        // Decompilation failed BEFORE the artifact was ever upserted, so there is no
+        // queryable artifact. Deliberately omit artifactId from the error: exposing the
+        // would-be id led callers to pass it to find-class/get-class-*, which then failed
+        // with "Artifact not found. Resolve context first." (B5 state inconsistency).
+        const priorDetails = { ...(caughtError.details as Record<string, unknown> | undefined ?? {}) };
+        delete priorDetails.artifactId;
         throw createError({
           code: ERROR_CODES.DECOMPILER_FAILED,
           message: caughtError.message,
           details: {
-            ...(caughtError.details ?? {}),
-            artifactId: resolved.artifactId,
+            ...priorDetails,
             binaryJarPath: resolved.binaryJarPath,
             producedJavaCount:
-              typeof (caughtError.details as Record<string, unknown> | undefined)?.producedJavaCount === "number"
-                ? (caughtError.details as Record<string, unknown>).producedJavaCount
-                : 0,
+              typeof priorDetails.producedJavaCount === "number" ? priorDetails.producedJavaCount : 0,
             nextAction:
-              "Verify Java runtime and Vineflower availability, then retry. If available, prefer source-backed artifacts.",
+              "Decompilation failed, so no artifact was created. Verify Java runtime and Vineflower availability, then retry; prefer source-backed artifacts when available.",
             recommendedCommand: "echo $MCP_VINEFLOWER_JAR_PATH"
           }
         });

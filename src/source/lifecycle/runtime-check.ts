@@ -1,3 +1,4 @@
+import { ERROR_CODES, isAppError } from "../../errors.js";
 import type { MinecraftExplorerService } from "../../minecraft-explorer-service.js";
 import type { SymbolResolutionOutput as MappingSymbolResolutionOutput } from "../../mapping-service.js";
 import type {
@@ -67,15 +68,24 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
     signature = await svc.explorerService.getSignature({
       fqn: targetClass,
       jarPath,
-      access: "all"
+      access: "all",
+      // Method existence is asked relative to the owner type, so inherited methods count:
+      // `level.getGameTime()` exists on Level even though it is declared on a supertype.
+      // Scoped to methods only: fields already resolved correctly without an inheritance
+      // walk, and including inherited fields would let a shadowed field name match twice
+      // and flip a previously-resolved field to "ambiguous".
+      includeInherited: input.kind === "method"
     });
-  } catch {
+  } catch (error) {
+    const classMissing = isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND;
     return {
       ...fallbackBase,
       querySymbol,
       warnings: [
         ...fallbackBase.warnings,
-        `Version ${version} is unobfuscated; runtime bytecode lookup could not load class "${targetClass}".`
+        classMissing
+          ? `Class "${targetClass}" was not found in the Minecraft ${version} runtime jar; it does not exist (or is not in this jar).`
+          : `Version ${version} is unobfuscated; runtime bytecode lookup could not load class "${targetClass}".`
       ]
     };
   }
@@ -140,8 +150,11 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
   const methodCandidates = signature.methods.filter((method) => method.name === name);
   const signatureMode = input.signatureMode ?? "name-only";
   if (signatureMode === "name-only") {
-    if (methodCandidates.length !== 1) {
-      return buildUnresolved(methodCandidates.length > 1 ? "ambiguous" : "not_found");
+    // Existence semantics: any overload with this name means the method exists. Multiple
+    // overloads are not "ambiguous" for a name-only existence check — only zero matches
+    // is not_found. (Use signatureMode: "exact" with a descriptor to pin one overload.)
+    if (methodCandidates.length === 0) {
+      return buildUnresolved("not_found");
     }
     return buildResolved({
       kind: "method",
