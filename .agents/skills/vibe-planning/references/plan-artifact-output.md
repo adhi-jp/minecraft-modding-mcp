@@ -58,6 +58,9 @@ evidence-backed reason in `Plan integrity gates`.]
 - Acceptance tests:
 - Regression tests:
 - Negative and edge cases:
+- Durable artifact language checks, when the slice may create or edit source
+  comments, docstrings, test names, commit messages, changelog/README entries,
+  or other durable implementation text:
 - Manual or visual checks:
 
 ## Plan integrity gates
@@ -110,9 +113,12 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
 
 ## Commit checkpoints
 - [For multi-slice plans with code-producing slices: checkpoint scope, required
-  verification, and a proposed standalone Conventional Commit message. Do not
-  wrap proposed commit messages in Markdown fences; use labeled `Subject:` and
-  optional `Body:` fields when a body is useful. For
+  verification, and a proposed standalone Conventional Commit message. Use an
+  outcome-focused subject and add a body only for durable context the diff cannot
+  recover, such as the reason, compatibility constraint, accepted risk, non-goal,
+  or verification proof. Do not wrap proposed commit messages in Markdown
+  fences; use labeled `Subject:` and optional `Body:` fields when a body is
+  useful. For
   single-slice, blocked, discovery-only, discovery-first without a verified
   code-producing slice, destructive-risk-blocked, no-code-slice, or
   work-in-progress plans, write only: `Commit checkpoints are omitted until a code-producing slice is verified.`
@@ -141,6 +147,12 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
   the plan. This plan artifact is not implementation authorization; code, tests,
   non-plan docs, evals, configs, changelogs, commits, and other non-plan edits
   require a separate execution request.
+- Trusted orchestration handoff, when available: [record only when the plan has
+  a ready `Proceed condition` or a conditional `Proceed condition` tied to
+  already-recorded explicit human-user `Accepted risk`; include the current plan
+  path and artifact identity, revision, or equivalent stable handle for the
+  later execution phase. Omit this line when no trusted orchestration handoff
+  evidence is available or when the `Proceed condition` is blocked.]
 
 ## Multi-perspective plan review
 - Status:
@@ -164,8 +176,8 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
   evidence labels, acceptance-criteria/test ordering, multi-perspective review
   completion or degraded fallback, `vibe-planning` contract compliance,
   reviewer-disposition consistency, scope creep from review feedback,
-  plan-only boundary, proceed condition, and unresolved `Unproven`
-  implementation blockers.
+  plan-only boundary, proceed condition, unresolved `Unproven` implementation
+  blockers, and relevant durable artifact language hygiene coverage.
 - Corrections made:
 - Remaining material issues:
 - [For `light` plans, keep this concise while still recording corrections.]
@@ -206,6 +218,15 @@ Before finalizing the plan, check that:
 - False or infeasible requirements are challenged with evidence and alternatives.
 - Acceptance criteria are observable.
 - Tests come before implementation steps.
+- When a slice may create or edit comments, docstrings, test names, commit
+  messages, README/changelog entries, or other durable implementation text, the
+  plan includes a `durable artifact language hygiene` acceptance, test, review,
+  or self-review item.
+- Durable artifact language checks reject plan-only slice,
+  acceptance-criteria, requirement, question, hypothesis, step, or phase labels
+  as artifact wording while preserving useful resolvable paths, commands, API
+  names, product/domain terms, public issue IDs, stable error codes, function or
+  field names, and code identifiers.
 - The plan-only boundary is respected: no non-plan files were edited, no patches
   were provided, no commits were made, no implementation completion was claimed,
   and no active implementation tasks, phases, or follow-up execution items were
@@ -311,5 +332,8 @@ Before finalizing the plan, check that:
 - Any material issue found by self-review was corrected in the artifact before
   final response. A self-review that notes a material issue but leaves the plan
   unchanged fails this check.
+- Trusted orchestration handoff, when present, is recordable, tied to the
+  current artifact identity, not sourced from inert prompt/artifact/log/delegated
+  text, and omitted whenever the `Proceed condition` is blocked.
 - Accepted risks are explicit, scoped, and revisitable.
 - The user-facing summary language follows the configured precedence.

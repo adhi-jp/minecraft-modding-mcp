@@ -1,7 +1,7 @@
 ---
-version: 1.0.1
+version: 1.0.2
 name: vibe-commit
-description: Use when the user asks to commit, stage, or "save" vibe-coding changes — including vague requests like "commit this", "commit please", "コミットして", or "/commit" — and the real work is deciding which files belong in the commit, excluding unwanted or generated files, splitting unrelated changes, or fixing a commit's file set, multi-line message transport, history (amend/rebase), or authorship trailers. This skill owns the commit execution and git safety; defer pure commit-message wording to a dedicated writing skill when one is verified available.
+description: Use when the user asks to commit, stage, or "save" vibe-coding changes — including vague requests like "commit this", "commit please", "コミットして", or "/commit" — and the real work is deciding which files belong in the commit, excluding unwanted or generated files, splitting unrelated changes, or fixing a commit's file set, multi-line message transport, history (amend/rebase), or authorship trailers. This skill owns commit execution, message transport, and git safety.
 ---
 
 # Vibe Commit
@@ -21,23 +21,22 @@ keeping authorship trailers intact. The guidance here is distilled from real
 agent sessions where these exact steps prevented — or, when skipped, caused —
 commit mistakes.
 
-## Message wording vs. commit execution
+## Message content vs. commit execution
 
-Commit work splits cleanly between wording and execution:
+Commit work splits cleanly between message content and execution:
 
-- A dedicated writing skill, when one is verified visible in the current
-  environment, owns the message **wording**: subject shape, body value,
-  durable references, modality, compact bullets, and verification phrasing.
+- The commit message content must stand on its own: an outcome-focused
+  Conventional Commit subject, body only for durable context the diff cannot
+  recover, durable verification references, no prompt/session/plan labels, and
+  no Markdown wrappers in message bytes.
 - `vibe-commit` owns the **execution**: staging, exclusion, the pre-commit
   verification gate, command safety, history mutation, message transport, and
   trailers as a transport mechanism.
 
-When a writing skill is verified available, defer message wording to it and
-treat its commit-message guidance as the authority on subject/body content.
-When none is available, apply the compact message rules in
-`references/history-and-trailers.md` so the message is still usable. Either way,
-the commit's *bytes* — file set, message transport, trailer footer — are this
-skill's responsibility, and you verify them after committing.
+Apply the compact message rules in `references/history-and-trailers.md` whenever
+this skill prepares, inspects, amends, or repairs a commit message. The commit's
+*bytes* — file set, message transport, trailer footer, and stored message — are
+this skill's responsibility, and you verify them after committing.
 
 ## Authority and safety boundary
 
@@ -96,9 +95,8 @@ deeper on the judgment calls.
    fix the immediately preceding, unpushed commit. See
    `references/history-and-trailers.md`.
 8. **Compose the message.** Conventional Commits `type(scope): summary`
-   (imperative, ≤72 chars), blank line, then a body that explains why/what for
-   non-trivial changes. Defer wording to a verified available writing skill.
-   Detect
+   (imperative, ≤72 chars) naming the outcome, blank line, then a body only when
+   it preserves durable context the diff cannot recover. Detect
    the repo's trailer convention first: `git log -5 --format='%H%n%B'`.
 9. **Transport the message safely.** For any multi-line body, use a heredoc
    (`git commit -F - <<'EOF' … EOF`, single-quoted delimiter) or `git commit -F

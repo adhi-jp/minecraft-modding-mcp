@@ -1,5 +1,5 @@
 ---
-version: 3.0.0
+version: 3.0.1
 name: vibe-plan-execution
 description: Use when the user asks to execute, implement, continue, or apply an existing implementation plan, specification, acceptance criteria, task plan, or prior planning output. Do not use for plan creation or coding requests with no concrete plan to bind.
 ---
@@ -514,6 +514,13 @@ and does not authorize the next step or any commit.
      `as requested`, `Phase 1`, `step 2`, or `implementation plan`; name the
      concrete change instead. Omit order-only phase, slice, checkpoint, or
      step labels unless they are part of the product or domain name.
+   - Use an outcome-focused subject. Add a body only when it preserves durable
+     context the diff cannot recover: the reason, user-visible contract,
+     compatibility constraint, accepted risk, non-goal, or verification that
+     changes review confidence. Keep durable references such as issue IDs,
+     commands, committed paths, public APIs, and stable error codes; translate or
+     omit local-only run labels, private tool-session records, ignored generated
+     reports, and other proof a fresh-clone reader cannot resolve.
    - When reporting a proposed commit message, write the commit-message bytes as
      raw message lines or inline text. Do not wrap the message itself in
      Markdown fences, labels, or explanatory wrappers that could be copied into

@@ -1,9 +1,9 @@
 # Message Transport, History Edits, and Trailers
 
 This reference covers getting the message into git intact, choosing between a new
-commit and an amend, and keeping authorship trailers correct. The message
-*wording* belongs to a dedicated writing skill when one is available; this is
-about the bytes git stores and the history operations around them.
+commit and an amend, and keeping authorship trailers correct. Message content
+and transport are both part of the stored commit artifact: choose usable message
+bytes, then verify what git stored.
 
 ## Amend vs. new commit
 
@@ -290,11 +290,10 @@ If the stored message is wrong — trailer in the body, dropped footer, mangled
 newlines — fix it with `git commit --amend` (re-including trailers) while the
 commit is still local, then verify again.
 
-## Compact message rules (fallback when no writing skill is available)
+## Compact message rules
 
-When no dedicated writing skill is available, keep the message usable with
-these minimums (an available writing skill's commit-message guidance is the
-fuller authority):
+Every commit message prepared, inspected, amended, or repaired through this
+skill must satisfy these minimums:
 
 - Subject: `type(scope): outcome`, imperative, ≤72 chars, naming the behavior or
   contract that changed — not the editing act.
