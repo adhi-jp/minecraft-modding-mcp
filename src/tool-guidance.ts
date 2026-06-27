@@ -852,7 +852,7 @@ export function buildInvalidInputGuidance(
     return gatedGuidance(
       tool,
       [
-        `${tool}.target must be an object: {"kind":"version|jar|coordinate","value":"..."} or {"kind":"artifact","artifactId":"..."} (same shape as resolve-artifact).`,
+        `${tool}.target must be an object: {"kind":"version|jar|coordinate","value":"..."}, {"kind":"workspace"}, {"kind":"dependency","group":"...","name":"...","versionFromProject":true} (inspect a Fabric/loader dependency like vanilla), or {"kind":"artifact","artifactId":"..."} (same shape as resolve-artifact).`,
         "Bare string targets are not accepted; wrap the value under target.kind/target.value."
       ],
       buildSourceLookupSuggestedParams(tool, normalizedInput)

@@ -108,10 +108,10 @@ export const workspaceTargetSchema = z.object({
 
 export const dependencyTargetSchema = z.object({
   kind: z.literal("dependency"),
-  group: nonEmptyString,
-  name: nonEmptyString,
-  version: z.string().trim().min(1).optional(),
-  versionFromProject: z.boolean().optional()
+  group: nonEmptyString.describe('Maven group, e.g. "net.fabricmc.fabric-api" or "dev.architectury".'),
+  name: nonEmptyString.describe('Maven artifact name, e.g. "fabric-api" or "architectury".'),
+  version: z.string().trim().min(1).optional().describe("Explicit version; omit and set versionFromProject to resolve it from the workspace."),
+  versionFromProject: z.boolean().optional().describe("Resolve the version from the project's gradle.properties / gradle cache (requires projectPath).")
 });
 
 export const resolveArtifactTargetSchema = z.discriminatedUnion("kind", [
@@ -137,9 +137,9 @@ export const sourceLookupTargetSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
-  'Object, not string. e.g. {"kind":"version","value":"1.21.10"}, {"kind":"workspace"}, {"kind":"dependency","group":"g","name":"n"}.';
+  'Object, not string. e.g. {"kind":"version","value":"1.21.10"}, {"kind":"workspace"}, or to inspect a loader/Fabric dependency like vanilla: {"kind":"dependency","group":"net.fabricmc.fabric-api","name":"fabric-api","versionFromProject":true} (needs projectPath) or with an explicit "version".';
 export const SOURCE_LOOKUP_TARGET_DESCRIPTION =
-  'Same shape as resolve-artifact target, plus {"kind":"artifact","artifactId":"..."} to reuse a resolved artifact. Object, not string.';
+  'Same shape as resolve-artifact target (incl. {"kind":"dependency",...} to read a Fabric/loader dependency class like vanilla), plus {"kind":"artifact","artifactId":"..."} to reuse a resolved artifact. Object, not string.';
 export const SOURCE_SCOPE_DESCRIPTION =
   "vanilla = Mojang client jar only; merged = merged runtime discovery; loader = loader-transformed runtime jars.";
 

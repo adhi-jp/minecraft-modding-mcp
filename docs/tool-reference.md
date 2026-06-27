@@ -67,6 +67,29 @@ Start here when you are not sure which tool to reach for. In every row, the left
 | `{ kind: "workspace", scope?, strict? }` | When the caller already passes a `projectPath` and wants the tool to detect Minecraft version, compile mapping, and loader from `gradle.properties` and `build.gradle(.kts)`. | `projectPath` | Synthesised to `{ kind: "version", value: <detected> }`. Scope precedence is `target.scope` → top-level `scope` → loader-derived default (`"merged"` when a loader is detected, `"vanilla"` otherwise). When the version is not detected, raises `ERR_WORKSPACE_VERSION_UNRESOLVED` regardless of `strict`. Detected facts surface on `provenance.workspaceResolution`. |
 | `{ kind: "dependency", group, name, version?, versionFromProject? }` | When the caller wants to resolve a Maven-coordinate dependency (e.g. `dev.architectury:architectury`) without computing the exact version themselves. | `projectPath` (unless `version` is given) | Synthesised to `{ kind: "coordinate", value: "<group>:<name>:<version>" }`. The dependency JAR is treated as non-vanilla: binary remap is suppressed. When the caller asks for a non-obfuscated mapping the resolver returns the JAR with `mappingApplied: "obfuscated"` and `qualityFlags: ["dependency-mapping-unverified"]`, plus a warning that the caller must validate symbol availability. Resolution metadata appears on `provenance.dependencyResolution`. |
 
+### Inspecting a Fabric / loader dependency like vanilla
+
+To read members or source of a Fabric API (or any loader/Maven dependency) class
+the same way you read vanilla, pass a `dependency` target straight to
+`get-class-members` / `get-class-source` — no separate lookup tool is needed:
+
+```jsonc
+// members of a Fabric API class, version taken from the workspace
+{
+  "tool": "get-class-members",
+  "className": "net.fabricmc.fabric.api.event.player.UseEntityCallback",
+  "target": { "kind": "dependency", "group": "net.fabricmc.fabric-api", "name": "fabric-api", "versionFromProject": true },
+  "projectPath": "/path/to/workspace"
+}
+```
+
+Use an explicit `"version"` instead of `versionFromProject` when you already
+know it. Because dependency JARs are not remapped, members come back in the
+dependency's own namespace with `qualityFlags: ["dependency-mapping-unverified"]`;
+treat the names as the JAR's compiled names. For repeated lookups against the
+same dependency, call `resolve-artifact` once and reuse the returned
+`artifactId` via `target: { kind: "artifact", artifactId }`.
+
 Workspace detection is memoised in a process-resident `WorkspaceContextCache` (16-entry LRU, 5-minute TTL). The cache is observable through `manage-cache` with `cacheKinds: ["workspace"]`, and individual entries can be invalidated via `selector.projectPath`.
 
 `target.kind="dependency"` resolution probes four de-duplicated `gradle.properties` keys in order — `name_version`, `camelCaseVersion`, `lastSegment(group)_name_version`, and `camelCase(lastSegment(group)_name)Version` — before falling back to the modules-2 cache layout `~/.gradle/caches/modules-2/files-2.1/<group>/<name>/`. Version tokens that contain path separators, `..`, NUL, control characters, or any character outside `[A-Za-z0-9._+-]` are rejected; in `gradle.properties` the rejection is recorded under `attempts[]` as `gradle.properties:<key>:rejected-unsafe-version` and the next key is tried. Snapshot and dev directories are excluded by default. The modules-2 fallback only resolves when exactly one valid entry remains; multiple entries raise `ERR_DEPENDENCY_VERSION_UNRESOLVED` so a global cache cannot supply a version the workspace did not declare.

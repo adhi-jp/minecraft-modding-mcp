@@ -14,6 +14,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Changed
 
 - `get-class-source` responses for a decompiled artifact now carry a `decompiled-source-signatures-unverified` quality flag and a warning that decompiled method/accessor names may differ from the jar the workspace actually compiles against (e.g. a decompiled `getGameRenderState()` vs the runtime `gameRenderState()`); confirm signatures with `get-class-members` (bytecode-derived) before copying names from the source.
+- Inspecting a Fabric / loader dependency class like vanilla is documented and surfaced: the `target` descriptions, `dependency` target fields, the `get-class-source` / `get-class-members` target-shape error guidance, and `docs/tool-reference.md` now show passing `target: { kind: "dependency", group, name, versionFromProject }` straight to the class tools (no separate lookup tool needed).
 
 ### Fixed
 

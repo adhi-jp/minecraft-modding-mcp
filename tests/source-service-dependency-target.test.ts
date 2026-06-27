@@ -301,3 +301,53 @@ test("synthesizeDependencyTarget tries the four de-duplicated property keys", as
     delete process.env.GRADLE_USER_HOME;
   }
 });
+
+test("get-class-members accepts and dispatches a dependency target (F5 discoverability)", async () => {
+  // Schema-level: the source-lookup tools accept a dependency target verbatim.
+  const { getClassMembersSchema } = await import("../src/tool-schemas.ts");
+  const parsed = getClassMembersSchema.parse({
+    className: "net.fabricmc.fabric.api.event.player.UseEntityCallback",
+    target: {
+      kind: "dependency",
+      group: "net.fabricmc.fabric-api",
+      name: "fabric-api",
+      versionFromProject: true
+    }
+  });
+  assert.deepEqual(parsed.target, {
+    kind: "dependency",
+    group: "net.fabricmc.fabric-api",
+    name: "fabric-api",
+    versionFromProject: true
+  });
+
+  // Dispatch-level: getClassMembers forwards the dependency target to resolveArtifact.
+  const root = await mkdtemp(join(tmpdir(), "dep-target-dispatch-"));
+  const service = new SourceService(buildTestConfig(root));
+  let seenTarget: unknown;
+  (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async (
+    input: { target: unknown }
+  ) => {
+    seenTarget = input.target;
+    throw new Error("stop-after-resolve");
+  };
+
+  await assert.rejects(
+    service.getClassMembers({
+      className: "net.fabricmc.fabric.api.event.player.UseEntityCallback",
+      target: {
+        kind: "dependency",
+        group: "net.fabricmc.fabric-api",
+        name: "fabric-api",
+        versionFromProject: true
+      }
+    }),
+    /stop-after-resolve/
+  );
+  assert.deepEqual(seenTarget, {
+    kind: "dependency",
+    group: "net.fabricmc.fabric-api",
+    name: "fabric-api",
+    versionFromProject: true
+  });
+});
