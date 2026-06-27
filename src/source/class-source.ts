@@ -32,7 +32,8 @@ import type {
 import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
-import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire } from "./class-source/members-builder.js";
+import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
+import { matchesMemberPattern } from "./member-pattern.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
@@ -339,8 +340,7 @@ export function buildDecompiledFallback(svc: SourceService, artifactId: string, 
     if (!memberPattern) {
       return list;
     }
-    const lower = memberPattern.toLowerCase();
-    return list.filter((entry) => entry.name.toLowerCase().includes(lower));
+    return list.filter((entry) => matchesMemberPattern(entry.name, memberPattern));
   };
   let constructors = filterByPattern(extracted.constructors);
   let fields = filterByPattern(extracted.fields);
@@ -378,6 +378,26 @@ export function buildDecompiledFallback(svc: SourceService, artifactId: string, 
       total: totalBefore
     },
     truncated: totalBefore > maxMembers
+  };
+}
+
+/**
+ * Apply a member projection to the decompiled fallback so it honors the same
+ * `projection` contract as the bytecode members block. The fallback only carries
+ * names + source line + kind (no signatures), so any non-"full" level reduces to
+ * the member name (the array it lives in already conveys the kind). Keeps the
+ * full shape for the default "full" level.
+ */
+function projectDecompiledFallback(fallback: DecompiledFallback, level: MemberProjection): DecompiledFallback {
+  if (level === "full") {
+    return fallback;
+  }
+  const reduce = (member: DecompiledMember): DecompiledMember => ({ name: member.name });
+  return {
+    constructors: fallback.constructors.map(reduce),
+    fields: fallback.fields.map(reduce),
+    methods: fallback.methods.map(reduce),
+    origin: fallback.origin
   };
 }
 
@@ -797,6 +817,23 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
         })
       : undefined;
 
+  // Decompiled source text can use different method/accessor names than the jar
+  // the workspace actually compiles against (e.g. `getGameRenderState()` in the
+  // decompiled source vs `gameRenderState()` in the runtime jar). Flag it so
+  // callers verify names against get-class-members (bytecode-derived) before
+  // copying signatures out of this source.
+  if (activeOrigin === "decompiled") {
+    activeQualityFlags = dedupeQualityFlags([
+      ...activeQualityFlags,
+      "decompiled-source-signatures-unverified"
+    ]);
+    warnings.push(
+      "Source is decompiled: method/accessor names may differ from the jar the workspace "
+      + "compiles against. Confirm signatures with get-class-members (bytecode-derived) "
+      + "before copying names from this source."
+    );
+  }
+
   return {
     className,
     mode,
@@ -1054,10 +1091,14 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   // Slim the wire member shape: hoist a shared ownerFqn, drop accessFlags, omit
   // isSynthetic:false, and drop FIELD jvmDescriptor unless includeDescriptors.
   // Internal SignatureMember arrays above stay intact.
-  const projectedMembers = projectMembersForWire(
-    { constructors, fields, methods },
-    includeInherited,
-    input.includeDescriptors ?? false
+  const projection = input.projection ?? "full";
+  const projectedMembers = projectMembersByLevel(
+    projectMembersForWire(
+      { constructors, fields, methods },
+      includeInherited,
+      input.includeDescriptors ?? false
+    ),
+    projection
   );
   const truncated = sliced.truncated;
   const nextCursor =
@@ -1081,7 +1122,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     const fallbackPattern = namespaceMismatch ? undefined : memberPattern;
     const sourceFallback = buildDecompiledFallback(svc, artifactId, lookupClassName, fallbackPattern, maxMembers);
     if (sourceFallback) {
-      decompiledFallback = sourceFallback.fallback;
+      decompiledFallback = projectDecompiledFallback(sourceFallback.fallback, projection);
       decompiledMemberCounts = sourceFallback.counts;
       fallbackQualityFlags = dedupeQualityFlags([
         ...qualityFlags,

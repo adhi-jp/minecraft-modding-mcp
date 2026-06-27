@@ -145,6 +145,13 @@ export const SOURCE_SCOPE_DESCRIPTION =
 
 // Shared describe() text reused by every symbol-lookup tool so the contract reads
 // identically on find-mapping and check-symbol-exists (and any future sibling).
+export const MEMBER_PATTERN_DESCRIPTION =
+  'Case-insensitive substring filter on member names. Use "|" for OR alternatives, e.g. "getStateForPlacement|canSurvive|setPlacedBy" (each token is matched as a substring, not a regex).';
+
+export const memberProjectionSchema = z.enum(["names", "signatures", "full"]);
+export const MEMBER_PROJECTION_DESCRIPTION =
+  'Per-member field projection: "names" (member name only), "signatures" (name + javaSignature, no jvmDescriptor), or "full" (default; complete member shape). Use "names"/"signatures" to cut response tokens for existence/signature checks.';
+
 export const SIGNATURE_MODE_DESCRIPTION =
   "exact: descriptor required for kind=method; name-only (default): match by owner+name only.";
 export const NAME_MODE_DESCRIPTION =
@@ -219,7 +226,8 @@ export const getClassMembersShape = {
   access: memberAccessSchema.default("public"),
   includeSynthetic: z.boolean().default(false),
   includeInherited: z.boolean().default(false),
-  memberPattern: optionalNonEmptyString,
+  memberPattern: optionalNonEmptyString.describe(MEMBER_PATTERN_DESCRIPTION),
+  projection: memberProjectionSchema.optional().describe(MEMBER_PROJECTION_DESCRIPTION),
   maxMembers: optionalPositiveInt.describe("default 150, max 5000. Page beyond the first 150 with cursor."),
   cursor: optionalNonEmptyString.describe("nextCursor from the previous response."),
   projectPath: optionalNonEmptyString,
@@ -340,7 +348,7 @@ export const batchClassMembersEntrySchema = z.object({
   access: memberAccessSchema.optional(),
   includeSynthetic: z.boolean().optional(),
   includeInherited: z.boolean().optional(),
-  memberPattern: optionalNonEmptyString,
+  memberPattern: optionalNonEmptyString.describe(MEMBER_PATTERN_DESCRIPTION),
   maxMembers: optionalPositiveInt
 });
 
@@ -357,6 +365,7 @@ export const batchClassMembersShape = {
   concurrency: z.number().int().min(1).max(8).optional(),
   failFast: z.boolean().optional(),
   detail: detailParam("summary"),
+  projection: memberProjectionSchema.optional().describe(MEMBER_PROJECTION_DESCRIPTION),
   include: responseIncludeParam,
   entries: z.array(batchClassMembersEntrySchema).min(1).max(50)
 };

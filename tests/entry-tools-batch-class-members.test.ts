@@ -180,3 +180,21 @@ test("BATCH_TOOLS_OFF env constant is exported (env-driven kill switch wiring)",
   const mod = await import("../src/entry-tools/batch-runner.ts");
   assert.equal(typeof mod.BATCH_TOOLS_OFF, "boolean");
 });
+
+test("projection is threaded from batch input to each get-class-members call", async () => {
+  const seen: Array<string | undefined> = [];
+  const deps: BatchClassMembersDeps = {
+    resolveArtifact: async () => buildResolved(),
+    getClassMembers: async (input: GetClassMembersInput) => {
+      seen.push(input.projection);
+      return buildOkMembers(input.className);
+    }
+  };
+  const service = new BatchClassMembersService(deps);
+  await service.execute({
+    ...baseInput,
+    projection: "names",
+    entries: [{ className: "a.A" }, { className: "b.B" }]
+  });
+  assert.deepEqual(seen, ["names", "names"]);
+});

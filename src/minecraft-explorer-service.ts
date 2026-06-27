@@ -2,6 +2,7 @@ import { createError, ERROR_CODES } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
 import { createJarEntryReader } from "./source-jar-reader.js";
+import { matchesMemberPattern } from "./source/member-pattern.js";
 import type { Config } from "./types.js";
 
 export type MappingNamespace = "obfuscated" | "mojang" | "yarn";
@@ -748,7 +749,7 @@ export class MinecraftExplorerService {
       if (access === "public" && !hasPublicVisibility(member.accessFlags)) {
         return false;
       }
-      if (memberPattern && !lower(member.name).includes(memberPattern)) {
+      if (memberPattern && !matchesMemberPattern(member.name, memberPattern)) {
         return false;
       }
       return true;

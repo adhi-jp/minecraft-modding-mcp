@@ -516,6 +516,37 @@ test("MinecraftExplorerService filters by access, synthetic flag, and member pat
   assert.deepEqual(allMembers.constructors, []);
 });
 
+test("MinecraftExplorerService treats memberPattern \"|\" as OR alternatives", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-or-pattern-"));
+  const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
+    "com/example/Block.class": buildClassFile({
+      internalName: "com/example/Block",
+      fields: [],
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC },
+        { name: "getStateForPlacement", descriptor: "()V", accessFlags: ACC_PUBLIC },
+        { name: "canSurvive", descriptor: "()V", accessFlags: ACC_PUBLIC },
+        { name: "setPlacedBy", descriptor: "()V", accessFlags: ACC_PUBLIC },
+        { name: "unrelated", descriptor: "()V", accessFlags: ACC_PUBLIC }
+      ]
+    })
+  });
+  const service = createService(root);
+
+  // The session-analysis regression: a piped pattern previously matched a literal
+  // "|" and returned zero. It must now match every alternative.
+  const matched = await service.getSignature({
+    jarPath,
+    fqn: "com.example.Block",
+    memberPattern: "getStateForPlacement|canSurvive|setPlacedBy"
+  });
+  assert.deepEqual(matched.methods.map((method) => method.name).sort(), [
+    "canSurvive",
+    "getStateForPlacement",
+    "setPlacedBy"
+  ]);
+});
+
 test("MinecraftExplorerService reuses cached signatures but refreshes response context", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-cache-"));
   const jarPath = join(root, "demo-1.21.4.jar");

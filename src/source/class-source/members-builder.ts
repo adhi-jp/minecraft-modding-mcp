@@ -1,6 +1,7 @@
 import type { SignatureMember } from "../../minecraft-explorer-service.js";
 import type { SourceService } from "../../source-service.js";
 import type { MappingSourcePriority, SourceMapping } from "../../types.js";
+import { matchesMemberPattern } from "../member-pattern.js";
 
 export type RemappedMembers = {
   constructors: SignatureMember[];
@@ -54,10 +55,10 @@ export async function remapAndCountMembers(
   let methods = await remap(input.signatureMethods, "method");
 
   if (input.requestedMapping !== input.mappingApplied && input.memberPattern) {
-    const lowerPattern = input.memberPattern.toLowerCase();
-    constructors = constructors.filter((m) => m.name.toLowerCase().includes(lowerPattern));
-    fields = fields.filter((m) => m.name.toLowerCase().includes(lowerPattern));
-    methods = methods.filter((m) => m.name.toLowerCase().includes(lowerPattern));
+    const pattern = input.memberPattern;
+    constructors = constructors.filter((m) => matchesMemberPattern(m.name, pattern));
+    fields = fields.filter((m) => matchesMemberPattern(m.name, pattern));
+    methods = methods.filter((m) => matchesMemberPattern(m.name, pattern));
   }
 
   const counts = {
@@ -185,5 +186,63 @@ export function projectMembersForWire(
     constructors: slice.constructors.map((m) => toWire(m, true)),
     fields: slice.fields.map((m) => toWire(m, keepFieldDescriptors)),
     methods: slice.methods.map((m) => toWire(m, true))
+  };
+}
+
+/**
+ * Token-projection level for a member listing, narrowing the per-member fields
+ * an agent receives:
+ * - `full` (default): the complete {@link WireMember} shape (current behavior).
+ * - `signatures`: name + javaSignature (drops jvmDescriptor) — enough to read
+ *   the API without overload descriptors.
+ * - `names`: member name only — enough for an "does this member exist?" check.
+ * The block-level hoisted `ownerFqn` and any per-member `ownerFqn` (the
+ * multi-owner / includeInherited case) are preserved in every level so members
+ * stay attributable.
+ */
+export type MemberProjection = "names" | "signatures" | "full";
+
+export type ProjectedMember = {
+  name: string;
+  javaSignature?: string;
+  jvmDescriptor?: string;
+  ownerFqn?: string;
+  isSynthetic?: boolean;
+};
+
+export type ProjectedMembersBlock = {
+  ownerFqn?: string;
+  constructors: ProjectedMember[];
+  fields: ProjectedMember[];
+  methods: ProjectedMember[];
+};
+
+export function projectMembersByLevel(
+  block: WireMembersBlock,
+  level: MemberProjection
+): ProjectedMembersBlock {
+  if (level === "full") {
+    return block;
+  }
+  const reduce = (m: WireMember): ProjectedMember => {
+    if (level === "names") {
+      return {
+        name: m.name,
+        ...(m.ownerFqn ? { ownerFqn: m.ownerFqn } : {})
+      };
+    }
+    // "signatures": keep the readable signature, drop the JVM descriptor.
+    return {
+      name: m.name,
+      javaSignature: m.javaSignature,
+      ...(m.ownerFqn ? { ownerFqn: m.ownerFqn } : {}),
+      ...(m.isSynthetic ? { isSynthetic: true } : {})
+    };
+  };
+  return {
+    ...(block.ownerFqn ? { ownerFqn: block.ownerFqn } : {}),
+    constructors: block.constructors.map(reduce),
+    fields: block.fields.map(reduce),
+    methods: block.methods.map(reduce)
   };
 }

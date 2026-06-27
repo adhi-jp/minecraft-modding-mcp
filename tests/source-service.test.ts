@@ -10916,3 +10916,198 @@ test("SourceService validateMixin quickSummary surfaces vanilla fallback after s
   assert.match(single!.quickSummary!, /Scope fell back from "merged" to "vanilla"/);
   assert.match(single!.quickSummary!, /Loom cache empty/);
 });
+
+test("SourceService getClassSource flags decompiled origin as compile-unverified (B3)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-b3-decompiled-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "b3-decompiled",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["decompiled"],
+    version: "1.21.10",
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "com/example/Foo.java",
+        content: ["package com.example;", "public class Foo {", "  public void bar() {}", "}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/Foo.java",
+        symbolKind: "class",
+        symbolName: "Foo",
+        qualifiedName: "com.example.Foo",
+        line: 2
+      }
+    ]
+  });
+
+  const result = await service.getClassSource({
+    artifactId: "b3-decompiled",
+    className: "com.example.Foo",
+    mode: "full"
+  });
+
+  assert.equal(result.origin, "decompiled");
+  assert.ok(
+    result.qualityFlags.includes("decompiled-source-signatures-unverified"),
+    "decompiled source must carry the compile-unverified quality flag"
+  );
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("get-class-members")),
+    "decompiled source must advise verifying signatures via get-class-members"
+  );
+});
+
+test("SourceService getClassSource does not flag non-decompiled origin (B3 negative)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-b3-sourcejar-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "b3-sourcejar",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: [],
+    version: "1.21.10",
+    isDecompiled: false,
+    sourceJarPath: join(root, "foo-sources.jar"),
+    files: [
+      {
+        filePath: "com/example/Foo.java",
+        content: ["package com.example;", "public class Foo {", "  public void bar() {}", "}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/Foo.java",
+        symbolKind: "class",
+        symbolName: "Foo",
+        qualifiedName: "com.example.Foo",
+        line: 2
+      }
+    ]
+  });
+
+  const result = await service.getClassSource({
+    artifactId: "b3-sourcejar",
+    className: "com.example.Foo",
+    mode: "full"
+  });
+
+  assert.notEqual(result.origin, "decompiled");
+  assert.ok(!result.qualityFlags.includes("decompiled-source-signatures-unverified"));
+  assert.ok(!result.warnings.some((warning) => warning.includes("get-class-members")));
+});
+
+test("SourceService getClassMembers projects decompiledFallback members per projection (AC2.6)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-decompiled-projection-"));
+  const service = new SourceService(buildTestConfig(root));
+  const binaryJarPath = join(root, "minecraft-merged.jar");
+
+  seedIndexedArtifact(service, {
+    artifactId: "artifact-decompiled-projection",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: [],
+    binaryJarPath,
+    version: "1.21.10",
+    files: [
+      {
+        filePath: "net/minecraft/world/entity/player/Player.java",
+        content: [
+          "package net.minecraft.world.entity.player;",
+          "public class Player {",
+          "    public void addAdditionalSaveData() {}",
+          "    public void tick() {}",
+          "}"
+        ].join("\n")
+      }
+    ],
+    symbols: []
+  });
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return { constructors: [], fields: [], methods: [], warnings: [], context: { classExistedInJar: true } };
+    }
+  };
+
+  // projection="names": decompiledFallback members carry only `name` (no line/kind).
+  const names = await service.getClassMembers({
+    artifactId: "artifact-decompiled-projection",
+    className: "net.minecraft.world.entity.player.Player",
+    mapping: "mojang",
+    projection: "names"
+  });
+  assert.ok(names.decompiledFallback, "decompiledFallback should be populated");
+  assert.ok(names.decompiledFallback!.methods.length > 0);
+  for (const member of names.decompiledFallback!.methods) {
+    assert.deepEqual(Object.keys(member).sort(), ["name"], `names projection must drop line/kind: ${JSON.stringify(member)}`);
+  }
+
+  // projection="full" (default): decompiledFallback keeps the full member shape.
+  const full = await service.getClassMembers({
+    artifactId: "artifact-decompiled-projection",
+    className: "net.minecraft.world.entity.player.Player",
+    mapping: "mojang",
+    projection: "full"
+  });
+  const fullMember = full.decompiledFallback!.methods[0];
+  assert.ok("line" in fullMember && "kind" in fullMember, "full projection keeps line and kind");
+});
+
+test("SourceService getClassMembers applies '|'-OR memberPattern to decompiledFallback (Slice 1, decompiled site)", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-decompiled-or-pattern-"));
+  const service = new SourceService(buildTestConfig(root));
+  const binaryJarPath = join(root, "minecraft-merged.jar");
+
+  seedIndexedArtifact(service, {
+    artifactId: "artifact-decompiled-or",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: [],
+    binaryJarPath,
+    version: "1.21.10",
+    files: [
+      {
+        filePath: "net/minecraft/world/level/block/Block.java",
+        content: [
+          "package net.minecraft.world.level.block;",
+          "public class Block {",
+          "    public void getStateForPlacement() {}",
+          "    public void canSurvive() {}",
+          "    public void unrelated() {}",
+          "}"
+        ].join("\n")
+      }
+    ],
+    symbols: []
+  });
+
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature() {
+      return { constructors: [], fields: [], methods: [], warnings: [], context: { classExistedInJar: true } };
+    }
+  };
+
+  const result = await service.getClassMembers({
+    artifactId: "artifact-decompiled-or",
+    className: "net.minecraft.world.level.block.Block",
+    mapping: "mojang",
+    memberPattern: "getStateForPlacement|canSurvive"
+  });
+  assert.ok(result.decompiledFallback, "decompiledFallback should be populated");
+  assert.deepEqual(
+    result.decompiledFallback!.methods.map((m) => m.name).sort(),
+    ["canSurvive", "getStateForPlacement"]
+  );
+});

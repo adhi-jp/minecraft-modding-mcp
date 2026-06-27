@@ -40,7 +40,7 @@ import * as accessValidate from "./source/access-validate.js";
 import * as validateMixinModule from "./source/validate-mixin.js";
 import * as artifactResolver from "./source/artifact-resolver.js";
 import * as classSource from "./source/class-source.js";
-import type { WireMembersBlock } from "./source/class-source/members-builder.js";
+import type { MemberProjection, ProjectedMembersBlock } from "./source/class-source/members-builder.js";
 import * as symbolResolver from "./source/symbol-resolver.js";
 import * as fileAccess from "./source/file-access.js";
 import { type StageEmitter } from "./stage-emitter.js";
@@ -367,12 +367,16 @@ export type GetClassMembersInput = {
   strictVersion?: boolean;
   /** When true, keep jvmDescriptor on FIELD members (always kept on methods/constructors). */
   includeDescriptors?: boolean;
+  /** Narrow the per-member fields returned: "names" | "signatures" | "full" (default "full"). */
+  projection?: MemberProjection;
 };
 
 export type DecompiledMember = {
   name: string;
-  line: number;
-  kind: "constructor" | "field" | "method";
+  /** Source line of the declaration. Omitted under a non-"full" projection. */
+  line?: number;
+  /** Member kind. Omitted under a non-"full" projection (the array conveys it). */
+  kind?: "constructor" | "field" | "method";
 };
 
 export type DecompiledFallback = {
@@ -386,7 +390,7 @@ export type GetClassMembersStatus = "ok" | "members_unavailable" | "partial";
 
 export type GetClassMembersOutput = {
   className: string;
-  members: WireMembersBlock;
+  members: ProjectedMembersBlock;
   counts: {
     constructors: number;
     fields: number;

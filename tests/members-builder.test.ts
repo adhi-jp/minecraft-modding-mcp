@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sliceMembersWithLimit } from "../src/source/class-source/members-builder.ts";
+import { sliceMembersWithLimit, projectMembersByLevel } from "../src/source/class-source/members-builder.ts";
+import type { WireMembersBlock } from "../src/source/class-source/members-builder.ts";
 import type { SignatureMember } from "../src/minecraft-explorer-service.ts";
 
 function member(name: string): SignatureMember {
@@ -53,4 +54,74 @@ test("sliceMembersWithLimit: a full page short of the end reports nextOffset for
   assert.equal(firstPage.methods.length, 0);
   assert.equal(firstPage.truncated, true);
   assert.equal(firstPage.nextOffset, 2);
+});
+
+function wireBlock(): WireMembersBlock {
+  return {
+    ownerFqn: "com.example.Block",
+    constructors: [
+      { name: "<init>", javaSignature: "public Block()", jvmDescriptor: "()V" }
+    ],
+    fields: [
+      { name: "id", javaSignature: "private int id", jvmDescriptor: "I", isSynthetic: true }
+    ],
+    methods: [
+      { name: "canSurvive", javaSignature: "public boolean canSurvive()", jvmDescriptor: "()Z" }
+    ]
+  };
+}
+
+test("projectMembersByLevel: full returns the block unchanged (equivalence)", () => {
+  const block = wireBlock();
+  const projected = projectMembersByLevel(block, "full");
+  assert.equal(projected, block); // same reference: byte-identical output
+  assert.deepEqual(projected, wireBlock());
+});
+
+test("projectMembersByLevel: signatures keeps javaSignature, drops jvmDescriptor", () => {
+  const projected = projectMembersByLevel(wireBlock(), "signatures");
+  assert.deepEqual(projected, {
+    ownerFqn: "com.example.Block",
+    constructors: [{ name: "<init>", javaSignature: "public Block()" }],
+    fields: [{ name: "id", javaSignature: "private int id", isSynthetic: true }],
+    methods: [{ name: "canSurvive", javaSignature: "public boolean canSurvive()" }]
+  });
+  // no jvmDescriptor anywhere
+  const all = [
+    ...projected.constructors,
+    ...projected.fields,
+    ...projected.methods
+  ];
+  assert.ok(all.every((m) => !("jvmDescriptor" in m)));
+});
+
+test("projectMembersByLevel: names keeps only member name (+ block ownerFqn)", () => {
+  const projected = projectMembersByLevel(wireBlock(), "names");
+  assert.deepEqual(projected, {
+    ownerFqn: "com.example.Block",
+    constructors: [{ name: "<init>" }],
+    fields: [{ name: "id" }],
+    methods: [{ name: "canSurvive" }]
+  });
+});
+
+test("projectMembersByLevel: preserves per-member ownerFqn in the multi-owner case", () => {
+  const block: WireMembersBlock = {
+    constructors: [],
+    fields: [],
+    methods: [
+      { name: "tick", javaSignature: "public void tick()", jvmDescriptor: "()V", ownerFqn: "com.example.A" },
+      { name: "load", javaSignature: "public void load()", jvmDescriptor: "()V", ownerFqn: "com.example.B" }
+    ]
+  };
+  const names = projectMembersByLevel(block, "names");
+  assert.deepEqual(names.methods, [
+    { name: "tick", ownerFqn: "com.example.A" },
+    { name: "load", ownerFqn: "com.example.B" }
+  ]);
+  const sigs = projectMembersByLevel(block, "signatures");
+  assert.deepEqual(sigs.methods, [
+    { name: "tick", javaSignature: "public void tick()", ownerFqn: "com.example.A" },
+    { name: "load", javaSignature: "public void load()", ownerFqn: "com.example.B" }
+  ]);
 });

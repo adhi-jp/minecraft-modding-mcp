@@ -13,6 +13,7 @@ import type {
   ResolveArtifactTargetInput,
   SourceMapping
 } from "../types.js";
+import type { MemberProjection } from "../source/class-source/members-builder.js";
 import {
   runBatch,
   splitEntryWarnings,
@@ -46,6 +47,7 @@ export type BatchClassMembersInput = {
   concurrency?: number;
   failFast?: boolean;
   detail?: ResponseDetailLevel;
+  projection?: MemberProjection;
   include?: readonly string[];
   entries: readonly BatchClassMembersEntry[];
 };
@@ -108,6 +110,7 @@ export class BatchClassMembersService {
           includeInherited: entry.includeInherited,
           memberPattern: entry.memberPattern,
           maxMembers: entry.maxMembers,
+          projection: input.projection,
           includeDescriptors: include.has("descriptors"),
           mapping: input.mapping,
           sourcePriority: input.sourcePriority,

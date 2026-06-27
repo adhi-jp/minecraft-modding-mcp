@@ -7,6 +7,18 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `get-class-members` / `batch-class-members` accept a `projection` parameter — `"names"` (member names only), `"signatures"` (name + `javaSignature`, no `jvmDescriptor`), or `"full"` (default; the complete member shape). Use the leaner projections to cut response tokens for "does this member exist?" / signature-only checks. Default `"full"` output is unchanged.
+
+### Changed
+
+- `get-class-source` responses for a decompiled artifact now carry a `decompiled-source-signatures-unverified` quality flag and a warning that decompiled method/accessor names may differ from the jar the workspace actually compiles against (e.g. a decompiled `getGameRenderState()` vs the runtime `gameRenderState()`); confirm signatures with `get-class-members` (bytecode-derived) before copying names from the source.
+
+### Fixed
+
+- `memberPattern` (`get-class-members` / `batch-class-members`) treats `"|"` as OR alternation, so a natural pattern like `"getStateForPlacement|canSurvive|setPlacedBy"` matches any of those members. Previously the pattern was matched as a single literal substring, so a piped pattern searched for a name containing a literal `"|"` and returned zero members on large vanilla classes such as `Block` and `EntityRenderer`. Single-token patterns keep their case-insensitive substring behavior. The parameter description now documents the substring + OR semantics.
+
 ## [6.0.0] - 2026-06-25
 
 ### Changed
