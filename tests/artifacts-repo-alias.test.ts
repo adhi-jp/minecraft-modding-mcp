@@ -93,7 +93,7 @@ test("ArtifactsRepo allows multiple null aliases (legacy rows tolerated)", async
   assert.equal(artifacts.getArtifact("legacy-2")?.alias, undefined);
 });
 
-test("ArtifactsRepo.setAlias backfills a NULL alias on a legacy row (cycle 1 F1 regression)", async () => {
+test("ArtifactsRepo.setAlias backfills a NULL alias on a legacy row", async () => {
   const { artifacts } = await createArtifactsRepo();
   artifacts.upsertArtifact({
     artifactId: "legacy-backfill",

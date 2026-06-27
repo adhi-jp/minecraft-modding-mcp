@@ -267,7 +267,7 @@ test("buildArtifactAlias produces a deterministic, canonical alias for version t
   assert.equal(alias, repeat);
 });
 
-test("buildArtifactAlias hash suffix differs for distinct artifactIds with identical readable tokens (cycle 1 F2 regression)", () => {
+test("buildArtifactAlias hash suffix differs for distinct artifactIds with identical readable tokens", () => {
   const aliasA = buildArtifactAlias({
     artifactId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     kind: "version",
@@ -289,7 +289,7 @@ test("buildArtifactAlias hash suffix differs for distinct artifactIds with ident
   assert.equal(aliasB.endsWith("fedcba987654"), true);
 });
 
-test("buildArtifactAlias is canonical: different mapping/scope inputs produce the same alias when the artifactId is the same (cycle 2 F2 regression)", () => {
+test("buildArtifactAlias is canonical: different mapping/scope inputs produce the same alias when the artifactId is the same", () => {
   const artifactId = stableArtifactId(["jar-canonical", "/tmp/foo.jar", "sigZ"]);
   const aliasA = buildArtifactAlias({
     artifactId,

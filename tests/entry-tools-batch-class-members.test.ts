@@ -166,7 +166,7 @@ test("E8: detail=summary strips provenance/artifactContents/qualityFlags/context
   assert.ok("counts" in result);
 });
 
-test("F2: per-entry status field from single-tool result is preserved", async () => {
+test("per-entry status field from single-tool result is preserved", async () => {
   const service = new BatchClassMembersService(buildDeps({}));
   const out = await service.execute({
     ...baseInput,

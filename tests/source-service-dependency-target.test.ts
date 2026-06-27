@@ -302,7 +302,7 @@ test("synthesizeDependencyTarget tries the four de-duplicated property keys", as
   }
 });
 
-test("get-class-members accepts and dispatches a dependency target (F5 discoverability)", async () => {
+test("get-class-members accepts and dispatches a dependency target", async () => {
   // Schema-level: the source-lookup tools accept a dependency target verbatim.
   const { getClassMembersSchema } = await import("../src/tool-schemas.ts");
   const parsed = getClassMembersSchema.parse({

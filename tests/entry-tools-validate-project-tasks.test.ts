@@ -446,16 +446,16 @@ test("validate-project mixin validation: parallel aggregation matches sequential
   const stages: Array<{ stage: string; meta: Record<string, unknown> }> = [];
   const result = await run(stages);
 
-  // AC5.1: aggregate counts equal the sequential result (valid 1, partial 1,
+  // Aggregate counts equal the sequential result (valid 1, partial 1,
   // invalid 2 = c's invalid + d's caught error).
   assert.equal(result.summary.counts.valid, 1);
   assert.equal(result.summary.counts.partial, 1);
   assert.equal(result.summary.counts.invalid, 2);
 
-  // AC5.4: every mixin was validated; the throwing one did not abort the batch.
+  // Every mixin was validated; the throwing one did not abort the batch.
   assert.equal(calls.length, 4);
 
-  // AC5.3: per-mixin progress is still emitted during parallel validation (one
+  // Per-mixin progress is still emitted during parallel validation (one
   // mixin-validation event carrying targetIndex per config; order may vary).
   const perMixinEmits = stages.filter(
     (s) => s.stage === "validate-project:mixin-validation" && typeof s.meta.targetIndex === "number"
@@ -466,7 +466,7 @@ test("validate-project mixin validation: parallel aggregation matches sequential
     [1, 2, 3, 4]
   );
 
-  // AC5.2: warnings appear in input order regardless of completion order.
+  // Warnings appear in input order regardless of completion order.
   const warnings = result.warnings ?? [];
   const idxB = warnings.indexOf("warn-b");
   const idxC = warnings.indexOf("warn-c");

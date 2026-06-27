@@ -871,7 +871,7 @@ export class SourceService {
     // Classes/fields surface as `mapping_unavailable` when the graph yields nothing, but
     // a method query with a non-empty graph returns `not_found` (empty member lookup) —
     // which previously skipped the runtime fallback and produced false negatives for
-    // methods that genuinely exist (B1). Treat `not_found` methods as fallback-eligible.
+    // methods that genuinely exist. Treat `not_found` methods as fallback-eligible.
     const fallbackEligible =
       result.status === "mapping_unavailable" ||
       (result.status === "not_found" && input.kind === "method");

@@ -114,7 +114,7 @@ test("E1: 3 mixed-kind entries (class, method, field) return ok in input order",
   for (let i = 0; i < 3; i++) assert.equal(out.results[i]!.index, i);
 });
 
-test("F3: per-entry signatureMode override flows through to checkSymbolExists", async () => {
+test("per-entry signatureMode override flows through to checkSymbolExists", async () => {
   const seen: CheckSymbolExistsInput[] = [];
   const deps: BatchSymbolExistsDeps = {
     resolveArtifact: async () => buildResolved(),

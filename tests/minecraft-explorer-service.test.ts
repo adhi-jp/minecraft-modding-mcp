@@ -533,8 +533,8 @@ test("MinecraftExplorerService treats memberPattern \"|\" as OR alternatives", a
   });
   const service = createService(root);
 
-  // The session-analysis regression: a piped pattern previously matched a literal
-  // "|" and returned zero. It must now match every alternative.
+  // Regression guard: a piped pattern previously matched a literal "|" and
+  // returned zero. It must now match every alternative.
   const matched = await service.getSignature({
     jarPath,
     fqn: "com.example.Block",

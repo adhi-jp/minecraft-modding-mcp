@@ -362,7 +362,7 @@ function aliasJarBase(jarPath: string): string {
 // to earlier callers. Two distinct artifactIds whose readable tokens collide and
 // whose first 48 hash bits also collide would trip the schema-v4 alias UNIQUE
 // constraint at upsert time — a hard error, not silent drift.
-// Phase 3.1a: display-only. Phase 3.1b stores it for lookup.
+// Currently display-only; a later change stores it for lookup.
 export function buildArtifactAlias(input: ArtifactAliasInput): string {
   const tokens: string[] = [];
   if (input.kind === "version") {

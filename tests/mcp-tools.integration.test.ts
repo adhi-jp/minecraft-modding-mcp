@@ -1697,7 +1697,7 @@ test("find-mapping descriptor validator accepts arrays at the JVM dimension limi
 test("find-mapping signatureMode=exact does not resolve to a different overload when the caller's descriptor is stale", async () => {
   // When only foo(I)V exists in the mapping graph and the caller asks for foo(Z)V with
   // signatureMode="exact", the service must NOT silently resolve to the (I)V overload via
-  // the owner+name descriptorless fallback. This guards against the F2 bug where exact
+  // the owner+name descriptorless fallback. This guards against a bug where exact
   // lookups could return wrong overloads during migration-tooling workflows.
   const result = await callTool("find-mapping", {
     version: "1.21.10",

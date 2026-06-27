@@ -328,7 +328,7 @@ export function compactMappingResponse(
 // onto the existing compact omit-sets so the DEFAULT wire output is
 // byte-identical to the previous compact defaults:
 //   - resolution/mapping tools + batch defaulted compact:true  -> default summary
-//   - source/file tools defaulted compact:false (post Phase 4) -> default standard
+//   - source/file tools defaulted compact:false -> default standard
 // summary == old compact:true; standard == old compact:false; full keeps
 // everything (incl. diagnostics). include groups opt specific fields back in.
 // ---------------------------------------------------------------------------

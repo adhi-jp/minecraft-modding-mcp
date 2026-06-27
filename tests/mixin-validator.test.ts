@@ -926,7 +926,7 @@ test("validateParsedMixin structuredWarnings classify representative warning cat
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 1: extractMethodName / extractMethodDescriptor tests         */
+/*  extractMethodName / extractMethodDescriptor tests  */
 /* ------------------------------------------------------------------ */
 
 test("extractMethodName strips descriptors and owner prefixes across supported forms", () => {
@@ -998,7 +998,7 @@ test("extractMethodDescriptor returns the descriptor portion when present", () =
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 1: validateInjection with descriptor-bearing references       */
+/*  validateInjection with descriptor-bearing references  */
 /* ------------------------------------------------------------------ */
 
 test("validateParsedMixin handles descriptor-bearing and owner-prefixed method references", () => {
@@ -1210,7 +1210,7 @@ test("validateParsedAccessTransformer reports a descriptor mismatch with candida
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 3: @Accessor/@Invoker parse warning escalation               */
+/*  @Accessor/@Invoker parse warning escalation  */
 /* ------------------------------------------------------------------ */
 
 test("validateParsedMixin handles representative parse warning flows", async (t) => {
@@ -1348,7 +1348,7 @@ test("validateParsedMixin handles representative parse warning flows", async (t)
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 4: provenance resolutionNotes                                */
+/*  provenance resolutionNotes  */
 /* ------------------------------------------------------------------ */
 
 test("validateParsedMixin provenance includes resolutionNotes when present", () => {
@@ -1372,7 +1372,7 @@ test("validateParsedMixin provenance includes resolutionNotes when present", () 
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 5: structuredWarnings                                        */
+/*  structuredWarnings  */
 /* ------------------------------------------------------------------ */
 
 test("validateParsedMixin includes structuredWarnings classified by severity", () => {
@@ -2227,7 +2227,7 @@ test("P7: falsePositiveRisk reflects representative resolution and health states
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 1A: symbolExistsButSignatureFailed fallback                  */
+/*  symbolExistsButSignatureFailed fallback  */
 /* ------------------------------------------------------------------ */
 
 test("symbolExistsButSignatureFailed produces tool_issue warning and skipped members", () => {
@@ -2292,7 +2292,7 @@ test("symbolExistsButSignatureFailed does not block normal signature-resolved ta
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 2A: issueOrigin classification                               */
+/*  issueOrigin classification  */
 /* ------------------------------------------------------------------ */
 
 test("issueOrigin is code_issue for genuine target-class-missing", () => {
@@ -2332,7 +2332,7 @@ test("issueOrigin is tool_issue for member-remap-failed", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 2C: quickSummary                                             */
+/*  quickSummary  */
 /* ------------------------------------------------------------------ */
 
 test("quickSummary reports representative success and failure summaries", () => {
@@ -2519,7 +2519,7 @@ test("P6: confidenceBreakdown captures base score and applied penalties", () => 
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 2D: improved error messages                                  */
+/*  improved error messages  */
 /* ------------------------------------------------------------------ */
 
 test("@Shadow field-not-found message includes available field count", () => {
@@ -2583,7 +2583,7 @@ test("@Accessor error includes inference hint with prefix removal", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/*  Phase 5: partial-success status derivation                         */
+/*  partial-success status derivation  */
 /* ------------------------------------------------------------------ */
 
 function makeBaseSummary(overrides: Partial<ValidationSummary> = {}): ValidationSummary {
@@ -2695,9 +2695,9 @@ test("loadMixinStageBudgets allows test-only override of individual stages", () 
 
 import { validateMixinSchema } from "../src/tool-schemas.ts";
 
-// --- Phase 1A–3C param surface guards via Zod schema -------------------------
+// --- param surface guards via Zod schema -------------------------
 
-test("validateMixinSchema accepts every Phase 1A–3C parameter value (reportMode, warningCategoryFilter, etc.)", () => {
+test("validateMixinSchema accepts every documented parameter value (reportMode, warningCategoryFilter, etc.)", () => {
   const base = {
     input: { mode: "inline", source: "class M {}" },
     version: "1.21.10"
@@ -2760,7 +2760,7 @@ test("validateMixinSchema rejects unknown reportMode and unknown warningCategory
   }
 });
 
-test("validateMixinSchema config mode accepts an array of mixin config paths (Phase 3A multi-config)", () => {
+test("validateMixinSchema config mode accepts an array of mixin config paths", () => {
   const parsed = validateMixinSchema.parse({
     input: { mode: "config", configPaths: ["src/main/resources/mod.mixins.json", "other.mixins.json"] },
     version: "1.21.10"

@@ -7,7 +7,7 @@ import {
   buildValidateMixinSuggestedParams
 } from "../src/tool-guidance.ts";
 
-// Regression for the Phase 4 review finding: SUGGESTED_CALL_DEFAULTS.reportMode
+// Regression for a review finding: SUGGESTED_CALL_DEFAULTS.reportMode
 // must track the summary-first default introduced for validate-mixin, otherwise the
 // suggestedCall default-omission inverts (an explicit "full" is dropped and the real
 // default "summary-first" is retained as noise).

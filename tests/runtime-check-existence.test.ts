@@ -92,7 +92,7 @@ test("method existence requests inherited members (includeInherited: true)", asy
   assert.equal(captured?.includeInherited, true);
 });
 
-test("a class missing from the runtime jar yields a clear 'not found' warning (B4)", async () => {
+test("a class missing from the runtime jar yields a clear 'not found' warning", async () => {
   const svc = buildSvc({
     throwError: createError({
       code: ERROR_CODES.CLASS_NOT_FOUND,

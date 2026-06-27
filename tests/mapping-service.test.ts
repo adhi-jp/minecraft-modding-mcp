@@ -3067,7 +3067,7 @@ test("MappingService getClassApiMatrix includes competing candidates in ambiguit
   }
 });
 
-test("MappingService getClassApiMatrix scopes ambiguity warnings to the returned page (B1)", async () => {
+test("MappingService getClassApiMatrix scopes ambiguity warnings to the returned page", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-page-"));
   try {
@@ -3160,18 +3160,18 @@ test("resolveTinyMappingFile yarn re-resolves the newest build after the metadat
     const clock = { t: 1_000_000 };
     const now = () => clock.t;
 
-    // Phase 1: first resolve -> fetches metadata, picks build.10, coordinate-keyed.
+    // First resolve -> fetches metadata, picks build.10, coordinate-keyed.
     const first = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
     assert.equal(first.coordinate, "1.21.1+build.10");
     assert.match(first.path, /1\.21\.1\+build\.10\.tiny$/);
     assert.equal(metadataFetches, 1);
 
-    // Phase 2: within TTL -> zero network, same coordinate (metadata fetch count unchanged).
+    // Within TTL -> zero network, same coordinate (metadata fetch count unchanged).
     const second = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
     assert.equal(second.coordinate, "1.21.1+build.10");
     assert.equal(metadataFetches, 1, "within TTL must not re-fetch maven metadata");
 
-    // Phase 3: TTL expires + Fabric publishes build.11 -> re-resolves to build.11.
+    // TTL expires + Fabric publishes build.11 -> re-resolves to build.11.
     clock.t += 25 * 60 * 60 * 1000; // > 24h TTL
     builds = ["1.21.1+build.10", "1.21.1+build.11"];
     const third = await resolveTinyMappingFile("1.21.1", "yarn", root, fetchStub, { now });
@@ -3179,7 +3179,7 @@ test("resolveTinyMappingFile yarn re-resolves the newest build after the metadat
     assert.match(third.path, /1\.21\.1\+build\.11\.tiny$/);
     assert.equal(metadataFetches, 2);
 
-    // Phase 4: TTL expires again but Maven is unreachable -> fall back to last-known-good
+    // TTL expires again but Maven is unreachable -> fall back to last-known-good
     // build.11 instead of throwing MAPPING_UNAVAILABLE.
     clock.t += 25 * 60 * 60 * 1000;
     metadataReachable = false;

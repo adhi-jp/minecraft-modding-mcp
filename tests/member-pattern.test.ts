@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { matchesMemberPattern } from "../src/source/member-pattern.ts";
 
-test("matchesMemberPattern: pipe pattern matches any alternative (B1/B2 regression)", () => {
+test("matchesMemberPattern: pipe pattern matches any alternative", () => {
   const pattern = "getStateForPlacement|canSurvive|setPlacedBy";
   assert.equal(matchesMemberPattern("getStateForPlacement", pattern), true);
   assert.equal(matchesMemberPattern("canSurvive", pattern), true);

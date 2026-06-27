@@ -847,7 +847,7 @@ export class MappingService {
 
     // Map ONLY the requested window. Per-row mapping cost is therefore O(window),
     // not O(rowCount). warnings/ambiguousRowCount are accordingly page-scoped on
-    // paginated calls (caveat B1) and byte-identical to the old full-set values when
+    // paginated calls and byte-identical to the old full-set values when
     // no maxRows/cursor narrows the window.
     const rows: ClassApiMatrixRow[] = [];
     let ambiguousRowCount = 0;

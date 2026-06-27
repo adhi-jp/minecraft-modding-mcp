@@ -372,7 +372,7 @@ test("SourceService resolves/searches/reads class source through artifactId flow
   // The resolver picks the sibling sources jar as canonical when present, so
   // the readable token reflects the resolver-canonical path (server-1.0.0-sources)
   // rather than the caller's request value (server-1.0.0.jar). This is the
-  // canonical-alias contract from cycle 3 F1: alias derives from the artifact
+  // canonical-alias contract: alias derives from the artifact
   // row, not from the user's request spelling.
   assert.match(
     resolved.artifactAlias,
@@ -1041,7 +1041,7 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
 });
 
 
-test("SourceService accepts artifactAlias on findClass and getClassSource (cycle 2 F1 regression)", async () => {
+test("SourceService accepts artifactAlias on findClass and getClassSource", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-alias-canonical-"));
   const binaryJarPath = join(root, "alias-canonical.jar");
@@ -1081,7 +1081,7 @@ test("SourceService accepts artifactAlias on findClass and getClassSource (cycle
   assert.equal(sourceResult.artifactId, resolved.artifactId);
 });
 
-test("SourceService produces identical alias when the same jar is resolved through a symlink (cycle 3 F1 regression)", async () => {
+test("SourceService produces identical alias when the same jar is resolved through a symlink", async () => {
   const { symlink } = await import("node:fs/promises");
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-alias-symlink-"));
@@ -1114,7 +1114,7 @@ test("SourceService produces identical alias when the same jar is resolved throu
   assert.match(file.content, /class Marker/);
 });
 
-test("SourceService backfills alias on warm-cache resolveArtifact (cycle 1 F1 regression)", async () => {
+test("SourceService backfills alias on warm-cache resolveArtifact", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-alias-backfill-"));
   const binaryJarPath = join(root, "warm-cache.jar");
@@ -3329,7 +3329,7 @@ test("SourceService rejects mojang binary-remap on jar inputs because the gate i
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-jar-mojang-gate-"));
   // A bare binary-only jar at an arbitrary path — the resolver cannot prove this
-  // is the vanilla Minecraft client jar. Phase 1.5 must refuse to apply Minecraft
+  // is the vanilla Minecraft client jar. The resolver must refuse to apply Minecraft
   // mappings to non-version artifacts even when the requested mapping is mojang.
   const localBinaryJarPath = join(root, "somelib-1.21.10.jar");
   await createJar(localBinaryJarPath, {
@@ -7466,9 +7466,9 @@ test("SourceService resolveArtifact returns undefined sampleEntries for decompil
 });
 
 // ---------------------------------------------------------------------------
-// B2/B3: resolveArtifact suggestedCall preserves representative scope/mapping hints
+// resolveArtifact suggestedCall preserves representative scope/mapping hints
 // ---------------------------------------------------------------------------
-test("B2/B3: resolveArtifact preserves representative suggestedCall hint variants", async (t) => {
+test("resolveArtifact preserves representative suggestedCall hint variants", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
 
   type ResolveArtifactHintFixture = {
@@ -7650,9 +7650,9 @@ test("B2/B3: resolveArtifact preserves representative suggestedCall hint variant
 });
 
 // ---------------------------------------------------------------------------
-// B1: CLASS_NOT_FOUND includes scope, target context, and retry hints
+// CLASS_NOT_FOUND includes scope, target context, and retry hints
 // ---------------------------------------------------------------------------
-test("B1: getClassSource CLASS_NOT_FOUND preserves representative context details", async (t) => {
+test("getClassSource CLASS_NOT_FOUND preserves representative context details", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
 
   type ClassNotFoundFixture = {
@@ -7773,9 +7773,9 @@ test("B1: getClassSource CLASS_NOT_FOUND preserves representative context detail
 });
 
 // ---------------------------------------------------------------------------
-// B4: version-approximated flag when source jar doesn't contain exact version
+// version-approximated flag when source jar doesn't contain exact version
 // ---------------------------------------------------------------------------
-test("B4: resolveArtifact flags representative version-approximated mismatches", { concurrency: false }, async (t) => {
+test("resolveArtifact flags representative version-approximated mismatches", { concurrency: false }, async (t) => {
   const cases: Array<{
     name: string;
     rootPrefix: string;
@@ -7839,9 +7839,9 @@ test("B4: resolveArtifact flags representative version-approximated mismatches",
 });
 
 // ---------------------------------------------------------------------------
-// B5: compact search output omits totalApprox
+// compact search output omits totalApprox
 // ---------------------------------------------------------------------------
-test("B5: searchClassSource omits totalApprox from compact search results", async () => {
+test("searchClassSource omits totalApprox from compact search results", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-b5-totalapprox-"));
   const binaryJarPath = join(root, "server-b5.jar");
@@ -10917,7 +10917,7 @@ test("SourceService validateMixin quickSummary surfaces vanilla fallback after s
   assert.match(single!.quickSummary!, /Loom cache empty/);
 });
 
-test("SourceService getClassSource flags decompiled origin as compile-unverified (B3)", async () => {
+test("SourceService getClassSource flags decompiled origin as compile-unverified", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-b3-decompiled-"));
   const service = new SourceService(buildTestConfig(root));
@@ -10963,7 +10963,7 @@ test("SourceService getClassSource flags decompiled origin as compile-unverified
   );
 });
 
-test("SourceService getClassSource does not flag non-decompiled origin (B3 negative)", async () => {
+test("SourceService getClassSource does not flag non-decompiled origin", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-b3-sourcejar-"));
   const service = new SourceService(buildTestConfig(root));
@@ -11004,7 +11004,7 @@ test("SourceService getClassSource does not flag non-decompiled origin (B3 negat
   assert.ok(!result.warnings.some((warning) => warning.includes("get-class-members")));
 });
 
-test("SourceService getClassMembers projects decompiledFallback members per projection (AC2.6)", async () => {
+test("SourceService getClassMembers projects decompiledFallback members per projection", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-decompiled-projection-"));
   const service = new SourceService(buildTestConfig(root));
@@ -11063,7 +11063,7 @@ test("SourceService getClassMembers projects decompiledFallback members per proj
   assert.ok("line" in fullMember && "kind" in fullMember, "full projection keeps line and kind");
 });
 
-test("SourceService getClassMembers applies '|'-OR memberPattern to decompiledFallback (Slice 1, decompiled site)", async () => {
+test("SourceService getClassMembers applies '|'-OR memberPattern to decompiledFallback", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-decompiled-or-pattern-"));
   const service = new SourceService(buildTestConfig(root));

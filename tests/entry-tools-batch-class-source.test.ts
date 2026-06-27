@@ -276,7 +276,7 @@ test("E1/E8: warnings flow into per-entry envelope (not inline in result)", asyn
   assert.ok(!("warnings" in entry.result), "warnings must be lifted out of result.");
 });
 
-test("F1: duplicate className entries each produce a result (no de-duplication)", async () => {
+test("duplicate className entries each produce a result (no de-duplication)", async () => {
   const { deps } = buildDeps({});
   const service = new BatchClassSourceService(deps);
   const out = await service.execute({
@@ -287,7 +287,7 @@ test("F1: duplicate className entries each produce a result (no de-duplication)"
   assert.equal(out.summary.ok, 2);
 });
 
-test("F1: per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource", async () => {
+test("per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource", async () => {
   const seen: GetClassSourceInput[] = [];
   const deps: BatchClassSourceDeps = {
     resolveArtifact: async () => buildResolved(),

@@ -90,7 +90,7 @@ function stubExplorer(
   };
 }
 
-test("B1: get-class-members status=ok when total > 0", async () => {
+test("get-class-members status=ok when total > 0", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b1-"));
   const service = new SourceService(buildTestConfig(root));
@@ -129,7 +129,7 @@ test("B1: get-class-members status=ok when total > 0", async () => {
   assert.equal(result.suggestedCall, undefined);
 });
 
-test("B2: status=ok when binary returns 0 members and decompiled fallback also yields 0", async () => {
+test("status=ok when binary returns 0 members and decompiled fallback also yields 0", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b2-"));
   const service = new SourceService(buildTestConfig(root));
@@ -156,7 +156,7 @@ test("B2: status=ok when binary returns 0 members and decompiled fallback also y
   assert.equal(result.status, "ok");
 });
 
-test("B3: status=partial when decompiled fallback rescues the call", async () => {
+test("status=partial when decompiled fallback rescues the call", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b3-"));
   const service = new SourceService(buildTestConfig(root));
@@ -194,7 +194,7 @@ test("B3: status=partial when decompiled fallback rescues the call", async () =>
   assert.ok(result.qualityFlags.includes("members-from-decompiled-source"));
 });
 
-test("B4: status=members_unavailable with suggestedCall when binary fails and no fallback", async () => {
+test("status=members_unavailable with suggestedCall when binary fails and no fallback", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b4-"));
   const service = new SourceService(buildTestConfig(root));
@@ -229,7 +229,7 @@ test("B4: status=members_unavailable with suggestedCall when binary fails and no
   );
 });
 
-test("B5: getSignature throw is captured into status, not propagated", async () => {
+test("getSignature throw is captured into status, not propagated", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b5-"));
   const service = new SourceService(buildTestConfig(root));
@@ -255,7 +255,7 @@ test("B5: getSignature throw is captured into status, not propagated", async () 
   assert.match(result.unavailableReason ?? "", /EBADF/);
 });
 
-test("B6: LivingEntity-style regression — never status=ok with counts.total === 0 when binary fails", async () => {
+test("LivingEntity-style regression — never status=ok with counts.total === 0 when binary fails", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "members-status-b6-"));
   const service = new SourceService(buildTestConfig(root));
@@ -282,7 +282,7 @@ test("B6: LivingEntity-style regression — never status=ok with counts.total ==
   assert.notEqual(result.status, "ok", "status must NOT be ok when total=0 and binary failed");
 });
 
-test("B7: MEMBERS_STATUS_LEGACY=1 strips the new fields", async () => {
+test("MEMBERS_STATUS_LEGACY=1 strips the new fields", async () => {
   const root = await mkdtemp(join(tmpdir(), "members-status-b7-"));
   const { spawnSync } = await import("node:child_process");
   const script = `
@@ -358,7 +358,7 @@ test("B7: MEMBERS_STATUS_LEGACY=1 strips the new fields", async () => {
   assert.equal(out.total, 1);
 });
 
-test("B8: stripping status leaves byte-identical primary fields across normal/empty/partial-source cases", async () => {
+test("stripping status leaves byte-identical primary fields across normal/empty/partial-source cases", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const stripStatus = (obj: Record<string, unknown>): Record<string, unknown> => {
     const copy: Record<string, unknown> = { ...obj };

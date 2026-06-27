@@ -143,7 +143,7 @@ test("detectDependencyVersion reads camelCase property fabricApiVersion", async 
   }
 });
 
-test("detectDependencyVersion resolves a fabric-api submodule via the umbrella property (B5)", async () => {
+test("detectDependencyVersion resolves a fabric-api submodule via the umbrella property", async () => {
   const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "dep-version-fabric-submodule-"));
   // Only the umbrella version is declared, as is conventional for Fabric API submodules.

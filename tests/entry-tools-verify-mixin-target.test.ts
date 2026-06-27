@@ -155,7 +155,7 @@ test("C3: name match with descriptor mismatch returns exists=false plus descript
   assert.equal(
     result.accessorAdvice,
     undefined,
-    "accessorAdvice must NOT be emitted when exists=false (F3 fix)"
+    "accessorAdvice must NOT be emitted when exists=false"
   );
 });
 
@@ -195,7 +195,7 @@ test("C4: method not found by name returns nearest neighbors via suggestSimilar"
   assert.equal(
     result.accessorAdvice,
     undefined,
-    "accessorAdvice must NOT be emitted when exists=false (F3 fix)"
+    "accessorAdvice must NOT be emitted when exists=false"
   );
 });
 

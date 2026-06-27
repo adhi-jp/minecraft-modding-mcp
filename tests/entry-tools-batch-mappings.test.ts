@@ -106,7 +106,7 @@ test("E7: per-entry retry suggestedCall proposes find-mapping and validates", as
   assert.equal(validateToolParams(suggested!.tool, suggested!.params).valid, true);
 });
 
-test("F4: per-entry version is rejected by the schema (entries[].version unknown key)", async () => {
+test("per-entry version is rejected by the schema (entries[].version unknown key)", async () => {
   const { getToolSchema } = await import("../src/tool-schema-registry.ts");
   const schema = getToolSchema("batch-mappings");
   assert.ok(schema, "batch-mappings schema must be registered");
@@ -186,7 +186,7 @@ test("schema: batch-symbol-exists rejects target.kind=dependency", async () => {
   assert.equal(parsed.success, false);
 });
 
-test("F4: schema rejects batch-mappings call with omitted top-level version", async () => {
+test("schema rejects batch-mappings call with omitted top-level version", async () => {
   const { getToolSchema } = await import("../src/tool-schema-registry.ts");
   const schema = getToolSchema("batch-mappings")!;
   const parsed = schema.safeParse({

@@ -308,7 +308,7 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
         // Decompilation failed BEFORE the artifact was ever upserted, so there is no
         // queryable artifact. Deliberately omit artifactId from the error: exposing the
         // would-be id led callers to pass it to find-class/get-class-*, which then failed
-        // with "Artifact not found. Resolve context first." (B5 state inconsistency).
+        // with "Artifact not found. Resolve context first." — a state inconsistency.
         const priorDetails = { ...(caughtError.details as Record<string, unknown> | undefined ?? {}) };
         delete priorDetails.artifactId;
         throw createError({
