@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { mapWithConcurrencyLimit } from "../../../concurrency.js";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
@@ -226,56 +227,84 @@ let mixinCaughtErrors = 0;
 await safeEmit(options.stageEmitter,"validate-project:mixin-validation", {
   targetTotal: mixinConfigs.length
 });
-for (const [mixinIndex, configPath] of mixinConfigs.entries()) {
-  try {
-    await safeEmit(options.stageEmitter,"validate-project:mixin-validation", {
-      targetIndex: mixinIndex + 1,
-      targetTotal: mixinConfigs.length,
-      configPath
-    });
-    const mixinResult = await deps.validateMixin({
-      input: {
-        mode: "config",
-        configPaths: [configPath]
-      },
-      version: validationVersion,
-      mapping: input.mapping,
-      sourcePriority: input.sourcePriority,
-      scope: input.scope,
-      projectPath,
-      gradleUserHome,
-      preferProjectVersion: false,
-      preferProjectMapping: input.preferProjectMapping,
-      sourceRoots: input.sourceRoots,
-      minSeverity: input.minSeverity,
-      hideUncertain: input.hideUncertain,
-      explain: input.explain,
-      warningMode: input.warningMode,
-      warningCategoryFilter: input.warningCategoryFilter,
-      treatInfoAsWarning: input.treatInfoAsWarning,
-      includeIssues: input.includeIssues,
-      reportMode: input.reportMode
-    }, {
-      stageEmitter: wrappedEmitter
-    });
-    const summary = mixinResult.summary as {
-      valid?: number;
-      partial?: number;
-      invalid?: number;
-    } | undefined;
-    validMixins += summary?.valid ?? 0;
-    partialMixins += summary?.partial ?? 0;
-    invalidMixins += summary?.invalid ?? 0;
-    if (Array.isArray(mixinResult.warnings)) {
-      warnings.push(...mixinResult.warnings);
-    }
-  } catch (error) {
-    invalidMixins += 1;
-    mixinCaughtErrors += 1;
-    if (error instanceof Error) {
-      warnings.push(`${configPath}: ${error.message}`);
+// Validate mixin configs with bounded concurrency (default 4, matching the
+// batch tools). Each unit returns its own counts/warnings; aggregation happens
+// afterward in input order so totals and warning order are identical to a
+// sequential run. Concurrent validateMixin against one SourceService is already
+// exercised by the batch-class-* tools (shared artifact resolution, idempotent
+// caches, synchronous SQLite), so this adds no new shared-state hazard.
+const MIXIN_VALIDATION_CONCURRENCY = 4;
+type MixinUnitResult = {
+  valid: number;
+  partial: number;
+  invalid: number;
+  caught: number;
+  warnings: string[];
+};
+const mixinResults = await mapWithConcurrencyLimit(
+  mixinConfigs,
+  MIXIN_VALIDATION_CONCURRENCY,
+  async (configPath, mixinIndex): Promise<MixinUnitResult> => {
+    try {
+      await safeEmit(options.stageEmitter, "validate-project:mixin-validation", {
+        targetIndex: mixinIndex + 1,
+        targetTotal: mixinConfigs.length,
+        configPath
+      });
+      const mixinResult = await deps.validateMixin({
+        input: {
+          mode: "config",
+          configPaths: [configPath]
+        },
+        version: validationVersion,
+        mapping: input.mapping,
+        sourcePriority: input.sourcePriority,
+        scope: input.scope,
+        projectPath,
+        gradleUserHome,
+        preferProjectVersion: false,
+        preferProjectMapping: input.preferProjectMapping,
+        sourceRoots: input.sourceRoots,
+        minSeverity: input.minSeverity,
+        hideUncertain: input.hideUncertain,
+        explain: input.explain,
+        warningMode: input.warningMode,
+        warningCategoryFilter: input.warningCategoryFilter,
+        treatInfoAsWarning: input.treatInfoAsWarning,
+        includeIssues: input.includeIssues,
+        reportMode: input.reportMode
+      }, {
+        stageEmitter: wrappedEmitter
+      });
+      const summary = mixinResult.summary as {
+        valid?: number;
+        partial?: number;
+        invalid?: number;
+      } | undefined;
+      return {
+        valid: summary?.valid ?? 0,
+        partial: summary?.partial ?? 0,
+        invalid: summary?.invalid ?? 0,
+        caught: 0,
+        warnings: Array.isArray(mixinResult.warnings) ? [...mixinResult.warnings] : []
+      };
+    } catch (error) {
+      return {
+        valid: 0,
+        partial: 0,
+        invalid: 1,
+        caught: 1,
+        warnings: error instanceof Error ? [`${configPath}: ${error.message}`] : []
+      };
     }
   }
+);
+for (const result of mixinResults) {
+  validMixins += result.valid;
+  partialMixins += result.partial;
+  invalidMixins += result.invalid;
+  mixinCaughtErrors += result.caught;
+  warnings.push(...result.warnings);
 }
 const mixinDurationMs = Date.now() - mixinDurationStart;
 

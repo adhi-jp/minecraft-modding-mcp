@@ -20,6 +20,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - `memberPattern` (`get-class-members` / `batch-class-members`) treats `"|"` as OR alternation, so a natural pattern like `"getStateForPlacement|canSurvive|setPlacedBy"` matches any of those members. Previously the pattern was matched as a single literal substring, so a piped pattern searched for a name containing a literal `"|"` and returned zero members on large vanilla classes such as `Block` and `EntityRenderer`. Single-token patterns keep their case-insensitive substring behavior. The parameter description now documents the substring + OR semantics.
 
+### Performance
+
+- `validate-project` (`project-summary`) validates discovered mixin configs with bounded concurrency (default 4) instead of one at a time; aggregate counts and warning order are identical to the previous sequential behavior.
+
 ## [6.0.0] - 2026-06-25
 
 ### Changed

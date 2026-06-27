@@ -405,3 +405,77 @@ test("validate-project task stages: project summary emits task-report and artifa
   assert.ok(stages.some((entry) => entry.stage === "validate-project:task-report"));
   assert.ok(stages.some((entry) => entry.stage === "validate-project:artifact-probe"));
 });
+
+test("validate-project mixin validation: parallel aggregation matches sequential (counts, warning order, failure isolation)", async () => {
+  const root = await makeWorkspace("validate-project-parallel-mixins-");
+  await writeBareGradleWorkspace(root);
+  const configs = ["a", "b", "c", "d"].map((n) => join(root, `${n}.mixins.json`));
+
+  const calls: string[] = [];
+  const makeService = () =>
+    new ValidateProjectService({
+      validateMixin: async (input: Record<string, unknown>) => {
+        const cfg = ((input.input as { configPaths: string[] }).configPaths)[0];
+        calls.push(cfg);
+        if (cfg.endsWith("a.mixins.json")) return { summary: { valid: 1, partial: 0, invalid: 0 }, warnings: [] };
+        if (cfg.endsWith("b.mixins.json")) return { summary: { valid: 0, partial: 1, invalid: 0 }, warnings: ["warn-b"] };
+        if (cfg.endsWith("c.mixins.json")) return { summary: { valid: 0, partial: 0, invalid: 1 }, warnings: ["warn-c"] };
+        throw new Error("boom"); // d: a throwing validator must not abort the others
+      },
+      validateAccessWidener: async () => ({ valid: true, issues: [], warnings: [] }),
+      discoverMixins: async () => configs,
+      discoverAccessWideners: async () => [],
+      discoverAccessTransformers: async () => [],
+      resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+    });
+
+  const run = async (stages?: Array<{ stage: string; meta: Record<string, unknown> }>) =>
+    (await makeService().execute(
+      {
+        task: "project-summary",
+        detail: "full",
+        include: ["workspace"],
+        version: "1.21.10",
+        subject: { kind: "workspace", projectPath: root, discover: ["mixins"] }
+      },
+      stages
+        ? { stageEmitter: (stage: string, meta: Record<string, unknown>) => { stages.push({ stage, meta }); } }
+        : {}
+    )) as Result & { summary: { counts: Record<string, number> } };
+
+  const stages: Array<{ stage: string; meta: Record<string, unknown> }> = [];
+  const result = await run(stages);
+
+  // AC5.1: aggregate counts equal the sequential result (valid 1, partial 1,
+  // invalid 2 = c's invalid + d's caught error).
+  assert.equal(result.summary.counts.valid, 1);
+  assert.equal(result.summary.counts.partial, 1);
+  assert.equal(result.summary.counts.invalid, 2);
+
+  // AC5.4: every mixin was validated; the throwing one did not abort the batch.
+  assert.equal(calls.length, 4);
+
+  // AC5.3: per-mixin progress is still emitted during parallel validation (one
+  // mixin-validation event carrying targetIndex per config; order may vary).
+  const perMixinEmits = stages.filter(
+    (s) => s.stage === "validate-project:mixin-validation" && typeof s.meta.targetIndex === "number"
+  );
+  assert.equal(perMixinEmits.length, 4, "each mixin must emit a progress event");
+  assert.deepEqual(
+    perMixinEmits.map((s) => s.meta.targetIndex).sort((a, b) => (a as number) - (b as number)),
+    [1, 2, 3, 4]
+  );
+
+  // AC5.2: warnings appear in input order regardless of completion order.
+  const warnings = result.warnings ?? [];
+  const idxB = warnings.indexOf("warn-b");
+  const idxC = warnings.indexOf("warn-c");
+  const idxD = warnings.findIndex((w) => w.includes("d.mixins.json") && w.includes("boom"));
+  assert.ok(idxB >= 0 && idxC >= 0 && idxD >= 0, `expected all warnings present: ${JSON.stringify(warnings)}`);
+  assert.ok(idxB < idxC && idxC < idxD, `warnings must be in input order: ${JSON.stringify(warnings)}`);
+
+  // Determinism: a second identical run yields the same warning order.
+  calls.length = 0;
+  const second = await run();
+  assert.deepEqual(second.warnings, result.warnings);
+});
