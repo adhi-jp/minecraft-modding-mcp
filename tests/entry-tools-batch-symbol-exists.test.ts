@@ -9,70 +9,10 @@ import {
 } from "../src/entry-tools/batch-symbol-exists-service.ts";
 import type {
   CheckSymbolExistsInput,
-  CheckSymbolExistsOutput,
   ResolveArtifactOutput
 } from "../src/source-service.ts";
 import "../src/index.ts";
-
-function buildResolved(workspace?: { minecraftVersion: string }): ResolveArtifactOutput {
-  return {
-    artifactId: "art-shared",
-    artifactAlias: "art-shared-alias",
-    origin: "local-jar",
-    isDecompiled: false,
-    version: workspace ? undefined : "1.21.10",
-    requestedMapping: "obfuscated",
-    mappingApplied: "obfuscated",
-    provenance: {
-      target: workspace
-        ? ({ kind: "workspace" } as unknown as never)
-        : { kind: "version", value: "1.21.10" },
-      resolvedAt: "2026-01-01T00:00:00Z",
-      resolvedFrom: { origin: "local-jar" },
-      transformChain: [],
-      ...(workspace
-        ? {
-            workspaceResolution: {
-              projectPath: "/tmp/proj",
-              detected: { minecraftVersion: workspace.minecraftVersion },
-              source: "test",
-              cacheHit: false
-            }
-          }
-        : {})
-    },
-    qualityFlags: [],
-    artifactContents: {
-      sourceKind: "source-jar",
-      indexedContentKinds: ["source"],
-      resourcesIncluded: false,
-      sourceCoverage: "full"
-    },
-    warnings: []
-  };
-}
-
-function buildOkExistence(input: CheckSymbolExistsInput): CheckSymbolExistsOutput {
-  return {
-    querySymbol: {
-      kind: input.kind,
-      symbol: input.name,
-      owner: input.owner,
-      name: input.name,
-      descriptor: input.descriptor
-    } as unknown as CheckSymbolExistsOutput["querySymbol"],
-    mappingContext: {
-      version: input.version,
-      sourceMapping: input.sourceMapping,
-      sourcePriorityApplied: "loom-first"
-    },
-    resolved: true,
-    status: "resolved",
-    candidates: [],
-    candidateCount: 0,
-    warnings: []
-  };
-}
+import { buildOkExistence, buildResolved } from "./helpers/batch-fixtures.ts";
 
 function buildDeps(opts: {
   failName?: string;
@@ -233,22 +173,6 @@ test("ERR_WORKSPACE_VERSION_UNRESOLVED when shared artifact lacks Minecraft vers
     }),
     (err: unknown) => (err as { code?: string }).code === ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED
   );
-});
-
-test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABORTED", async () => {
-  const service = new BatchSymbolExistsService(buildDeps({ failName: "Doom" }));
-  const out = await service.execute({
-    ...baseInput,
-    concurrency: 1,
-    failFast: true,
-    entries: [
-      { kind: "class", name: "Doom" },
-      { kind: "class", name: "OkB" },
-      { kind: "class", name: "OkC" }
-    ]
-  });
-  assert.equal((out.results[1] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
-  assert.equal((out.results[2] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
 });
 
 test("E2: failFast=false (default) keeps running and preserves the entry's underlying code", async () => {

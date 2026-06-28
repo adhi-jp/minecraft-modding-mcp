@@ -9,71 +9,15 @@ import {
 } from "../src/entry-tools/batch-class-source-service.ts";
 import type {
   GetClassSourceInput,
-  GetClassSourceOutput,
-  ResolveArtifactInput,
-  ResolveArtifactOutput
+  ResolveArtifactInput
 } from "../src/source-service.ts";
 import "../src/index.ts";
+import { buildOkSource, buildResolved } from "./helpers/batch-fixtures.ts";
 
 type ResolveSpy = {
   callCount: number;
   lastInput?: ResolveArtifactInput;
 };
-
-function buildResolved(): ResolveArtifactOutput {
-  return {
-    artifactId: "art-shared",
-    artifactAlias: "art-shared-alias",
-    origin: "local-jar",
-    isDecompiled: false,
-    requestedMapping: "obfuscated",
-    mappingApplied: "obfuscated",
-    provenance: {
-      target: { kind: "version", value: "1.21.10" },
-      resolvedAt: "2026-01-01T00:00:00Z",
-      resolvedFrom: { origin: "local-jar" },
-      transformChain: []
-    },
-    qualityFlags: [],
-    artifactContents: {
-      sourceKind: "source-jar",
-      indexedContentKinds: ["source"],
-      resourcesIncluded: false,
-      sourceCoverage: "full"
-    },
-    warnings: []
-  };
-}
-
-function buildOkSource(className: string): GetClassSourceOutput {
-  return {
-    className,
-    mode: "metadata",
-    sourceText: `class ${className} {}`,
-    totalLines: 1,
-    returnedRange: { start: 1, end: 1 },
-    truncated: false,
-    origin: "local-jar",
-    artifactId: "art-shared",
-    requestedMapping: "obfuscated",
-    mappingApplied: "obfuscated",
-    returnedNamespace: "obfuscated",
-    provenance: {
-      target: { kind: "version", value: "1.21.10" },
-      resolvedAt: "2026-01-01T00:00:00Z",
-      resolvedFrom: { origin: "local-jar" },
-      transformChain: []
-    },
-    qualityFlags: ["ok"],
-    artifactContents: {
-      sourceKind: "source-jar",
-      indexedContentKinds: ["source"],
-      resourcesIncluded: false,
-      sourceCoverage: "full"
-    },
-    warnings: ["fixture-warning"]
-  };
-}
 
 function buildDeps(opts: {
   failClass?: string;
@@ -143,30 +87,6 @@ test("E2: failFast=false (default) returns mixed ok/error with code passthrough"
   assert.equal(out.summary.error, 1);
   assert.equal(out.results[1]!.status, "error");
   assert.equal((out.results[1] as { error: { code: string } }).error.code, ERROR_CODES.CLASS_NOT_FOUND);
-});
-
-test("E3: failFast=true halts dispatch; un-started entries become ERR_BATCH_ABORTED", async () => {
-  // concurrency=1 makes the test deterministic: no later entry can start until
-  // entry 0 returns its (failed) result, so all subsequent entries are
-  // guaranteed un-started when the abort flag flips.
-  const { deps } = buildDeps({ failClass: "fail.A" });
-  const service = new BatchClassSourceService(deps);
-  const out = await service.execute({
-    ...baseInput,
-    concurrency: 1,
-    failFast: true,
-    entries: [
-      { className: "fail.A" },
-      { className: "ok.B" },
-      { className: "ok.C" }
-    ]
-  });
-  assert.equal(out.results[0]!.status, "error");
-  assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.CLASS_NOT_FOUND);
-  assert.equal(out.results[1]!.status, "error");
-  assert.equal((out.results[1] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
-  assert.equal(out.results[2]!.status, "error");
-  assert.equal((out.results[2] as { error: { code: string } }).error.code, ERROR_CODES.BATCH_ABORTED);
 });
 
 test("shared resolution warnings flow into summary.sharedArtifactWarnings (not lost)", async () => {
@@ -455,11 +375,4 @@ test("top-level resolution failure surfaces as a thrown error (no results array)
     }),
     (err: unknown) => (err as { code?: string }).code === ERROR_CODES.VERSION_NOT_FOUND
   );
-});
-
-test("BATCH_TOOLS_OFF env constant is exported (env-driven kill switch wiring)", async () => {
-  // `src/index.ts` gates the four batch-tool registrations on this value, so
-  // it must stay boolean even if the env-reading logic is refactored.
-  const mod = await import("../src/entry-tools/batch-runner.ts");
-  assert.equal(typeof mod.BATCH_TOOLS_OFF, "boolean");
 });

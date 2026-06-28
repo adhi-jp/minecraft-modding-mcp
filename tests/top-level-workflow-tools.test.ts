@@ -18,6 +18,7 @@ import {
   ValidateProjectService,
   validateProjectSchema
 } from "../src/entry-tools/validate-project-service.ts";
+import { buildInspectDeps } from "./helpers/inspect-deps.ts";
 
 test("top-level workflow tool schemas expose explicit defaults on safe public parameters", async () => {
   const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
@@ -113,8 +114,7 @@ test("inspectMinecraftSchema applies defaults while keeping non-version includeS
 
 test("InspectMinecraftService preserves gradleUserHome through schema parsing and artifact resolution", async () => {
   let seenGradleUserHome: string | undefined;
-  const service = new InspectMinecraftService({
-    listVersions: async () => ({ versions: [], cached: false }),
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input: { gradleUserHome?: string }) => {
       seenGradleUserHome = input.gradleUserHome;
       return {
@@ -140,15 +140,8 @@ test("InspectMinecraftService preserves gradleUserHome through schema parsing an
         },
         warnings: []
       } as any;
-    },
-    findClass: async () => ({ matches: [], total: 0, warnings: [] }),
-    getClassSource: async () => ({} as any),
-    getClassMembers: async () => ({} as any),
-    searchClassSource: async () => ({} as any),
-    getArtifactFile: async () => ({} as any),
-    listArtifactFiles: async () => ({} as any),
-    detectProjectMinecraftVersion: async () => undefined
-  } as any);
+    }
+  }));
 
   const parsed = inspectMinecraftSchema.parse({
     task: "artifact",
@@ -167,23 +160,15 @@ test("InspectMinecraftService preserves gradleUserHome through schema parsing an
 });
 
 test("InspectMinecraftService task=versions surfaces the listVersions clamp warning", async () => {
-  const service = new InspectMinecraftService({
+  const service = new InspectMinecraftService(buildInspectDeps({
     listVersions: async () => ({
       latest: { release: "1.21.10" },
       releases: [{ id: "1.21.10", unobfuscated: true }],
       cached: [],
       totalAvailable: 1,
       warnings: ["limit was clamped to 200 from 100000."]
-    }),
-    resolveArtifact: async () => ({} as any),
-    findClass: async () => ({ matches: [], total: 0, warnings: [] }),
-    getClassSource: async () => ({} as any),
-    getClassMembers: async () => ({} as any),
-    searchClassSource: async () => ({} as any),
-    getArtifactFile: async () => ({} as any),
-    listArtifactFiles: async () => ({} as any),
-    detectProjectMinecraftVersion: async () => undefined
-  } as any);
+    })
+  }));
 
   const result = (await service.execute({
     task: "versions",
@@ -198,10 +183,7 @@ test("InspectMinecraftService task=versions surfaces the listVersions clamp warn
 });
 
 test("InspectMinecraftService returns ambiguous class overview with follow-up candidates", async () => {
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async () => ({
       artifactId: "artifact-1",
       origin: "local-jar",
@@ -236,23 +218,8 @@ test("InspectMinecraftService returns ambiguous class overview with follow-up ca
         }
       ]
     }),
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => undefined
-  });
+  }));
 
   const result = await service.execute({
     task: "class-overview",
@@ -283,10 +250,7 @@ test("InspectMinecraftService auto routes workspace search focus through project
     strictVersion?: boolean;
   }> = [];
   let searchCalls = 0;
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => {
       resolveArtifactCalls.push(input);
       return {
@@ -306,15 +270,6 @@ test("InspectMinecraftService auto routes workspace search focus through project
         },
         warnings: []
       };
-    },
-    findClass: async () => {
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
     },
     searchClassSource: async (input) => {
       searchCalls += 1;
@@ -338,14 +293,8 @@ test("InspectMinecraftService auto routes workspace search focus through project
         warnings: []
       };
     },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     detail: "summary",
@@ -406,10 +355,7 @@ test("InspectMinecraftService falls back to binary-backed metadata for workspace
   let checkSymbolExistsCalls = 0;
   let getClassSourceCalls = 0;
 
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-partial",
       origin: "local-jar",
@@ -474,20 +420,8 @@ test("InspectMinecraftService falls back to binary-backed metadata for workspace
         ]
       };
     },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "class-overview",
@@ -521,10 +455,7 @@ test("InspectMinecraftService falls back to binary-backed metadata for workspace
 test("InspectMinecraftService returns binary-backed class hits for workspace search when partial sources omit vanilla matches", async () => {
   let checkSymbolExistsCalls = 0;
 
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-search-partial",
       origin: "local-jar",
@@ -543,9 +474,6 @@ test("InspectMinecraftService returns binary-backed class hits for workspace sea
       },
       warnings: ["Source coverage does not include net.minecraft."]
     }),
-    findClass: async () => {
-      throw new Error("not used");
-    },
     checkSymbolExists: async (input) => {
       checkSymbolExistsCalls += 1;
       assert.equal(input.kind, "class");
@@ -569,12 +497,6 @@ test("InspectMinecraftService returns binary-backed class hits for workspace sea
         warnings: []
       };
     },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
     searchClassSource: async () => ({
       hits: [],
       nextCursor: undefined,
@@ -587,14 +509,8 @@ test("InspectMinecraftService returns binary-backed class hits for workspace sea
         sourceCoverage: "partial"
       }
     }),
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "search",
@@ -624,10 +540,7 @@ test("InspectMinecraftService returns binary-backed class hits for workspace sea
 test("InspectMinecraftService prepends a binary-backed vanilla class hit when workspace partial-source search only finds non-vanilla matches", async () => {
   let checkSymbolExistsCalls = 0;
 
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-search-partial",
       origin: "local-jar",
@@ -646,9 +559,6 @@ test("InspectMinecraftService prepends a binary-backed vanilla class hit when wo
       },
       warnings: ["Source coverage does not include net.minecraft."]
     }),
-    findClass: async () => {
-      throw new Error("not used");
-    },
     checkSymbolExists: async (input) => {
       checkSymbolExistsCalls += 1;
       assert.equal(input.kind, "class");
@@ -670,12 +580,6 @@ test("InspectMinecraftService prepends a binary-backed vanilla class hit when wo
         candidateCount: 1,
         warnings: []
       };
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
     },
     searchClassSource: async () => ({
       hits: [
@@ -702,14 +606,8 @@ test("InspectMinecraftService prepends a binary-backed vanilla class hit when wo
         sourceCoverage: "partial"
       }
     }),
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "search",
@@ -741,10 +639,7 @@ test("InspectMinecraftService prepends a binary-backed vanilla class hit when wo
 });
 
 test("InspectMinecraftService uses the outer source file path for binary-backed inner class search hits", async () => {
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-search-partial",
       origin: "local-jar",
@@ -763,9 +658,6 @@ test("InspectMinecraftService uses the outer source file path for binary-backed 
       },
       warnings: ["Source coverage does not include net.minecraft."]
     }),
-    findClass: async () => {
-      throw new Error("not used");
-    },
     checkSymbolExists: async () => ({
       resolved: true,
       status: "resolved",
@@ -783,12 +675,6 @@ test("InspectMinecraftService uses the outer source file path for binary-backed 
       candidateCount: 1,
       warnings: []
     }),
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
     searchClassSource: async () => ({
       hits: [],
       nextCursor: undefined,
@@ -801,14 +687,8 @@ test("InspectMinecraftService uses the outer source file path for binary-backed 
         sourceCoverage: "partial"
       }
     }),
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "search",
@@ -833,10 +713,7 @@ test("InspectMinecraftService uses the outer source file path for binary-backed 
 test("InspectMinecraftService skips binary-backed class lookup for lowercase workspace search queries", async () => {
   let checkSymbolExistsCalls = 0;
 
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-search-partial",
       origin: "local-jar",
@@ -855,17 +732,8 @@ test("InspectMinecraftService skips binary-backed class lookup for lowercase wor
       },
       warnings: ["Source coverage does not include net.minecraft."]
     }),
-    findClass: async () => {
-      throw new Error("not used");
-    },
     checkSymbolExists: async () => {
       checkSymbolExistsCalls += 1;
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
       throw new Error("not used");
     },
     searchClassSource: async () => ({
@@ -880,14 +748,8 @@ test("InspectMinecraftService skips binary-backed class lookup for lowercase wor
         sourceCoverage: "partial"
       }
     }),
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "search",
@@ -910,10 +772,7 @@ test("InspectMinecraftService skips binary-backed class lookup for lowercase wor
 });
 
 test("InspectMinecraftService marks workspace list-files results as partial when source coverage excludes net.minecraft", async () => {
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => ({
       artifactId: "artifact-files-partial",
       origin: "local-jar",
@@ -932,22 +791,7 @@ test("InspectMinecraftService marks workspace list-files results as partial when
       },
       warnings: ["Source coverage does not include net.minecraft."]
     }),
-    findClass: async () => {
-      throw new Error("not used");
-    },
     checkSymbolExists: async () => {
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
       throw new Error("not used");
     },
     listArtifactFiles: async () => ({
@@ -963,7 +807,7 @@ test("InspectMinecraftService marks workspace list-files results as partial when
       warnings: []
     }),
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "list-files",
@@ -986,7 +830,7 @@ test("InspectMinecraftService marks workspace list-files results as partial when
 });
 
 test("InspectMinecraftService omits includeSnapshots=false from versions summary subject", async () => {
-  const service = new InspectMinecraftService({
+  const service = new InspectMinecraftService(buildInspectDeps({
     listVersions: async () => ({
       latest: {
         release: "1.21.10",
@@ -996,30 +840,8 @@ test("InspectMinecraftService omits includeSnapshots=false from versions summary
       snapshots: [],
       cached: ["1.21.10"],
       totalAvailable: 1
-    }),
-    resolveArtifact: async () => {
-      throw new Error("not used");
-    },
-    findClass: async () => {
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
-    detectProjectMinecraftVersion: async () => undefined
-  });
+    })
+  }));
 
   const result = await service.execute({
     task: "versions",
@@ -1104,10 +926,7 @@ test("InspectMinecraftService preserves workspace context for file focus without
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
   }> = [];
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => {
       resolveArtifactCalls.push(input);
       return {
@@ -1128,18 +947,6 @@ test("InspectMinecraftService preserves workspace context for file focus without
         warnings: []
       };
     },
-    findClass: async () => {
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
-    },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
     getArtifactFile: async (input) => ({
       artifactId: input.artifactId,
       filePath: input.filePath,
@@ -1156,11 +963,8 @@ test("InspectMinecraftService preserves workspace context for file focus without
       },
       warnings: []
     }),
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.11"
-  });
+  }));
 
   const result = await service.execute({
     task: "file",
@@ -1200,10 +1004,7 @@ test("InspectMinecraftService preserves workspace context for class overview wit
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
   }> = [];
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => {
       resolveArtifactCalls.push(input);
       return {
@@ -1253,20 +1054,8 @@ test("InspectMinecraftService preserves workspace context for class overview wit
         warnings: []
       };
     },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "class-overview",
@@ -1306,10 +1095,7 @@ test("InspectMinecraftService preserves workspace context for class source witho
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
   }> = [];
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => {
       resolveArtifactCalls.push(input);
       return {
@@ -1330,9 +1116,6 @@ test("InspectMinecraftService preserves workspace context for class source witho
         warnings: []
       };
     },
-    findClass: async () => {
-      throw new Error("not used");
-    },
     getClassSource: async (input) => {
       assert.equal(input.artifactId, "artifact-class-source");
       assert.equal(input.className, "net.minecraft.server.MinecraftServer");
@@ -1347,20 +1130,8 @@ test("InspectMinecraftService preserves workspace context for class source witho
         warnings: []
       };
     },
-    getClassMembers: async () => {
-      throw new Error("not used");
-    },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "class-source",
@@ -1419,10 +1190,7 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
     preferProjectVersion?: boolean;
     strictVersion?: boolean;
   }> = [];
-  const service = new InspectMinecraftService({
-    listVersions: async () => {
-      throw new Error("not used");
-    },
+  const service = new InspectMinecraftService(buildInspectDeps({
     resolveArtifact: async (input) => {
       resolveArtifactCalls.push(input);
       return {
@@ -1442,12 +1210,6 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
         },
         warnings: []
       };
-    },
-    findClass: async () => {
-      throw new Error("not used");
-    },
-    getClassSource: async () => {
-      throw new Error("not used");
     },
     getClassMembers: async (input) => {
       assert.equal(input.artifactId, "artifact-class-members");
@@ -1473,17 +1235,8 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
         warnings: []
       };
     },
-    searchClassSource: async () => {
-      throw new Error("not used");
-    },
-    getArtifactFile: async () => {
-      throw new Error("not used");
-    },
-    listArtifactFiles: async () => {
-      throw new Error("not used");
-    },
     detectProjectMinecraftVersion: async () => "1.21.10"
-  });
+  }));
 
   const result = await service.execute({
     task: "class-members",
@@ -1516,8 +1269,7 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
 
 test("InspectMinecraftService forwards include:[\"descriptors\"] to getClassMembers as includeDescriptors", async () => {
   const seen: Array<{ includeDescriptors?: boolean }> = [];
-  const makeDeps = () => ({
-    listVersions: async () => { throw new Error("not used"); },
+  const makeDeps = () => buildInspectDeps({
     resolveArtifact: async () => ({
       artifactId: "artifact-desc",
       origin: "local-jar" as const,
@@ -1529,8 +1281,6 @@ test("InspectMinecraftService forwards include:[\"descriptors\"] to getClassMemb
       artifactContents: { sourceKind: "source-jar" as const, indexedContentKinds: ["sources"], resourcesIncluded: false, sourceCoverage: "full" as const },
       warnings: []
     }),
-    findClass: async () => { throw new Error("not used"); },
-    getClassSource: async () => { throw new Error("not used"); },
     getClassMembers: async (input: { includeDescriptors?: boolean }) => {
       seen.push({ includeDescriptors: input.includeDescriptors });
       return {
@@ -1542,17 +1292,13 @@ test("InspectMinecraftService forwards include:[\"descriptors\"] to getClassMemb
         returnedNamespace: "obfuscated",
         warnings: []
       };
-    },
-    searchClassSource: async () => { throw new Error("not used"); },
-    getArtifactFile: async () => { throw new Error("not used"); },
-    listArtifactFiles: async () => { throw new Error("not used"); },
-    detectProjectMinecraftVersion: async () => undefined
+    }
   });
 
   const subject = { kind: "class" as const, className: "com.example.Widget", artifact: { type: "resolved-id" as const, artifactId: "artifact-desc" } };
 
-  await new InspectMinecraftService(makeDeps() as never).execute({ task: "class-members", detail: "full", subject });
-  await new InspectMinecraftService(makeDeps() as never).execute({ task: "class-members", detail: "full", include: ["descriptors"], subject });
+  await new InspectMinecraftService(makeDeps()).execute({ task: "class-members", detail: "full", subject });
+  await new InspectMinecraftService(makeDeps()).execute({ task: "class-members", detail: "full", include: ["descriptors"], subject });
 
   assert.equal(seen[0]!.includeDescriptors, false, "default omits field descriptors");
   assert.equal(seen[1]!.includeDescriptors, true, "include:[descriptors] opts field descriptors back in");
@@ -3507,134 +3253,13 @@ test("ManageCacheService preview delete includes summary.subject and apply follo
   ]);
 });
 
-test("ValidateProjectService task=mixin without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
+test("ValidateProjectService version-required tasks throw ERR_INVALID_INPUT with a suggestedCall when no version is resolvable", async () => {
   const service = new ValidateProjectService({
     validateMixin: async () => {
       throw new Error("should not be called");
     },
     validateAccessWidener: async () => {
-      throw new Error("not used");
-    },
-    discoverMixins: async () => [],
-    discoverAccessWideners: async () => []
-  });
-
-  await assert.rejects(
-    () =>
-      service.execute({
-        task: "mixin",
-        detail: "summary",
-        subject: {
-          kind: "mixin",
-          input: { mode: "inline", source: "public class Example {}" }
-        }
-      } as Parameters<typeof service.execute>[0]),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
-        return false;
-      }
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.failedStage === "input-validation" &&
-        typeof details.nextAction === "string" &&
-        typeof details.suggestedCall === "object" &&
-        details.suggestedCall !== null
-      );
-    }
-  );
-});
-
-test("ValidateProjectService task=mixin rejects preferProjectVersion without explicit version", async () => {
-  const service = new ValidateProjectService({
-    validateMixin: async () => {
       throw new Error("should not be called");
-    },
-    validateAccessWidener: async () => {
-      throw new Error("not used");
-    },
-    discoverMixins: async () => [],
-    discoverAccessWideners: async () => []
-  });
-
-  await assert.rejects(
-    () =>
-      service.execute({
-        task: "mixin",
-        detail: "summary",
-        preferProjectVersion: true,
-        subject: {
-          kind: "mixin",
-          input: { mode: "inline", source: "public class Example {}" }
-        }
-      } as Parameters<typeof service.execute>[0]),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
-        return false;
-      }
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.failedStage === "input-validation" &&
-        typeof details.nextAction === "string" &&
-        typeof details.suggestedCall === "object" &&
-        details.suggestedCall !== null
-      );
-    }
-  );
-});
-
-test("ValidateProjectService task=access-widener without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
-  const service = new ValidateProjectService({
-    validateMixin: async () => {
-      throw new Error("not used");
-    },
-    validateAccessWidener: async () => {
-      throw new Error("should not be called");
-    },
-    discoverMixins: async () => [],
-    discoverAccessWideners: async () => []
-  });
-
-  await assert.rejects(
-    () =>
-      service.execute({
-        task: "access-widener",
-        detail: "summary",
-        subject: {
-          kind: "access-widener",
-          input: { mode: "inline", content: "accessWidener v2 named" }
-        }
-      } as Parameters<typeof service.execute>[0]),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
-        return false;
-      }
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.failedStage === "input-validation" &&
-        typeof details.nextAction === "string" &&
-        typeof details.suggestedCall === "object" &&
-        details.suggestedCall !== null
-      );
-    }
-  );
-});
-
-test("ValidateProjectService task=access-transformer without version throws ERR_INVALID_INPUT with suggestedCall", async () => {
-  const service = new ValidateProjectService({
-    validateMixin: async () => {
-      throw new Error("not used");
-    },
-    validateAccessWidener: async () => {
-      throw new Error("not used");
     },
     validateAccessTransformer: async () => {
       throw new Error("should not be called");
@@ -3644,30 +3269,65 @@ test("ValidateProjectService task=access-transformer without version throws ERR_
     discoverAccessTransformers: async () => []
   });
 
-  await assert.rejects(
-    () =>
-      service.execute({
-        task: "access-transformer",
-        detail: "summary",
-        subject: {
-          kind: "access-transformer",
-          input: { mode: "inline", content: "public net.minecraft.server.MinecraftServer" }
-        }
-      } as Parameters<typeof service.execute>[0]),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-      if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
-        return false;
-      }
-      const details = (error as { details?: Record<string, unknown> }).details ?? {};
-      return (
-        details.failedStage === "input-validation" &&
-        typeof details.nextAction === "string" &&
-        typeof details.suggestedCall === "object" &&
-        details.suggestedCall !== null
-      );
+  const assertProblem = (error: unknown): boolean => {
+    if (typeof error !== "object" || error === null || !("code" in error)) {
+      return false;
     }
-  );
+    if ((error as { code: string }).code !== ERROR_CODES.INVALID_INPUT) {
+      return false;
+    }
+    const details = (error as { details?: Record<string, unknown> }).details ?? {};
+    return (
+      details.failedStage === "input-validation" &&
+      typeof details.nextAction === "string" &&
+      typeof details.suggestedCall === "object" &&
+      details.suggestedCall !== null
+    );
+  };
+
+  const cases: Array<{
+    label: string;
+    task: "mixin" | "access-widener" | "access-transformer";
+    preferProjectVersion?: boolean;
+    subject: Record<string, unknown>;
+  }> = [
+    {
+      label: "mixin",
+      task: "mixin",
+      subject: { kind: "mixin", input: { mode: "inline", source: "public class Example {}" } }
+    },
+    {
+      label: "mixin + preferProjectVersion (no explicit version)",
+      task: "mixin",
+      preferProjectVersion: true,
+      subject: { kind: "mixin", input: { mode: "inline", source: "public class Example {}" } }
+    },
+    {
+      label: "access-widener",
+      task: "access-widener",
+      subject: { kind: "access-widener", input: { mode: "inline", content: "accessWidener v2 named" } }
+    },
+    {
+      label: "access-transformer",
+      task: "access-transformer",
+      subject: {
+        kind: "access-transformer",
+        input: { mode: "inline", content: "public net.minecraft.server.MinecraftServer" }
+      }
+    }
+  ];
+
+  for (const testCase of cases) {
+    await assert.rejects(
+      () =>
+        service.execute({
+          task: testCase.task,
+          detail: "summary",
+          ...(testCase.preferProjectVersion ? { preferProjectVersion: true } : {}),
+          subject: testCase.subject
+        } as Parameters<typeof service.execute>[0]),
+      assertProblem,
+      `expected ERR_INVALID_INPUT with suggestedCall for task=${testCase.label}`
+    );
+  }
 });
