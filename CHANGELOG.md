@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-06-28
+
 ### Added
 
 - `get-class-members` / `batch-class-members` accept a `projection` parameter — `"names"` (member names only), `"signatures"` (name + `javaSignature`, no `jvmDescriptor`), or `"full"` (default; the complete member shape). Use the leaner projections to cut response tokens for "does this member exist?" / signature-only checks. Default `"full"` output is unchanged.
