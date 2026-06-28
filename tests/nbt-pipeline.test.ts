@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
-import { applyNbtJsonPatch, nbtBase64ToTypedJson, typedJsonToNbtBase64 } from "../src/nbt/pipeline.ts";
+import {
+  applyNbtJsonPatch,
+  nbtBase64ToTypedJson,
+  typedJsonToNbtBase64,
+  type DecodeCompression,
+  type EncodeCompression
+} from "../src/nbt/pipeline.ts";
 import type { TypedNbtDocument } from "../src/nbt/typed-json.ts";
+
+import { expectAppErrorCode } from "./helpers/expect-app-error.ts";
 
 function buildSample(): TypedNbtDocument {
   return {
@@ -64,18 +72,11 @@ test("nbtBase64ToTypedJson enforces max input bytes limit", () => {
 
   assert.throws(
     () =>
-      (nbtBase64ToTypedJson as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      nbtBase64ToTypedJson(
         { nbtBase64: encoded.nbtBase64, compression: "none" },
         { maxInputBytes: 1, maxInflatedBytes: 1_000_000, maxResponseBytes: 1_000_000 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.LIMIT_EXCEEDED
+    expectAppErrorCode(ERROR_CODES.LIMIT_EXCEEDED)
   );
 });
 
@@ -85,18 +86,11 @@ test("nbtBase64ToTypedJson enforces max inflated bytes for gzip payloads", () =>
 
   assert.throws(
     () =>
-      (nbtBase64ToTypedJson as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      nbtBase64ToTypedJson(
         { nbtBase64: encoded.nbtBase64, compression: "auto" },
         { maxInputBytes: 1_000_000, maxInflatedBytes: 8, maxResponseBytes: 1_000_000 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.LIMIT_EXCEEDED
+    expectAppErrorCode(ERROR_CODES.LIMIT_EXCEEDED)
   );
 });
 
@@ -106,18 +100,11 @@ test("nbtBase64ToTypedJson enforces typedJson response bytes limit", () => {
 
   assert.throws(
     () =>
-      (nbtBase64ToTypedJson as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      nbtBase64ToTypedJson(
         { nbtBase64: encoded.nbtBase64, compression: "none" },
         { maxInputBytes: 1_000_000, maxInflatedBytes: 1_000_000, maxResponseBytes: 8 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.LIMIT_EXCEEDED
+    expectAppErrorCode(ERROR_CODES.LIMIT_EXCEEDED)
   );
 });
 
@@ -126,18 +113,11 @@ test("typedJsonToNbtBase64 enforces response bytes limit", () => {
 
   assert.throws(
     () =>
-      (typedJsonToNbtBase64 as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      typedJsonToNbtBase64(
         { typedJson: sample, compression: "none" },
         { maxInputBytes: 1_000_000, maxInflatedBytes: 1_000_000, maxResponseBytes: 8 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.LIMIT_EXCEEDED
+    expectAppErrorCode(ERROR_CODES.LIMIT_EXCEEDED)
   );
 });
 
@@ -146,21 +126,14 @@ test("applyNbtJsonPatch enforces patched typedJson response bytes limit", () => 
 
   assert.throws(
     () =>
-      (applyNbtJsonPatch as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      applyNbtJsonPatch(
         {
           typedJson: sample,
           patch: [{ op: "test", path: "/root/value/name/value", value: "Steve" }]
         },
         { maxInputBytes: 1_000_000, maxInflatedBytes: 1_000_000, maxResponseBytes: 8 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.LIMIT_EXCEEDED
+    expectAppErrorCode(ERROR_CODES.LIMIT_EXCEEDED)
   );
 });
 
@@ -171,18 +144,11 @@ test("nbtBase64ToTypedJson treats truncated gzip payload as parse failure, not l
 
   assert.throws(
     () =>
-      (nbtBase64ToTypedJson as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      nbtBase64ToTypedJson(
         { nbtBase64: truncated, compression: "gzip" },
         { maxInputBytes: 1_000_000, maxInflatedBytes: 1_000_000, maxResponseBytes: 1_000_000 }
       ),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.NBT_PARSE_FAILED
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
   );
 });
 
@@ -199,10 +165,7 @@ test("nbtBase64ToTypedJson rejects oversized base64 before Buffer.from decode al
 
   try {
     try {
-      (nbtBase64ToTypedJson as unknown as (
-        input: unknown,
-        limits: { maxInputBytes: number; maxInflatedBytes: number; maxResponseBytes: number }
-      ) => unknown)(
+      nbtBase64ToTypedJson(
         { nbtBase64: oversizedBase64, compression: "none" },
         { maxInputBytes: 8, maxInflatedBytes: 1_000_000, maxResponseBytes: 1_000_000 }
       );
@@ -217,4 +180,53 @@ test("nbtBase64ToTypedJson rejects oversized base64 before Buffer.from decode al
   assert.equal(typeof caught, "object");
   assert.notEqual(caught, null);
   assert.equal((caught as { code?: string }).code, ERROR_CODES.LIMIT_EXCEEDED);
+});
+
+test("nbtBase64ToTypedJson rejects an invalid compression value", () => {
+  const sample = buildSample();
+  const encoded = typedJsonToNbtBase64({ typedJson: sample, compression: "none" });
+
+  assert.throws(
+    () =>
+      nbtBase64ToTypedJson({
+        nbtBase64: encoded.nbtBase64,
+        compression: "bogus" as unknown as DecodeCompression
+      }),
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
+  );
+});
+
+test("typedJsonToNbtBase64 rejects an invalid compression value", () => {
+  const sample = buildSample();
+
+  assert.throws(
+    () =>
+      typedJsonToNbtBase64({
+        typedJson: sample,
+        compression: "bogus" as unknown as EncodeCompression
+      }),
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
+  );
+});
+
+test("nbtBase64ToTypedJson rejects malformed nbtBase64 input", () => {
+  const cases: Array<{ name: string; nbtBase64: unknown }> = [
+    { name: "non-string", nbtBase64: 123 },
+    { name: "empty string", nbtBase64: "" },
+    { name: "whitespace only", nbtBase64: "   " },
+    { name: "length not a multiple of 4", nbtBase64: "AAA" },
+    { name: "non-base64 characters", nbtBase64: "@@@@" }
+  ];
+
+  for (const { name, nbtBase64 } of cases) {
+    assert.throws(
+      () =>
+        nbtBase64ToTypedJson({
+          nbtBase64: nbtBase64 as unknown as string,
+          compression: "none"
+        }),
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT),
+      `expected INVALID_INPUT for ${name}`
+    );
+  }
 });

@@ -4,6 +4,8 @@ import test from "node:test";
 import { ERROR_CODES } from "../src/errors.ts";
 import { assertValidTypedNbtDocument, type TypedNbtDocument } from "../src/nbt/typed-json.ts";
 
+import { expectAppErrorCode } from "./helpers/expect-app-error.ts";
+
 test("assertValidTypedNbtDocument accepts a valid typed NBT document", () => {
   const input: TypedNbtDocument = {
     rootName: "Level",
@@ -31,6 +33,34 @@ test("assertValidTypedNbtDocument accepts a valid typed NBT document", () => {
   assert.doesNotThrow(() => assertValidTypedNbtDocument(input));
 });
 
+test("assertValidTypedNbtDocument rejects a non-record document", () => {
+  assert.throws(
+    () => assertValidTypedNbtDocument("not-a-document"),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "" })
+  );
+});
+
+test("assertValidTypedNbtDocument rejects a missing root node", () => {
+  assert.throws(
+    () => assertValidTypedNbtDocument({ rootName: "NoRoot" }),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root" })
+  );
+});
+
+test("assertValidTypedNbtDocument rejects a non-object root", () => {
+  assert.throws(
+    () => assertValidTypedNbtDocument({ rootName: "BadRoot", root: 5 }),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root" })
+  );
+});
+
+test("assertValidTypedNbtDocument rejects a node missing its 'type' field", () => {
+  assert.throws(
+    () => assertValidTypedNbtDocument({ rootName: "NoType", root: { value: 1 } }),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/type" })
+  );
+});
+
 test("assertValidTypedNbtDocument rejects non-string long values", () => {
   const input = {
     rootName: "Bad",
@@ -42,17 +72,7 @@ test("assertValidTypedNbtDocument rejects non-string long values", () => {
 
   assert.throws(
     () => assertValidTypedNbtDocument(input),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-
-      const err = error as { code: string; details?: Record<string, unknown> };
-      return (
-        err.code === ERROR_CODES.NBT_INVALID_TYPED_JSON &&
-        err.details?.jsonPointer === "/root/value"
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value" })
   );
 });
 
@@ -68,11 +88,7 @@ test("assertValidTypedNbtDocument rejects list element type mismatches", () => {
 
   assert.throws(
     () => assertValidTypedNbtDocument(input),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.NBT_INVALID_TYPED_JSON
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON)
   );
 });
 
@@ -100,17 +116,7 @@ test("assertValidTypedNbtDocument rejects unrecognized float/double strings", ()
 
   assert.throws(
     () => assertValidTypedNbtDocument(input),
-    (error: unknown) => {
-      if (typeof error !== "object" || error === null || !("code" in error)) {
-        return false;
-      }
-
-      const err = error as { code: string; details?: Record<string, unknown> };
-      return (
-        err.code === ERROR_CODES.NBT_INVALID_TYPED_JSON &&
-        err.details?.jsonPointer === "/root/value"
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value" })
   );
 });
 
@@ -125,10 +131,68 @@ test("assertValidTypedNbtDocument rejects out-of-range byteArray values", () => 
 
   assert.throws(
     () => assertValidTypedNbtDocument(input),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.NBT_INVALID_TYPED_JSON
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/1" })
+  );
+});
+
+test("assertValidTypedNbtDocument rejects out-of-range intArray values", () => {
+  const input = {
+    rootName: "Bad",
+    root: {
+      type: "intArray",
+      value: [0, 2147483648]
+    }
+  };
+
+  assert.throws(
+    () => assertValidTypedNbtDocument(input),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/1" })
+  );
+});
+
+test("assertValidTypedNbtDocument rejects out-of-range longArray values", () => {
+  const input = {
+    rootName: "Bad",
+    root: {
+      type: "longArray",
+      value: ["0", "9223372036854775808"]
+    }
+  };
+
+  assert.throws(
+    () => assertValidTypedNbtDocument(input),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/1" })
+  );
+});
+
+test("assertValidTypedNbtDocument escapes compound key tokens in the JSON pointer", () => {
+  const slashKey = {
+    rootName: "Bad",
+    root: {
+      type: "compound",
+      value: {
+        "a/b": { type: "long", value: 1 }
+      }
+    }
+  };
+
+  assert.throws(
+    () => assertValidTypedNbtDocument(slashKey),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/a~1b/value" })
+  );
+
+  const tildeKey = {
+    rootName: "Bad",
+    root: {
+      type: "compound",
+      value: {
+        "a~b": { type: "long", value: 1 }
+      }
+    }
+  };
+
+  assert.throws(
+    () => assertValidTypedNbtDocument(tildeKey),
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/a~0b/value" })
   );
 });

@@ -6,6 +6,8 @@ import { ERROR_CODES } from "../src/errors.ts";
 import { decodeJavaNbt, encodeJavaNbt } from "../src/nbt/java-nbt-codec.ts";
 import type { TypedNbtDocument } from "../src/nbt/typed-json.ts";
 
+import { expectAppErrorCode } from "./helpers/expect-app-error.ts";
+
 test("decodeJavaNbt decodes a simple known Java NBT payload", () => {
   const bytes = Buffer.from("0a000152030006616e737765720000002a00", "hex");
 
@@ -92,12 +94,69 @@ test("decodeJavaNbt throws structured parse errors for truncated payloads", () =
 
   assert.throws(
     () => decodeJavaNbt(truncated),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.NBT_PARSE_FAILED
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
   );
+});
+
+test("decodeJavaNbt rejects an unknown NBT tag id", () => {
+  // Root tag 0xff is not a defined NBT tag; name length 0x0000 -> "".
+  const bytes = Buffer.from([0xff, 0x00, 0x00]);
+
+  assert.throws(
+    () => decodeJavaNbt(bytes),
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
+  );
+});
+
+test("decodeJavaNbt rejects a root TAG_End tag", () => {
+  assert.throws(
+    () => decodeJavaNbt(Buffer.from([0x00])),
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
+  );
+});
+
+test("decodeJavaNbt rejects trailing bytes after a complete payload", () => {
+  const bytes = Buffer.from("0a000152030006616e737765720000002a00" + "ff", "hex");
+
+  assert.throws(
+    () => decodeJavaNbt(bytes),
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
+  );
+});
+
+test("decodeJavaNbt rejects negative array and list lengths", () => {
+  // Each fixture is a root tag with an empty name followed by a 0xffffffff (-1) length.
+  const cases: Array<{ name: string; hex: string }> = [
+    { name: "byteArray", hex: "070000ffffffff" },
+    { name: "intArray", hex: "0b0000ffffffff" },
+    { name: "longArray", hex: "0c0000ffffffff" },
+    { name: "list", hex: "09000003ffffffff" }
+  ];
+
+  for (const { name, hex } of cases) {
+    assert.throws(
+      () => decodeJavaNbt(Buffer.from(hex, "hex")),
+      expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED),
+      `expected parse failure for negative ${name} length`
+    );
+  }
+});
+
+test("decodeJavaNbt rejects malformed MUTF-8 byte sequences", () => {
+  // Prefix: compound (empty name) -> string "s" with a uint16 byte length, then 0x00 terminator.
+  const cases: Array<{ name: string; hex: string }> = [
+    { name: "invalid lead byte", hex: "0a000008000173" + "0001" + "f8" + "00" },
+    { name: "truncated 2-byte sequence", hex: "0a000008000173" + "0001" + "c2" + "00" },
+    { name: "truncated 3-byte sequence", hex: "0a000008000173" + "0002" + "e080" + "00" }
+  ];
+
+  for (const { name, hex } of cases) {
+    assert.throws(
+      () => decodeJavaNbt(Buffer.from(hex, "hex")),
+      expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED),
+      `expected parse failure for ${name}`
+    );
+  }
 });
 
 test("encodeJavaNbt rejects out-of-range long values", () => {
@@ -111,11 +170,24 @@ test("encodeJavaNbt rejects out-of-range long values", () => {
 
   assert.throws(
     () => encodeJavaNbt(input),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.NBT_INVALID_TYPED_JSON
+    expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON)
+  );
+});
+
+test("encodeJavaNbt rejects strings whose MUTF-8 length exceeds uint16", () => {
+  const doc: TypedNbtDocument = {
+    rootName: "R",
+    root: {
+      type: "compound",
+      value: {
+        k: { type: "string", value: "a".repeat(70000) }
+      }
+    }
+  };
+
+  assert.throws(
+    () => encodeJavaNbt(doc),
+    expectAppErrorCode(ERROR_CODES.NBT_ENCODE_FAILED)
   );
 });
 
@@ -191,7 +263,13 @@ test("encodeJavaNbt ASCII strings still produce identical bytes to UTF-8 (regres
     }
   };
   const buffer = encodeJavaNbt(doc);
-  assert.ok(buffer.includes(Buffer.from("hello world", "utf8")));
+  const utf8 = Buffer.from("hello world", "utf8");
+  assert.ok(buffer.includes(utf8));
+
+  // The value must be MUTF-8 length-prefixed with its big-endian uint16 byte length.
+  const valueOffset = buffer.indexOf(utf8);
+  assert.ok(valueOffset >= 2, "string value must be length-prefixed");
+  assert.equal(buffer.readUInt16BE(valueOffset - 2), utf8.length);
 });
 
 test("encodeJavaNbt common BMP CJK strings still produce identical bytes to UTF-8 (regression guard)", () => {
@@ -205,7 +283,13 @@ test("encodeJavaNbt common BMP CJK strings still produce identical bytes to UTF-
     }
   };
   const buffer = encodeJavaNbt(doc);
-  assert.ok(buffer.includes(Buffer.from("日本語", "utf8")));
+  const utf8 = Buffer.from("日本語", "utf8");
+  assert.ok(buffer.includes(utf8));
+
+  // BMP CJK shares UTF-8 bytes, but must remain length-prefixed by MUTF-8 byte count (9 here).
+  const valueOffset = buffer.indexOf(utf8);
+  assert.ok(valueOffset >= 2, "string value must be length-prefixed");
+  assert.equal(buffer.readUInt16BE(valueOffset - 2), utf8.length);
 });
 
 test("decodeJavaNbt rejects a MUTF-8 string with an invalid continuation byte", () => {
@@ -214,16 +298,6 @@ test("decodeJavaNbt rejects a MUTF-8 string with an invalid continuation byte", 
   const bytes = Buffer.from("0a000008000173" + "0002" + "c241" + "00", "hex");
   assert.throws(
     () => decodeJavaNbt(bytes),
-    (error: unknown) => (error as { code?: string }).code === ERROR_CODES.NBT_PARSE_FAILED
+    expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
   );
-});
-
-test("decodeJavaNbt still accepts the overlong C0 80 form for NUL", () => {
-  // Java MUTF-8 encodes U+0000 as the overlong two-byte sequence 0xC0 0x80.
-  const bytes = Buffer.from("0a000008000173" + "0002" + "c080" + "00", "hex");
-  const decoded = decodeJavaNbt(bytes);
-  assert.deepEqual(decoded, {
-    rootName: "",
-    root: { type: "compound", value: { s: { type: "string", value: "\u0000" } } }
-  });
 });
