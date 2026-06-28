@@ -1,20 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import Database from "../src/storage/sqlite.ts";
 
-async function createArtifactsRepo() {
-  const { ArtifactsRepo } = await import("../src/storage/artifacts-repo.ts");
-  const { runMigrations } = await import("../src/storage/migrations.ts");
-  const db = new Database(":memory:");
-  db.pragma("foreign_keys = ON");
-  runMigrations(db);
-  return { db, artifacts: new ArtifactsRepo(db) };
-}
+import { createRepos } from "./helpers/repos.ts";
 
 const TIMESTAMP = "2026-04-18T00:00:00.000Z";
 
 test("ArtifactsRepo round-trips alias and exposes it via getArtifact()", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "art-1",
     alias: "mc-1.21.10-mojang-merged-abc123",
@@ -30,7 +22,7 @@ test("ArtifactsRepo round-trips alias and exposes it via getArtifact()", async (
 });
 
 test("ArtifactsRepo.getArtifact resolves an artifact by its alias", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "art-2",
     alias: "mc-1.21.10-obfuscated-vanilla-abc123",
@@ -46,13 +38,13 @@ test("ArtifactsRepo.getArtifact resolves an artifact by its alias", async () => 
 });
 
 test("ArtifactsRepo.getArtifact returns undefined for unknown id and unknown alias", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   assert.equal(artifacts.getArtifact("missing-id"), undefined);
   assert.equal(artifacts.getArtifact("mc-no-such-alias-000000"), undefined);
 });
 
 test("ArtifactsRepo enforces alias UNIQUE across distinct artifact_ids", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "art-a",
     alias: "mc-1.21.10-mojang-merged-deadbe",
@@ -75,7 +67,7 @@ test("ArtifactsRepo enforces alias UNIQUE across distinct artifact_ids", async (
 });
 
 test("ArtifactsRepo allows multiple null aliases (legacy rows tolerated)", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "legacy-1",
     origin: "local-jar",
@@ -94,7 +86,7 @@ test("ArtifactsRepo allows multiple null aliases (legacy rows tolerated)", async
 });
 
 test("ArtifactsRepo.setAlias backfills a NULL alias on a legacy row", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "legacy-backfill",
     origin: "local-jar",
@@ -116,7 +108,7 @@ test("ArtifactsRepo.setAlias backfills a NULL alias on a legacy row", async () =
 });
 
 test("ArtifactsRepo.setAlias is idempotent and rotates an existing alias", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "rotate-via-setalias",
     alias: "mc-1.21.10-mojang-merged-aaaaaaaaaaaa",
@@ -144,7 +136,7 @@ test("ArtifactsRepo.setAlias is idempotent and rotates an existing alias", async
 });
 
 test("ArtifactsRepo.upsertArtifact updates alias on conflict for same artifact_id", async () => {
-  const { artifacts } = await createArtifactsRepo();
+  const { artifacts } = await createRepos();
   artifacts.upsertArtifact({
     artifactId: "art-rotate",
     alias: "mc-1.21.10-mojang-merged-aaaaaa",

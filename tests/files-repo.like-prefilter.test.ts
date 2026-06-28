@@ -1,31 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import Database from "../src/storage/sqlite.ts";
-
-async function createRepos() {
-  const { ArtifactsRepo } = await import("../src/storage/artifacts-repo.ts");
-  const { FilesRepo } = await import("../src/storage/files-repo.ts");
-  const { runMigrations } = await import("../src/storage/migrations.ts");
-
-  const db = new Database(":memory:");
-  db.pragma("foreign_keys = ON");
-  runMigrations(db);
-  return {
-    artifacts: new ArtifactsRepo(db),
-    files: new FilesRepo(db)
-  };
-}
-
-function seedArtifact(artifacts: { upsertArtifact: (...args: unknown[]) => void }, artifactId: string): void {
-  artifacts.upsertArtifact({
-    artifactId,
-    origin: "local-jar",
-    artifactSignature: "sig",
-    isDecompiled: false,
-    timestamp: new Date().toISOString()
-  });
-}
+import { createRepos, seedArtifact } from "./helpers/repos.ts";
 
 const CORPUS: Array<{ filePath: string; content: string }> = [
   { filePath: "a/Percent.java", content: "progress is 100% complete" },

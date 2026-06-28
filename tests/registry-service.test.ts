@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -30,6 +30,19 @@ async function installFakeJava(binDir: string, body: string): Promise<void> {
   );
   await chmod(wrapperPath, 0o755);
 }
+
+// A fake `java` body that writes a minimal valid registries.json into the
+// `--output <dir>/reports/` location, mimicking a successful data generation run.
+const REGISTRY_GEN_JAVA = [
+  'const fs = require("node:fs");',
+  'const path = require("node:path");',
+  "const args = process.argv.slice(2);",
+  'const outputIndex = args.lastIndexOf("--output");',
+  "const outputDir = outputIndex >= 0 ? args[outputIndex + 1] : process.cwd();",
+  'const registryPath = path.join(outputDir, "reports", "registries.json");',
+  'fs.mkdirSync(path.dirname(registryPath), { recursive: true });',
+  'fs.writeFileSync(registryPath, JSON.stringify({ "minecraft:block": { entries: { "minecraft:stone": { protocol_id: 1 } } } }));'
+].join("\n");
 
 test("RegistryService discards corrupt cached registries and regenerates them", async () => {
   const root = await mkdtemp(join(tmpdir(), "registry-service-recover-"));
@@ -290,4 +303,109 @@ test("RegistryService supports summary-only and entry-capped registry responses"
   assert.equal(singleRegistry.dataTruncated, true);
   assert.equal(singleRegistry.data.default, "minecraft:stone");
   assert.equal(Object.keys(singleRegistry.data.entries).length, 1);
+});
+
+test("RegistryService dedups concurrent loads of the same version into one generation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "registry-service-inflight-"));
+  const config = buildTestConfig(root);
+  const version = "1.20.1";
+
+  const binDir = join(root, "bin");
+  await mkdir(binDir, { recursive: true });
+  await installFakeJava(binDir, REGISTRY_GEN_JAVA);
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+
+  try {
+    let resolveServerJarCalls = 0;
+    const service = new RegistryService(
+      config,
+      {
+        async resolveServerJar(requestedVersion: string) {
+          resolveServerJarCalls += 1;
+          return { version: requestedVersion, jarPath: join(root, "fake-server.jar") };
+        }
+      } as any
+    );
+    await writeFile(join(root, "fake-server.jar"), "stub", "utf8");
+
+    // Two concurrent callers must share a single in-flight load (loadLocks),
+    // so the underlying server jar is resolved (and data generated) only once.
+    const [first, second] = await Promise.all([
+      service.getRegistryData({ version }),
+      service.getRegistryData({ version })
+    ]);
+
+    assert.equal(resolveServerJarCalls, 1);
+    assert.deepEqual(first.registries, ["minecraft:block"]);
+    assert.deepEqual(second.registries, ["minecraft:block"]);
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+  }
+});
+
+test("RegistryService evicts the coldest version once the in-memory cache bound is exceeded", async () => {
+  const root = await mkdtemp(join(tmpdir(), "registry-service-lru-"));
+  const config = buildTestConfig(root);
+
+  const binDir = join(root, "bin");
+  await mkdir(binDir, { recursive: true });
+  await installFakeJava(binDir, REGISTRY_GEN_JAVA);
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+
+  try {
+    const resolveCalls = new Map<string, number>();
+    const service = new RegistryService(
+      config,
+      {
+        async resolveServerJar(requestedVersion: string) {
+          resolveCalls.set(requestedVersion, (resolveCalls.get(requestedVersion) ?? 0) + 1);
+          return { version: requestedVersion, jarPath: join(root, "fake-server.jar") };
+        }
+      } as any
+    );
+    await writeFile(join(root, "fake-server.jar"), "stub", "utf8");
+
+    // The registryCache caps at 8 entries; loading 9 distinct versions evicts
+    // the coldest (first-inserted) one.
+    const versions = Array.from({ length: 9 }, (_, i) => `9.0.${i}`);
+    for (const version of versions) {
+      await service.getRegistryData({ version });
+    }
+    for (const version of versions) {
+      assert.equal(resolveCalls.get(version), 1, `first load generates ${version} once`);
+    }
+
+    const coldVersion = versions[0]!;
+    const hotVersion = versions[versions.length - 1]!;
+
+    // Remove the on-disk snapshots so a cache miss is forced to regenerate
+    // (which calls resolveServerJar again). This distinguishes an in-memory
+    // cache hit from a miss.
+    await rm(join(config.cacheDir, "registries", coldVersion), { recursive: true, force: true });
+    await rm(join(config.cacheDir, "registries", hotVersion), { recursive: true, force: true });
+
+    // The hottest version is still cached in memory: no regeneration despite the
+    // deleted disk snapshot.
+    await service.getRegistryData({ version: hotVersion });
+    assert.equal(resolveCalls.get(hotVersion), 1, "hot version served from in-memory cache");
+
+    // The coldest version was evicted: with no cache entry and no disk snapshot,
+    // it must regenerate.
+    await service.getRegistryData({ version: coldVersion });
+    assert.equal(resolveCalls.get(coldVersion), 2, "cold version was evicted and regenerated");
+  } finally {
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
+    }
+  }
 });

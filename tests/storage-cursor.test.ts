@@ -1,32 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import Database from "../src/storage/sqlite.ts";
 
-async function createRepos() {
-  const { ArtifactsRepo } = await import("../src/storage/artifacts-repo.ts");
-  const { FilesRepo } = await import("../src/storage/files-repo.ts");
-  const { runMigrations } = await import("../src/storage/migrations.ts");
-  const { SymbolsRepo } = await import("../src/storage/symbols-repo.ts");
-
-  const db = new Database(":memory:");
-  db.pragma("foreign_keys = ON");
-  runMigrations(db);
-  return {
-    artifacts: new ArtifactsRepo(db),
-    files: new FilesRepo(db),
-    symbols: new SymbolsRepo(db)
-  };
-}
-
-function seedArtifact(artifacts: { upsertArtifact: (...args: unknown[]) => void }, artifactId: string): void {
-  artifacts.upsertArtifact({
-    artifactId,
-    origin: "local-jar",
-    artifactSignature: "sig",
-    isDecompiled: false,
-    timestamp: new Date().toISOString()
-  });
-}
+import { createRepos, seedArtifact } from "./helpers/repos.ts";
 
 test("filesRepo.searchFiles cursor advances without duplicating previous hit", async () => {
   const { artifacts, files } = await createRepos();
@@ -636,9 +611,11 @@ test("filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for de
   const artifactId = "artifact-cursor-pushdown";
   seedArtifact(artifacts, artifactId);
 
-  // Create files where path matches for "Entity"
+  // Create enough path matches that the first (cursor-less) page's generous
+  // fetch limit saturates while the cursored page's smaller fetch limit does
+  // not. Only then can the row-scan reduction actually be observed.
   const fileData = [];
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 250; i++) {
     fileData.push({
       filePath: `net/Entity${String(i).padStart(3, "0")}.java`,
       content: `class Entity${String(i).padStart(3, "0")} {}`,
@@ -652,8 +629,9 @@ test("filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for de
   const first = files.searchFileCandidates(artifactId, { query: "Entity", limit: 5, mode: "path" });
   assert.equal(first.items.length, 5);
   assert.ok(first.nextCursor);
+  assert.ok(first.scannedRows > 5, `cursor-less page should over-scan, scanned ${first.scannedRows}`);
 
-  // Second page with cursor — should scan fewer rows than without cursor
+  // Second page with cursor — should scan fewer rows than without cursor.
   const secondWithCursor = files.searchFileCandidates(artifactId, {
     query: "Entity",
     limit: 5,
@@ -661,6 +639,13 @@ test("filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for de
     cursor: first.nextCursor
   });
   assert.equal(secondWithCursor.items.length, 5);
+
+  // The named behavior: the cursored deep page scans strictly fewer rows than
+  // the cursor-less first page.
+  assert.ok(
+    secondWithCursor.scannedRows < first.scannedRows,
+    `cursor pushdown should reduce scanned rows: first=${first.scannedRows} cursored=${secondWithCursor.scannedRows}`
+  );
 
   // Verify no overlap between pages
   const firstPaths = new Set(first.items.map((item) => item.filePath));

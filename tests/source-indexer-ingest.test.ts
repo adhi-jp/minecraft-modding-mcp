@@ -8,10 +8,14 @@ import { ERROR_CODES, isAppError } from "../src/errors.ts";
 import {
   buildBinaryRemapTempPath,
   ingestIfNeeded,
+  INDEX_SCHEMA_VERSION,
+  isUsableJarFile,
   maybeRemapBinaryForMojang,
+  resolveIndexRebuildReason,
   runBinaryRemapWithDeps,
   type BinaryRemapDeps
 } from "../src/source/indexer.ts";
+import type { ArtifactIndexMetaRow } from "../src/storage/index-meta-repo.ts";
 import { SourceServiceState } from "../src/source/state.ts";
 import type { SourceService } from "../src/source-service.ts";
 import type { ResolvedSourceArtifact } from "../src/types.ts";
@@ -323,5 +327,115 @@ test("maybeRemapBinaryForMojang re-resolves the client jar when binaryJarPath is
     assert.equal(resolveVersionJarCalls, 1);
     assert.deepEqual(inputJars, [clientJar]);
     assert.equal((await stat(remappedJarPath)).isFile(), true);
+  });
+});
+
+function metaRow(overrides: Partial<ArtifactIndexMetaRow> = {}): ArtifactIndexMetaRow {
+  return {
+    artifactId: "artifact",
+    artifactSignature: "sig-current",
+    indexSchemaVersion: INDEX_SCHEMA_VERSION,
+    filesCount: 1,
+    symbolsCount: 1,
+    ftsRowsCount: 1,
+    indexedAt: "2026-01-01T00:00:00.000Z",
+    indexDurationMs: 1,
+    ...overrides
+  };
+}
+
+test("resolveIndexRebuildReason classifies each rebuild branch", () => {
+  // force wins even when the meta is otherwise current.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: true,
+      expectedSignature: "sig-current",
+      hasFiles: true,
+      meta: metaRow()
+    }),
+    "force"
+  );
+
+  // No indexed files => missing_meta, regardless of a present meta row.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: false,
+      expectedSignature: "sig-current",
+      hasFiles: false,
+      meta: metaRow()
+    }),
+    "missing_meta"
+  );
+  // Absent meta row => missing_meta even when files exist.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: false,
+      expectedSignature: "sig-current",
+      hasFiles: true,
+      meta: undefined
+    }),
+    "missing_meta"
+  );
+
+  // Stored schema version differs from the current one => schema_mismatch.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: false,
+      expectedSignature: "sig-current",
+      hasFiles: true,
+      meta: metaRow({ indexSchemaVersion: INDEX_SCHEMA_VERSION + 1 })
+    }),
+    "schema_mismatch"
+  );
+
+  // Stored signature differs from the expected one => signature_mismatch.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: false,
+      expectedSignature: "sig-current",
+      hasFiles: true,
+      meta: metaRow({ artifactSignature: "sig-stale" })
+    }),
+    "signature_mismatch"
+  );
+
+  // Files present, schema and signature match => already_current.
+  assert.equal(
+    resolveIndexRebuildReason({
+      force: false,
+      expectedSignature: "sig-current",
+      hasFiles: true,
+      meta: metaRow()
+    }),
+    "already_current"
+  );
+});
+
+test("isUsableJarFile accepts real jars and rejects non-files, short files, bad magic, and missing paths", async () => {
+  await withTempDir("source-usable-jar-", async (root) => {
+    // A real ZIP/JAR (local file header starts with PK\x03\x04) is usable.
+    const goodJar = join(root, "good.jar");
+    await createJar(goodJar, {
+      "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    });
+    assert.equal(await isUsableJarFile(goodJar), true);
+
+    // A directory is not a regular file.
+    const dirPath = join(root, "a-directory");
+    await mkdir(dirPath, { recursive: true });
+    assert.equal(await isUsableJarFile(dirPath), false);
+
+    // A file shorter than the 4-byte magic header.
+    const tinyJar = join(root, "tiny.jar");
+    await writeFile(tinyJar, "PK");
+    assert.equal(await isUsableJarFile(tinyJar), false);
+
+    // A long-enough file whose first four bytes are not the ZIP magic.
+    const notZip = join(root, "not-zip.jar");
+    await writeFile(notZip, "this is plainly not a zip archive");
+    assert.equal(await isUsableJarFile(notZip), false);
+
+    // A missing path: stat throws and is swallowed into a false result.
+    assert.equal(await isUsableJarFile(join(root, "does-not-exist.jar")), false);
   });
 });
