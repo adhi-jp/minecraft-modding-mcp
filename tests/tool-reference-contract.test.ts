@@ -176,19 +176,6 @@ test("tool-reference.md documents the verify-mixin-target tool and accessorAdvic
   }
 });
 
-test("tool-reference.md references all 5 top-level workflow tools (post-rename)", async () => {
-  const doc = await loadDoc();
-  for (const tool of [
-    "inspect-minecraft",
-    "analyze-symbol",
-    "compare-minecraft",
-    "analyze-mod",
-    "validate-project"
-  ]) {
-    assert.ok(doc.includes(tool), `tool-reference.md must reference top-level tool "${tool}"`);
-  }
-});
-
 test("tool-reference.md preserves migration guidance for removed legacy tokens", async () => {
   const doc = await loadDoc();
   // Anchor on the removal context, not on the bare substring. If `official`

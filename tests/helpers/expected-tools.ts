@@ -1,0 +1,48 @@
+/**
+ * Canonical public MCP tool surface. Pinned in one place so the tools/list
+ * integration test and the tool-schema-registry test assert against a single
+ * source of truth instead of two local copies that can silently drift apart.
+ */
+export const EXPECTED_TOOLS = [
+  "inspect-minecraft",
+  "analyze-symbol",
+  "compare-minecraft",
+  "analyze-mod",
+  "validate-project",
+  "manage-cache",
+  "list-versions",
+  "resolve-artifact",
+  "find-class",
+  "get-class-source",
+  "get-class-members",
+  "search-class-source",
+  "get-artifact-file",
+  "list-artifact-files",
+  "trace-symbol-lifecycle",
+  "diff-class-signatures",
+  "find-mapping",
+  "resolve-method-mapping-exact",
+  "get-class-api-matrix",
+  "resolve-workspace-symbol",
+  "check-symbol-exists",
+  "nbt-to-json",
+  "nbt-apply-json-patch",
+  "json-to-nbt",
+  "index-artifact",
+  "get-runtime-metrics",
+  "validate-mixin",
+  "validate-access-widener",
+  "validate-access-transformer",
+  "analyze-mod-jar",
+  "get-registry-data",
+  "compare-versions",
+  "decompile-mod-jar",
+  "get-mod-class-source",
+  "search-mod-source",
+  "remap-mod-jar",
+  "verify-mixin-target",
+  "batch-class-source",
+  "batch-class-members",
+  "batch-symbol-exists",
+  "batch-mappings"
+] as const;

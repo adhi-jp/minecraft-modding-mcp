@@ -7,7 +7,8 @@ import {
   extractAllowlistedContext,
   issueOriginForErrorCode,
   retryClassForErrorCode,
-  statusForErrorCode
+  type IssueOrigin,
+  type RetryClass
 } from "../src/error-mapping.ts";
 
 test("issueOriginForErrorCode separates caller input from tool capability and environment", () => {
@@ -86,30 +87,6 @@ test("errorToBatchEntryProblem attaches retryClass derived from the error code",
   assert.equal(problem.retryClass, "permanent");
 });
 
-test("statusForErrorCode: ERR_WORKSPACE_VERSION_UNRESOLVED maps to 422 (recoverable input)", () => {
-  assert.equal(statusForErrorCode(ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED), 422);
-});
-
-test("statusForErrorCode: ERR_DEPENDENCY_VERSION_UNRESOLVED maps to 422 (recoverable input)", () => {
-  assert.equal(statusForErrorCode(ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED), 422);
-});
-
-test("statusForErrorCode: ERR_BATCH_ABORTED maps to 412 (failFast precondition)", () => {
-  assert.equal(statusForErrorCode(ERROR_CODES.BATCH_ABORTED), 412);
-});
-
-test("statusForErrorCode: ERR_STAGE_BUDGET_PRE_PARSE maps to 408 (request timeout)", () => {
-  assert.equal(statusForErrorCode(ERROR_CODES.STAGE_BUDGET_PRE_PARSE), 408);
-});
-
-test("statusForErrorCode: ERR_INVALID_INPUT maps to 400 (existing contract preserved)", () => {
-  assert.equal(statusForErrorCode(ERROR_CODES.INVALID_INPUT), 400);
-});
-
-test("statusForErrorCode: unknown code falls through to 500", () => {
-  assert.equal(statusForErrorCode("ERR_DOES_NOT_EXIST"), 500);
-});
-
 test("errorToBatchEntryProblem: non-AppError generic detail is sanitized (no Error.message leak)", () => {
   // Generic Error.message must not surface in the public envelope: a
   // filesystem path, parser internal, or assertion text could leak from a
@@ -136,4 +113,113 @@ test("errorToBatchEntryProblem: AppError detail is preserved (AppErrors are inte
   const problem = errorToBatchEntryProblem(appError, "test-instance-2");
   assert.equal(problem.detail, "class net.example.Foo not found");
   assert.equal(problem.code, ERROR_CODES.CLASS_NOT_FOUND);
+});
+
+test("retryClassForErrorCode classifies every ERROR_CODES value explicitly (no silent transient default)", () => {
+  // Mirror of the exhaustive status sweep in errors.test.ts: every known code
+  // must be assigned a deliberate retry family here. A newly-added ERROR_CODES
+  // entry that is missing from this map fails the iteration, forcing a conscious
+  // classification instead of silently inheriting the "transient" catch-all.
+  const expected: Record<string, RetryClass> = {
+    [ERROR_CODES.INVALID_INPUT]: "input",
+    [ERROR_CODES.COORDINATE_PARSE_FAILED]: "input",
+    [ERROR_CODES.INVALID_LINE_RANGE]: "input",
+    [ERROR_CODES.NBT_PARSE_FAILED]: "input",
+    [ERROR_CODES.NBT_INVALID_TYPED_JSON]: "input",
+    [ERROR_CODES.JSON_PATCH_INVALID]: "input",
+    [ERROR_CODES.JSON_PATCH_CONFLICT]: "input",
+    [ERROR_CODES.NBT_ENCODE_FAILED]: "input",
+    [ERROR_CODES.NBT_UNSUPPORTED_FEATURE]: "input",
+    [ERROR_CODES.NAMESPACE_MISMATCH]: "input",
+    [ERROR_CODES.CONTEXT_UNRESOLVED]: "input",
+    [ERROR_CODES.MIXIN_PARSE_FAILED]: "input",
+    [ERROR_CODES.SOURCE_NOT_FOUND]: "permanent",
+    [ERROR_CODES.FILE_NOT_FOUND]: "permanent",
+    [ERROR_CODES.JAR_NOT_FOUND]: "permanent",
+    [ERROR_CODES.VERSION_NOT_FOUND]: "permanent",
+    [ERROR_CODES.CLASS_NOT_FOUND]: "permanent",
+    [ERROR_CODES.MAPPING_NOT_APPLIED]: "permanent",
+    [ERROR_CODES.MAPPING_UNAVAILABLE]: "permanent",
+    [ERROR_CODES.DECOMPILE_DISABLED]: "permanent",
+    [ERROR_CODES.REMAP_FAILED]: "permanent",
+    [ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED]: "permanent",
+    [ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED]: "permanent",
+    [ERROR_CODES.PROVENANCE_INCOMPLETE]: "permanent",
+    [ERROR_CODES.BATCH_ABORTED]: "permanent",
+    [ERROR_CODES.JAVA_UNAVAILABLE]: "environment",
+    [ERROR_CODES.DECOMPILER_UNAVAILABLE]: "environment",
+    [ERROR_CODES.DECOMPILER_FAILED]: "environment",
+    [ERROR_CODES.REMAPPER_UNAVAILABLE]: "environment",
+    [ERROR_CODES.REGISTRY_GENERATION_FAILED]: "environment",
+    [ERROR_CODES.INTERNAL]: "server",
+    [ERROR_CODES.DB_FAILURE]: "server",
+    [ERROR_CODES.REPO_FETCH_FAILED]: "transient",
+    [ERROR_CODES.LIMIT_EXCEEDED]: "transient",
+    [ERROR_CODES.ARTIFACT_RESOLUTION_FAILED]: "transient",
+    [ERROR_CODES.JAVA_PROCESS_FAILED]: "transient",
+    [ERROR_CODES.WORKER_RESTART]: "transient",
+    [ERROR_CODES.STAGE_BUDGET_PRE_PARSE]: "transient"
+  };
+  for (const code of Object.values(ERROR_CODES)) {
+    const family = expected[code];
+    assert.ok(
+      family !== undefined,
+      `ERROR_CODE ${code} is unclassified in the retryClass sweep — add it deliberately instead of relying on the transient default`
+    );
+    assert.equal(retryClassForErrorCode(code), family, `${code} retryClass`);
+  }
+});
+
+test("issueOriginForErrorCode classifies every ERROR_CODES value explicitly (no silent tool_issue default)", () => {
+  // Companion to the retryClass sweep: pin the issue origin of every known code
+  // so a newly-added ERROR_CODES entry cannot silently inherit the "tool_issue"
+  // catch-all default.
+  const expected: Record<string, IssueOrigin> = {
+    [ERROR_CODES.INVALID_INPUT]: "code_issue",
+    [ERROR_CODES.COORDINATE_PARSE_FAILED]: "code_issue",
+    [ERROR_CODES.INVALID_LINE_RANGE]: "code_issue",
+    [ERROR_CODES.NBT_PARSE_FAILED]: "code_issue",
+    [ERROR_CODES.NBT_INVALID_TYPED_JSON]: "code_issue",
+    [ERROR_CODES.JSON_PATCH_INVALID]: "code_issue",
+    [ERROR_CODES.JSON_PATCH_CONFLICT]: "code_issue",
+    [ERROR_CODES.NBT_ENCODE_FAILED]: "code_issue",
+    [ERROR_CODES.NBT_UNSUPPORTED_FEATURE]: "code_issue",
+    [ERROR_CODES.NAMESPACE_MISMATCH]: "code_issue",
+    [ERROR_CODES.CONTEXT_UNRESOLVED]: "code_issue",
+    [ERROR_CODES.MIXIN_PARSE_FAILED]: "code_issue",
+    [ERROR_CODES.CLASS_NOT_FOUND]: "code_issue",
+    [ERROR_CODES.SOURCE_NOT_FOUND]: "code_issue",
+    [ERROR_CODES.FILE_NOT_FOUND]: "code_issue",
+    [ERROR_CODES.JAR_NOT_FOUND]: "code_issue",
+    [ERROR_CODES.VERSION_NOT_FOUND]: "code_issue",
+    [ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED]: "code_issue",
+    [ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED]: "code_issue",
+    [ERROR_CODES.JAVA_UNAVAILABLE]: "environment",
+    [ERROR_CODES.DECOMPILER_UNAVAILABLE]: "environment",
+    [ERROR_CODES.DECOMPILER_FAILED]: "environment",
+    [ERROR_CODES.REMAPPER_UNAVAILABLE]: "environment",
+    [ERROR_CODES.REGISTRY_GENERATION_FAILED]: "environment",
+    [ERROR_CODES.REPO_FETCH_FAILED]: "tool_issue",
+    [ERROR_CODES.DB_FAILURE]: "tool_issue",
+    [ERROR_CODES.LIMIT_EXCEEDED]: "tool_issue",
+    [ERROR_CODES.ARTIFACT_RESOLUTION_FAILED]: "tool_issue",
+    [ERROR_CODES.MAPPING_NOT_APPLIED]: "tool_issue",
+    [ERROR_CODES.PROVENANCE_INCOMPLETE]: "tool_issue",
+    [ERROR_CODES.MAPPING_UNAVAILABLE]: "tool_issue",
+    [ERROR_CODES.DECOMPILE_DISABLED]: "tool_issue",
+    [ERROR_CODES.JAVA_PROCESS_FAILED]: "tool_issue",
+    [ERROR_CODES.REMAP_FAILED]: "tool_issue",
+    [ERROR_CODES.WORKER_RESTART]: "tool_issue",
+    [ERROR_CODES.STAGE_BUDGET_PRE_PARSE]: "tool_issue",
+    [ERROR_CODES.BATCH_ABORTED]: "tool_issue",
+    [ERROR_CODES.INTERNAL]: "tool_issue"
+  };
+  for (const code of Object.values(ERROR_CODES)) {
+    const origin = expected[code];
+    assert.ok(
+      origin !== undefined,
+      `ERROR_CODE ${code} is unclassified in the issueOrigin sweep — add it deliberately instead of relying on the tool_issue default`
+    );
+    assert.equal(issueOriginForErrorCode(code), origin, `${code} issueOrigin`);
+  }
 });

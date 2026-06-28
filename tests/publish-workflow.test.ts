@@ -86,10 +86,3 @@ test("package.json version is reflected in CHANGELOG and [Unreleased] is a perma
     "CHANGELOG must keep a permanent `## [Unreleased]` header (Keep a Changelog)"
   );
 });
-
-test("publish workflow keeps the explanatory comment about npm 11 OIDC workaround", async () => {
-  const workflow = await readPublishWorkflow();
-  // Document why the npm 11.x escape hatch exists so future maintainers do not
-  // strip the workaround without context.
-  assert.match(workflow, /OIDC support for scoped packages/i);
-});

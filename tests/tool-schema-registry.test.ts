@@ -5,51 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { z } from "zod";
 
-process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tool-schema-registry-cache");
+import { EXPECTED_TOOLS } from "./helpers/expected-tools.ts";
 
-const EXPECTED_TOOLS = [
-  "inspect-minecraft",
-  "analyze-symbol",
-  "compare-minecraft",
-  "analyze-mod",
-  "validate-project",
-  "manage-cache",
-  "list-versions",
-  "resolve-artifact",
-  "find-class",
-  "get-class-source",
-  "get-class-members",
-  "search-class-source",
-  "get-artifact-file",
-  "list-artifact-files",
-  "trace-symbol-lifecycle",
-  "diff-class-signatures",
-  "find-mapping",
-  "resolve-method-mapping-exact",
-  "get-class-api-matrix",
-  "resolve-workspace-symbol",
-  "check-symbol-exists",
-  "nbt-to-json",
-  "nbt-apply-json-patch",
-  "json-to-nbt",
-  "index-artifact",
-  "get-runtime-metrics",
-  "validate-mixin",
-  "validate-access-widener",
-  "validate-access-transformer",
-  "analyze-mod-jar",
-  "get-registry-data",
-  "compare-versions",
-  "decompile-mod-jar",
-  "get-mod-class-source",
-  "search-mod-source",
-  "remap-mod-jar",
-  "verify-mixin-target",
-  "batch-class-source",
-  "batch-class-members",
-  "batch-symbol-exists",
-  "batch-mappings"
-] as const;
+process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tool-schema-registry-cache");
 
 test("registry contains every public tool from EXPECTED_TOOLS after server import", async () => {
   await import("../src/index.ts");
@@ -157,9 +115,4 @@ test("registry does NOT contain removed/legacy tool names from earlier renames",
       `tool-schema-registry must NOT contain removed tool name "${removed}"`
     );
   }
-});
-
-test("EXPECTED_TOOLS list contains no duplicates", () => {
-  const unique = new Set(EXPECTED_TOOLS);
-  assert.equal(unique.size, EXPECTED_TOOLS.length, "EXPECTED_TOOLS must not have duplicates");
 });

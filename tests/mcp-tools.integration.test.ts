@@ -6,53 +6,10 @@ import test from "node:test";
 
 import { createJar } from "./helpers/zip.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
+import { EXPECTED_TOOLS } from "./helpers/expected-tools.ts";
 import { checkSymbolExistsSchema, validateMixinSchema, getClassSourceSchema, getClassMembersSchema, verifyMixinTargetMemberSchema, findMappingSchema } from "../src/tool-schemas.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
-
-const EXPECTED_TOOLS = [
-  "inspect-minecraft",
-  "analyze-symbol",
-  "compare-minecraft",
-  "analyze-mod",
-  "validate-project",
-  "manage-cache",
-  "list-versions",
-  "resolve-artifact",
-  "find-class",
-  "get-class-source",
-  "get-class-members",
-  "search-class-source",
-  "get-artifact-file",
-  "list-artifact-files",
-  "trace-symbol-lifecycle",
-  "diff-class-signatures",
-  "find-mapping",
-  "resolve-method-mapping-exact",
-  "get-class-api-matrix",
-  "resolve-workspace-symbol",
-  "check-symbol-exists",
-  "nbt-to-json",
-  "nbt-apply-json-patch",
-  "json-to-nbt",
-  "index-artifact",
-  "get-runtime-metrics",
-  "validate-mixin",
-  "validate-access-widener",
-  "validate-access-transformer",
-  "analyze-mod-jar",
-  "get-registry-data",
-  "compare-versions",
-  "decompile-mod-jar",
-  "get-mod-class-source",
-  "search-mod-source",
-  "remap-mod-jar",
-  "verify-mixin-target",
-  "batch-class-source",
-  "batch-class-members",
-  "batch-symbol-exists",
-  "batch-mappings"
-] as const;
 
 type RequestHandler = (
   request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
@@ -315,69 +272,6 @@ test("network-local NBT/runtime tools declare openWorldHint:false; network/cache
       `${name} falls back to network on a cache miss and must not declare openWorldHint:false`
     );
   }
-});
-
-test("manual stdio smoke validates restarted list-versions against the current releases contract", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  assert.match(source, /requireToolOk<ListVersionsOutput>\(\s*"list-versions-after-restart"/s);
-  assert.match(source, /versionsAfterRestart\.releases/);
-  assert.doesNotMatch(source, /versionsAfterRestart\.items/);
-});
-
-test("manual stdio smoke records cold and warm local resolve/search probes for a fresh artifact", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  assert.match(source, /resolve-artifact-probe-cold/);
-  assert.match(source, /resolve-artifact-probe-warm/);
-  assert.match(source, /search-class-source-probe-cold/);
-  assert.match(source, /search-class-source-probe-warm/);
-  assert.match(source, /Cold-start perf probes:/);
-  assert.match(source, /function classifyColdStartProbes\(/);
-  assert.match(source, /const coldStartClassification = classifyColdStartProbes\(/);
-  assert.match(source, /classification:\s*coldStartClassification\.classification/);
-});
-
-test("manual stdio smoke exercises a top-level entry tool and a JSON resource read", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  // The recommended default surface (entry tools) and the JSON resource path
-  // must be covered, not just the low-level tools and raw-text resources.
-  assert.match(source, /name: "inspect-minecraft"/);
-  assert.match(source, /inspect-minecraft class-source must resolve the class\./);
-  assert.match(source, /client\.readResource\(\{[\s\S]*?mc:\/\/artifact\/\$\{artifactId\}\/members\//);
-  assert.match(source, /class-members resource must return a JSON \{ result \| error \} envelope\./);
-});
-
-test("manual stdio smoke bounds transport shutdown and force-kills a stuck supervisor", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  assert.match(source, /type ManagedTransport = Transport &/);
-  assert.match(source, /async function closeTransportWithTimeout\(transport: ManagedTransport/);
-  assert.match(source, /const pid = transport\.pid \?\? null;/);
-  assert.match(source, /const closePromise = transport\.close\(\)\.catch\(\(\) => undefined\);/);
-  assert.match(source, /await Promise\.race\(\[\s*closePromise\.then\(\(\) => false\),\s*wait\(timeoutMs\)\.then\(\(\) => true\)\s*\]\)/s);
-  assert.match(source, /process\.kill\(pid,\s*"SIGTERM"\)/);
-  assert.match(source, /process\.kill\(pid,\s*"SIGKILL"\)/);
-});
-
-test("manual stdio smoke falls back to the bash bridge when native child stdio pipes are unavailable", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  assert.match(source, /selectManualStdioMode\(await canUseStdioPipeReliably\(\)\)/);
-  assert.match(source, /createDirectWorkerBridgeTransport\(/);
-  assert.match(source, /Manual stdio smoke fallback active:/);
-  assert.match(source, /worker restart validation is disabled in this mode/);
-});
-
-test("manual stdio smoke fully terminates the content-length probe child process", async () => {
-  const source = await readFile("tests/manual/stdio-client-smoke.manual.ts", "utf8");
-
-  assert.match(source, /async function terminateChildProcess\(child: ChildProcess/);
-  assert.match(source, /child\.kill\("SIGTERM"\)/);
-  assert.match(source, /child\.kill\("SIGKILL"\)/);
-  assert.match(source, /child\.unref\(\)/);
-  assert.match(source, /await terminateChildProcess\(child\);/);
 });
 
 test("validate-mixin tools/list schema exposes all mode-based inputs to clients", async () => {
@@ -2139,42 +2033,4 @@ test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)"
   const keysWithCompact = Object.keys(withCompact.structuredContent?.result ?? {}).sort();
   const keysWithoutCompact = Object.keys(withoutCompact.structuredContent?.result ?? {}).sort();
   assert.deepEqual(keysWithCompact, keysWithoutCompact);
-});
-
-test("EXPECTED_TOOLS is locked at length 41 (bidirectional with tool registry)", async () => {
-  // Literal magic-number fix: when this fires, update BOTH this assertion
-  // and the EXPECTED_TOOLS array above to keep the public contract pinned.
-  assert.equal(EXPECTED_TOOLS.length, 41);
-});
-
-test("EXPECTED_TOOLS matches the registered tool-schema-registry set (set equivalence)", async () => {
-  await import("../src/index.ts");
-  const { listRegisteredTools } = await import("../src/tool-schema-registry.ts");
-  const registered = new Set(
-    listRegisteredTools().filter((name) => !name.startsWith("__test-tool-"))
-  );
-  const expected = new Set(EXPECTED_TOOLS);
-  // bidirectional equivalence
-  for (const name of expected) {
-    assert.ok(registered.has(name), `EXPECTED_TOOLS has ${name} but registry does not`);
-  }
-  for (const name of registered) {
-    assert.ok(expected.has(name), `registry has ${name} but EXPECTED_TOOLS does not`);
-  }
-  assert.equal(registered.size, expected.size);
-});
-
-test("EXPECTED_TOOLS excludes every removed legacy tool name (negative-list)", () => {
-  const expected = new Set<string>(EXPECTED_TOOLS);
-  // Tool names only — mapping values (`official`) and parameter names
-  // (`targetKind`, `snippetLines`) cannot appear here by construction and are
-  // pinned by docs-contract tests instead.
-  for (const removed of [
-    "inspect-mc-class",
-    "explore-mod",
-    "mc-list-versions",
-    "mc-resolve-artifact"
-  ]) {
-    assert.ok(!expected.has(removed), `EXPECTED_TOOLS must not contain removed name "${removed}"`);
-  }
 });

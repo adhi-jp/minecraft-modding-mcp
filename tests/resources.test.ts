@@ -42,15 +42,6 @@ function parseJsonResource(result: { contents: Array<{ text?: string }> }) {
   return JSON.parse(result.contents[0]!.text as string) as Record<string, any>;
 }
 
-test("registerResources completes without errors", () => {
-  const server = new McpServer({ name: "test", version: "0.0.0" });
-  const stub = createStubSourceService();
-
-  assert.doesNotThrow(() => {
-    registerResources(server, stub as never);
-  });
-});
-
 test("registerResources registers exactly 9 resources (2 fixed + 7 template)", () => {
   const server = new McpServer({ name: "test", version: "0.0.0" });
   const stub = createStubSourceService();
