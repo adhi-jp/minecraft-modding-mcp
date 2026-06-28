@@ -232,3 +232,75 @@ test("decompileBinaryJar cache-hit traversal avoids sync listing and stat probes
   assert.doesNotMatch(source, /statSync\(/);
   assert.match(source, /mapWithConcurrencyLimit/);
 });
+
+test("decompileBinaryJar falls back default -> relaxed -> safe when no Java files are produced", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "decompile-fallback-profiles-"));
+  const cacheDir = join(root, "cache");
+  const binaryJarPath = join(root, "test.jar");
+  const vineflowerJarPath = join(root, "vineflower.jar");
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+  const flagsLogPath = join(root, "profile-flags.log");
+
+  mkdirSync(cacheDir, { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(binaryJarPath, Buffer.from([0xca, 0xfe]));
+  writeFileSync(vineflowerJarPath, Buffer.from([0x50, 0x4b]));
+
+  // Fake java: succeed on `-version` (so assertJavaAvailable resolves) and, for
+  // each decompile invocation, exit 0 but emit NO .java files. That drives the
+  // "No Java files were produced" DECOMPILER_FAILED retry across every profile.
+  // Each invocation records its leading three flags so we can assert the order.
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+const { appendFileSync, mkdirSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "-version") {
+  process.exit(0);
+}
+const jarIndex = args.indexOf("-jar");
+const toolArgs = args.slice(jarIndex + 2);
+const flags = toolArgs.slice(0, 3);
+appendFileSync(${JSON.stringify(flagsLogPath)}, flags.join(" ") + "\\n");
+const outputDir = toolArgs.at(-1);
+mkdirSync(outputDir, { recursive: true });
+process.exit(0);
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  try {
+    await assert.rejects(
+      () =>
+        decompileBinaryJar(binaryJarPath, cacheDir, {
+          vineflowerJarPath,
+          signature: "fallback-profiles-test",
+          timeoutMs: 10_000
+        }),
+      (error: unknown) => {
+        if (!isAppError(error)) return false;
+        assert.equal(error.code, ERROR_CODES.DECOMPILER_FAILED);
+        assert.deepEqual(error.details?.profilesAttempted, ["default", "relaxed", "safe"]);
+        return true;
+      }
+    );
+
+    const recordedFlags = readFileSync(flagsLogPath, "utf8").trim().split("\n");
+    assert.deepEqual(recordedFlags, [
+      "-din=1 -rbr=1 -dgs=1",
+      "-din=1 -rbr=0 -dgs=0",
+      "-din=0 -rbr=0 -dgs=0"
+    ]);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});

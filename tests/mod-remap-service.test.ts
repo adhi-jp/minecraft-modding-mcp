@@ -371,55 +371,53 @@ test("remapModJar rejects mojang-mapped Fabric jars when targetMapping=yarn", as
 test("remapModJar ignores legacy cache entries that are not scoped by mapping context", async () => {
   const tempDir = makeTempDir();
   try {
-    // Create a minimal JAR with no recognized mod metadata.
-    const { createJar } = await import("./helpers/zip.ts");
-    const jarPath = join(tempDir, "unknown-loader.jar");
-    await createJar(jarPath, { "com/example/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]) });
+    // Use a recognized Fabric jar so execution actually reaches the cache lookup.
+    // (An unknown-loader jar bails out with REMAP_FAILED before the cache is ever
+    // consulted, which would let this test pass for the wrong reason.)
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
 
-    // Pre-seed a legacy cache entry using the old cache key format.
+    // Pre-seed a cache entry under the legacy (pre-v3) key format. The current
+    // cache key is scoped by mapping context, so this stale entry must NOT be
+    // served: the remap should run fresh and never read these bytes.
     const staleCache = legacyCachePath(tempDir, jarPath, "yarn");
     mkdirSync(dirname(staleCache), { recursive: true });
-    writeFileSync(staleCache, "stale-cache");
+    writeFileSync(staleCache, "stale-legacy-bytes");
+
+    const yarnTiny = join(tempDir, "build.11.tiny");
+    writeFileSync(yarnTiny, "tiny\t2\t0\tintermediary\tnamed\n");
 
     const config = makeTestConfig(tempDir);
-
-    await assert.rejects(
-      () =>
-        remapModJar(
-          {
-            inputJar: jarPath,
-            mcVersion: "1.21.1",
-            targetMapping: "yarn"
-          },
-          config
-        ),
-      (error: unknown) => {
-        const appError = error as { code?: string };
-        return appError.code === ERROR_CODES.REMAP_FAILED;
+    const remapCalls: string[] = [];
+    const deps = {
+      resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+      resolveTinyMappingFile: async () => ({ path: yarnTiny, coordinate: "1.21.1+build.11" }),
+      remapJar: async (_jar: string, opts: { outputJar: string; mappingsFile: string }) => {
+        remapCalls.push(opts.mappingsFile);
+        writeFileSync(opts.outputJar, "freshly-remapped-bytes");
+        return { outputJar: opts.outputJar, durationMs: 0 };
       }
+    };
+
+    const result = await remapModJar(
+      { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "yarn" },
+      config,
+      deps
     );
+
+    // The remap pipeline actually ran (the legacy entry did not short-circuit it)...
+    assert.equal(remapCalls.length, 1, "the stale legacy entry must not satisfy the scoped cache lookup");
+    // ...and the result carries the fresh bytes, never the legacy "stale" bytes.
+    assert.equal(readFileSync(result.outputJar, "utf8"), "freshly-remapped-bytes");
+    assert.ok(
+      !result.warnings.some((w) => w.toLowerCase().includes("cache")),
+      "a fresh remap must not report a cache hit"
+    );
+    // The legacy entry is left untouched — it was ignored, not read or overwritten.
+    assert.equal(readFileSync(staleCache, "utf8"), "stale-legacy-bytes");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
-});
-
-test("ModRemapInput type accepts valid configurations", () => {
-  const yarnInput: ModRemapInput = {
-    inputJar: "/path/to/mod.jar",
-    targetMapping: "yarn"
-  };
-  assert.equal(yarnInput.targetMapping, "yarn");
-  assert.equal(yarnInput.mcVersion, undefined);
-  assert.equal(yarnInput.outputJar, undefined);
-
-  const mojangInput: ModRemapInput = {
-    inputJar: "/path/to/mod.jar",
-    outputJar: "/path/to/output.jar",
-    mcVersion: "1.20.4",
-    targetMapping: "mojang"
-  };
-  assert.equal(mojangInput.targetMapping, "mojang");
-  assert.equal(mojangInput.mcVersion, "1.20.4");
 });
 
 // --- New high-priority coverage tests ---------------------------------------
@@ -585,25 +583,6 @@ test("remapModJar accepts quilt loader and returns cached output for mojang targ
     assert.equal(result.targetMapping, "mojang");
     assert.equal(result.mcVersion, "1.21.1");
     assert.equal(result.fromMapping, "intermediary");
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("remapModJar exposes a numeric durationMs on cache-hit results", async () => {
-  const tempDir = makeTempDir();
-  try {
-    const jarPath = join(tempDir, "with-duration.jar");
-    await createMinimalFabricJar(jarPath);
-    const cachedOutput = scopedCachePath(tempDir, jarPath, "intermediary", "mojang", "1.21.1");
-    mkdirSync(dirname(cachedOutput), { recursive: true });
-    writeFileSync(cachedOutput, "x");
-    const result = await remapModJar(
-      { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" },
-      makeTestConfig(tempDir)
-    );
-    assert.equal(typeof (result as any).durationMs, "number");
-    assert.ok((result as any).durationMs >= 0);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }

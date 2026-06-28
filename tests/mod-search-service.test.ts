@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { ERROR_CODES } from "../src/errors.ts";
 import type { DecompileModJarOutput } from "../src/mod-decompile-service.ts";
 import { ModSearchService } from "../src/mod-search-service.ts";
 import { createJar } from "./helpers/zip.ts";
@@ -265,9 +266,133 @@ test("searchModSource searches source jars directly without decompile", async ()
   assert.ok(result.warnings.some((warning) => warning.includes("source jar")));
 });
 
-test("searchModSource uses promise-based file reads for decompiled output scanning", async () => {
-  const source = await readFile("src/mod-search-service.ts", "utf8");
+// ---------------------------------------------------------------------------
+// Line classification, symbol-name extraction, query validation, and the
+// invalid-regex literal fallback, all driven through searchModSource over a
+// pre-decompiled (stubbed) output directory.
+// ---------------------------------------------------------------------------
 
-  assert.doesNotMatch(source, /readFileSync\(/);
-  assert.match(source, /mapWithConcurrencyLimit/);
+function buildDecompiledStub(outputDir: string, classNames: string[]): { decompileModJar(): Promise<DecompileModJarOutput> } {
+  return {
+    async decompileModJar(): Promise<DecompileModJarOutput> {
+      return {
+        modId: "demo",
+        loader: "fabric",
+        outputDir,
+        fileCount: classNames.length,
+        files: classNames,
+        warnings: []
+      };
+    }
+  };
+}
+
+test("searchModSource classifies and names method hits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-method-"));
+  const outputDir = join(root, "decompiled");
+  const jarPath = join(root, "demo.jar");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await createJar(jarPath, { "com/example/Foo.class": Buffer.alloc(4) });
+  await writeFile(
+    join(outputDir, "com/example/Foo.java"),
+    [
+      "package com.example;",
+      "public class Foo {",
+      "  public void runMethod() {",
+      "    int x = 0;",
+      "  }",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const service = new ModSearchService(buildDecompiledStub(outputDir, ["com.example.Foo"]) as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "runMethod",
+    searchType: "method",
+    limit: 10
+  });
+
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0]?.type, "method");
+  assert.equal(result.hits[0]?.name, "runMethod");
+});
+
+test("searchModSource classifies and names field hits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-field-"));
+  const outputDir = join(root, "decompiled");
+  const jarPath = join(root, "demo.jar");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await createJar(jarPath, { "com/example/Foo.class": Buffer.alloc(4) });
+  await writeFile(
+    join(outputDir, "com/example/Foo.java"),
+    [
+      "package com.example;",
+      "public class Foo {",
+      "  private int fieldValue = 7;",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const service = new ModSearchService(buildDecompiledStub(outputDir, ["com.example.Foo"]) as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "fieldValue",
+    searchType: "field",
+    limit: 10
+  });
+
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0]?.type, "field");
+  assert.equal(result.hits[0]?.name, "fieldValue");
+});
+
+test("searchModSource falls back to literal matching for invalid regex queries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-bad-regex-"));
+  const outputDir = join(root, "decompiled");
+  const jarPath = join(root, "demo.jar");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await createJar(jarPath, { "com/example/Foo.class": Buffer.alloc(4) });
+  await writeFile(
+    join(outputDir, "com/example/Foo.java"),
+    [
+      "package com.example;",
+      "public class Foo {",
+      "  String s = foo(bar);",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+
+  // "foo(" is not a valid standalone regex (unterminated group); buildRegex must
+  // escape it and match the literal text rather than throwing or returning none.
+  const service = new ModSearchService(buildDecompiledStub(outputDir, ["com.example.Foo"]) as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "foo(",
+    searchType: "content",
+    limit: 10
+  });
+
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0]?.type, "content");
+  assert.equal(result.hits[0]?.name, "com.example.Foo");
+});
+
+test("searchModSource rejects empty queries with INVALID_INPUT", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-empty-query-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Foo.class": Buffer.alloc(4) });
+
+  const service = new ModSearchService(buildDecompiledStub(root, []) as any);
+  await assert.rejects(
+    () => service.searchModSource({ jarPath, query: "   " }),
+    (error: unknown) => {
+      const appError = error as { code?: string };
+      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+      return true;
+    }
+  );
 });

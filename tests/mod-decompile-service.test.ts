@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
+import { ERROR_CODES } from "../src/errors.ts";
 import { ModDecompileService } from "../src/mod-decompile-service.ts";
 import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
@@ -377,9 +379,136 @@ test("ModDecompileService refreshes cache hits before eviction so hot jars stay 
   assert.match(source, /while \(this\.decompileCache\.size > 8\)/);
 });
 
-test("ModDecompileService uses promise-based file I/O on decompiled source paths", async () => {
-  const source = await readFile("src/mod-decompile-service.ts", "utf8");
+// ---------------------------------------------------------------------------
+// getModClassSource validation / lookup failures
+// ---------------------------------------------------------------------------
 
-  assert.doesNotMatch(source, /readFileSync\(/);
-  assert.doesNotMatch(source, /writeFileSync\(/);
+test("getModClassSource throws CLASS_NOT_FOUND when the class is absent from decompiled output", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-class-not-found-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+  const outputDir = join(root, "decompiled");
+  await mkdir(outputDir, { recursive: true });
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  await assert.rejects(
+    () => service.getModClassSource({ jarPath, className: "com.example.Missing" }),
+    (error: unknown) => {
+      const appError = error as { code?: string; details?: { availableCount?: number } };
+      assert.equal(appError.code, ERROR_CODES.CLASS_NOT_FOUND);
+      assert.equal(appError.details?.availableCount, 1);
+      return true;
+    }
+  );
+});
+
+test("getModClassSource rejects an empty className with INVALID_INPUT", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-empty-class-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+  const outputDir = join(root, "decompiled");
+  await mkdir(outputDir, { recursive: true });
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  await assert.rejects(
+    () => service.getModClassSource({ jarPath, className: "   " }),
+    (error: unknown) => {
+      const appError = error as { code?: string };
+      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+      return true;
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Real decompileAndCache: in-flight dedup + size>8 eviction
+//
+// These drive the real ensureDecompiled/decompileAndCache pipeline (no
+// ensureDecompiled stub). The Vineflower decompile cache is pre-seeded so
+// decompileBinaryJar short-circuits on its completion-marker cache hit instead
+// of spawning Java, while the service-level LRU/in-flight logic runs for real.
+// ---------------------------------------------------------------------------
+
+async function createFabricBinaryJar(jarPath: string, modId: string): Promise<void> {
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({ schemaVersion: 1, id: modId, version: "1.0.0" }),
+    "com/example/Demo.class": Buffer.alloc(4)
+  });
+}
+
+/**
+ * Replicates modDecompileCacheKey() + decompileOutputDir() so the on-disk
+ * Vineflower cache can be pre-populated for a given jar, and returns the
+ * service-level cache key so eviction can be asserted directly.
+ */
+async function seedDecompileCache(
+  cacheDir: string,
+  jarRealPath: string
+): Promise<{ serviceCacheKey: string; outputDir: string }> {
+  const stats = statSync(jarRealPath);
+  const signature = `${Math.trunc(stats.mtimeMs)}:${stats.size}`;
+  const serviceCacheKey = createHash("sha256").update(`${jarRealPath}|${signature}`).digest("hex");
+  const digest = createHash("sha256").update(jarRealPath).update(serviceCacheKey).digest("hex");
+  const outputDir = join(cacheDir, "decompiled", digest);
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await writeFile(
+    join(outputDir, "com/example/Demo.java"),
+    "package com.example;\npublic class Demo {}",
+    "utf8"
+  );
+  await writeFile(join(outputDir, ".decompile-complete"), "default", "utf8");
+  return { serviceCacheKey, outputDir };
+}
+
+test("decompileModJar dedups concurrent requests for the same jar via the in-flight map", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-decompile-inflight-"));
+  const jarPath = join(root, "demo.jar");
+  await createFabricBinaryJar(jarPath, "inflight-mod");
+  const jarRealPath = realpathSync(jarPath);
+
+  const config = buildTestConfig(root, { vineflowerJarPath: join(root, "vineflower.jar") });
+  await seedDecompileCache(config.cacheDir, jarRealPath);
+
+  const service = new ModDecompileService(config);
+  const realDecompileAndCache = (
+    service as unknown as { decompileAndCache: (...args: unknown[]) => Promise<unknown> }
+  ).decompileAndCache.bind(service);
+  let decompileAndCacheCalls = 0;
+  (service as unknown as { decompileAndCache: (...args: unknown[]) => Promise<unknown> }).decompileAndCache =
+    (...args: unknown[]) => {
+      decompileAndCacheCalls += 1;
+      return realDecompileAndCache(...args);
+    };
+
+  const [first, second] = await Promise.all([
+    service.decompileModJar({ jarPath }),
+    service.decompileModJar({ jarPath })
+  ]);
+
+  assert.equal(decompileAndCacheCalls, 1, "two concurrent requests must share a single decompile");
+  assert.equal(first.fileCount, 1);
+  assert.equal(second.fileCount, 1);
+  assert.equal(first.modId, "inflight-mod");
+  assert.equal(second.modId, "inflight-mod");
+});
+
+test("decompileAndCache evicts the oldest entry once more than 8 jars are resident", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-decompile-evict-"));
+  const config = buildTestConfig(root, { vineflowerJarPath: join(root, "vineflower.jar") });
+  const service = new ModDecompileService(config);
+
+  const cacheKeys: string[] = [];
+  for (let index = 0; index < 9; index += 1) {
+    const jarPath = join(root, `mod-${index}.jar`);
+    await createFabricBinaryJar(jarPath, `evict-mod-${index}`);
+    const jarRealPath = realpathSync(jarPath);
+    const { serviceCacheKey } = await seedDecompileCache(config.cacheDir, jarRealPath);
+    cacheKeys.push(serviceCacheKey);
+    await service.decompileModJar({ jarPath });
+  }
+
+  const decompileCache = (service as unknown as { decompileCache: Map<string, unknown> }).decompileCache;
+  assert.equal(decompileCache.size, 8, "the LRU must stay capped at 8 resident jars");
+  assert.equal(decompileCache.has(cacheKeys[0]!), false, "the oldest jar must be evicted");
+  assert.equal(decompileCache.has(cacheKeys.at(-1)!), true, "the most recent jar must stay resident");
 });

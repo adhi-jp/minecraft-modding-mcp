@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../src/errors.ts";
@@ -14,7 +18,7 @@ test("assertJavaAvailable resolves when java is installed", async () => {
   }
 });
 
-test("runJavaProcess rejects with JAVA_PROCESS_FAILED for non-existent jar", async () => {
+test("runJavaProcess resolves with a non-zero exitCode when the target jar is missing", async () => {
   try {
     await assertJavaAvailable();
   } catch {
@@ -22,6 +26,9 @@ test("runJavaProcess rejects with JAVA_PROCESS_FAILED for non-existent jar", asy
     return;
   }
 
+  // Java starts fine but cannot open a missing jar, so it exits non-zero. This
+  // resolves (with exitCode != 0); it does NOT reject — the reject paths are
+  // covered by the dedicated timeout-kill and spawn-error tests below.
   const result = await runJavaProcess({
     jarPath: "/tmp/nonexistent-test-jar.jar",
     args: [],
@@ -50,15 +57,16 @@ test("runJavaProcess normalizes path args when normalizePathArgs is true", async
   assert.notEqual(result.exitCode, 0);
 });
 
-test("runJavaProcess includes memory flags when specified", async () => {
+test("runJavaProcess accepts memory flags without a spawn error (missing jar still exits non-zero)", async () => {
   try {
     await assertJavaAvailable();
   } catch {
     return;
   }
 
-  // The process will fail because the jar doesn't exist,
-  // but it verifies the memory args don't cause spawn errors
+  // The process exits non-zero because the jar doesn't exist; this smoke-checks
+  // that the -Xmx/-Xms args don't break spawning. The dedicated test below
+  // asserts those flags actually reach the spawn argv.
   const result = await runJavaProcess({
     jarPath: "/tmp/nonexistent-test-jar.jar",
     args: [],
@@ -70,23 +78,132 @@ test("runJavaProcess includes memory flags when specified", async () => {
   assert.notEqual(result.exitCode, 0);
 });
 
-test("runJavaProcess times out and rejects", async () => {
-  try {
-    await assertJavaAvailable();
-  } catch {
+test("runJavaProcess kills the process and rejects with JAVA_PROCESS_FAILED on timeout", async () => {
+  if (process.platform === "win32") {
     return;
   }
 
-  // Use a very short timeout with a jar that would hang
-  // Since the jar doesn't exist, java exits fast — but we validate timeout path works
-  const result = await runJavaProcess({
-    jarPath: "/tmp/nonexistent-test-jar.jar",
-    args: [],
-    timeoutMs: 60_000
-  });
+  const root = await mkdtemp(join(tmpdir(), "java-process-timeout-"));
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+  mkdirSync(binDir, { recursive: true });
 
-  // Process exits non-zero because jar doesn't exist
-  assert.notEqual(result.exitCode, 0);
+  // Fake `java` that hangs far past the timeout so the kill + reject path runs.
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+setTimeout(() => process.exit(0), 30000);
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  try {
+    await assert.rejects(
+      () =>
+        runJavaProcess({
+          jarPath: "/tmp/whatever.jar",
+          args: [],
+          timeoutMs: 300
+        }),
+      (error: unknown) => {
+        const appError = error as { code?: string; details?: { reason?: string } };
+        assert.equal(appError.code, ERROR_CODES.JAVA_PROCESS_FAILED);
+        assert.equal(appError.details?.reason, "timeout");
+        return true;
+      }
+    );
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("runJavaProcess rejects with JAVA_PROCESS_FAILED when java cannot be spawned", async () => {
+  const root = await mkdtemp(join(tmpdir(), "java-process-spawn-err-"));
+  const emptyBin = join(root, "empty-bin");
+  mkdirSync(emptyBin, { recursive: true });
+
+  const originalPath = process.env.PATH ?? "";
+  // Point PATH at a directory with no `java`, so spawn raises an ENOENT error.
+  process.env.PATH = emptyBin;
+
+  try {
+    await assert.rejects(
+      () =>
+        runJavaProcess({
+          jarPath: "/tmp/whatever.jar",
+          args: [],
+          timeoutMs: 2_000
+        }),
+      (error: unknown) => {
+        const appError = error as { code?: string; details?: { error?: string } };
+        assert.equal(appError.code, ERROR_CODES.JAVA_PROCESS_FAILED);
+        assert.equal(typeof appError.details?.error, "string");
+        return true;
+      }
+    );
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("runJavaProcess forwards -Xmx/-Xms memory flags ahead of -jar in the spawn args", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "java-process-memflags-"));
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+  const argsLogPath = join(root, "java-args.log");
+  mkdirSync(binDir, { recursive: true });
+
+  // Fake `java` records every arg it was spawned with, then exits cleanly.
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "-version") {
+  process.exit(0);
+}
+writeFileSync(${JSON.stringify(argsLogPath)}, args.join("\\n"), "utf8");
+process.exit(0);
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  try {
+    const result = await runJavaProcess({
+      jarPath: "/tmp/tool.jar",
+      args: ["--threads=4"],
+      timeoutMs: 5_000,
+      maxMemoryMb: 512,
+      minMemoryMb: 128
+    });
+
+    assert.equal(result.exitCode, 0);
+
+    const spawnedArgs = readFileSync(argsLogPath, "utf8").split("\n");
+    const xmxIndex = spawnedArgs.indexOf("-Xmx512m");
+    const xmsIndex = spawnedArgs.indexOf("-Xms128m");
+    const jarIndex = spawnedArgs.indexOf("-jar");
+
+    assert.ok(xmxIndex >= 0, "-Xmx512m must reach the spawn args");
+    assert.ok(xmsIndex >= 0, "-Xms128m must reach the spawn args");
+    assert.ok(jarIndex >= 0, "-jar must reach the spawn args");
+    assert.ok(xmxIndex < jarIndex, "-Xmx must precede -jar");
+    assert.ok(xmsIndex < jarIndex, "-Xms must precede -jar");
+  } finally {
+    process.env.PATH = originalPath;
+  }
 });
 
 import {
