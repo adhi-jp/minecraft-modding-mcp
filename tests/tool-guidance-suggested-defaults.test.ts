@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   SUGGESTED_CALL_DEFAULTS,
   copyValidateMixinSharedParams,
-  buildValidateMixinSuggestedParams
+  buildValidateMixinSuggestedParams,
+  truncateSuggestionText
 } from "../src/tool-guidance.ts";
 
 // Regression for a review finding: SUGGESTED_CALL_DEFAULTS.reportMode
@@ -33,4 +34,18 @@ test("buildValidateMixinSuggestedParams preserves an explicit reportMode='full' 
     reportMode: "full"
   });
   assert.equal(params.reportMode, "full");
+});
+
+test("truncateSuggestionText appends an ellipsis when the value exceeds maxLength", () => {
+  // >maxLength branch: the head is sliced to exactly maxLength and an ellipsis
+  // marker is appended so the returned string is maxLength + 3 characters.
+  const truncated = truncateSuggestionText("a".repeat(12), 5);
+  assert.equal(truncated, "aaaaa...");
+  assert.equal(truncated.length, 8);
+});
+
+test("truncateSuggestionText returns the value unchanged at or below maxLength", () => {
+  // Boundary: length === maxLength must NOT truncate (strict > comparison).
+  assert.equal(truncateSuggestionText("exact", 5), "exact");
+  assert.equal(truncateSuggestionText("hi", 5), "hi");
 });
