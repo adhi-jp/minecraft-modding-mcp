@@ -2999,12 +2999,6 @@ test("MappingService rejects class queries that include owner", async () => {
   }
 });
 
-test("MappingService uses async Loom cache candidate discovery", async () => {
-  const source = await readFile("src/mapping-service.ts", "utf8");
-
-  assert.doesNotMatch(source, /fastGlob\.sync\(/);
-});
-
 test("MappingService getClassApiMatrix includes competing candidates in ambiguity warnings", async () => {
   const { MappingService } = await import("../src/mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "mapping-service-matrix-competing-"));

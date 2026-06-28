@@ -110,6 +110,11 @@ test("resolveTinyRemapperJar deduplicates concurrent downloads", async () => {
     // Both should succeed
     assert.ok(existsSync(result1));
     assert.ok(existsSync(result2));
+    assert.equal(result1, expectedPath);
+    assert.equal(result2, expectedPath);
+    // The whole point of the in-flight lock: two concurrent resolutions must collapse
+    // into a single network download rather than racing two downloads to the same path.
+    assert.equal(fetchCount, 1);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
