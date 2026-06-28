@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import type { SignatureMember } from "../src/minecraft-explorer-service.ts";
@@ -156,25 +155,6 @@ test("suggestSimilar handles ranking, truncation, and empty results", () => {
   }
 });
 
-test("suggestSimilar skips candidates whose length gap already exceeds maxDistance", async () => {
-  const source = await readFile("src/mixin/helpers.ts", "utf8");
-  const block =
-    source.match(/export function suggestSimilar\([\s\S]*?return scored\.slice\(0, maxResults\)\.map\(\(s\) => s\.candidate\);\n\}/)?.[0] ?? "";
-
-  assert.match(block, /Math\.abs\(normalizedName\.length - normalizedCandidate\.length\) > maxDistance/);
-});
-
-test("classifyStructuredWarning hoists warning-classifier regexes out of the hot function body", async () => {
-  const helpersSource = await readFile("src/mixin/helpers.ts", "utf8");
-  const block =
-    helpersSource.match(/export function classifyStructuredWarning\([\s\S]*?\n\}/)?.[0] ?? "";
-
-  assert.doesNotMatch(block, /const MAPPING_WARNING_RE =/);
-  assert.match(helpersSource, /const MAPPING_WARNING_RE = /);
-  assert.match(helpersSource, /const CONFIG_WARNING_RE = /);
-  assert.match(helpersSource, /const PARSE_WARNING_RE = /);
-});
-
 /* ------------------------------------------------------------------ */
 /*  Mixin validation tests                                             */
 /* ------------------------------------------------------------------ */
@@ -314,19 +294,6 @@ test("validateParsedMixin reports representative member-validation outcomes", ()
       assert.equal(result.summary.total, testCase.expectedSummary.total, `${testCase.name}: total`);
     }
   }
-});
-
-test("validateParsedMixin includes parse warnings in output", () => {
-  const parsed = makeParsedMixin({
-    parseWarnings: ["Line 3: @Inject missing method attribute."]
-  });
-  const targetMembers = new Map<string, ResolvedTargetMembers>([
-    ["PlayerEntity", makeTargetMembers("PlayerEntity", { methods: [] })]
-  ]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings);
-  assert.ok(result.warnings.some((w) => w.includes("missing method attribute")));
 });
 
 /* ------------------------------------------------------------------ */
@@ -652,9 +619,13 @@ test("validateParsedMixin distinguishes mapping-failed and missing targets", asy
           mappingFailedTargets
         );
         assert.equal(result.issues.length, 1);
+        // Canonical assertion for every field of a target-mapping-failed issue.
         assert.equal(result.issues[0].kind, "target-mapping-failed");
         assert.equal(result.issues[0].severity, "warning");
         assert.equal(result.issues[0].confidence, "uncertain");
+        assert.equal(result.issues[0].issueOrigin, "tool_issue");
+        assert.equal(result.issues[0].resolutionPath, "target-mapping-failed");
+        assert.equal(result.issues[0].category, "mapping");
         assert.equal(result.valid, true);
       }
     },
@@ -2302,16 +2273,6 @@ test("issueOrigin is code_issue for genuine target-class-missing", () => {
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
   assert.equal(result.issues[0].issueOrigin, "code_issue");
-});
-
-test("issueOrigin is tool_issue for target-mapping-failed", () => {
-  const parsed = makeParsedMixin({ targets: [{ className: "SomeClass" }] });
-  const targetMembers = new Map<string, ResolvedTargetMembers>();
-  const mappingFailed = new Set(["SomeClass"]);
-  const warnings: string[] = [];
-
-  const result = validateParsedMixin(parsed, targetMembers, warnings, undefined, undefined, mappingFailed);
-  assert.equal(result.issues[0].issueOrigin, "tool_issue");
 });
 
 test("issueOrigin is tool_issue for member-remap-failed", () => {

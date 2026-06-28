@@ -412,7 +412,7 @@ test("C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects 
   assert.match(result.stdout, /OK/);
 });
 
-test("C14: @Accessor setter template emits void with parameter (not zero-arg)", async () => {
+test("C19: @Accessor setter template emits void with parameter (not zero-arg)", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({
       fields: [
@@ -438,7 +438,7 @@ test("C14: @Accessor setter template emits void with parameter (not zero-arg)", 
   assert.doesNotMatch(snippet, /<returnType> setHealth\(\);/);
 });
 
-test("C14b: @Accessor getter template stays zero-arg with return type", async () => {
+test("C19b: @Accessor getter template stays zero-arg with return type", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({
       fields: [
@@ -725,4 +725,212 @@ test("C12: exampleSnippet is deterministic for given (annotation, kind, accessFl
     member: { kind: "field", name: "airSupply" }
   });
   assert.equal(a.accessorAdvice?.exampleSnippet, b.accessorAdvice?.exampleSnippet);
+});
+
+test("C20: missing target throws ERR_INVALID_INPUT pointing at the target field", async () => {
+  const service = new VerifyMixinTargetService(buildDeps({}));
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "tick" }
+      } as VerifyMixinTargetInput),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.INVALID_INPUT);
+      const details = (err as { details?: { fieldErrors?: Array<{ path?: string }> } }).details ?? {};
+      assert.equal(details.fieldErrors?.[0]?.path, "target");
+      return true;
+    }
+  );
+});
+
+test("C21: empty owner throws ERR_INVALID_INPUT", async () => {
+  const service = new VerifyMixinTargetService(buildDeps({}));
+  await assert.rejects(
+    () =>
+      service.execute({
+        ...baseInput,
+        owner: "   ",
+        member: { kind: "method", name: "tick" }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.INVALID_INPUT);
+      assert.match((err as { message: string }).message, /owner must be non-empty/);
+      return true;
+    }
+  );
+});
+
+test("C22: empty member.name throws ERR_INVALID_INPUT", async () => {
+  const service = new VerifyMixinTargetService(buildDeps({}));
+  await assert.rejects(
+    () =>
+      service.execute({
+        ...baseInput,
+        member: { kind: "method", name: "  " }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.INVALID_INPUT);
+      assert.match((err as { message: string }).message, /member\.name must be non-empty/);
+      return true;
+    }
+  );
+});
+
+test("C23: resolved artifact without a binary jar throws ERR_CONTEXT_UNRESOLVED", async () => {
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: undefined,
+      provenance: undefined,
+      warnings: []
+    }),
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when the binary jar is missing");
+    }
+  });
+  await assert.rejects(
+    () =>
+      service.execute({
+        ...baseInput,
+        member: { kind: "method", name: "tick" }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.CONTEXT_UNRESOLVED);
+      const details = (err as { details?: { artifactId?: string } }).details ?? {};
+      assert.equal(details.artifactId, "minecraft-1.21.10");
+      return true;
+    }
+  );
+});
+
+test("C24: autoRemap without a findMapping translator throws ERR_NAMESPACE_MISMATCH", async () => {
+  // buildDeps supplies no findMapping translator, so autoRemap cannot run.
+  const service = new VerifyMixinTargetService(buildDeps({}));
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "tick" },
+        target: { kind: "version", value: "1.21.10" },
+        mapping: "yarn",
+        autoRemap: true
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.NAMESPACE_MISMATCH);
+      assert.match((err as { message: string }).message, /no mapping translator configured/);
+      return true;
+    }
+  );
+});
+
+test("C25: autoRemap with no resolvable version throws ERR_INVALID_INPUT", async () => {
+  // Translator present, but neither resolved.version nor a version-kind target
+  // can supply a Minecraft version for find-mapping.
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-workspace",
+      mappingApplied: "obfuscated",
+      binaryJarPath: "/tmp/fake.jar",
+      version: undefined,
+      provenance: undefined,
+      warnings: []
+    }),
+    findMapping: async () => ({ resolved: false }),
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when the version cannot be resolved");
+    }
+  });
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: "net.minecraft.world.entity.LivingEntity",
+        member: { kind: "method", name: "tick" },
+        target: { kind: "workspace" },
+        projectPath: "/workspace/demo-mod",
+        mapping: "yarn",
+        autoRemap: true
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      assert.equal((err as { code: string }).code, ERROR_CODES.INVALID_INPUT);
+      assert.match((err as { message: string }).message, /needs a Minecraft version/);
+      return true;
+    }
+  );
+});
+
+test("C26: decodeAccessFlags labels static, final, abstract, and package-private members", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      methods: [
+        { ownerFqn: "Owner", name: "pkg", javaSignature: "void pkg()", jvmDescriptor: "()V", accessFlags: 0x0000, isSynthetic: false },
+        { ownerFqn: "Owner", name: "stat", javaSignature: "static void stat()", jvmDescriptor: "()V", accessFlags: 0x0008, isSynthetic: false },
+        { ownerFqn: "Owner", name: "fin", javaSignature: "final void fin()", jvmDescriptor: "()V", accessFlags: 0x0010, isSynthetic: false },
+        { ownerFqn: "Owner", name: "abs", javaSignature: "abstract void abs()", jvmDescriptor: "()V", accessFlags: 0x0400, isSynthetic: false }
+      ]
+    })
+  );
+  const expectations: Array<{ name: string; flags: string[] }> = [
+    { name: "pkg", flags: ["package-private"] },
+    { name: "stat", flags: ["static"] },
+    { name: "fin", flags: ["final"] },
+    { name: "abs", flags: ["abstract"] }
+  ];
+  for (const { name, flags } of expectations) {
+    const result = await service.execute({
+      ...baseInput,
+      member: { kind: "method", name, descriptor: "()V" }
+    });
+    assert.equal(result.exists, true, name);
+    assert.deepEqual(result.matches[0]?.accessFlags, flags, name);
+  }
+});
+
+test("C27: @Shadow @Final snippet emitted for a private final field", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "MAX_HEALTH",
+          javaSignature: "private final int MAX_HEALTH",
+          jvmDescriptor: "I",
+          accessFlags: 0x0002 | 0x0010,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "MAX_HEALTH" }
+  });
+  assert.deepEqual(result.matches[0]?.accessFlags, ["private", "final"]);
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Shadow @Final\nprivate <type> MAX_HEALTH;/);
+});
+
+test("C28: getSignature errors other than CLASS_NOT_FOUND propagate unchanged", async () => {
+  const boom = new Error("explorer backend exploded");
+  const service = new VerifyMixinTargetService(buildDeps({ signatureError: boom }));
+  await assert.rejects(
+    () =>
+      service.execute({
+        ...baseInput,
+        member: { kind: "method", name: "tick" }
+      }),
+    (err: unknown) => {
+      // Non CLASS_NOT_FOUND failures are rethrown as-is (no find-class wrapping).
+      assert.equal(err, boom);
+      assert.equal(isAppError(err), false);
+      return true;
+    }
+  );
 });
