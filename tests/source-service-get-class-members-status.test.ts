@@ -4,91 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { seedIndexedArtifact, stubExplorer } from "./helpers/seed-artifact.ts";
 import { buildTestConfig } from "./helpers/test-config.ts";
-
-type ArtifactSeed = {
-  artifactId: string;
-  origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
-  requestedMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-  mappingApplied: "obfuscated" | "mojang" | "intermediary" | "yarn";
-  qualityFlags: string[];
-  files: Array<{ filePath: string; content: string }>;
-  symbols: Array<{ filePath: string; symbolKind: string; symbolName: string; qualifiedName?: string; line: number }>;
-  version?: string;
-  sourceJarPath?: string;
-  binaryJarPath?: string;
-  isDecompiled?: boolean;
-};
-
-function seedIndexedArtifact(service: unknown, input: ArtifactSeed): void {
-  const repos = service as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-    filesRepo: {
-      insertFilesForArtifact: (
-        artifactId: string,
-        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
-      ) => void;
-    };
-    symbolsRepo: {
-      insertSymbolsForArtifact: (artifactId: string, symbols: ArtifactSeed["symbols"]) => void;
-    };
-  };
-  const timestamp = new Date().toISOString();
-  repos.artifactsRepo.upsertArtifact({
-    artifactId: input.artifactId,
-    origin: input.origin,
-    version: input.version,
-    sourceJarPath: input.sourceJarPath,
-    binaryJarPath: input.binaryJarPath,
-    requestedMapping: input.requestedMapping,
-    mappingApplied: input.mappingApplied,
-    qualityFlags: input.qualityFlags,
-    artifactSignature: `${input.artifactId}-sig`,
-    isDecompiled: input.isDecompiled ?? false,
-    timestamp
-  });
-  repos.filesRepo.insertFilesForArtifact(
-    input.artifactId,
-    input.files.map((file) => ({
-      filePath: file.filePath,
-      content: file.content,
-      contentBytes: Buffer.byteLength(file.content, "utf8"),
-      contentHash: `${input.artifactId}:${file.filePath}`
-    }))
-  );
-  repos.symbolsRepo.insertSymbolsForArtifact(input.artifactId, input.symbols);
-}
-
-function stubExplorer(
-  service: unknown,
-  result: {
-    constructors?: unknown[];
-    fields?: unknown[];
-    methods?: unknown[];
-    throwError?: Error;
-  }
-): void {
-  (service as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      if (result.throwError) {
-        throw result.throwError;
-      }
-      return {
-        constructors: result.constructors ?? [],
-        fields: result.fields ?? [],
-        methods: result.methods ?? [],
-        warnings: [],
-        context: {
-          minecraftVersion: "1.21.10",
-          mappingType: "unknown",
-          mappingNamespace: "obfuscated",
-          jarHash: "fake",
-          generatedAt: new Date().toISOString()
-        }
-      };
-    }
-  };
-}
 
 test("get-class-members status=ok when total > 0", async () => {
   const { SourceService } = await import("../src/source-service.ts");
@@ -358,7 +275,7 @@ test("MEMBERS_STATUS_LEGACY=1 strips the new fields", async () => {
   assert.equal(out.total, 1);
 });
 
-test("stripping status leaves byte-identical primary fields across normal/empty/partial-source cases", async () => {
+test("stripping status leaves byte-identical primary fields for a normal members result", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const stripStatus = (obj: Record<string, unknown>): Record<string, unknown> => {
     const copy: Record<string, unknown> = { ...obj };
@@ -368,115 +285,58 @@ test("stripping status leaves byte-identical primary fields across normal/empty/
     return copy;
   };
 
-  // Case 1: normal class with members
-  {
-    const root = await mkdtemp(join(tmpdir(), "members-status-b8-normal-"));
-    const service = new SourceService(buildTestConfig(root));
-    const binaryJarPath = join(root, "minecraft.jar");
-    seedIndexedArtifact(service, {
-      artifactId: "b8-normal",
-      origin: "local-jar",
-      requestedMapping: "obfuscated",
-      mappingApplied: "obfuscated",
-      qualityFlags: [],
-      binaryJarPath,
-      version: "1.21.10",
-      files: [],
-      symbols: []
-    });
-    stubExplorer(service, {
-      methods: [
-        {
-          ownerFqn: "X",
-          name: "tick",
-          javaSignature: "public void tick()",
-          jvmDescriptor: "()V",
-          accessFlags: 1,
-          isSynthetic: false
-        }
-      ]
-    });
-    const result = await service.getClassMembers({
-      artifactId: "b8-normal",
-      className: "X",
-      mapping: "obfuscated"
-    });
-    const stripped = stripStatus(result as unknown as Record<string, unknown>);
-    assert.deepEqual(Object.keys(stripped).sort(), [
-      "artifactContents",
-      "artifactId",
-      "className",
-      "context",
-      "counts",
-      "mappingApplied",
-      "members",
-      "origin",
-      "provenance",
-      "qualityFlags",
-      "requestedMapping",
-      "returnedNamespace",
-      "truncated",
-      "warnings"
-    ]);
-  }
-
-  // Case 2: real empty interface (no fallback fires)
-  {
-    const root = await mkdtemp(join(tmpdir(), "members-status-b8-empty-"));
-    const service = new SourceService(buildTestConfig(root));
-    const binaryJarPath = join(root, "minecraft.jar");
-    seedIndexedArtifact(service, {
-      artifactId: "b8-empty",
-      origin: "local-jar",
-      requestedMapping: "obfuscated",
-      mappingApplied: "obfuscated",
-      qualityFlags: [],
-      binaryJarPath,
-      version: "1.21.10",
-      files: [],
-      symbols: []
-    });
-    stubExplorer(service, {});
-    const result = await service.getClassMembers({
-      artifactId: "b8-empty",
-      className: "EmptyInterface",
-      mapping: "obfuscated"
-    });
-    assert.equal(result.counts.total, 0);
-    assert.equal(result.decompiledFallback, undefined);
-  }
-
-  // Case 3: partial-source with successful fallback — qualityFlags must contain members-from-decompiled-source
-  {
-    const root = await mkdtemp(join(tmpdir(), "members-status-b8-partial-"));
-    const service = new SourceService(buildTestConfig(root));
-    const binaryJarPath = join(root, "minecraft.jar");
-    seedIndexedArtifact(service, {
-      artifactId: "b8-partial",
-      origin: "local-jar",
-      requestedMapping: "mojang",
-      mappingApplied: "mojang",
-      qualityFlags: ["partial-source-no-net-minecraft"],
-      binaryJarPath,
-      version: "1.21.10",
-      files: [
-        {
-          filePath: "net/minecraft/Foo.java",
-          content: "package net.minecraft;\npublic class Foo {\n  int x = 0;\n}\n"
-        }
-      ],
-      symbols: []
-    });
-    stubExplorer(service, {});
-    const result = await service.getClassMembers({
-      artifactId: "b8-partial",
-      className: "net.minecraft.Foo",
-      mapping: "mojang"
-    });
-    assert.ok(result.qualityFlags.includes("members-from-decompiled-source"));
-    assert.ok(result.decompiledFallback);
-    assert.equal(result.status, "partial");
-  }
+  // Normal class with members. The empty-interface and partial-source variants
+  // that used to live here as Case 2 / Case 3 are covered behaviorally by the
+  // b2 (status=ok, counts.total===0, no decompiled fallback) and b3
+  // (status=partial, members-from-decompiled-source) sibling tests above.
+  const root = await mkdtemp(join(tmpdir(), "members-status-b8-normal-"));
+  const service = new SourceService(buildTestConfig(root));
+  const binaryJarPath = join(root, "minecraft.jar");
+  seedIndexedArtifact(service, {
+    artifactId: "b8-normal",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    binaryJarPath,
+    version: "1.21.10",
+    files: [],
+    symbols: []
+  });
+  stubExplorer(service, {
+    methods: [
+      {
+        ownerFqn: "X",
+        name: "tick",
+        javaSignature: "public void tick()",
+        jvmDescriptor: "()V",
+        accessFlags: 1,
+        isSynthetic: false
+      }
+    ]
+  });
+  const result = await service.getClassMembers({
+    artifactId: "b8-normal",
+    className: "X",
+    mapping: "obfuscated"
+  });
+  const stripped = stripStatus(result as unknown as Record<string, unknown>);
+  assert.deepEqual(Object.keys(stripped).sort(), [
+    "artifactContents",
+    "artifactId",
+    "className",
+    "context",
+    "counts",
+    "mappingApplied",
+    "members",
+    "origin",
+    "provenance",
+    "qualityFlags",
+    "requestedMapping",
+    "returnedNamespace",
+    "truncated",
+    "warnings"
+  ]);
 });
 
 test("get-class-members keeps per-member ownerFqn and omits the block-level ownerFqn when includeInherited", async () => {

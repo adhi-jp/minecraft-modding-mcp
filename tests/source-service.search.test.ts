@@ -113,6 +113,30 @@ test("SourceService searchClassSource returns compact hits without snippets or r
   assert.equal("totalApprox" in searched, false);
 });
 
+test("SourceService searchClassSource omits totalApprox from compact zero-hit results", async () => {
+  const { service, resolved } = await createResolvedSearchFixture({
+    rootPrefix: "service-search-totalapprox-zerohit-",
+    jarBaseName: "server-totalapprox-zerohit",
+    sourceEntries: {
+      "net/minecraft/server/Main.java":
+        "package net.minecraft.server;\npublic class Main { int x = 1; }"
+    }
+  });
+
+  // A query that matches nothing must still omit totalApprox, just like the
+  // hit-bearing compact case above.
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "zzz_completely_nonexistent_needle_zzz",
+    intent: "text",
+    match: "contains",
+    limit: 10
+  });
+
+  assert.equal(result.hits.length, 0);
+  assert.equal("totalApprox" in result, false);
+});
+
 test("SourceService records list-files duration metric", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-list-files-metric-"));

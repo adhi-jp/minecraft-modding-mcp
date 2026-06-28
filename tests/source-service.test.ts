@@ -8,6 +8,7 @@ import { createError, ERROR_CODES } from "../src/errors.ts";
 import type { Config } from "../src/types.ts";
 import { buildClassFile } from "./helpers/classfile.ts";
 import { withGradleUserHome } from "./helpers/env.ts";
+import { seedIndexedArtifact } from "./helpers/seed-artifact.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -15,92 +16,6 @@ import {
 } from "./helpers/source-service-metrics.ts";
 import { buildTestConfig } from "./helpers/test-config.ts";
 import { createJar } from "./helpers/zip.ts";
-
-function seedIndexedArtifact(
-  service: unknown,
-  input: {
-    artifactId: string;
-    origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
-    requestedMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    mappingApplied: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    qualityFlags: string[];
-    files: Array<{ filePath: string; content: string }>;
-    symbols: Array<{
-      filePath: string;
-      symbolKind: string;
-      symbolName: string;
-      qualifiedName?: string;
-      line: number;
-    }>;
-    version?: string;
-    sourceJarPath?: string;
-    binaryJarPath?: string;
-    provenance?: Record<string, unknown>;
-    isDecompiled?: boolean;
-  }
-): void {
-  const repos = service as {
-    artifactsRepo: {
-      upsertArtifact: (value: {
-        artifactId: string;
-        origin: "local-jar" | "local-m2" | "remote-repo" | "decompiled";
-        requestedMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        mappingApplied: "obfuscated" | "mojang" | "intermediary" | "yarn";
-        qualityFlags: string[];
-        artifactSignature: string;
-        isDecompiled: boolean;
-        timestamp: string;
-        version?: string;
-        sourceJarPath?: string;
-        binaryJarPath?: string;
-        provenance?: Record<string, unknown>;
-      }) => void;
-    };
-    filesRepo: {
-      insertFilesForArtifact: (
-        artifactId: string,
-        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
-      ) => void;
-    };
-    symbolsRepo: {
-      insertSymbolsForArtifact: (
-        artifactId: string,
-        symbols: Array<{
-          filePath: string;
-          symbolKind: string;
-          symbolName: string;
-          qualifiedName?: string;
-          line: number;
-        }>
-      ) => void;
-    };
-  };
-  const timestamp = new Date().toISOString();
-  repos.artifactsRepo.upsertArtifact({
-    artifactId: input.artifactId,
-    origin: input.origin,
-    version: input.version,
-    sourceJarPath: input.sourceJarPath,
-    binaryJarPath: input.binaryJarPath,
-    requestedMapping: input.requestedMapping,
-    mappingApplied: input.mappingApplied,
-    provenance: input.provenance,
-    qualityFlags: input.qualityFlags,
-    artifactSignature: `${input.artifactId}-sig`,
-    isDecompiled: input.isDecompiled ?? false,
-    timestamp
-  });
-  repos.filesRepo.insertFilesForArtifact(
-    input.artifactId,
-    input.files.map((file) => ({
-      filePath: file.filePath,
-      content: file.content,
-      contentBytes: Buffer.byteLength(file.content, "utf8"),
-      contentHash: `${input.artifactId}:${file.filePath}`
-    }))
-  );
-  repos.symbolsRepo.insertSymbolsForArtifact(input.artifactId, input.symbols);
-}
 
 async function createResolvedSearchFixture(input: {
   rootPrefix: string;
@@ -1701,6 +1616,58 @@ test("SourceService returns class source with line range filtering", async () =>
   assert.match(source.sourceText, /void tickServer\(\)/);
   assert.match(source.sourceText, /int b = 2/);
   assert.doesNotMatch(source.sourceText, /int c = a \+ b/);
+});
+
+test("SourceService getClassSource mode='snippet' applies the 200-line default truncation with a continuation", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-snippet-default-"));
+  const binaryJarPath = join(root, "server-3.0.0.jar");
+  const sourcesJarPath = join(root, "server-3.0.0-sources.jar");
+
+  // A 250-line class: line 1 = package, line 2 = class header, lines 3..249 =
+  // `int fieldN = N;` (field0 on line 3 ... field197 on line 200), line 250 = }.
+  const lines = [
+    "package net.minecraft.server;",
+    "public class Main {",
+    ...Array.from({ length: 247 }, (_, i) => `  int field${i} = ${i};`),
+    "}"
+  ];
+
+  await createJar(binaryJarPath, {
+    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "net/minecraft/server/Main.java": lines.join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath }
+  });
+
+  const source = await service.getClassSource({
+    artifactId: resolved.artifactId,
+    className: "net.minecraft.server.Main",
+    mode: "snippet"
+  });
+
+  assert.equal(source.mode, "snippet");
+  assert.equal(source.totalLines, 250);
+  assert.equal(source.returnedRange.start, 1);
+  assert.equal(source.returnedRange.end, 200);
+  assert.equal(source.truncated, true);
+  assert.equal(source.nextStartLine, 201);
+  // Only the first 200 lines come back: field197 (line 200) is the boundary and
+  // field198 (line 201) must be withheld for the next page.
+  assert.match(source.sourceText, /int field0 = 0;/);
+  assert.match(source.sourceText, /int field197 = 197;/);
+  assert.doesNotMatch(source.sourceText, /int field198 = 198;/);
+
+  const suggested = source.suggestedCall as { tool?: string; params?: Record<string, unknown> } | undefined;
+  assert.equal(suggested?.tool, "get-class-source");
+  assert.equal(suggested?.params?.mode, "snippet");
+  assert.equal(suggested?.params?.startLine, 201);
+  assert.equal(suggested?.params?.maxLines, 200);
 });
 
 test("SourceService getClassSource truncation reports nextStartLine and an executable continuation suggestedCall", async () => {
@@ -5956,12 +5923,6 @@ test("SourceService validateMixin project/config discovery avoids sync glob and 
   assert.doesNotMatch(configBlock, /existsSync\(/);
 });
 
-test("validate-mixin reuses the shared concurrency helper instead of defining a local variant", async () => {
-  const source = await readFile("src/source/validate-mixin.ts", "utf8");
-
-  assert.doesNotMatch(source, /async function mapWithConcurrencyLimit</);
-});
-
 test("SourceService validateAccessWidener resolves merged runtime artifacts and surfaces runtime access evidence", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-validate-aw-runtime-aware-"));
@@ -7836,40 +7797,6 @@ test("resolveArtifact flags representative version-approximated mismatches", { c
       );
     });
   }
-});
-
-// ---------------------------------------------------------------------------
-// compact search output omits totalApprox
-// ---------------------------------------------------------------------------
-test("searchClassSource omits totalApprox from compact search results", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-b5-totalapprox-"));
-  const binaryJarPath = join(root, "server-b5.jar");
-  const sourcesJarPath = join(root, "server-b5-sources.jar");
-
-  await createJar(binaryJarPath, {
-    "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-  await createJar(sourcesJarPath, {
-    "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main { int x = 1; }"
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    mapping: "obfuscated"
-  });
-
-  // Query that won't match anything in the content
-  const result = await service.searchClassSource({
-    artifactId: resolved.artifactId,
-    query: "zzz_completely_nonexistent_needle_zzz",
-    intent: "text",
-    match: "contains",
-    limit: 10
-  });
-  assert.equal(result.hits.length, 0);
-  assert.equal("totalApprox" in result, false);
 });
 
 test("SourceService validateMixin handles representative scope and mapping resolution flows", async (t) => {
@@ -10351,50 +10278,80 @@ test("SourceService validateMixin tags failedStage='resolve' when resolveVersion
   );
 });
 
-test("SourceService validateMixin tags failedStage='input-validation' when version is empty", async () => {
+test("SourceService validateMixin tags failedStage='input-validation' across malformed-input triggers", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-stage-input-"));
-  const service = new SourceService(buildTestConfig(root));
 
-  await assert.rejects(
-    () => service.validateMixin({
-      input: {
-        mode: "inline",
-        source: "@Mixin(Main.class) public class X {}"
-      },
-      version: "   ",
-      mapping: "obfuscated"
-    }),
-    (err: unknown) => {
-      const appError = err as { code?: string; details?: Record<string, unknown> };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      assert.equal(appError.details?.failedStage, "input-validation");
-      return true;
+  type ValidateMixinArgs = Parameters<InstanceType<typeof SourceService>["validateMixin"]>[0];
+  const cases: Array<{
+    name: string;
+    messageMatch?: RegExp;
+    prepare: (root: string) => Promise<ValidateMixinArgs>;
+  }> = [
+    {
+      name: "version is empty",
+      prepare: async () => ({
+        input: { mode: "inline", source: "@Mixin(Main.class) public class X {}" },
+        version: "   ",
+        mapping: "obfuscated"
+      })
+    },
+    {
+      name: "source is empty",
+      prepare: async () => ({
+        input: { mode: "inline", source: "   " },
+        version: "1.21",
+        mapping: "obfuscated"
+      })
+    },
+    {
+      name: "project mode finds no mixin configs",
+      prepare: async (root) => ({
+        input: { mode: "project", path: root },
+        version: "1.21",
+        mapping: "obfuscated"
+      })
+    },
+    {
+      name: "project mode cannot detect a version",
+      messageMatch: /could not detect a minecraft version/i,
+      prepare: async (root) => ({
+        input: { mode: "project", path: root },
+        mapping: "obfuscated"
+      })
+    },
+    {
+      name: "a mixin config JSON is malformed",
+      prepare: async (root) => {
+        const configPath = join(root, "broken.mixins.json");
+        await writeFile(configPath, "{ this is not json", "utf8");
+        return {
+          input: { mode: "config", configPaths: [configPath] },
+          version: "1.21",
+          mapping: "obfuscated"
+        };
+      }
     }
-  );
-});
+  ];
 
-test("SourceService validateMixin tags failedStage='input-validation' when source is empty", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-stage-empty-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () => service.validateMixin({
-      input: {
-        mode: "inline",
-        source: "   "
-      },
-      version: "1.21",
-      mapping: "obfuscated"
-    }),
-    (err: unknown) => {
-      const appError = err as { code?: string; details?: Record<string, unknown> };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      assert.equal(appError.details?.failedStage, "input-validation");
-      return true;
-    }
-  );
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const root = await mkdtemp(join(tmpdir(), "validate-mixin-stage-input-"));
+      const service = new SourceService(buildTestConfig(root));
+      const args = await testCase.prepare(root);
+      await assert.rejects(
+        () => service.validateMixin(args),
+        (err: unknown) => {
+          const appError = err as { code?: string; message?: string; details?: Record<string, unknown> };
+          assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
+          assert.equal(appError.details?.failedStage, "input-validation");
+          if (testCase.messageMatch) {
+            assert.match(appError.message ?? "", testCase.messageMatch);
+          }
+          return true;
+        }
+      );
+    });
+  }
 });
 
 test("SourceService validateMixin preserves an existing nested failedStage rather than overwriting it", async () => {
@@ -10544,46 +10501,6 @@ test("SourceService validateMixin quickSummary surfaces mapping-health probe fai
   assert.match(single!.quickSummary!, /mapping graph download timed out/);
 });
 
-test("SourceService validateMixin tags failedStage='input-validation' when project mode finds no mixin configs", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-stage-project-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () => service.validateMixin({
-      input: { mode: "project", path: root },
-      version: "1.21",
-      mapping: "obfuscated"
-    }),
-    (err: unknown) => {
-      const appError = err as { code?: string; details?: Record<string, unknown> };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      assert.equal(appError.details?.failedStage, "input-validation");
-      return true;
-    }
-  );
-});
-
-test("SourceService validateMixin errors with version guidance when project mode cannot detect a version", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-detect-missing-"));
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () => service.validateMixin({
-      input: { mode: "project", path: root },
-      mapping: "obfuscated"
-    }),
-    (err: unknown) => {
-      const appError = err as { code?: string; message?: string; details?: Record<string, unknown> };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      assert.equal(appError.details?.failedStage, "input-validation");
-      assert.match(appError.message ?? "", /could not detect a minecraft version/i);
-      return true;
-    }
-  );
-});
-
 test("SourceService validateMixin detects the version from gradle.properties in project mode without an explicit version", async () => {
   const { SourceService } = await import("../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "validate-mixin-detect-gradle-"));
@@ -10603,28 +10520,6 @@ test("SourceService validateMixin detects the version from gradle.properties in 
       assert.equal(appError.details?.failedStage, "input-validation");
       assert.match(appError.message ?? "", /no mixin config json files/i);
       assert.doesNotMatch(appError.message ?? "", /could not detect a minecraft version/i);
-      return true;
-    }
-  );
-});
-
-test("SourceService validateMixin tags failedStage='input-validation' when a mixin config JSON is malformed", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-stage-malformed-"));
-  const configPath = join(root, "broken.mixins.json");
-  await writeFile(configPath, "{ this is not json", "utf8");
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () => service.validateMixin({
-      input: { mode: "config", configPaths: [configPath] },
-      version: "1.21",
-      mapping: "obfuscated"
-    }),
-    (err: unknown) => {
-      const appError = err as { code?: string; details?: Record<string, unknown> };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      assert.equal(appError.details?.failedStage, "input-validation");
       return true;
     }
   );
@@ -10725,71 +10620,6 @@ test("SourceService validateMixin preserves mapping-health quickSummary note thr
   assert.ok(single?.quickSummary);
   assert.match(single!.quickSummary!, /Mapping health degraded/);
   assert.match(single!.quickSummary!, /Mojang mappings unavailable after retry/);
-});
-
-test("SourceService validateMixin preserves mapping-health quickSummary note even when reportMode='compact' clears toolHealth", async () => {
-  const { SourceService } = await import("../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "validate-mixin-qs-compact-"));
-  const jarPath = join(root, "client.jar");
-  await createJar(jarPath, {});
-  const service = new SourceService(buildTestConfig(root));
-
-  (service as any).versionService = {
-    async resolveVersionJar(version: string) {
-      return { version, jarPath };
-    }
-  };
-  (service as any).workspaceMappingService = {
-    async detectCompileMapping() {
-      return { resolved: false, evidence: [], warnings: [] };
-    },
-    async detectProjectMinecraftVersion() {
-      return undefined;
-    }
-  };
-  (service as any).mappingService = {
-    async checkMappingHealth() {
-      return {
-        mojangMappingsAvailable: false,
-        tinyMappingsAvailable: false,
-        memberRemapAvailable: false,
-        degradations: ["Mojang mappings unavailable"]
-      };
-    }
-  };
-  (service as any).explorerService = {
-    async getSignature() {
-      return {
-        className: "net.minecraft.server.Main",
-        constructors: [],
-        methods: [],
-        fields: [],
-        warnings: []
-      };
-    }
-  };
-
-  const result = await service.validateMixin({
-    input: {
-      mode: "inline",
-      source: [
-        "import net.minecraft.server.Main;",
-        "import org.spongepowered.asm.mixin.Mixin;",
-        "",
-        "@Mixin(Main.class)",
-        "public abstract class MainMixin {}"
-      ].join("\n")
-    },
-    version: "1.21",
-    mapping: "obfuscated",
-    reportMode: "compact"
-  });
-
-  const single = result.results[0]?.result;
-  assert.equal(single?.toolHealth, undefined);
-  assert.ok(single?.quickSummary);
-  assert.match(single!.quickSummary!, /Mapping health degraded/);
-  assert.match(single!.quickSummary!, /Mojang mappings unavailable/);
 });
 
 test("SourceService validateMixin reportMode='compact' keeps resolutionTrace when explain=true", async () => {

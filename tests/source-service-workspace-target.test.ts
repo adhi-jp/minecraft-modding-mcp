@@ -88,6 +88,37 @@ test("synthesizeWorkspaceTarget detects MC version + compile mapping + loader fr
   assert.equal(synthesized.provenance.cacheHit, false);
 });
 
+test("synthesizeWorkspaceTarget defaults to obfuscated mapping and vanilla scope when no loader is detected", async () => {
+  // A project with a detectable minecraft_version but no loader plugin (no
+  // build.gradle) resolves the version yet leaves loader/compileMapping
+  // undetected, so the defaults must fall back to obfuscated + vanilla.
+  const projectPath = await makeProject({ minecraft_version: "1.21.10" }, "");
+  const root = await mkdtemp(join(tmpdir(), "ws-target-host-noloader-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: createWorkspaceContextCache() }
+  ) as unknown as AnySourceService;
+
+  const synthesized = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath },
+    { kind: "workspace" }
+  )) as {
+    target: { kind: string; value: string };
+    mapping: string;
+    scope: string;
+    provenance: { detected: { loader?: string; compileMapping?: string } };
+  };
+
+  assert.equal(synthesized.target.kind, "version");
+  assert.equal(synthesized.target.value, "1.21.10");
+  assert.equal(synthesized.mapping, "obfuscated");
+  assert.equal(synthesized.scope, "vanilla");
+  assert.equal(synthesized.provenance.detected.loader, undefined);
+  assert.equal(synthesized.provenance.detected.compileMapping, undefined);
+});
+
 test("synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when version is undetected, regardless of strict flag", async () => {
   const projectPath = await makeProject({}, "");
   const root = await mkdtemp(join(tmpdir(), "ws-target-host-strict-"));

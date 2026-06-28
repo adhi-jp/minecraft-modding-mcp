@@ -180,6 +180,34 @@ test("synthesizeDependencyTarget rejects path traversal characters in group/name
   );
 });
 
+test("synthesizeDependencyTarget rejects empty group or name with INVALID_INPUT", async () => {
+  const host = await makeHost();
+  const service = new SourceService(buildTestConfig(host)) as unknown as AnySourceService;
+
+  // group/name emptiness is checked before the version safety check, so a valid
+  // version still surfaces the missing-coordinate field error.
+  const cases: Array<{ group: string; name: string; expectedPath: string }> = [
+    { group: "", name: "architectury", expectedPath: "target.group" },
+    { group: "   ", name: "architectury", expectedPath: "target.group" },
+    { group: "dev.architectury", name: "", expectedPath: "target.name" }
+  ];
+
+  for (const { group, name, expectedPath } of cases) {
+    await assert.rejects(
+      () =>
+        service.synthesizeDependencyTarget(
+          { target: { kind: "dependency" } },
+          { kind: "dependency", group, name, version: "1.0.0" }
+        ),
+      (err: Error & { code?: string; details?: { fieldErrors?: Array<{ path?: string }> } }) => {
+        assert.equal(err.code, ERROR_CODES.INVALID_INPUT);
+        assert.equal(err.details?.fieldErrors?.[0]?.path, expectedPath);
+        return true;
+      }
+    );
+  }
+});
+
 test("synthesizeDependencyTarget rejects when versionFromProject=false and no version is given", async () => {
   const host = await makeHost();
   const service = new SourceService(buildTestConfig(host)) as unknown as AnySourceService;
