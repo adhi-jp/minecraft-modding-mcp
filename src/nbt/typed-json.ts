@@ -182,7 +182,10 @@ function validateNode(value: unknown, pointer: string): ValidationResult {
         }
         return { ok: true };
       }
-      if (typeof node.value !== "number") {
+      if (typeof node.value !== "number" || !Number.isFinite(node.value)) {
+        // A raw non-finite number (NaN/Infinity) must use the sentinel-string form —
+        // it cannot survive JSON serialization (JSON.stringify turns it into null),
+        // so accepting it here would let a silently-corrupted document through.
         return fail(`${pointer}/value`, "number-or-non-finite-sentinel", node.value);
       }
       return { ok: true };

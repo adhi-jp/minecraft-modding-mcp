@@ -120,6 +120,22 @@ test("assertValidTypedNbtDocument rejects unrecognized float/double strings", ()
   );
 });
 
+test("assertValidTypedNbtDocument rejects raw non-finite float/double numbers", () => {
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    for (const type of ["float", "double"] as const) {
+      const input = {
+        rootName: "RawNonFinite",
+        root: { type, value }
+      };
+
+      assert.throws(
+        () => assertValidTypedNbtDocument(input),
+        expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value" })
+      );
+    }
+  }
+});
+
 test("assertValidTypedNbtDocument rejects out-of-range byteArray values", () => {
   const input = {
     rootName: "Bad",
