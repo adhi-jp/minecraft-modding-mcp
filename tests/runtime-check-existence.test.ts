@@ -57,7 +57,8 @@ const baseInput = (over: Partial<CheckSymbolExistsInput>): CheckSymbolExistsInpu
     name: "animateTick",
     owner: "net.minecraft.world.level.block.Block",
     sourceMapping: "mojang",
-    signatureMode: "name-only"
+    signatureMode: "name-only",
+    ...over
   } as unknown as CheckSymbolExistsInput);
 
 const fallbackBase = { warnings: [] } as unknown as CheckSymbolExistsOutput;
@@ -70,6 +71,38 @@ test("name-only method with MULTIPLE overloads resolves (exists), not ambiguous"
   assert.ok(out);
   assert.equal(out!.status, "resolved");
   assert.equal(out!.resolved, true);
+});
+
+test("exact method whose overridden copy is inherited resolves, not ambiguous", async () => {
+  // includeInherited surfaces both the owner's own copy and the supertype's copy of an
+  // overridden method: same name + descriptor, different owner. That is one logical
+  // method, so an exact-descriptor existence check must resolve, not report ambiguous.
+  const svc = buildSvc({
+    methods: [
+      { ...method("getShape", "()V"), ownerFqn: "net.minecraft.world.level.block.StairBlock" },
+      method("getShape", "()V")
+    ]
+  });
+  const out = await checkSymbolExistsInUnobfuscatedRuntime(
+    svc,
+    baseInput({ name: "getShape", signatureMode: "exact", descriptor: "()V" } as Partial<CheckSymbolExistsInput>),
+    fallbackBase
+  );
+  assert.ok(out);
+  assert.equal(out!.status, "resolved");
+  assert.equal(out!.resolved, true);
+});
+
+test("exact method with no descriptor match is not_found", async () => {
+  const svc = buildSvc({ methods: [method("animateTick", "()V")] });
+  const out = await checkSymbolExistsInUnobfuscatedRuntime(
+    svc,
+    baseInput({ signatureMode: "exact", descriptor: "(I)V" } as Partial<CheckSymbolExistsInput>),
+    fallbackBase
+  );
+  assert.ok(out);
+  assert.equal(out!.status, "not_found");
+  assert.equal(out!.resolved, false);
 });
 
 test("name-only method with no match is not_found", async () => {

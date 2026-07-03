@@ -167,8 +167,12 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
 
   const descriptor = input.descriptor?.trim();
   const matched = methodCandidates.filter((method) => method.jvmDescriptor === descriptor);
-  if (matched.length !== 1) {
-    return buildUnresolved(matched.length > 1 ? "ambiguous" : "not_found");
+  // An exact descriptor pins a single overload. Multiple matches only arise when an
+  // inherited method is overridden (same name + descriptor, different owner) and
+  // includeInherited surfaces both copies — that is the same logical method, not an
+  // ambiguity. Only zero matches is not_found. (Mirrors the name-only fix above.)
+  if (matched.length === 0) {
+    return buildUnresolved("not_found");
   }
   return buildResolved({
     kind: "method",
