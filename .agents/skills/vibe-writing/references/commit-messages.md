@@ -270,7 +270,7 @@ replace the required blank line before footer trailers.
 
 Footer examples in this reference describe the stored message shape. When an
 active commit-execution skill is adding or repairing an authorship trailer,
-follow that skill's command transport rule; for `vibe-commit`, that means using
+follow that skill's command transport rule; for a commit-execution workflow, that means using
 `git commit ... --trailer`, not treating a hand-written footer block as a
 substitute.
 

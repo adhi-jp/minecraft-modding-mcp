@@ -111,6 +111,19 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
 2. [Implementation step]
 3. [Verification and diff-review step]
 
+## Implementation progress
+| Item | Planned scope | Status | Required verification or review | Commit action | Last update | Remaining blocker or next item |
+| --- | --- | --- | --- | --- | --- | --- |
+| [Stable item or checkpoint ID] | [Bounded item scope] | Not started | [Check, proof, or review required before completion] | [Planned local commit, no commit planned, or commit denied/blocked] | Not started | [Next item, proof path, or blocker] |
+
+[Include this section for multi-item, multi-slice, or checkpointed plans. Initial
+planning output must not mark implementation items complete. During later
+execution, this section is the durable resume ledger: update it only with
+evidence-backed status such as `In progress`, `Completed`, `Blocked`, or
+`Skipped with approved deviation`, plus verification, review, commit, and
+remaining-work facts. For single-slice or discovery-only plans, either omit this
+section or record `Not applicable` with a concise reason.]
+
 ## Commit checkpoints
 - [For multi-slice plans with code-producing slices: checkpoint scope, required
   verification, and a proposed standalone Conventional Commit message. Use an
@@ -118,7 +131,14 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
   recover, such as the reason, compatibility constraint, accepted risk, non-goal,
   or verification proof. Do not wrap proposed commit messages in Markdown
   fences; use labeled `Subject:` and optional `Body:` fields when a body is
-  useful. For
+  useful. State that during later execution these checkpoints authorize scoped
+  local commits only after implementation, verification, multi-perspective
+  review, material finding disposition, and safe file-set confirmation, when the
+  user asks to execute, implement, apply, or continue this bound plan and no
+  current user or project instruction denies commits. They do not authorize
+  planning-time commits, push, release preparation, version bumps, amend, reset,
+  stash, squash, destructive operations, external side effects, work-in-progress
+  commits, failing/skipped-verification commits, or scope-changing commits. For
   single-slice, blocked, discovery-only, discovery-first without a verified
   code-producing slice, destructive-risk-blocked, no-code-slice, or
   work-in-progress plans, write only: `Commit checkpoints are omitted until a code-producing slice is verified.`
@@ -143,10 +163,18 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
 - When implementing this plan, treat this document as authoritative. Re-check
   local facts before editing, follow the acceptance criteria, test plan, and
   skill usage plan's per-step routes, implement only the current in-scope slice,
-  and stop if the `Proceed condition` is blocked or local evidence contradicts
-  the plan. This plan artifact is not implementation authorization; code, tests,
+  update `Implementation progress` after each completed, blocked, skipped, or
+  committed item when the plan artifact is writable, and stop if the `Proceed
+  condition` is blocked or local evidence contradicts the plan. This plan
+  artifact is not implementation authorization; code, tests,
   non-plan docs, evals, configs, changelogs, commits, and other non-plan edits
   require a separate execution request.
+- If implementation evidence shows that requirements, acceptance criteria,
+  tests, data handling, permissions, security posture, UX, external contracts,
+  or the plan's proof strategy are wrong, return to the owning requirements or
+  planning artifact and revise it before continuing. Do not patch code against
+  stale plan text or treat a one-off approval as a replacement for a rebound
+  contract.
 - Trusted orchestration handoff, when available: [record only when the plan has
   a ready `Proceed condition` or a conditional `Proceed condition` tied to
   already-recorded explicit human-user `Accepted risk`; include the current plan
@@ -181,6 +209,9 @@ not include message text, a Conventional Commit example, `Subject:`, or `Body:`.
 - Corrections made:
 - Remaining material issues:
 - [For `light` plans, keep this concise while still recording corrections.]
+- [For multi-item plans, record whether the `Implementation progress` ledger is
+  present, maps to the implementation items or checkpoints, starts with
+  `Not started` statuses, and avoids planning-time completion claims.]
 
 ## Proceed condition
 - [State whether implementation is ready, conditional on accepted risk, or
@@ -235,6 +266,17 @@ Before finalizing the plan, check that:
   include proposed commit messages, Conventional Commit examples, conditional
   future commit text, or `Subject:`/`Body:` bytes anywhere in the artifact, and
   single-slice work was not split into artificial checkpoints.
+- Multi-item, multi-slice, or checkpointed plans include an `Implementation
+  progress` ledger with stable item IDs, planned scope, status, required
+  verification or review, commit action, last update, and remaining blocker or
+  next item; initial planning output uses `Not started` or a not-applicable
+  reason and does not claim implementation completion.
+- Eligible commit checkpoints state their later-execution scoped local-commit
+  authorization and guardrails: execute/apply/continue the bound plan, verify,
+  multi-perspective review, material finding disposition, safe file-set
+  confirmation, no current denial, and no push/release/version/history-rewrite,
+  WIP, failing, skipped-verification, destructive, external-side-effect, or
+  scope-changing commits.
 - Checkpoint eligibility is decided before message formatting: a planned single
   implementation slice is not an eligible checkpoint merely because it will
   produce code during later execution.
@@ -303,6 +345,10 @@ Before finalizing the plan, check that:
   narrowed to evidence-backed behavior.
 - The implementation handoff is present, self-contained, and does not require
   unverified or unavailable skills.
+- The implementation handoff tells later execution to return to requirements or
+  planning when evidence breaks the bound contract, instead of continuing with
+  ad hoc patches against stale requirements, acceptance criteria, tests, or risk
+  assumptions.
 - The `Multi-perspective plan review` ran after the draft artifact and before
   final self-review. It used verified review-only subagents when available and
   permitted by current-turn instruction or `VIBE_SUBAGENTS=ask|allow|deny`, or
@@ -328,7 +374,9 @@ Before finalizing the plan, check that:
   multi-perspective review completion or degraded fallback, `vibe-planning`
   contract compliance, reviewer-disposition consistency, scope creep from
   review feedback, plan-only boundary, proceed condition, and unresolved
-  `Unproven` implementation blockers.
+  `Unproven` implementation blockers. For multi-item plans, it also checked that
+  the `Implementation progress` ledger is present, aligned to the implementation
+  items or checkpoints, and contains no planning-time completion claim.
 - Any material issue found by self-review was corrected in the artifact before
   final response. A self-review that notes a material issue but leaves the plan
   unchanged fails this check.

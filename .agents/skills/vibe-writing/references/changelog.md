@@ -8,7 +8,7 @@ notes, operate in two layers:
 - Format layer: which structure the changelog uses. This belongs to the
   repository and its user. Detect the existing format and conform to it; never
   restructure it on your own initiative.
-- Content layer: what each entry says. This is the vibe-coding strategy below,
+- Content layer: what each entry says. This is the agent-assisted coding strategy below,
   and it applies under whatever format the repository already uses.
 
 Keep the layers separate. The content rules never authorize changing a
@@ -25,7 +25,7 @@ format by this precedence, highest first:
    (for example a `The format is based on ...` line).
 3. The existing `CHANGELOG.md`'s observable conventions: its section headings,
    category names, entry shape, ordering, and date format.
-4. The vibe-coding fallback structure below, used only when the repository
+4. The agent-assisted coding fallback structure below, used only when the repository
    defines no format.
 
 `AGENTS.md` is named here only as one example of a tier-2 policy source; any
@@ -68,14 +68,14 @@ proposal, not a change you have already applied.
 
 ## Content Layer: Write For The Next Agent
 
-This is the first-principles vibe-coding content strategy. It applies under any
+This is the first-principles agent-assisted coding content strategy. It applies under any
 format.
 
 Default reader: the next agent resuming the work with zero prior context, with
 the human supervisor as the second reader. The changelog is a contract and
 evidence log for that reader, not human-facing release marketing. This departs
 from the "for humans, not machines" premise of the source specs (see Sources);
-adopt the next-agent reader as the vibe-coding default. It is consistent with
+adopt the next-agent reader as the agent-assisted coding default. It is consistent with
 this skill's LLM-first default in `SKILL.md`.
 
 Each entry should carry:
@@ -177,7 +177,7 @@ Source material, adapted rather than adopted wholesale:
 - Keep a Changelog 1.0.0 — https://keepachangelog.com/en/1.0.0/
 - Common Changelog — https://common-changelog.org/
 
-Both frame the changelog as "for humans, not machines." The vibe-coding content
+Both frame the changelog as "for humans, not machines." The agent-assisted coding content
 layer deliberately departs from that premise toward the next-agent reader, while
 reusing their structural mechanics (format layer) and their entry discipline
 (impact-first, self-describing, breaking-first, references, anti-noise, and no

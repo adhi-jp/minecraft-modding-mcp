@@ -1,5 +1,5 @@
 ---
-version: 1.0.1
+version: 1.1.0
 name: vibe-code-research
 description: Use when the user wants to understand, locate, trace, or assess existing code without changing it — questions like "how does X work", "where is Y implemented", "what would changing Z affect", architecture or data-flow mapping, dependency tracing, convention discovery, or pre-planning and pre-debugging evidence gathering. Do not use when a defect needs repair, a plan or spec artifact is requested, or an edit, commit, or diff review is the deliverable.
 ---
@@ -128,6 +128,17 @@ When fanning out:
   credentials and secret-like literal values before returning findings.
 - Ask for findings in collectable shape: direct answer, anchors (`path`,
   `path:line`, or symbol), evidence labels, and what was not inspected.
+- When the host lets you choose a delegated model and the user has not
+  explicitly fixed one, choose a fit-for-purpose model per investigator. Use a
+  cheaper or faster model for narrow path/symbol lookup, mechanical extraction,
+  or small-context anchor checks; use a higher-capability or larger-context
+  model for cross-subsystem synthesis, ambiguous architecture tracing,
+  security-sensitive evidence handling, or investigations where weak reasoning
+  would become the bottleneck. Do not default every small lookup to the top
+  model, and do not downshift solely to save tokens when the question needs
+  stronger reasoning. Record any explicit user model override or the
+  capability/context reason for a non-default model when the host exposes that
+  metadata.
 - The fan-out may run as ad-hoc sub-agent calls or as one scripted
   orchestration run: a host mechanism that runs the investigators under a
   single deterministic, independently recorded run and returns their results.

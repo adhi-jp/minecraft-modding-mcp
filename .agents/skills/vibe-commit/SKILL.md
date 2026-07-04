@@ -1,7 +1,7 @@
 ---
-version: 1.0.2
+version: 1.0.3
 name: vibe-commit
-description: Use when the user asks to commit, stage, or "save" vibe-coding changes — including vague requests like "commit this", "commit please", "コミットして", or "/commit" — and the real work is deciding which files belong in the commit, excluding unwanted or generated files, splitting unrelated changes, or fixing a commit's file set, multi-line message transport, history (amend/rebase), or authorship trailers. This skill owns commit execution, message transport, and git safety.
+description: Use when the user asks to commit, stage, or "save" agent-assisted coding changes — including vague requests like "commit this", "commit please", "コミットして", or "/commit" — and the real work is deciding which files belong in the commit, excluding unwanted or generated files, splitting unrelated changes, or fixing a commit's file set, multi-line message transport, history (amend/rebase), or authorship trailers. This skill owns commit execution, message transport, and git safety.
 ---
 
 # Vibe Commit
