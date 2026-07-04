@@ -7,6 +7,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [6.1.1] - 2026-07-04
+
+### Fixed
+
+- `check-symbol-exists` no longer misreports an overridden method as unresolved in exact-signature mode. Requesting inherited methods surfaces the same name + descriptor from both the overriding and overridden owner, and the exact-signature branch treated that as an ambiguous match; it now treats any match as resolved and only zero matches as `not_found`.
+- NBT JSON-patch validation rejects raw non-finite `float`/`double` numbers (`Infinity`, `-Infinity`, `NaN`) again. A prior fix for the `"NaN"`/`"Infinity"`/`"-Infinity"` sentinel-string round-trip had also stopped rejecting raw non-finite JS numbers, which cannot survive JSON serialization and would silently corrupt the document.
+
 ## [6.1.0] - 2026-06-28
 
 ### Added
