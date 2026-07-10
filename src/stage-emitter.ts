@@ -36,15 +36,32 @@ export function makeStageEmitter(
     return NOOP_STAGE_EMITTER;
   }
 
+  let deliveryPending = false;
   return async (stage, meta) => {
-    await sendNotification({
-      method: "$/stageUpdate",
-      params: {
-        stage,
-        meta: meta ?? null,
-        t: performance.now(),
-        requestId
-      }
-    });
+    if (deliveryPending) {
+      return;
+    }
+
+    let delivery: Promise<void>;
+    try {
+      delivery = sendNotification({
+        method: "$/stageUpdate",
+        params: {
+          stage,
+          meta: meta ?? null,
+          t: performance.now(),
+          requestId
+        }
+      });
+    } catch {
+      return;
+    }
+
+    deliveryPending = true;
+    void Promise.resolve(delivery)
+      .catch(() => undefined)
+      .finally(() => {
+        deliveryPending = false;
+      });
   };
 }

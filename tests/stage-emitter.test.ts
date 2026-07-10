@@ -91,3 +91,51 @@ test("makeStageEmitter sends meta as null when omitted", async () => {
   await emit("mapping-health");
   assert.equal(capture.calls[0].params.meta, null);
 });
+
+test("makeStageEmitter observes synchronous notification failure without rejecting", async () => {
+  const emit = makeStageEmitter({
+    requestId: 1,
+    sendNotification: (() => {
+      throw new Error("sync notification failure");
+    }) as StageEmitterExtra["sendNotification"]
+  });
+  await assert.doesNotReject(emit("resolve"));
+});
+
+test("makeStageEmitter observes asynchronous notification rejection without rejecting", async () => {
+  const emit = makeStageEmitter({
+    requestId: 1,
+    sendNotification: async () => {
+      throw new Error("async notification failure");
+    }
+  });
+  await assert.doesNotReject(emit("resolve"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("makeStageEmitter keeps at most one unresolved notification and resumes after settlement", async () => {
+  let settle: (() => void) | undefined;
+  let calls = 0;
+  const emit = makeStageEmitter({
+    requestId: 1,
+    sendNotification: async () => {
+      calls += 1;
+      await new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+    }
+  });
+
+  await Promise.race([
+    emit("resolve"),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("emitter blocked")), 25))
+  ]);
+  await emit("parse");
+  assert.equal(calls, 1);
+
+  settle?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await emit("target-lookup");
+  assert.equal(calls, 2);
+  settle?.();
+});

@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `validate-project` calls now have a supervisor-owned 120-second end-to-end deadline, configurable with `MCP_VALIDATE_PROJECT_TIMEOUT_MS` from 10,000 through 600,000 ms. Expiry returns the standard synthetic `{ error, meta }` tool-result envelope with `ERR_TOOL_TIMEOUT`, queue/running phase diagnostics, redacted progress context, and restart-initiation state. Queue expiry leaves the active worker untouched; running expiry replaces the isolated worker and preserves admitted later requests when initialization replay succeeds. Replacement startup/replay failure terminalizes queued work with existing restart errors. The supervisor FIFO holds at most two worker-bound requests and returns `ERR_LIMIT_EXCEEDED` (tool calls) or JSON-RPC `-32000` (non-tool requests) on overflow; cap-blocked requests fail immediately and undeliverable notifications are warning-dropped.
+
 ## [6.1.1] - 2026-07-04
 
 ### Fixed

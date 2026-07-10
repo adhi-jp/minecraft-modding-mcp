@@ -7,6 +7,13 @@ test("ERROR_CODES exposes ERR_WORKER_RESTART", () => {
   assert.equal(ERROR_CODES.WORKER_RESTART, "ERR_WORKER_RESTART");
 });
 
+test("ERROR_CODES exposes ERR_TOOL_TIMEOUT", () => {
+  assert.equal(
+    (ERROR_CODES as Record<string, string>).TOOL_TIMEOUT,
+    "ERR_TOOL_TIMEOUT"
+  );
+});
+
 test("ERROR_CODES exposes ERR_MIXIN_PARSE_FAILED", () => {
   assert.equal(ERROR_CODES.MIXIN_PARSE_FAILED, "ERR_MIXIN_PARSE_FAILED");
 });
@@ -26,6 +33,7 @@ test("ERROR_CODES exposes ERR_DEPENDENCY_VERSION_UNRESOLVED", () => {
 test("new error codes are part of the ErrorCode union", () => {
   const values = Object.values(ERROR_CODES) as ErrorCode[];
   assert.ok(values.includes("ERR_WORKER_RESTART" as ErrorCode));
+  assert.ok(values.includes("ERR_TOOL_TIMEOUT" as ErrorCode));
   assert.ok(values.includes("ERR_MIXIN_PARSE_FAILED" as ErrorCode));
   assert.ok(values.includes("ERR_STAGE_BUDGET_PRE_PARSE" as ErrorCode));
   assert.ok(values.includes("ERR_WORKSPACE_VERSION_UNRESOLVED" as ErrorCode));

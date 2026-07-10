@@ -56,6 +56,7 @@
 - Use Conventional Commits.
 - Breaking changes MUST use `!` in the type/scope summary and include a `BREAKING CHANGE:` footer.
 - Keep commits logically scoped; do not mix unrelated changes.
+- Do not commit files under `docs/specs/` or `docs/plans/`; keep specifications and implementation plans out of repository history.
 - Do not force-add ignored files or otherwise commit files outside the agreed commit scope unless the user explicitly instructs you to include those extra files.
 - If the user explicitly asks to commit ignored or otherwise out-of-scope files, first suggest reviewing `.gitignore` so repository policy matches the intended commit behavior.
 

@@ -13,6 +13,207 @@ import {
   type PendingRequestSnapshot,
   type RestartContext
 } from "../src/stdio-supervisor.ts";
+import * as supervisorModule from "../src/stdio-supervisor.ts";
+
+const supervisorExports = supervisorModule as Record<string, unknown>;
+
+test("validate-project timeout configuration accepts only bounded ASCII decimals", () => {
+  const load = supervisorExports.loadValidateProjectTimeoutMs;
+  assert.equal(typeof load, "function");
+  const parse = load as (value: string | undefined) => number;
+  for (const value of [undefined, "", " 10000", "+10000", "1e4", "0x2710", "9999", "600001", "9007199254740992", "abc"]) {
+    assert.equal(parse(value), 120_000, String(value));
+  }
+  assert.equal(parse("010000"), 10_000);
+  assert.equal(parse("600000"), 600_000);
+});
+
+test("startup watchdog is capped independently from validate-project workload timeout", () => {
+  const compute = supervisorExports.computeWorkerStartupWatchdogMs;
+  assert.equal(typeof compute, "function");
+  const watchdog = compute as (deadlineMs: number) => number;
+  assert.equal(watchdog(10_000), 10_000);
+  assert.equal(watchdog(120_000), 30_000);
+  assert.equal(watchdog(600_000), 30_000);
+});
+
+test("restart backoff starts at 100 ms and caps at 30 seconds", () => {
+  const compute = supervisorExports.computeRestartBackoffMs;
+  assert.equal(typeof compute, "function");
+  const delay = compute as (retryIndex: number) => number;
+  assert.deepEqual(
+    [0, 1, 2, 8, 9, 20].map(delay),
+    [100, 200, 400, 25_600, 30_000, 30_000]
+  );
+});
+
+test("POSIX tree termination targets the worker process group", () => {
+  const terminate = supervisorExports.terminatePosixProcessGroup;
+  assert.equal(typeof terminate, "function");
+  const calls: Array<[number, string]> = [];
+  const result = (terminate as (pid: number, kill: (pid: number, signal: string) => void) => boolean)(
+    321,
+    (pid, signal) => calls.push([pid, signal])
+  );
+  assert.equal(result, true);
+  assert.deepEqual(calls, [[-321, "SIGKILL"]]);
+});
+
+test("POSIX tree termination reports failure without hiding direct-child fallback need", () => {
+  const terminate = supervisorExports.terminatePosixProcessGroup;
+  assert.equal(typeof terminate, "function");
+  assert.equal(
+    (terminate as (pid: number, kill: (pid: number, signal: string) => void) => boolean)(1, () => {
+      throw new Error("EPERM");
+    }),
+    false
+  );
+});
+
+test("Windows tree termination command includes descendant and force flags", () => {
+  const build = supervisorExports.buildWindowsTreeKillArgs;
+  assert.equal(typeof build, "function");
+  assert.deepEqual((build as (pid: number) => string[])(456), ["/PID", "456", "/T", "/F"]);
+});
+
+test("tree cleanup returns failure within its deadline when the helper never settles", async () => {
+  const settle = supervisorExports.settleTreeCleanupWithin;
+  assert.equal(typeof settle, "function");
+  let timeoutCleanupCalls = 0;
+  const result = await (settle as (
+    operation: Promise<boolean>,
+    timeoutMs: number,
+    onTimeout: () => void
+  ) => Promise<boolean>)(new Promise<boolean>(() => {}), 20, () => {
+    timeoutCleanupCalls += 1;
+  });
+  assert.equal(result, false);
+  assert.equal(timeoutCleanupCalls, 1);
+});
+
+test("only the initialized lifecycle notification is retained while the worker is unavailable", () => {
+  const shouldRetain = supervisorExports.shouldRetainUnavailableNotification;
+  assert.equal(typeof shouldRetain, "function");
+  const retain = shouldRetain as (method: string) => boolean;
+  assert.equal(retain("notifications/initialized"), true);
+  assert.equal(retain("notifications/progress"), false);
+  assert.equal(retain("notifications/resources/updated"), false);
+});
+
+test("restart backoff reserves its exact delay even when live-cap blocks the timer", () => {
+  const BackoffState = supervisorExports.RestartBackoffState as {
+    new(): {
+      reserve(now: number): { epoch: number; notBefore: number; delayMs: number };
+      reset(): void;
+    };
+  };
+  assert.equal(typeof BackoffState, "function");
+  const state = new BackoffState();
+  assert.deepEqual(state.reserve(1_000), { epoch: 1, notBefore: 1_100, delayMs: 100 });
+  assert.deepEqual(state.reserve(1_050), { epoch: 2, notBefore: 1_250, delayMs: 200 });
+  assert.deepEqual(state.reserve(1_250), { epoch: 3, notBefore: 1_650, delayMs: 400 });
+  state.reset();
+  assert.deepEqual(state.reserve(2_000), { epoch: 4, notBefore: 2_100, delayMs: 100 });
+});
+
+test("POSIX unresolved-token shutdown retry targets the saved process group", () => {
+  const retry = supervisorExports.retryPosixTreeToken;
+  assert.equal(typeof retry, "function");
+  const calls: Array<[number, string]> = [];
+  assert.equal(
+    (retry as (pid: number, kill: (pid: number, signal: string) => void) => boolean)(
+      987,
+      (pid, signal) => calls.push([pid, signal])
+    ),
+    true
+  );
+  assert.deepEqual(calls, [[-987, "SIGKILL"]]);
+});
+
+test("supervisor queue overflow tool result has the exact public envelope", () => {
+  const build = supervisorExports.buildSupervisorQueueLimitReply;
+  assert.equal(typeof build, "function");
+  const reply = (build as (id: string | number, method: string) => Record<string, unknown>)("q-3", "tools/call");
+  const result = reply.result as Record<string, unknown>;
+  const structured = result.structuredContent as Record<string, unknown>;
+  assert.equal(result.isError, true);
+  assert.deepEqual(structured, {
+    error: {
+      type: "about:blank/mcp/limit-exceeded",
+      title: "Supervisor queue limit exceeded",
+      detail: "The MCP supervisor request queue is full.",
+      status: 413,
+      code: "ERR_LIMIT_EXCEEDED",
+      instance: "urn:mcp:request:q-3",
+      retryClass: "transient",
+      issueOrigin: "tool_issue",
+      hints: ["Retry after the supervisor queue drains."]
+    },
+    meta: {
+      synthetic: true,
+      syntheticSource: "supervisor",
+      queue: { reason: "supervisor-request-queue", maxQueued: 2, queuedCount: 2 }
+    }
+  });
+  const content = result.content as Array<{ type: string; text: string }>;
+  assert.equal(content[0].type, "text");
+  assert.deepEqual(JSON.parse(content[0].text), structured);
+});
+
+test("supervisor queue overflow non-tool result is a raw JSON-RPC error without data", () => {
+  const build = supervisorExports.buildSupervisorQueueLimitReply;
+  assert.equal(typeof build, "function");
+  assert.deepEqual(
+    (build as (id: string | number, method: string) => unknown)(7, "resources/read"),
+    {
+      jsonrpc: "2.0",
+      id: 7,
+      error: { code: -32000, message: "MCP supervisor request queue is full." }
+    }
+  );
+});
+
+test("validate-project timeout result uses the standard envelope and exact timeout metadata", () => {
+  const build = supervisorExports.buildValidateProjectTimeoutReply;
+  assert.equal(typeof build, "function");
+  const reply = (build as (input: Record<string, unknown>) => Record<string, unknown>)({
+    request: {
+      id: "timeout-1",
+      method: "tools/call",
+      toolName: "validate-project",
+      toolArgsRedacted: { task: "project-summary" },
+      toolArgsRedactedModified: false,
+      startedAt: 100,
+      lastStage: "validate-project:mixin-validation",
+      lastStageStartedAt: 700,
+      lastStageMeta: { targetIndex: 2, token: "secret" }
+    },
+    phase: "running",
+    deadlineMs: 1_000,
+    now: 1_100,
+    workerRestartInitiated: true
+  });
+  const result = reply.result as { isError?: boolean; structuredContent?: Record<string, unknown> };
+  assert.equal(result.isError, true);
+  const structured = result.structuredContent as { error: Record<string, unknown>; meta: { timeout: Record<string, unknown> } };
+  assert.equal(structured.error.code, "ERR_TOOL_TIMEOUT");
+  assert.equal(structured.error.status, 408);
+  assert.equal(structured.error.retryClass, "transient");
+  assert.equal(structured.error.issueOrigin, "tool_issue");
+  assert.deepEqual(structured.meta.timeout, {
+    tool: "validate-project",
+    phase: "running",
+    durationMs: 1_000,
+    deadlineMs: 1_000,
+    lastStage: "validate-project:mixin-validation",
+    lastStageElapsedMs: 400,
+    lastStageMeta: { targetIndex: 2, token: "<redacted>" },
+    redactedToolArgs: { task: "project-summary" },
+    redactedToolArgsModified: false,
+    retryRecommendation: "same-request",
+    workerRestartInitiated: true
+  });
+});
 
 const baseExit: ExitInfo = { code: 1, signal: null };
 

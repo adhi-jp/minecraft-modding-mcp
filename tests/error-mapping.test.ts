@@ -69,6 +69,8 @@ test("retryClassForErrorCode keeps genuinely-transient codes transient (scope gu
   ]) {
     assert.equal(retryClassForErrorCode(code), "transient", `${code} must stay transient`);
   }
+  assert.equal(retryClassForErrorCode("ERR_TOOL_TIMEOUT"), "transient");
+  assert.equal(issueOriginForErrorCode("ERR_TOOL_TIMEOUT"), "tool_issue");
   // An unknown code still falls through to the transient catch-all.
   assert.equal(retryClassForErrorCode("ERR_DOES_NOT_EXIST"), "transient");
 });
@@ -158,6 +160,7 @@ test("retryClassForErrorCode classifies every ERROR_CODES value explicitly (no s
     [ERROR_CODES.ARTIFACT_RESOLUTION_FAILED]: "transient",
     [ERROR_CODES.JAVA_PROCESS_FAILED]: "transient",
     [ERROR_CODES.WORKER_RESTART]: "transient",
+    ERR_TOOL_TIMEOUT: "transient",
     [ERROR_CODES.STAGE_BUDGET_PRE_PARSE]: "transient"
   };
   for (const code of Object.values(ERROR_CODES)) {
@@ -210,6 +213,7 @@ test("issueOriginForErrorCode classifies every ERROR_CODES value explicitly (no 
     [ERROR_CODES.JAVA_PROCESS_FAILED]: "tool_issue",
     [ERROR_CODES.REMAP_FAILED]: "tool_issue",
     [ERROR_CODES.WORKER_RESTART]: "tool_issue",
+    ERR_TOOL_TIMEOUT: "tool_issue",
     [ERROR_CODES.STAGE_BUDGET_PRE_PARSE]: "tool_issue",
     [ERROR_CODES.BATCH_ABORTED]: "tool_issue",
     [ERROR_CODES.INTERNAL]: "tool_issue"

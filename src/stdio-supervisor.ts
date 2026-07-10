@@ -26,9 +26,128 @@ const PRESERVED_PATH_KEYS = new Set(["projectPath", "sourcePath", "mixinConfigPa
 const MAX_STRING_BYTES = 256;
 const MAX_ARRAY_LENGTH = 8;
 const MAX_OBJECT_KEYS = 16;
+const DEFAULT_VALIDATE_PROJECT_TIMEOUT_MS = 120_000;
+const MIN_VALIDATE_PROJECT_TIMEOUT_MS = 10_000;
+const MAX_VALIDATE_PROJECT_TIMEOUT_MS = 600_000;
+const MAX_WORKER_STARTUP_WATCHDOG_MS = 30_000;
+const MAX_SUPERVISOR_QUEUE = 2;
+const DEFAULT_TREE_CLEANUP_TIMEOUT_MS = 5_000;
 
-type SupervisorOptions = {
+export function loadValidateProjectTimeoutMs(value = process.env.MCP_VALIDATE_PROJECT_TIMEOUT_MS): number {
+  if (!/^[0-9]+$/.test(value ?? "")) {
+    return DEFAULT_VALIDATE_PROJECT_TIMEOUT_MS;
+  }
+  const parsed = Number(value);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < MIN_VALIDATE_PROJECT_TIMEOUT_MS ||
+    parsed > MAX_VALIDATE_PROJECT_TIMEOUT_MS
+  ) {
+    return DEFAULT_VALIDATE_PROJECT_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+export function computeWorkerStartupWatchdogMs(validateProjectTimeoutMs: number): number {
+  return Math.min(validateProjectTimeoutMs, MAX_WORKER_STARTUP_WATCHDOG_MS);
+}
+
+export function computeRestartBackoffMs(retryIndex: number): number {
+  if (!Number.isFinite(retryIndex) || retryIndex <= 0) {
+    return 100;
+  }
+  return Math.min(100 * (2 ** Math.floor(retryIndex)), MAX_WORKER_STARTUP_WATCHDOG_MS);
+}
+
+export function terminatePosixProcessGroup(
+  pid: number,
+  kill: (pid: number, signal: NodeJS.Signals) => void = process.kill
+): boolean {
+  try {
+    kill(-pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function buildWindowsTreeKillArgs(pid: number): string[] {
+  return ["/PID", String(pid), "/T", "/F"];
+}
+
+export function shouldRetainUnavailableNotification(method: string): boolean {
+  return method === "notifications/initialized";
+}
+
+export type RestartReservation = {
+  epoch: number;
+  notBefore: number;
+  delayMs: number;
+};
+
+export class RestartBackoffState {
+  private retryIndex = 0;
+  private epoch = 0;
+
+  reserve(now: number): RestartReservation {
+    const delayMs = computeRestartBackoffMs(this.retryIndex);
+    this.retryIndex += 1;
+    return {
+      epoch: ++this.epoch,
+      notBefore: now + delayMs,
+      delayMs
+    };
+  }
+
+  reset(): void {
+    this.retryIndex = 0;
+  }
+}
+
+export function retryPosixTreeToken(
+  pid: number,
+  kill: (pid: number, signal: NodeJS.Signals) => void = process.kill
+): boolean {
+  return terminatePosixProcessGroup(pid, kill);
+}
+
+export async function settleTreeCleanupWithin(
+  operation: Promise<boolean>,
+  timeoutMs: number,
+  onTimeout: () => void = () => {}
+): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try { onTimeout(); } catch { /* best effort */ }
+      finish(false);
+    }, timeoutMs);
+    operation.then(finish, () => finish(false));
+  });
+}
+
+export type SupervisorOptions = {
   entryFile: string;
+  validateProjectTimeoutMs?: number;
+  clientWriter?: (message: JSONRPCMessage) => void;
+  treeTokenRetrier?: (pid: number) => boolean | Promise<boolean>;
+  treeCleanupTimeoutMs?: number;
+  eventWriter?: (
+    level: "warn" | "error" | "info",
+    event: string,
+    details?: Record<string, unknown>
+  ) => void;
+  monotonicNow?: () => number;
+  timerScheduler?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+  timerClearer?: (timer: NodeJS.Timeout) => void;
+  workerSpawner?: () => ChildProcessWithoutNullStreams;
+  treeTerminator?: (pid: number) => boolean | Promise<boolean>;
 };
 
 type RequestId = string | number;
@@ -66,7 +185,22 @@ export type PendingRequestSnapshot = {
   lastStageMeta?: unknown;
 };
 
-type PendingRequest = PendingRequestSnapshot;
+type PendingRequest = PendingRequestSnapshot & {
+  deadlineTimer?: NodeJS.Timeout;
+  timeoutPhase?: "queue" | "running";
+  clientCancelled?: boolean;
+};
+
+type QueuedRequest = {
+  message: JSONRPCRequest;
+  pending: PendingRequest;
+};
+
+type CleanupState = {
+  pid: number;
+  status: "pending" | "accepted" | "unresolved";
+  parentExited: boolean;
+};
 
 function isRequest(message: JSONRPCMessage): message is JSONRPCRequest {
   return "method" in message && "id" in message;
@@ -185,6 +319,134 @@ export function redactToolArgs(args: unknown): RedactedToolArgs {
     return { args: redacted as Record<string, unknown>, modified: counter.modified };
   }
   return { args: {}, modified: counter.modified };
+}
+
+function redactDiagnosticValue(value: unknown): unknown {
+  const counter: RedactCounter = { modified: false };
+  return redactValue(value, counter) ?? null;
+}
+
+function buildSyntheticToolResult(
+  id: RequestId,
+  structuredContent: Record<string, unknown>
+): JSONRPCResponse {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      isError: true,
+      structuredContent
+    }
+  } as unknown as JSONRPCResponse;
+}
+
+export function buildSupervisorQueueLimitReply(id: RequestId, method: string): JSONRPCResponse {
+  if (method !== "tools/call") {
+    return {
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32000,
+        message: "MCP supervisor request queue is full."
+      }
+    } as JSONRPCResponse;
+  }
+
+  return buildSyntheticToolResult(id, {
+    error: {
+      type: "about:blank/mcp/limit-exceeded",
+      title: "Supervisor queue limit exceeded",
+      detail: "The MCP supervisor request queue is full.",
+      status: 413,
+      code: "ERR_LIMIT_EXCEEDED",
+      instance: `urn:mcp:request:${String(id)}`,
+      retryClass: "transient",
+      issueOrigin: "tool_issue",
+      hints: ["Retry after the supervisor queue drains."]
+    },
+    meta: {
+      synthetic: true,
+      syntheticSource: "supervisor",
+      queue: {
+        reason: "supervisor-request-queue",
+        maxQueued: MAX_SUPERVISOR_QUEUE,
+        queuedCount: MAX_SUPERVISOR_QUEUE
+      }
+    }
+  });
+}
+
+export type BuildValidateProjectTimeoutReplyInput = {
+  request: PendingRequestSnapshot;
+  phase: "queue" | "running";
+  deadlineMs: number;
+  now: number;
+  workerRestartInitiated: boolean;
+};
+
+export function buildValidateProjectTimeoutReply(
+  input: BuildValidateProjectTimeoutReplyInput
+): JSONRPCResponse {
+  const { request, phase, deadlineMs, now, workerRestartInitiated } = input;
+  const retryRecommendation = decideRetryRecommendation(
+    {
+      toolName: "validate-project",
+      lastStage: request.lastStage,
+      lastStageMeta: request.lastStageMeta,
+      exit: { code: null, signal: null }
+    },
+    []
+  );
+  const error: Record<string, unknown> = {
+    type: "about:blank/mcp/tool-timeout",
+    title: "MCP tool timed out",
+    detail: `validate-project exceeded its ${deadlineMs} ms deadline.`,
+    status: 408,
+    code: "ERR_TOOL_TIMEOUT",
+    instance: `urn:mcp:request:${String(request.id)}`,
+    retryClass: "transient",
+    issueOrigin: "tool_issue",
+    hints: ["Retry the request or narrow the validation scope."]
+  };
+  if (
+    request.toolName === "validate-project" &&
+    request.toolArgsRedacted !== undefined &&
+    !request.toolArgsRedactedModified &&
+    getToolSchema("validate-project") !== undefined
+  ) {
+    const gated = buildSuggestedCall({
+      tool: "validate-project",
+      params: request.toolArgsRedacted
+    });
+    if (gated.suggestedCall) {
+      error.suggestedCall = gated.suggestedCall;
+    }
+  }
+
+  return buildSyntheticToolResult(request.id, {
+    error,
+    meta: {
+      synthetic: true,
+      syntheticSource: "supervisor",
+      timeout: {
+        tool: "validate-project",
+        phase,
+        durationMs: Math.max(0, now - request.startedAt),
+        deadlineMs,
+        lastStage: request.lastStage ?? null,
+        lastStageElapsedMs:
+          request.lastStageStartedAt === undefined
+            ? null
+            : Math.max(0, now - request.lastStageStartedAt),
+        lastStageMeta: redactDiagnosticValue(request.lastStageMeta),
+        redactedToolArgs: request.toolArgsRedacted ?? {},
+        redactedToolArgsModified: request.toolArgsRedactedModified ?? false,
+        retryRecommendation,
+        workerRestartInitiated
+      }
+    }
+  });
 }
 
 export function decideRetryRecommendation(
@@ -423,16 +685,41 @@ function debugSupervisor(event: string, details?: Record<string, unknown>): void
 
 export class StdioSupervisor {
   private readonly entryFile: string;
+  private readonly validateProjectTimeoutMs: number;
+  private readonly workerStartupWatchdogMs: number;
+  private readonly clientWriter: ((message: JSONRPCMessage) => void) | undefined;
+  private readonly treeTokenRetrier: ((pid: number) => boolean | Promise<boolean>) | undefined;
+  private readonly treeCleanupTimeoutMs: number;
+  private readonly eventWriter: NonNullable<SupervisorOptions["eventWriter"]>;
+  private readonly monotonicNow: () => number;
+  private readonly timerScheduler: NonNullable<SupervisorOptions["timerScheduler"]>;
+  private readonly timerClearer: NonNullable<SupervisorOptions["timerClearer"]>;
+  private readonly workerSpawner: () => ChildProcessWithoutNullStreams;
+  private readonly treeTerminator: ((pid: number) => boolean | Promise<boolean>) | undefined;
   private readonly clientReader = new JsonRpcFrameReader();
-  private readonly workerReader = new JsonRpcFrameReader();
-  private readonly queuedMessages: JSONRPCMessage[] = [];
+  private readonly workerReaders = new Map<ChildProcessWithoutNullStreams, JsonRpcFrameReader>();
+  private readonly queuedRequests: QueuedRequest[] = [];
+  private readonly queuedNotifications: JSONRPCMessage[] = [];
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly recentRestarts = new Map<string, number[]>();
+  private readonly liveChildren = new Set<ChildProcessWithoutNullStreams>();
+  private readonly staleChildren = new Set<ChildProcessWithoutNullStreams>();
+  private readonly cleanupStates = new Map<ChildProcessWithoutNullStreams, CleanupState>();
+  private readonly unresolvedTreeTokens = new Set<number>();
+  private readonly restartBackoff = new RestartBackoffState();
+  private readonly terminalChildren = new WeakSet<ChildProcessWithoutNullStreams>();
 
   private child: ChildProcessWithoutNullStreams | undefined;
   private childReady = false;
   private shuttingDown = false;
   private restartTimer: NodeJS.Timeout | undefined;
+  private startupWatchdog: NodeJS.Timeout | undefined;
+  private validateBarrierKey: string | undefined;
+  private runningValidateKey: string | undefined;
+  private attemptToken = 0;
+  private currentRetryEpoch: number | undefined;
+  private currentRetryReservation: RestartReservation | undefined;
+  private retryPaused = false;
   private workerStderrBuffer = "";
   private clientMode: ConcreteFramingMode = DEFAULT_CLIENT_MODE;
   private initializeRequest: JSONRPCRequest | undefined;
@@ -443,6 +730,24 @@ export class StdioSupervisor {
 
   constructor(options: SupervisorOptions) {
     this.entryFile = options.entryFile;
+    this.validateProjectTimeoutMs = options.validateProjectTimeoutMs ?? loadValidateProjectTimeoutMs();
+    this.workerStartupWatchdogMs = computeWorkerStartupWatchdogMs(this.validateProjectTimeoutMs);
+    this.clientWriter = options.clientWriter;
+    this.treeTokenRetrier = options.treeTokenRetrier;
+    this.treeCleanupTimeoutMs = options.treeCleanupTimeoutMs ?? DEFAULT_TREE_CLEANUP_TIMEOUT_MS;
+    this.eventWriter = options.eventWriter ?? log;
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.timerScheduler = options.timerScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.timerClearer = options.timerClearer ?? ((timer) => clearTimeout(timer));
+    this.workerSpawner = options.workerSpawner ?? (() => spawn(process.execPath, [...process.execArgv, this.entryFile], {
+      env: {
+        ...process.env,
+        [WORKER_MODE_ENV]: "1"
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(process.platform === "win32" ? {} : { detached: true })
+    }));
+    this.treeTerminator = options.treeTerminator;
   }
 
   async start(): Promise<void> {
@@ -496,125 +801,333 @@ export class StdioSupervisor {
       this.initializedNotification = message;
     }
 
-    if (!this.childReady) {
-      this.queuedMessages.push(message);
+    if (isNotification(message)) {
+      if (message.method === "notifications/cancelled") {
+        this.handleCancellation(message);
+        return;
+      }
+      if (!this.childReady) {
+        if (!shouldRetainUnavailableNotification(message.method)) {
+          this.eventWriter("warn", "supervisor.notification_dropped", {
+            method: message.method,
+            reason: this.liveCapOccupancy() >= 2 ? "live-cap-blocked" : "worker-unavailable"
+          });
+        }
+        return;
+      }
+      if (this.child && !this.child.stdin.destroyed) {
+        this.writeToWorker(this.child, message);
+      }
       return;
     }
 
-    this.forwardToWorker(message);
+    if (!isRequest(message)) {
+      return;
+    }
+
+    if (message.method === "initialize") {
+      if (!this.child && this.liveCapOccupancy() >= 2) {
+        this.clearInitialInitializationState();
+        this.writeToClient(buildLegacyJsonRpcError(message.id as RequestId));
+        return;
+      }
+      if (this.childReady) {
+        this.forwardRequest(message, this.createPendingRequest(message));
+      } else {
+        const existing = this.queuedNotifications.findIndex(
+          (entry) => isRequest(entry) && entry.method === "initialize"
+        );
+        if (existing >= 0) this.queuedNotifications.splice(existing, 1);
+        this.queuedNotifications.push(message);
+      }
+      return;
+    }
+
+    const pending = this.createPendingRequest(message);
+    if (!this.child && this.liveCapOccupancy() >= 2) {
+      const { reply } = buildWorkerRestartReply(
+        pending,
+        { code: null, signal: null },
+        this.monotonicNow(),
+        [],
+        { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
+      );
+      this.writeToClient(reply);
+      return;
+    }
+    const isValidate = pending.toolName === "validate-project";
+    const dispatchImmediately = this.canDispatchImmediately(pending);
+    if (!dispatchImmediately && this.queuedRequests.length >= MAX_SUPERVISOR_QUEUE) {
+      this.writeToClient(buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method));
+      this.drainQueue();
+      return;
+    }
+
+    if (isValidate) {
+      pending.timeoutPhase = "queue";
+      const elapsedAtAdmission = Math.max(0, this.monotonicNow() - pending.startedAt);
+      pending.deadlineTimer = this.timerScheduler(
+        () => this.handleValidateProjectDeadline(requestKey(pending.id)),
+        Math.max(0, this.validateProjectTimeoutMs - elapsedAtAdmission)
+      );
+      pending.deadlineTimer.unref();
+      if (!this.validateBarrierKey) {
+        this.validateBarrierKey = requestKey(pending.id);
+      }
+    }
+
+    if (dispatchImmediately) {
+      this.forwardRequest(message, pending);
+      return;
+    }
+    this.queuedRequests.push({ message, pending });
   }
 
-  private forwardToWorker(message: JSONRPCMessage): void {
+  private createPendingRequest(message: JSONRPCRequest): PendingRequest {
+    const pending: PendingRequest = {
+      id: message.id as RequestId,
+      method: message.method,
+      startedAt: this.monotonicNow()
+    };
+    if (message.method === "tools/call") {
+      const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
+      if (typeof params.name === "string") pending.toolName = params.name;
+      const redacted = redactToolArgs(params.arguments);
+      pending.toolArgsRedacted = redacted.args;
+      pending.toolArgsRedactedModified = redacted.modified;
+    }
+    return pending;
+  }
+
+  private canDispatchImmediately(pending: PendingRequest): boolean {
+    if (!this.childReady || !this.child || this.child.stdin.destroyed) return false;
+    if (pending.toolName === "validate-project") {
+      return (
+        this.pendingRequests.size === 0 &&
+        this.runningValidateKey === undefined &&
+        this.staleChildren.size === 0 &&
+        this.unresolvedTreeTokens.size === 0 &&
+        this.queuedRequests.length === 0
+      );
+    }
+    return this.validateBarrierKey === undefined;
+  }
+
+  private forwardRequest(message: JSONRPCRequest, pending: PendingRequest): void {
     const child = this.child;
     if (!child || child.stdin.destroyed) {
-      this.queuedMessages.push(message);
-      if (!this.shuttingDown) {
-        this.scheduleRestart();
+      if (this.queuedRequests.length < MAX_SUPERVISOR_QUEUE) {
+        this.queuedRequests.push({ message, pending });
+      } else {
+        if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+        this.writeToClient(buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method));
       }
+      this.scheduleRestart();
       return;
     }
 
-    if (isRequest(message)) {
-      const id = getTrackedRequestId(message);
-      if (id !== undefined) {
-        const pending: PendingRequest = {
-          id,
-          method: message.method,
-          startedAt: performance.now()
-        };
-        if (message.method === "tools/call") {
-          const params = (message.params ?? {}) as {
-            name?: unknown;
-            arguments?: unknown;
-          };
-          if (typeof params.name === "string") {
-            pending.toolName = params.name;
-          }
-          const redacted = redactToolArgs(params.arguments);
-          pending.toolArgsRedacted = redacted.args;
-          pending.toolArgsRedactedModified = redacted.modified;
-        }
-        this.pendingRequests.set(requestKey(id), pending);
-      }
-      if (message.method === "initialize") {
-        this.initializeSentToWorker = true;
-      }
+    this.pendingRequests.set(requestKey(pending.id), pending);
+    if (pending.toolName === "validate-project") {
+      pending.timeoutPhase = "running";
+      this.runningValidateKey = requestKey(pending.id);
+      this.validateBarrierKey = requestKey(pending.id);
     }
+    if (message.method === "initialize") this.initializeSentToWorker = true;
 
     debugSupervisor("forward_to_worker", {
       method: "method" in message ? message.method : undefined,
       id: "id" in message ? message.id : undefined
     });
+    this.writeToWorker(child, message);
+  }
+
+  private writeToWorker(child: ChildProcessWithoutNullStreams, message: JSONRPCMessage): void {
     child.stdin.write(encodeJsonRpcMessage(message, "content-length"));
   }
 
-  private spawnWorker(): void {
-    if (this.shuttingDown) {
+  private handleCancellation(message: JSONRPCNotification): void {
+    const params = (message.params ?? {}) as { requestId?: unknown };
+    const targetId = params.requestId;
+    if (typeof targetId !== "string" && typeof targetId !== "number") {
+      return;
+    }
+    const key = requestKey(targetId);
+    const queuedIndex = this.queuedRequests.findIndex(
+      (entry) => requestKey(entry.pending.id) === key
+    );
+    if (queuedIndex >= 0) {
+      const [{ pending }] = this.queuedRequests.splice(queuedIndex, 1);
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+      this.drainQueue();
       return;
     }
 
-    const stale = this.child;
-    if (stale) {
-      this.detachChild();
-      if (stale.exitCode === null) {
-        stale.kill("SIGTERM");
+    const pending = this.pendingRequests.get(key);
+    if (pending?.toolName === "validate-project") {
+      pending.clientCancelled = true;
+    }
+    const child = this.child;
+    if (child && !child.stdin.destroyed) {
+      this.writeToWorker(child, message);
+    }
+  }
+
+  private handleValidateProjectDeadline(key: string): void {
+    const queuedIndex = this.queuedRequests.findIndex(
+      (entry) => requestKey(entry.pending.id) === key
+    );
+    if (queuedIndex >= 0) {
+      const [{ pending }] = this.queuedRequests.splice(queuedIndex, 1);
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+      pending.deadlineTimer = undefined;
+      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+      if (!pending.clientCancelled) {
+        this.writeToClient(buildValidateProjectTimeoutReply({
+          request: pending,
+          phase: "queue",
+          deadlineMs: this.validateProjectTimeoutMs,
+          now: this.monotonicNow(),
+          workerRestartInitiated: false
+        }));
       }
+      this.drainQueue();
+      return;
     }
 
-    const child = spawn(process.execPath, [...process.execArgv, this.entryFile], {
-      env: {
-        ...process.env,
-        [WORKER_MODE_ENV]: "1"
-      },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
+    const pending = this.pendingRequests.get(key);
+    if (!pending || pending.toolName !== "validate-project") return;
+    this.pendingRequests.delete(key);
+    pending.deadlineTimer = undefined;
+    this.runningValidateKey = undefined;
+    this.validateBarrierKey = undefined;
+    if (!pending.clientCancelled) {
+      this.writeToClient(buildValidateProjectTimeoutReply({
+        request: pending,
+        phase: "running",
+        deadlineMs: this.validateProjectTimeoutMs,
+        now: this.monotonicNow(),
+        workerRestartInitiated: true
+      }));
+    }
+    this.recoverTimedOutWorker();
+  }
+
+  private drainQueue(): void {
+    if (!this.childReady || !this.child || this.child.stdin.destroyed) return;
+
+    while (this.queuedRequests.length > 0) {
+      if (this.runningValidateKey) return;
+      const next = this.queuedRequests[0];
+      const nextKey = requestKey(next.pending.id);
+      if (next.pending.toolName === "validate-project") {
+        this.validateBarrierKey = nextKey;
+        if (
+          this.pendingRequests.size > 0 ||
+          this.staleChildren.size > 0 ||
+          this.unresolvedTreeTokens.size > 0
+        ) {
+          return;
+        }
+        this.queuedRequests.shift();
+        this.forwardRequest(next.message, next.pending);
+        return;
+      }
+      if (this.validateBarrierKey && this.validateBarrierKey !== nextKey) {
+        const barrierIndex = this.queuedRequests.findIndex(
+          (entry) => requestKey(entry.pending.id) === this.validateBarrierKey
+        );
+        if (barrierIndex === 0) return;
+      }
+      this.queuedRequests.shift();
+      this.forwardRequest(next.message, next.pending);
+    }
+  }
+
+  private spawnWorker(): void {
+    if (this.shuttingDown || this.child || this.liveCapOccupancy() >= 2) {
+      this.retryPaused = this.liveCapOccupancy() >= 2;
+      return;
+    }
+    this.currentRetryEpoch = undefined;
+    this.currentRetryReservation = undefined;
+    this.retryPaused = false;
+    const token = ++this.attemptToken;
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = this.workerSpawner();
+    } catch (error) {
+      log("error", "supervisor.worker_spawn_throw", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+      this.handleStartupFailure(token, { code: null, signal: null });
+      return;
+    }
 
     this.child = child;
+    this.liveChildren.add(child);
+    this.workerReaders.set(child, new JsonRpcFrameReader());
     this.childReady = false;
     this.initializeSentToWorker = false;
-    this.workerReader.clear();
     this.workerStderrBuffer = "";
+    this.clearStartupWatchdog();
+    this.startupWatchdog = this.timerScheduler(() => {
+      if (token !== this.attemptToken || child !== this.child || this.childReady) return;
+      log("warn", "supervisor.worker_startup_timeout", {
+        pid: child.pid,
+        timeoutMs: this.workerStartupWatchdogMs
+      });
+      this.invalidateCurrentChild(child);
+      this.beginTreeTermination(child);
+      this.handleStartupFailure(token, { code: null, signal: "SIGKILL" });
+    }, this.workerStartupWatchdogMs);
 
-    child.stdout.on("data", this.handleWorkerData);
-    child.stderr.on("data", this.handleWorkerStderr);
-    child.stdin.on("error", this.handleWorkerStdinError);
+    child.stdout.on("data", (chunk: Buffer) => this.handleWorkerData(child, chunk));
+    child.stderr.on("data", (chunk: Buffer | string) => this.handleWorkerStderr(child, chunk));
+    child.stdin.on("error", (error) => this.handleWorkerStdinError(child, error));
     child.once("error", (error) => this.handleWorkerProcessError(child, error));
     child.once("exit", (code, signal) => this.handleWorkerExit(child, code, signal));
+    child.once("close", (code, signal) => this.handleWorkerExit(child, code, signal));
 
     log("info", "supervisor.worker_spawn", { pid: child.pid });
   }
 
-  private readonly handleWorkerData = (chunk: Buffer): void => {
-    this.workerReader.processChunk(chunk, {
+  private handleWorkerData(child: ChildProcessWithoutNullStreams, chunk: Buffer): void {
+    if (child !== this.child) return;
+    const reader = this.workerReaders.get(child);
+    if (!reader) return;
+    reader.processChunk(chunk, {
       onFrame: ({ message }) => {
-        this.handleWorkerMessage(message);
+        this.handleWorkerMessage(child, message);
       },
       onError: (error) => {
         log("warn", "supervisor.worker_parse_error", { message: error.message });
       }
     });
-  };
+  }
 
-  private readonly handleWorkerStdinError = (error: Error): void => {
+  private handleWorkerStdinError(child: ChildProcessWithoutNullStreams, error: Error): void {
+    if (child !== this.child) return;
     if ((error as NodeJS.ErrnoException).code === "EPIPE") {
       return;
     }
     log("warn", "supervisor.worker_stdin_error", { message: error.message });
-  };
+  }
 
-  private readonly handleWorkerStderr = (chunk: Buffer | string): void => {
+  private handleWorkerStderr(child: ChildProcessWithoutNullStreams, chunk: Buffer | string): void {
+    if (child !== this.child) return;
     this.workerStderrBuffer += chunk.toString();
     const lines = this.workerStderrBuffer.split(/\r?\n/);
     this.workerStderrBuffer = lines.pop() ?? "";
 
     for (const line of lines) {
       if (line === WORKER_READY_MARKER) {
-        this.handleWorkerReady();
+        this.handleWorkerReady(child);
         continue;
       }
       process.stderr.write(`${line}\n`);
     }
-  };
+  }
 
   private handleWorkerProcessError(child: ChildProcessWithoutNullStreams, error: Error): void {
     log("error", "supervisor.worker_process_error", { message: error.message });
@@ -622,10 +1135,15 @@ export class StdioSupervisor {
     if (child !== this.child) {
       return;
     }
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
+    const wasReady = this.childReady;
+    this.invalidateCurrentChild(child);
+    this.beginTreeTermination(child);
+    if (!wasReady) {
+      this.handleStartupFailure(this.attemptToken, { code: null, signal: null });
+    } else {
+      this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
+      this.scheduleRestart(true);
     }
-    this.handleWorkerExit(child, null, null);
   }
 
   private handleWorkerExit(
@@ -633,15 +1151,37 @@ export class StdioSupervisor {
     code: number | null,
     signal: NodeJS.Signals | null
   ): void {
-    if (child !== this.child) {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
+    if (this.terminalChildren.has(child)) return;
+    this.terminalChildren.add(child);
+    const cleanup = this.cleanupStates.get(child);
+    if (cleanup) {
+      cleanup.parentExited = true;
+      this.liveChildren.delete(child);
+      this.workerReaders.delete(child);
+      this.staleChildren.delete(child);
+      if (cleanup.status === "pending" || cleanup.status === "unresolved") {
+        this.unresolvedTreeTokens.add(cleanup.pid);
+      } else {
+        this.cleanupStates.delete(child);
       }
+      this.resumePausedRestart();
+      this.drainQueue();
+      return;
+    }
+
+    this.liveChildren.delete(child);
+    this.workerReaders.delete(child);
+    this.staleChildren.delete(child);
+
+    if (child !== this.child) {
+      this.resumePausedRestart();
+      this.drainQueue();
       return;
     }
 
     const childPid = this.child?.pid;
-    this.detachChild();
+    const wasReady = this.childReady;
+    this.detachCurrentChild();
 
     if (this.shuttingDown) {
       return;
@@ -654,11 +1194,16 @@ export class StdioSupervisor {
       pendingRequests: this.pendingRequests.size
     });
 
+    if (!wasReady) {
+      this.handleStartupFailure(this.attemptToken, { code, signal });
+      return;
+    }
     this.failPendingRequestsOnWorkerExit({ code, signal });
-    this.scheduleRestart();
+    this.scheduleRestart(true);
   }
 
-  private handleWorkerMessage(message: JSONRPCMessage): void {
+  private handleWorkerMessage(child: ChildProcessWithoutNullStreams, message: JSONRPCMessage): void {
+    if (child !== this.child) return;
     debugSupervisor("worker_message", {
       hasMethod: "method" in message,
       method: "method" in message ? message.method : undefined,
@@ -679,18 +1224,35 @@ export class StdioSupervisor {
         this.pendingRequests.delete(requestKey(id));
       }
 
+      if ("error" in message) {
+        if (!this.replayingInitialization && id !== undefined) {
+          this.writeToClient(buildLegacyJsonRpcError(id));
+          const retainedIndex = this.queuedNotifications.findIndex(
+            (entry) => isRequest(entry) && requestKey(entry.id as RequestId) === requestKey(id)
+          );
+          if (retainedIndex >= 0) this.queuedNotifications.splice(retainedIndex, 1);
+        }
+        const active = this.child;
+        if (active) {
+          this.invalidateCurrentChild(active);
+          this.beginTreeTermination(active);
+        }
+        this.handleStartupFailure(this.attemptToken, { code: null, signal: null });
+        return;
+      }
+
       if (this.replayingInitialization) {
         this.replayingInitialization = false;
         if (this.initializedNotification) {
-          this.forwardToWorker(this.initializedNotification);
+          this.writeToWorker(child, this.initializedNotification);
         }
-        this.childReady = true;
+        this.adoptActiveChild();
         this.flushQueue();
         return;
       }
 
       this.clientInitialized = true;
-      this.childReady = true;
+      this.adoptActiveChild();
       this.writeToClient(message);
       this.flushQueue();
       return;
@@ -699,11 +1261,23 @@ export class StdioSupervisor {
     if (isResponse(message)) {
       const id = getTrackedRequestId(message);
       if (id !== undefined) {
-        this.pendingRequests.delete(requestKey(id));
+        const key = requestKey(id);
+        const pending = this.pendingRequests.get(key);
+        this.pendingRequests.delete(key);
+        if (pending?.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+        if (pending?.toolName === "validate-project") {
+          this.runningValidateKey = undefined;
+          if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+          if (pending.clientCancelled) {
+            this.drainQueue();
+            return;
+          }
+        }
       }
     }
 
     this.writeToClient(message);
+    this.drainQueue();
   }
 
   private applyStageUpdate(params: unknown): void {
@@ -728,28 +1302,29 @@ export class StdioSupervisor {
     // restart envelopes carry the latest progress payload.
     if (typeof p.stage === "string" && p.stage !== pending.lastStage) {
       pending.lastStage = p.stage;
-      pending.lastStageStartedAt = performance.now();
+      pending.lastStageStartedAt = this.monotonicNow();
     } else if (pending.lastStageStartedAt === undefined) {
       // First emit for this request; bootstrap the stage timer.
-      pending.lastStageStartedAt = performance.now();
+      pending.lastStageStartedAt = this.monotonicNow();
     }
     pending.lastStageMeta = p.meta;
   }
 
-  private handleWorkerReady(): void {
+  private handleWorkerReady(child: ChildProcessWithoutNullStreams): void {
+    if (child !== this.child) return;
     debugSupervisor("worker_ready", {
       hasInitializeRequest: this.initializeRequest !== undefined,
       clientInitialized: this.clientInitialized
     });
 
     if (!this.initializeRequest) {
-      this.childReady = true;
+      this.adoptActiveChild();
       this.flushQueue();
       return;
     }
 
     this.replayingInitialization = this.clientInitialized;
-    this.forwardToWorker(this.initializeRequest);
+    this.forwardRequest(this.initializeRequest, this.createPendingRequest(this.initializeRequest));
   }
 
   private isInitializationResponse(message: JSONRPCMessage): message is JSONRPCResponse {
@@ -757,20 +1332,24 @@ export class StdioSupervisor {
     const initializeId = this.initializeRequest
       ? getTrackedRequestId(this.initializeRequest)
       : undefined;
+    const initializePending = initializeId !== undefined
+      ? this.pendingRequests.get(requestKey(initializeId))?.method === "initialize"
+      : false;
     return (
       id !== undefined &&
       initializeId !== undefined &&
+      initializePending &&
       requestKey(id) === requestKey(initializeId)
     );
   }
 
   private flushQueue(): void {
-    if (!this.childReady || this.queuedMessages.length === 0) {
+    if (!this.childReady || !this.child) {
       return;
     }
 
-    const pending = this.queuedMessages.splice(0, this.queuedMessages.length);
-    for (const message of pending) {
+    const controls = this.queuedNotifications.splice(0, this.queuedNotifications.length);
+    for (const message of controls) {
       if (
         this.initializeSentToWorker &&
         isRequest(message) &&
@@ -780,8 +1359,13 @@ export class StdioSupervisor {
       ) {
         continue;
       }
-      this.forwardToWorker(message);
+      if (isRequest(message)) {
+        this.forwardRequest(message, this.createPendingRequest(message));
+      } else {
+        this.writeToWorker(this.child, message);
+      }
     }
+    this.drainQueue();
   }
 
   private failPendingRequestsOnWorkerExit(exit: ExitInfo): void {
@@ -789,7 +1373,7 @@ export class StdioSupervisor {
       ? requestKey(this.initializeRequest.id)
       : undefined;
 
-    const now = performance.now();
+    const now = this.monotonicNow();
 
     // Record this exit once per toolName regardless of how many concurrent
     // pending requests it killed; per-request recording would inflate the
@@ -811,6 +1395,10 @@ export class StdioSupervisor {
     for (const [key, pending] of [...this.pendingRequests.entries()]) {
       if (key === preservedInitializeKey) continue;
       this.pendingRequests.delete(key);
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+      if (this.runningValidateKey === key) this.runningValidateKey = undefined;
+      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+      if (pending.clientCancelled) continue;
       const toolName = pending.toolName ?? "unknown";
       const pruned = prunedByTool.get(toolName) ?? [];
       const { reply } = buildWorkerRestartReply(
@@ -831,35 +1419,298 @@ export class StdioSupervisor {
       id: "id" in message ? message.id : undefined,
       clientMode: this.clientMode
     });
-    const frame = encodeJsonRpcMessage(message, this.clientMode);
-    process.stdout.write(frame);
+    try {
+      if (this.clientWriter) {
+        this.clientWriter(message);
+        return;
+      }
+      const frame = encodeJsonRpcMessage(message, this.clientMode);
+      process.stdout.write(frame);
+    } catch (error) {
+      this.eventWriter("warn", "supervisor.client_write_error", {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
-  private scheduleRestart(): void {
-    if (this.restartTimer || this.shuttingDown) {
-      return;
-    }
-
-    this.restartTimer = setTimeout(() => {
-      this.restartTimer = undefined;
-      this.spawnWorker();
-    }, 100);
+  private clearInitialInitializationState(): void {
+    if (this.clientInitialized) return;
+    this.initializeRequest = undefined;
+    this.initializedNotification = undefined;
+    this.replayingInitialization = false;
+    this.initializeSentToWorker = false;
   }
 
-  private detachChild(): void {
-    const child = this.child;
-    if (!child) {
-      this.childReady = false;
-      return;
-    }
+  private liveCapOccupancy(): number {
+    return this.liveChildren.size + this.unresolvedTreeTokens.size;
+  }
 
-    child.stdout.off("data", this.handleWorkerData);
-    child.stderr.off("data", this.handleWorkerStderr);
-    child.stdin.off("error", this.handleWorkerStdinError);
-    child.removeAllListeners("error");
-    child.removeAllListeners("exit");
+  private clearStartupWatchdog(): void {
+    if (this.startupWatchdog) {
+      this.timerClearer(this.startupWatchdog);
+      this.startupWatchdog = undefined;
+    }
+  }
+
+  private adoptActiveChild(): void {
+    this.clearStartupWatchdog();
+    this.childReady = true;
+    this.restartBackoff.reset();
+    this.currentRetryEpoch = undefined;
+    this.currentRetryReservation = undefined;
+    this.retryPaused = false;
+  }
+
+  private invalidateCurrentChild(child: ChildProcessWithoutNullStreams): void {
+    if (child !== this.child) return;
+    this.clearStartupWatchdog();
     this.child = undefined;
     this.childReady = false;
+    this.replayingInitialization = false;
+    this.initializeSentToWorker = false;
+    this.staleChildren.add(child);
+    this.attemptToken += 1;
+    child.stdout.removeAllListeners("data");
+    child.stderr.removeAllListeners("data");
+    child.stdin.removeAllListeners("error");
+  }
+
+  private detachCurrentChild(): void {
+    const child = this.child;
+    this.clearStartupWatchdog();
+    this.child = undefined;
+    this.childReady = false;
+    this.replayingInitialization = false;
+    this.initializeSentToWorker = false;
+    if (child) {
+      child.stdout.removeAllListeners("data");
+      child.stderr.removeAllListeners("data");
+      child.stdin.removeAllListeners("error");
+    }
+  }
+
+  private recoverTimedOutWorker(): void {
+    const child = this.child;
+    if (!child) {
+      this.scheduleRestart(true);
+      return;
+    }
+    this.invalidateCurrentChild(child);
+    this.beginTreeTermination(child);
+    this.spawnWorker();
+  }
+
+  private beginTreeTermination(child: ChildProcessWithoutNullStreams): void {
+    const pid = child.pid;
+    if (pid === undefined) {
+      try { child.kill("SIGKILL"); } catch { /* best effort */ }
+      return;
+    }
+    if (!this.cleanupStates.has(child)) {
+      this.cleanupStates.set(child, { pid, status: "pending", parentExited: false });
+    }
+
+    if (this.treeTerminator) {
+      let operation: boolean | Promise<boolean>;
+      try {
+        operation = this.treeTerminator(pid);
+      } catch {
+        operation = false;
+      }
+      if (typeof operation === "boolean") {
+        if (!operation) {
+          try { child.kill("SIGKILL"); } catch { /* best effort */ }
+        }
+        this.finishTreeTermination(child, operation);
+      } else {
+        void settleTreeCleanupWithin(operation, this.treeCleanupTimeoutMs).then((success) => {
+          if (!success) {
+            try { child.kill("SIGKILL"); } catch { /* best effort */ }
+          }
+          this.finishTreeTermination(child, success);
+        });
+      }
+      return;
+    }
+
+    if (process.platform !== "win32") {
+      if (terminatePosixProcessGroup(pid)) {
+        this.finishTreeTermination(child, true);
+      } else {
+        try { child.kill("SIGKILL"); } catch { /* best effort */ }
+        this.finishTreeTermination(child, false);
+      }
+      return;
+    }
+
+    let taskkill;
+    try {
+      taskkill = spawn("taskkill", buildWindowsTreeKillArgs(pid), {
+        stdio: "ignore",
+        windowsHide: true
+      });
+    } catch {
+      try { child.kill("SIGKILL"); } catch { /* best effort */ }
+      this.finishTreeTermination(child, false);
+      return;
+    }
+    const operation = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (success: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(success);
+      };
+      taskkill.once("error", () => finish(false));
+      taskkill.once("exit", (code) => finish(code === 0));
+    });
+    void settleTreeCleanupWithin(operation, this.treeCleanupTimeoutMs, () => {
+      try { taskkill.kill("SIGKILL"); } catch { /* best effort */ }
+    }).then((success) => {
+      if (!success) {
+        try { child.kill("SIGKILL"); } catch { /* best effort */ }
+      }
+      this.finishTreeTermination(child, success);
+    });
+  }
+
+  private finishTreeTermination(child: ChildProcessWithoutNullStreams, success: boolean): void {
+    const cleanup = this.cleanupStates.get(child);
+    if (!cleanup) return;
+    cleanup.status = success ? "accepted" : "unresolved";
+    if (!cleanup.parentExited) return;
+    if (success) {
+      this.unresolvedTreeTokens.delete(cleanup.pid);
+      this.cleanupStates.delete(child);
+    } else {
+      this.unresolvedTreeTokens.add(cleanup.pid);
+    }
+    this.resumePausedRestart();
+    this.drainQueue();
+  }
+
+  private async retryUnresolvedTreeToken(pid: number): Promise<void> {
+    let success = false;
+    if (this.treeTokenRetrier) {
+      success = await settleTreeCleanupWithin(
+        Promise.resolve().then(() => this.treeTokenRetrier!(pid)),
+        this.treeCleanupTimeoutMs
+      );
+    } else if (process.platform !== "win32") {
+      success = retryPosixTreeToken(pid);
+    } else {
+      let taskkill: ReturnType<typeof spawn> | undefined;
+      const operation = new Promise<boolean>((resolve) => {
+        try {
+          taskkill = spawn("taskkill", buildWindowsTreeKillArgs(pid), {
+            stdio: "ignore",
+            windowsHide: true
+          });
+        } catch {
+          resolve(false);
+          return;
+        }
+        let settled = false;
+        const finish = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        };
+        taskkill.once("error", () => finish(false));
+        taskkill.once("exit", (code) => finish(code === 0));
+      });
+      success = await settleTreeCleanupWithin(operation, this.treeCleanupTimeoutMs, () => {
+        try { taskkill?.kill("SIGKILL"); } catch { /* best effort */ }
+      });
+    }
+    if (!success) return;
+    this.unresolvedTreeTokens.delete(pid);
+    for (const [child, cleanup] of this.cleanupStates) {
+      if (cleanup.pid === pid && cleanup.parentExited) {
+        this.cleanupStates.delete(child);
+      }
+    }
+  }
+
+  private handleStartupFailure(token: number, exit: ExitInfo): void {
+    if (token !== this.attemptToken && this.child !== undefined) return;
+    this.clearStartupWatchdog();
+    this.failQueuedRequestsOnStartupFailure(exit);
+    this.scheduleRestart(true);
+  }
+
+  private failQueuedRequestsOnStartupFailure(exit: ExitInfo): void {
+    const now = this.monotonicNow();
+    const queued = this.queuedRequests.splice(0, this.queuedRequests.length);
+    for (const { pending } of queued) {
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+      const { reply } = buildWorkerRestartReply(pending, exit, now, [], {
+        structuredRestartDisabled: STRUCTURED_RESTART_DISABLED
+      });
+      this.writeToClient(reply);
+    }
+    const retainedInitialize = this.queuedNotifications.find(
+      (message) => isRequest(message) && message.method === "initialize"
+    );
+    this.queuedNotifications.splice(0, this.queuedNotifications.length);
+    if (retainedInitialize && isRequest(retainedInitialize)) {
+      this.writeToClient(buildLegacyJsonRpcError(retainedInitialize.id as RequestId));
+    }
+    this.clearInitialInitializationState();
+    this.validateBarrierKey = undefined;
+    this.runningValidateKey = undefined;
+  }
+
+  private scheduleRestart(_failedAttempt = false): void {
+    if (this.restartTimer || this.shuttingDown || this.child || this.currentRetryReservation) {
+      return;
+    }
+    const reservation = this.restartBackoff.reserve(this.monotonicNow());
+    this.currentRetryReservation = reservation;
+    this.currentRetryEpoch = reservation.epoch;
+    if (this.liveCapOccupancy() >= 2) {
+      this.retryPaused = true;
+      return;
+    }
+    this.armRestartReservation(reservation);
+  }
+
+  private armRestartReservation(reservation: RestartReservation): void {
+    if (this.restartTimer || this.shuttingDown) return;
+    const remaining = Math.max(0, reservation.notBefore - this.monotonicNow());
+    this.restartTimer = this.timerScheduler(() => {
+      this.restartTimer = undefined;
+      if (
+        this.shuttingDown ||
+        reservation.epoch !== this.currentRetryEpoch ||
+        this.child ||
+        this.liveCapOccupancy() >= 2
+      ) {
+        if (
+          !this.shuttingDown &&
+          reservation.epoch === this.currentRetryEpoch &&
+          this.liveCapOccupancy() >= 2
+        ) {
+          this.retryPaused = true;
+        }
+        return;
+      }
+      this.currentRetryEpoch = undefined;
+      this.currentRetryReservation = undefined;
+      this.spawnWorker();
+    }, remaining);
+  }
+
+  private resumePausedRestart(): void {
+    if (!this.retryPaused || this.shuttingDown || this.child || this.liveCapOccupancy() >= 2) return;
+    this.retryPaused = false;
+    const reservation = this.currentRetryReservation;
+    if (!reservation) {
+      this.scheduleRestart(true);
+      return;
+    }
+    if (reservation.epoch !== this.currentRetryEpoch) return;
+    this.armRestartReservation(reservation);
   }
 
   private async shutdown(): Promise<void> {
@@ -869,9 +1720,22 @@ export class StdioSupervisor {
 
     this.shuttingDown = true;
     if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
+      this.timerClearer(this.restartTimer);
       this.restartTimer = undefined;
     }
+    this.currentRetryEpoch = undefined;
+    this.currentRetryReservation = undefined;
+    this.retryPaused = false;
+    this.clearStartupWatchdog();
+
+    for (const pending of this.pendingRequests.values()) {
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+    }
+    for (const { pending } of this.queuedRequests) {
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+    }
+    this.pendingRequests.clear();
+    this.queuedRequests.splice(0, this.queuedRequests.length);
 
     process.stdin.off("data", this.handleClientData);
     process.stdin.off("error", this.handleClientError);
@@ -880,11 +1744,13 @@ export class StdioSupervisor {
     process.off("SIGINT", this.handleTerminateSignal);
     process.off("SIGTERM", this.handleTerminateSignal);
 
-    const child = this.child;
-    this.detachChild();
-    if (child && child.exitCode === null) {
-      child.kill("SIGTERM");
+    this.detachCurrentChild();
+    for (const child of this.liveChildren) {
+      this.beginTreeTermination(child);
     }
+    await Promise.all(
+      [...this.unresolvedTreeTokens].map((pid) => this.retryUnresolvedTreeToken(pid))
+    );
   }
 }
 

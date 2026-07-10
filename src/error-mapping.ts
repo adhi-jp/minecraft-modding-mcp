@@ -73,6 +73,10 @@ export function statusForErrorCode(code: string): number {
     return 408;
   }
 
+  if (code === ERROR_CODES.TOOL_TIMEOUT) {
+    return 408;
+  }
+
   if (
     code === ERROR_CODES.INVALID_INPUT ||
     code === ERROR_CODES.COORDINATE_PARSE_FAILED ||

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -42,6 +43,8 @@ const BATCH_TOOLS = [
   "batch-symbol-exists",
   "batch-mappings"
 ] as const;
+
+const execFileAsync = promisify(execFile);
 
 type ErrorPayload = {
   type: string;
@@ -511,7 +514,7 @@ async function assertContentLengthInitializeHandshake(env: NodeJS.ProcessEnv): P
   });
 }
 
-async function main(): Promise<void> {
+async function main(): Promise<boolean> {
   await ensureSqliteAvailable();
 
   const stdioMode = selectManualStdioMode(await canUseStdioPipeReliably());
@@ -904,6 +907,16 @@ async function main(): Promise<void> {
     await closeTransportWithTimeout(transport);
     await rm(root, { recursive: true, force: true });
   }
+  return stdioMode.supportsWorkerRestartValidation;
+}
+
+async function runSupervisorTimeoutProbe(): Promise<void> {
+  await execFileAsync(
+    process.execPath,
+    ["--import", "tsx", "--test", "tests/stdio-supervisor-timeout.test.ts"],
+    { cwd: process.cwd(), timeout: 60_000 }
+  );
+  console.log("Manual stdio supervisor timeout smoke passed: queue/running timeout, overflow, cancellation, and queued recovery validated.");
 }
 
 async function runBatchToolsOffProbe(): Promise<void> {
@@ -978,6 +991,9 @@ async function runBatchToolsOffProbe(): Promise<void> {
   }
 }
 
-await main();
+const supportsSupervisorValidation = await main();
+if (supportsSupervisorValidation) {
+  await runSupervisorTimeoutProbe();
+}
 await runBatchToolsOffProbe();
 process.exit(0);
