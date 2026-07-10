@@ -70,6 +70,17 @@ test("POSIX tree termination reports failure without hiding direct-child fallbac
   );
 });
 
+test("POSIX tree termination treats an already-gone process group as cleaned up", () => {
+  const terminate = supervisorExports.terminatePosixProcessGroup;
+  assert.equal(typeof terminate, "function");
+  assert.equal(
+    (terminate as (pid: number, kill: (pid: number, signal: string) => void) => boolean)(654, () => {
+      throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+    }),
+    true
+  );
+});
+
 test("Windows tree termination command includes descendant and force flags", () => {
   const build = supervisorExports.buildWindowsTreeKillArgs;
   assert.equal(typeof build, "function");
@@ -128,6 +139,20 @@ test("POSIX unresolved-token shutdown retry targets the saved process group", ()
     true
   );
   assert.deepEqual(calls, [[-987, "SIGKILL"]]);
+});
+
+test("POSIX unresolved-token shutdown retry clears already-gone process groups", () => {
+  const retry = supervisorExports.retryPosixTreeToken;
+  assert.equal(typeof retry, "function");
+  assert.equal(
+    (retry as (pid: number, kill: (pid: number, signal: string) => void) => boolean)(
+      988,
+      () => {
+        throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+      }
+    ),
+    true
+  );
 });
 
 test("supervisor queue overflow tool result has the exact public envelope", () => {

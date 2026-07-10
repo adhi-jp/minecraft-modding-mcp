@@ -66,7 +66,10 @@ export function terminatePosixProcessGroup(
   try {
     kill(-pid, "SIGKILL");
     return true;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ESRCH") {
+      return true;
+    }
     return false;
   }
 }
