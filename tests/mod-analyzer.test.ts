@@ -414,3 +414,105 @@ test("analyzeModJar throws AppError for invalid jar contents", async () => {
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// Nested jars (Jar-in-Jar shells)
+// ---------------------------------------------------------------------------
+
+test("analyzeModJar surfaces the nested-jar inventory of a Jar-in-Jar shell", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-nested-inventory-"));
+  const innerPath = join(root, "inner.jar");
+  await createJar(innerPath, {
+    "net/fabricmc/fabric/api/Inner.class": Buffer.alloc(4)
+  });
+  const { readFile } = await import("node:fs/promises");
+  const innerBytes = await readFile(innerPath);
+
+  const jarPath = join(root, "shell.jar");
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "fabric-api",
+      version: "0.131.0",
+      jars: [{ file: "META-INF/jars/inner-a.jar" }, { file: "META-INF/jars/inner-b.jar" }]
+    }),
+    "META-INF/jars/inner-a.jar": innerBytes,
+    "META-INF/jars/inner-b.jar": innerBytes
+  });
+
+  const result = await analyzeModJar(jarPath);
+
+  assert.equal(result.loader, "fabric");
+  assert.deepEqual(result.nestedJars, [
+    "META-INF/jars/inner-a.jar",
+    "META-INF/jars/inner-b.jar"
+  ]);
+});
+
+test("analyzeModJar excludes declared nested jars that are absent or escape the archive", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-nested-adversarial-"));
+  const innerPath = join(root, "inner.jar");
+  await createJar(innerPath, {
+    "com/example/Inner.class": Buffer.alloc(4)
+  });
+  const { readFile } = await import("node:fs/promises");
+  const innerBytes = await readFile(innerPath);
+
+  const jarPath = join(root, "shell.jar");
+  // The declared list contains a traversal path, an absolute path, and a
+  // missing entry; only the really-present in-archive entry may survive.
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "adversarial",
+      jars: [
+        { file: "../outside.jar" },
+        { file: "/abs/evil.jar" },
+        { file: "META-INF/jars/missing.jar" },
+        { file: "META-INF/jars/real.jar" }
+      ]
+    }),
+    "META-INF/jars/real.jar": innerBytes
+  });
+
+  const result = await analyzeModJar(jarPath);
+
+  assert.deepEqual(result.nestedJars, ["META-INF/jars/real.jar"]);
+});
+
+test("analyzeModJar leaves nestedJars absent for a mod without nested jars", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-nested-none-"));
+  const jarPath = join(root, "plain.jar");
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({ schemaVersion: 1, id: "plain" }),
+    "com/example/Plain.class": Buffer.alloc(4)
+  });
+
+  const result = await analyzeModJar(jarPath);
+
+  assert.equal(result.nestedJars, undefined);
+});
+
+test("analyzeModJar includes declared nested jars outside META-INF/jars when present and safe", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-nested-custom-dir-"));
+  const innerPath = join(root, "inner.jar");
+  await createJar(innerPath, {
+    "com/example/Inner.class": Buffer.alloc(4)
+  });
+  const { readFile } = await import("node:fs/promises");
+  const innerBytes = await readFile(innerPath);
+
+  const jarPath = join(root, "custom-dir-shell.jar");
+  await createJar(jarPath, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "custom-dir",
+      jars: [{ file: "custom/dir/lib.jar" }]
+    }),
+    "custom/dir/lib.jar": innerBytes
+  });
+
+  const result = await analyzeModJar(jarPath);
+
+  assert.deepEqual(result.nestedJars, ["custom/dir/lib.jar"]);
+});

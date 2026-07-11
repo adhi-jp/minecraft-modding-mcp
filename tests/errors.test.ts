@@ -132,7 +132,8 @@ test("statusForErrorCode buckets cover the documented groups (400 / 404 / 422 / 
     ERROR_CODES.DECOMPILE_DISABLED,
     ERROR_CODES.REMAP_FAILED,
     ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
-    ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED
+    ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED,
+    ERROR_CODES.NESTED_JAR_AMBIGUOUS
   ]) {
     assert.equal(statusForErrorCode(code), 422, `${code} must map to 422`);
   }

@@ -87,6 +87,20 @@ export interface ArtifactProvenance {
   workspaceResolution?: WorkspaceResolutionProvenance;
   dependencyResolution?: DependencyResolutionProvenance;
   warnings?: string[];
+  /**
+   * In-archive paths of bundled Jar-in-Jar nested jars, recorded once at
+   * ingest for shell jars (near-zero own classes). Class-family lookups
+   * redirect into these instead of dead-ending in decompilation.
+   */
+  nestedJars?: string[];
+  /**
+   * Set on responses that were served by redirecting a class lookup into a
+   * nested jar of a shell artifact.
+   */
+  nestedJar?: {
+    entryName: string;
+    shellArtifactId: string;
+  };
 }
 
 export interface RuntimeValidationProvenance<

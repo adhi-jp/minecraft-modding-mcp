@@ -8,6 +8,7 @@ import { decompileBinaryJar } from "../decompiler/vineflower.js";
 import { ERROR_CODES, createError, isAppError } from "../errors.js";
 import { log } from "../logger.js";
 import { resolveMojangTinyFile } from "../mojang-tiny-mapping-service.js";
+import { detectShellJarInventory } from "./nested-jars.js";
 import { iterateJavaEntriesAsUtf8 } from "../source-jar-reader.js";
 import type { SourceService } from "../source-service.js";
 import type { ArtifactIndexMetaRow } from "../storage/index-meta-repo.js";
@@ -119,7 +120,11 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
   const artifact = svc.getArtifact(artifactId);
   const force = input.force ?? false;
   const meta = svc.indexMetaRepo.get(artifact.artifactId);
-  const hasFiles = meta ? meta.filesCount > 0 : false;
+  // Shell jars legitimately index zero files; without force they count as
+  // current instead of re-running shell detection on every reindex call.
+  const hasFiles = meta
+    ? meta.filesCount > 0 || artifact.qualityFlags.includes("shell-jar")
+    : false;
   const expectedSignature = artifact.artifactSignature ?? fallbackArtifactSignature(artifact.artifactId);
   const reason = resolveIndexRebuildReason({
     force,
@@ -275,6 +280,31 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
   if (resolved.sourceJarPath) {
     files = await loadFromSourceJar(svc, resolved.sourceJarPath);
   } else if (resolved.binaryJarPath) {
+    // Jar-in-Jar shells (near-zero own classes, all content in nested jars)
+    // would decompile to zero Java files and dead-end in
+    // ERR_DECOMPILER_FAILED. Detect them before remap/decompile: the artifact
+    // is created with an empty file index, the nested-jar inventory persisted
+    // in provenance, and class-family lookups redirect into the nested jars.
+    const shellInventory = await detectShellJarInventory(resolved.binaryJarPath);
+    if (shellInventory) {
+      const qualityFlags = resolved.qualityFlags ?? [];
+      resolved.qualityFlags = qualityFlags.includes("shell-jar")
+        ? qualityFlags
+        : [...qualityFlags, "shell-jar"];
+      if (resolved.provenance) {
+        // Mutate in place: resolveArtifact holds a reference to this object
+        // for its response, mirroring the binaryJarPath swap below.
+        resolved.provenance.nestedJars = shellInventory;
+      }
+      resolved.isDecompiled = false;
+      return {
+        files: [],
+        symbols: [],
+        totalContentBytes: 0,
+        indexedAt: new Date().toISOString(),
+        indexDurationMs: Date.now() - indexStartedAt
+      };
+    }
     const decompileInputJarPath = await maybeRemapBinaryForMojang(svc, resolved);
     // When the binary jar was remapped from obfuscated to mojang, swap the resolved
     // artifact's binaryJarPath to the remapped jar so downstream bytecode consumers
@@ -398,7 +428,11 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
   // Derive hasFiles from meta instead of a separate listFiles probe: when meta is
   // absent the reason is "missing_meta" regardless of hasFiles, and when present
   // meta.filesCount is the authoritative count written alongside the file rows.
-  const hasFiles = meta ? meta.filesCount > 0 : false;
+  // Shell jars legitimately index zero files (their content lives in nested
+  // jars), so their empty index counts as current instead of forcing a
+  // re-detection rebuild on every warm resolve.
+  const existingIsShell = existing?.qualityFlags.includes("shell-jar") ?? false;
+  const hasFiles = meta ? meta.filesCount > 0 || existingIsShell : false;
   const reason = resolveIndexRebuildReason({
     force: false,
     expectedSignature: resolved.artifactSignature,
@@ -407,6 +441,19 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
   });
 
   if (existing && reason === "already_current") {
+    if (existingIsShell) {
+      // Reconcile shell state onto the freshly-resolved object so warm-cache
+      // responses carry the same flag and inventory as the first resolve.
+      const qualityFlags = resolved.qualityFlags ?? [];
+      if (!qualityFlags.includes("shell-jar")) {
+        resolved.qualityFlags = [...qualityFlags, "shell-jar"];
+      }
+      const persistedInventory = existing.provenance?.nestedJars;
+      if (resolved.provenance && persistedInventory && !resolved.provenance.nestedJars) {
+        resolved.provenance.nestedJars = persistedInventory;
+      }
+      resolved.isDecompiled = false;
+    }
     // Mojang binary-remap reconciliation on the warm cache hit path:
     // resolveSourceTargetInternal always returns the original binary jar
     // (resolver does not know about prior remap output), so without this

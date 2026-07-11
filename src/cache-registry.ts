@@ -19,6 +19,7 @@ export const PUBLIC_CACHE_KINDS = [
   "decompiled-source",
   "mod-remap",
   "binary-remap",
+  "nested-jar",
   "workspace"
 ] as const;
 
@@ -108,6 +109,8 @@ function kindRoot(config: CacheRegistryConfig, cacheKind: PublicCacheKind): stri
       return join(config.cacheDir, "remapped-mods");
     case "binary-remap":
       return join(config.cacheDir, "remapped");
+    case "nested-jar":
+      return join(config.cacheDir, "nested-jars");
     case "workspace":
       return "<in-memory:workspace-context-cache>";
   }

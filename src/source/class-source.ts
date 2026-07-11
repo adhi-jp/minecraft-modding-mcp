@@ -34,6 +34,7 @@ import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
 import { matchesMemberPattern } from "./member-pattern.js";
+import { resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
@@ -260,6 +261,7 @@ export function buildClassSourceNotFoundError(_svc: SourceService, input: {
   scope?: ArtifactScope;
   projectPath?: string;
   version?: string;
+  nestedJars?: string[];
 }): AppError {
   const simpleName = input.className.split(/[.$]/).at(-1) ?? input.className;
   const details: Record<string, unknown> = {
@@ -272,7 +274,8 @@ export function buildClassSourceNotFoundError(_svc: SourceService, input: {
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.targetKind ? { targetKind: input.targetKind } : {}),
     ...(input.targetValue ? { targetValue: input.targetValue } : {}),
-    ...(input.attemptedBinaryFallback ? { binaryFallbackAttempted: true } : {})
+    ...(input.attemptedBinaryFallback ? { binaryFallbackAttempted: true } : {}),
+    ...(input.nestedJars && input.nestedJars.length > 0 ? { nestedJars: input.nestedJars } : {})
   };
 
   let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
@@ -683,6 +686,56 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     return true;
   };
 
+  let attemptedNestedJarRedirect = false;
+  const tryNestedJarRedirect = async (lookupClassName: string): Promise<boolean> => {
+    if (attemptedNestedJarRedirect) {
+      return false;
+    }
+    const inventory = activeProvenance?.nestedJars;
+    const outerJarPath = normalizeOptionalString(binaryJarPath);
+    if (!inventory || inventory.length === 0 || !outerJarPath) {
+      return false;
+    }
+    attemptedNestedJarRedirect = true;
+    const shellArtifactId = activeArtifactId;
+    const match = await resolveUniqueNestedJarForClass({
+      cacheDir: svc.config.cacheDir,
+      outerJarPath,
+      outerArtifactId: shellArtifactId,
+      inventory,
+      className: lookupClassName
+    });
+    if (!match) {
+      return false;
+    }
+    const redirectResolved = await svc.resolveArtifact({
+      target: { kind: "jar", value: match.extractedPath },
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      allowDecompile: input.allowDecompile,
+      projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome
+    });
+    activeArtifactId = redirectResolved.artifactId;
+    activeOrigin = redirectResolved.origin;
+    activeMappingApplied = redirectResolved.mappingApplied ?? activeMappingApplied;
+    activeProvenance = redirectResolved.provenance
+      ? {
+          ...redirectResolved.provenance,
+          nestedJar: { entryName: match.entryName, shellArtifactId }
+        }
+      : activeProvenance;
+    activeQualityFlags = dedupeQualityFlags([
+      ...redirectResolved.qualityFlags,
+      "nested-jar-redirect"
+    ]);
+    activeSourceJarPath = redirectResolved.resolvedSourceJarPath;
+    warnings.push(
+      `Class "${className}" lives in nested jar "${match.entryName}" bundled by the shell jar; the lookup was redirected there automatically.`
+    );
+    return true;
+  };
+
   let activeLookupClassName = await svc.resolveClassNameForLookup({
     className,
     version,
@@ -694,6 +747,9 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     context: "source lookup"
   });
   let filePath = resolveClassFilePath(svc, activeArtifactId, activeLookupClassName);
+  if (!filePath && (await tryNestedJarRedirect(activeLookupClassName))) {
+    filePath = resolveClassFilePath(svc, activeArtifactId, activeLookupClassName);
+  }
   if (!filePath && (await tryBinaryFallback())) {
     activeLookupClassName = await svc.resolveClassNameForLookup({
       className,
@@ -721,11 +777,19 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
         input.target && "value" in input.target ? input.target.value : undefined,
       scope: input.scope,
       projectPath: input.projectPath,
-      version
+      version,
+      nestedJars: activeProvenance?.nestedJars
     });
   }
 
   let row = svc.filesRepo.getFileContent(activeArtifactId, filePath);
+  if (!row && (await tryNestedJarRedirect(activeLookupClassName))) {
+    const redirectedFilePath = resolveClassFilePath(svc, activeArtifactId, activeLookupClassName);
+    if (redirectedFilePath) {
+      filePath = redirectedFilePath;
+      row = svc.filesRepo.getFileContent(activeArtifactId, filePath);
+    }
+  }
   if (!row && (await tryBinaryFallback())) {
     activeLookupClassName = await svc.resolveClassNameForLookup({
       className,
@@ -755,7 +819,8 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
         input.target && "value" in input.target ? input.target.value : undefined,
       scope: input.scope,
       projectPath: input.projectPath,
-      version
+      version,
+      nestedJars: activeProvenance?.nestedJars
     });
   }
 
@@ -1006,21 +1071,57 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   let signatureMethods: SignatureMember[];
   let binaryExtractionFailed = false;
   let binaryExtractionFailureReason: string | undefined;
-  try {
-    const signature = await svc.explorerService.getSignature({
+  let nestedJarRedirect: { entryName: string; shellArtifactId: string } | undefined;
+  const fetchSignature = (jarPath: string) =>
+    svc.explorerService.getSignature({
       fqn: lookupClassName,
-      jarPath: binaryJarPath,
+      jarPath,
       access,
       includeSynthetic,
       includeInherited,
       memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined
     });
+  try {
+    let signature;
+    try {
+      signature = await fetchSignature(binaryJarPath);
+    } catch (missError) {
+      const inventory = provenance?.nestedJars;
+      if (
+        !isAppError(missError) ||
+        missError.code !== ERROR_CODES.CLASS_NOT_FOUND ||
+        !inventory ||
+        inventory.length === 0
+      ) {
+        throw missError;
+      }
+      const match = await resolveUniqueNestedJarForClass({
+        cacheDir: svc.config.cacheDir,
+        outerJarPath: binaryJarPath,
+        outerArtifactId: artifactId,
+        inventory,
+        className: lookupClassName
+      });
+      if (!match) {
+        throw missError;
+      }
+      nestedJarRedirect = { entryName: match.entryName, shellArtifactId: artifactId };
+      warnings.push(
+        `Class "${className}" lives in nested jar "${match.entryName}" bundled by the shell jar; members were read from it.`
+      );
+      signature = await fetchSignature(match.extractedPath);
+    }
     warnings.push(...signature.warnings);
     signatureContext = signature.context;
     signatureConstructors = signature.constructors;
     signatureFields = signature.fields;
     signatureMethods = signature.methods;
   } catch (error) {
+    if (isAppError(error) && error.code === ERROR_CODES.NESTED_JAR_AMBIGUOUS) {
+      // A class living in several nested jars needs the caller's choice; the
+      // candidates error must not degrade into a members_unavailable response.
+      throw error;
+    }
     if (isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND) {
       // Re-raise with the shared recovery shape (find-class/api-matrix
       // suggestedCall, namespace + scope hints) instead of the sparse bytecode
@@ -1038,7 +1139,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
           input.target && "value" in input.target ? input.target.value : undefined,
         scope: input.scope,
         projectPath: input.projectPath,
-        version
+        version,
+        nestedJars: provenance?.nestedJars
       });
     }
     binaryExtractionFailed = true;
@@ -1104,7 +1206,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const nextCursor =
     sliced.nextOffset != null ? encodeOffsetCursor(sliced.nextOffset, memberCursorContext) : undefined;
 
-  const normalizedProvenance =
+  const baseProvenance =
     provenance ??
     buildFallbackProvenance(svc, {
       artifactId,
@@ -1112,6 +1214,9 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       requestedMapping,
       mappingApplied
     });
+  const normalizedProvenance = nestedJarRedirect
+    ? { ...baseProvenance, nestedJar: nestedJarRedirect }
+    : baseProvenance;
 
   let decompiledFallback: DecompiledFallback | undefined;
   let decompiledMemberCounts: GetClassMembersOutput["decompiledMemberCounts"];

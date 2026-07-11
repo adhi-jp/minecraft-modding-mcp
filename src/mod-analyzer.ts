@@ -2,7 +2,7 @@ import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 
 import { AppError, ERROR_CODES } from "./errors.js";
-import { normalizeJarPath } from "./path-resolver.js";
+import { isSecureJarEntryPath, normalizeJarPath } from "./path-resolver.js";
 import { listJarEntries, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +32,12 @@ export interface ModAnalysisResult {
   dependencies?: ModDependency[];
   classCount: number;
   classes?: string[];
+  /**
+   * In-archive paths of bundled Jar-in-Jar nested jars (META-INF/jars scan
+   * plus present-and-safe fabric.mod.json "jars" declarations). Absent when
+   * the mod bundles none.
+   */
+  nestedJars?: string[];
 }
 
 export interface AnalyzeModOptions {
@@ -71,7 +77,8 @@ const fabricModJsonSchema = z
     depends: z.record(z.union([z.string(), z.array(z.string())])).optional(),
     recommends: z.record(z.union([z.string(), z.array(z.string())])).optional(),
     conflicts: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-    suggests: z.record(z.union([z.string(), z.array(z.string())])).optional()
+    suggests: z.record(z.union([z.string(), z.array(z.string())])).optional(),
+    jars: z.array(z.object({ file: z.string() }).passthrough()).optional()
   })
   .passthrough();
 
@@ -155,7 +162,9 @@ function collectFabricDeps(
   }));
 }
 
-function parseFabricMod(content: string): Partial<ModAnalysisResult> {
+function parseFabricMod(
+  content: string
+): Partial<ModAnalysisResult> & { declaredNestedJars?: string[] } {
   const parsed = fabricModJsonSchema.safeParse(JSON.parse(content));
   if (!parsed.success) return {};
   const mod = parsed.data;
@@ -178,6 +187,8 @@ function parseFabricMod(content: string): Partial<ModAnalysisResult> {
     ...collectFabricDeps(mod.suggests, "optional")
   ];
 
+  const declaredNestedJars = mod.jars?.map((entry) => entry.file);
+
   return {
     modId: mod.id,
     modName: mod.name,
@@ -186,8 +197,27 @@ function parseFabricMod(content: string): Partial<ModAnalysisResult> {
     entrypoints,
     mixinConfigs,
     accessWidener: mod.accessWidener,
-    dependencies: dependencies.length > 0 ? dependencies : undefined
+    dependencies: dependencies.length > 0 ? dependencies : undefined,
+    ...(declaredNestedJars && declaredNestedJars.length > 0 ? { declaredNestedJars } : {})
   };
+}
+
+// Nested-jar inventory: every real `.jar` entry directly under META-INF/jars/
+// plus declared fabric.mod.json "jars" files that actually exist in the
+// archive under a safe (non-escaping) path. Declared-but-absent or escaping
+// paths are dropped — the inventory never names content the archive cannot
+// safely serve.
+export function collectNestedJars(entries: string[], declared: string[] | undefined): string[] {
+  const present = new Set(entries);
+  const collected = new Set(
+    entries.filter((entry) => /^META-INF\/jars\/[^/]+\.jar$/.test(entry))
+  );
+  for (const file of declared ?? []) {
+    if (isSecureJarEntryPath(file) && present.has(file) && file.endsWith(".jar")) {
+      collected.add(file);
+    }
+  }
+  return [...collected].sort((left, right) => left.localeCompare(right));
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +408,7 @@ export async function analyzeModJar(
 
   // Detect loader and parse metadata
   let loader: ModLoader = "unknown";
-  let metadata: Partial<ModAnalysisResult> = {};
+  let metadata: Partial<ModAnalysisResult> & { declaredNestedJars?: string[] } = {};
   const packagedAccessTransformers = [...new Set(entries.filter((entry) =>
     /(^|\/)META-INF\/accesstransformer\.cfg$/i.test(entry) ||
     /(^|\/)[^/]+_at\.cfg$/i.test(entry) ||
@@ -431,19 +461,23 @@ export async function analyzeModJar(
     }
   }
 
+  const { declaredNestedJars, ...metadataRest } = metadata;
+  const nestedJars = collectNestedJars(entries, declaredNestedJars);
+
   return {
     loader,
     jarKind,
-    ...metadata,
-    ...(packagedAccessTransformers.length > 0 || metadata.accessTransformers
+    ...metadataRest,
+    ...(packagedAccessTransformers.length > 0 || metadataRest.accessTransformers
       ? {
           accessTransformers: [...new Set([
-            ...(metadata.accessTransformers ?? []),
+            ...(metadataRest.accessTransformers ?? []),
             ...packagedAccessTransformers
           ])]
         }
       : {}),
     classCount,
-    ...(classes !== undefined ? { classes } : {})
+    ...(classes !== undefined ? { classes } : {}),
+    ...(nestedJars.length > 0 ? { nestedJars } : {})
   };
 }
