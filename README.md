@@ -147,7 +147,7 @@ All six return `result.summary` first and can include `summary.nextActions` when
 | `inspect-minecraft` | versions, artifacts, classes, files, and source search |
 | `analyze-symbol` | symbol existence checks, mapping conversion, lifecycle tracing, and workspace symbol resolution |
 | `compare-minecraft` | version-pair diffs, class diffs, registry diffs, and migration-oriented overviews |
-| `analyze-mod` | mod metadata, decompile/search flows, class source, and safe remap preview/apply |
+| `analyze-mod` | mod metadata, decompile/search flows, class source, bytecode member queries, and safe remap preview/apply |
 | `validate-project` | workspace summaries plus direct Mixin, Access Widener, and Access Transformer validation |
 | `manage-cache` | cache inventory, verification, and preview/apply cleanup workflows |
 
@@ -264,7 +264,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 | `inspect-minecraft` | Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows |
 | `analyze-symbol` | Handle symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol resolution, and API overviews |
 | `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |
-| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, and preview or apply remaps |
+| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, read class members from bytecode, and preview or apply remaps |
 | `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |
 | `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |
 <!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->

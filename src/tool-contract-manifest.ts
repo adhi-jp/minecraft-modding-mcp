@@ -24,7 +24,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `inspect-minecraft` | Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows |",
       "| `analyze-symbol` | Handle symbol existence checks, namespace mapping, lifecycle tracing, workspace symbol resolution, and API overviews |",
       "| `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |",
-      "| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, and preview or apply remaps |",
+      "| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, read class members from bytecode, and preview or apply remaps |",
       "| `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |",
       "| `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |"
     ],

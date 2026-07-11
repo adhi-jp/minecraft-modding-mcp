@@ -30,7 +30,7 @@ const subjectSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const analyzeModShape = {
-  task: z.enum(["summary", "decompile", "search", "class-source", "remap"]),
+  task: z.enum(["summary", "decompile", "search", "class-source", "members", "remap"]),
   subject: subjectSchema,
   query: nonEmptyString.optional(),
   searchType: z.enum(["class", "method", "field", "content", "all"]).default("all"),
@@ -54,11 +54,11 @@ export const analyzeModSchema = z.object(analyzeModShape).superRefine((value, ct
       message: `${value.task} requires subject.kind=jar.`
     });
   }
-  if (value.task === "class-source" && value.subject.kind !== "class") {
+  if ((value.task === "class-source" || value.task === "members") && value.subject.kind !== "class") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["subject", "kind"],
-      message: "class-source requires subject.kind=class."
+      message: `${value.task} requires subject.kind=class.`
     });
   }
   if (value.task === "search" && !value.query) {
@@ -103,6 +103,10 @@ type AnalyzeModDeps = {
     outputJar?: string;
     mcVersion?: string;
     targetMapping: "yarn" | "mojang";
+  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  getModClassMembers: (input: {
+    jarPath: string;
+    className: string;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
 };
 
@@ -246,6 +250,40 @@ export class AnalyzeModService {
             blocks: {
               source: output
             }
+          }),
+          warnings: Array.isArray(output.warnings) ? output.warnings : []
+        };
+      }
+      case "members": {
+        if (input.subject.kind !== "class") {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: "members requires subject.kind=class."
+          });
+        }
+        const output = await this.deps.getModClassMembers({
+          jarPath: input.subject.jarPath,
+          className: input.subject.className
+        });
+        return {
+          ...buildEntryToolResult({
+            task: "members",
+            detail,
+            include,
+            summary: {
+              status: "ok",
+              headline: `Read bytecode members of ${input.subject.className}.`,
+              subject: createSummarySubject({
+                task: "members",
+                kind: input.subject.kind,
+                jarPath: input.subject.jarPath,
+                className: input.subject.className
+              })
+            },
+            blocks: {
+              members: output
+            },
+            alwaysBlocks: ["members"]
           }),
           warnings: Array.isArray(output.warnings) ? output.warnings : []
         };

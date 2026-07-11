@@ -298,7 +298,8 @@ const analyzeModService = new AnalyzeModService({
   decompileModJar: (input) => sourceService.decompileModJar(input),
   getModClassSource: (input) => sourceService.getModClassSource(input),
   searchModSource: (input) => sourceService.searchModSource(input),
-  remapModJar: (input) => remapModJar(input, config) as unknown as Promise<Record<string, unknown> & { warnings?: string[] }>
+  remapModJar: (input) => remapModJar(input, config) as unknown as Promise<Record<string, unknown> & { warnings?: string[] }>,
+  getModClassMembers: (input) => sourceService.getModClassMembers(input)
 });
 const validateProjectService = new ValidateProjectService({
   validateMixin: (input, options) =>
@@ -760,7 +761,7 @@ server.tool("compare-minecraft",
 registerToolSchema("compare-minecraft", compareMinecraftSchema);
 
 server.tool("analyze-mod",
-  "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, and safe remap previews/applies.",
+  "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, bytecode-only class member reads, and safe remap previews/applies.",
   analyzeModShape,
   { readOnlyHint: false },
   async (args) => runTool("analyze-mod", args, analyzeModSchema, async (input) =>

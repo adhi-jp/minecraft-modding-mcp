@@ -1,4 +1,6 @@
 import { loadConfig } from "./config.js";
+import { ERROR_CODES, createError } from "./errors.js";
+import { validateAndNormalizeJarPath } from "./path-resolver.js";
 import {
   MinecraftExplorerService,
   type ResponseContext as ExplorerResponseContext,
@@ -237,6 +239,30 @@ export type GetArtifactFileOutput = {
   deliveryMode?: "jar-read-through";
   /** Set when content was withheld (e.g. a binary entry); explains why. */
   contentOmittedReason?: string;
+};
+
+export type GetModClassMembersInput = {
+  jarPath: string;
+  className: string;
+};
+
+export type GetModClassMembersOutput = {
+  className: string;
+  jarPath: string;
+  members: {
+    constructors: SignatureMember[];
+    fields: SignatureMember[];
+    methods: SignatureMember[];
+  };
+  counts: {
+    constructors: number;
+    fields: number;
+    methods: number;
+    total: number;
+  };
+  /** Members are read from bytecode; no decompiler runs on this path. */
+  extractionMethod: "bytecode-only";
+  warnings: string[];
 };
 
 export type ListArtifactFilesInput = {
@@ -847,6 +873,48 @@ export class SourceService {
 
   async decompileModJar(input: DecompileModJarInput): Promise<DecompileModJarOutput> {
     return this.modDecompileService.decompileModJar(input);
+  }
+
+  /**
+   * Member-level view of a third-party mod jar class, read from bytecode
+   * only — no decompiler is involved on this path, so it answers in
+   * milliseconds where a decompile-backed lookup costs a full Vineflower run.
+   */
+  async getModClassMembers(input: GetModClassMembersInput): Promise<GetModClassMembersOutput> {
+    const jarPath = validateAndNormalizeJarPath(input.jarPath);
+    const className = input.className.trim();
+    if (!className) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "className must be non-empty."
+      });
+    }
+    const signature = await this.explorerService.getSignature({
+      fqn: className,
+      jarPath,
+      access: "all"
+    });
+    const counts = {
+      constructors: signature.constructors.length,
+      fields: signature.fields.length,
+      methods: signature.methods.length,
+      total: signature.constructors.length + signature.fields.length + signature.methods.length
+    };
+    // No context block: contextForJar derives minecraftVersion/namespace from
+    // the jar path, which for an arbitrary mod jar greps the MOD's own
+    // version (e.g. geckolib-fabric-26.2.jar -> "26.2") — misleading here.
+    return {
+      className,
+      jarPath,
+      members: {
+        constructors: signature.constructors,
+        fields: signature.fields,
+        methods: signature.methods
+      },
+      counts,
+      extractionMethod: "bytecode-only",
+      warnings: signature.warnings
+    };
   }
 
   async getModClassSource(input: GetModClassSourceInput): Promise<GetModClassSourceOutput> {
