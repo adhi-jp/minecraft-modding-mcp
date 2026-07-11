@@ -249,6 +249,7 @@ export type InspectMinecraftDeps = {
     cursor?: string;
   }) => Promise<ListArtifactFilesOutput>;
   detectProjectMinecraftVersion: (projectPath: string) => Promise<string | undefined>;
+  listWorkspaceContexts: () => Array<{ projectPath: string; minecraftVersion?: string }>;
 };
 
 // Helpers live as free functions so InspectMinecraftService keeps its baseline
@@ -554,6 +555,32 @@ export async function resolveArtifactReference(
   }
   if (subject.kind === "class" || subject.kind === "file" || subject.kind === "search") {
     if (!subject.artifact) {
+      // Guardrailed auto-resolution: an omitted subject.artifact resolves
+      // through the workspace ONLY when exactly one workspace is known, and
+      // the response always carries a provenance warning. An explicit
+      // subject.artifact is never overridden (this branch requires absence).
+      const workspaces = deps.listWorkspaceContexts();
+      const unique = workspaces.length === 1 ? workspaces[0] : undefined;
+      if (unique) {
+        const version =
+          unique.minecraftVersion ??
+          (await deps.detectProjectMinecraftVersion(unique.projectPath));
+        if (version) {
+          const artifact = await deps.resolveArtifact({
+            target: { kind: "version", value: version },
+            projectPath: unique.projectPath
+          });
+          return {
+            artifactId: artifact.artifactId,
+            artifact,
+            version,
+            warnings: [
+              `subject.artifact was omitted; auto-resolved through the unique known workspace ${unique.projectPath} (Minecraft ${version}). Pass subject.artifact to target a different artifact.`,
+              ...artifact.warnings
+            ]
+          };
+        }
+      }
       const suggestedTask: ArtifactContextTask = task
         ?? (subject.kind === "class"
           ? "class-overview"
@@ -565,6 +592,9 @@ export async function resolveArtifactReference(
         message: `${subject.kind} subject requires artifact context.`,
         details: {
           nextAction: "Add subject.artifact or use subject.kind=workspace so inspect-minecraft can resolve the artifact first.",
+          ...(workspaces.length > 1
+            ? { workspaceCandidates: workspaces.map((workspace) => workspace.projectPath) }
+            : {}),
           ...(await buildArtifactContextSuggestedCall(deps, suggestedTask, subject))
         }
       });

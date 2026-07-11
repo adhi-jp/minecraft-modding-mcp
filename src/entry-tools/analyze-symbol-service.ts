@@ -140,11 +140,12 @@ const LIFECYCLE_ONLY_FIELDS = [
 ] as const;
 
 export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((value, ctx) => {
-  if (value.task !== "lifecycle" && !value.version) {
+  if (value.task !== "lifecycle" && !value.version && !value.projectPath) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["version"],
-      message: "version is required for non-lifecycle tasks."
+      message:
+        "version is required for non-lifecycle tasks (or pass projectPath so the version can be inferred from the workspace)."
     });
   }
   if (value.task === "lifecycle" && !value.version && !value.toVersion) {
@@ -202,6 +203,7 @@ export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((val
 export type AnalyzeSymbolInput = z.infer<typeof analyzeSymbolSchema>;
 
 type AnalyzeSymbolDeps = {
+  detectProjectMinecraftVersion: (projectPath: string) => Promise<string | undefined>;
   checkSymbolExists: (input: {
     version: string;
     kind: "class" | "field" | "method";
@@ -294,6 +296,50 @@ export class AnalyzeSymbolService {
     const include = resolveInclude(input.include);
     const { kind: subjectKind, warning: inferenceWarning } = inferSubjectKind(input.subject);
 
+    // Omitted version with a supplied projectPath: infer from the workspace.
+    // Inference always carries provenance (versionInference block + warning);
+    // an explicit version is never overridden.
+    let versionInference: { version: string; source: string } | undefined;
+    if (input.task !== "lifecycle" && !input.version && input.projectPath) {
+      const detected = await this.deps.detectProjectMinecraftVersion(input.projectPath);
+      if (!detected) {
+        throw createError({
+          code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+          message: `Could not infer a Minecraft version from ${input.projectPath}.`,
+          details: {
+            projectPath: input.projectPath,
+            nextAction:
+              "Declare minecraft_version (or mc_version) in gradle.properties, or pass version explicitly."
+          }
+        });
+      }
+      versionInference = {
+        version: detected,
+        source: `projectPath:gradle.properties (${input.projectPath})`
+      };
+      input = { ...input, version: detected };
+    }
+    const inferenceWarnings = versionInference
+      ? [
+          `version was inferred from the workspace: ${versionInference.version} (source: ${versionInference.source}).`
+        ]
+      : [];
+
+    const result = await this.dispatch(input, detail, include, subjectKind, inferenceWarning);
+    if (versionInference) {
+      result.versionInference = versionInference;
+      result.warnings = [...(result.warnings ?? []), ...inferenceWarnings];
+    }
+    return result;
+  }
+
+  private async dispatch(
+    input: AnalyzeSymbolInput,
+    detail: ReturnType<typeof resolveDetail>,
+    include: ReturnType<typeof resolveInclude>,
+    subjectKind: "class" | "field" | "method",
+    inferenceWarning: string | undefined
+  ): Promise<Record<string, unknown> & { warnings?: string[] }> {
     switch (input.task) {
       case "exists": {
         const output = await this.deps.checkSymbolExists({

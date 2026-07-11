@@ -544,12 +544,20 @@ test("analyzeSymbolSchema accepts kind=symbol for task=api-overview (infers clas
 });
 
 test("analyzeSymbolSchema requires version for task=workspace", () => {
-  const missing = analyzeSymbolSchema.safeParse({
+  // With a projectPath, an omitted version is now inferred from the
+  // workspace at execution time instead of being rejected at schema time.
+  const inferable = analyzeSymbolSchema.safeParse({
     task: "workspace",
     projectPath: "/workspace/demo-mod",
     subject: { kind: "class", name: "net.minecraft.world.item.ItemStack" }
   });
-  assert.equal(missing.success, false, "task=workspace without version must be rejected");
+  assert.equal(inferable.success, true, "projectPath allows version inference");
+
+  const missing = analyzeSymbolSchema.safeParse({
+    task: "workspace",
+    subject: { kind: "class", name: "net.minecraft.world.item.ItemStack" }
+  });
+  assert.equal(missing.success, false, "no version and no projectPath must be rejected");
   if (!missing.success) {
     assert.ok(missing.error.issues.some((i) => i.path[0] === "version"), "issue path should name version");
   }

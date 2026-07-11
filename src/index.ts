@@ -160,7 +160,9 @@ import {
   validateMixinSchema,
   validateMixinShape,
   verifyMixinTargetSchema,
-  verifyMixinTargetShape
+  verifyMixinTargetShape,
+  findClassShape,
+  findClassSchema
 } from "./tool-schemas.js";
 
 type ToolMeta = ToolGuidanceToolMeta;
@@ -278,9 +280,12 @@ const inspectMinecraftService = new InspectMinecraftService({
   getArtifactFile: (input) => sourceService.getArtifactFile(input),
   listArtifactFiles: (input) => sourceService.listArtifactFiles(input),
   detectProjectMinecraftVersion: (projectPath) =>
-    workspaceMappingService.detectProjectMinecraftVersion(projectPath)
+    workspaceMappingService.detectProjectMinecraftVersion(projectPath),
+  listWorkspaceContexts: () => sourceService.workspaceContextCache.list()
 });
 const analyzeSymbolService = new AnalyzeSymbolService({
+  detectProjectMinecraftVersion: (projectPath) =>
+    workspaceMappingService.detectProjectMinecraftVersion(projectPath),
   checkSymbolExists: (input) => sourceService.checkSymbolExists(input),
   findMapping: (input) => sourceService.findMapping(input),
   resolveMethodMappingExact: (input) => sourceService.resolveMethodMappingExact(input),
@@ -882,12 +887,34 @@ expertTool("resolve-artifact",
 );
 registerToolSchema("resolve-artifact", resolveArtifactSchema);
 
-const findClassShape = {
-  className: nonEmptyString.describe("Simple name (e.g. Blocks) or fully-qualified name (e.g. net.minecraft.world.level.block.Blocks)"),
-  artifactId: nonEmptyString,
-  limit: optionalPositiveInt.describe("default 20, max 200")
-};
-const findClassSchema = z.object(findClassShape);
+// Flat tools accept `target` as an additive alternative to `artifactId`
+// (mutually exclusive, enforced by each schema). A target is resolved to its
+// artifactId here before the underlying artifactId-based service call.
+async function resolveFlatArtifactId(input: {
+  artifactId?: string;
+  target?: unknown;
+}): Promise<string> {
+  if (input.artifactId) {
+    return input.artifactId;
+  }
+  const target = input.target as
+    | { kind?: string; artifactId?: string; projectPath?: string }
+    | undefined;
+  // {kind:"artifact"} reuses an already-resolved artifact without a resolve
+  // round-trip. Workspace-context kinds carry their own projectPath when the
+  // target shape provides one; kinds that require workspace context beyond
+  // that fail with the resolver's own projectPath guidance.
+  if (target?.kind === "artifact" && target.artifactId) {
+    return target.artifactId;
+  }
+  const resolved = await sourceService.resolveArtifact({
+    target: target as Parameters<typeof sourceService.resolveArtifact>[0]["target"],
+    ...(target && "projectPath" in target && target.projectPath
+      ? { projectPath: target.projectPath }
+      : {})
+  });
+  return resolved.artifactId;
+}
 
 expertTool("find-class",
   "Resolve a simple or qualified class name to fully-qualified class names within an artifact. Use this before get-class-source when you only have a simple name.",
@@ -896,7 +923,7 @@ expertTool("find-class",
   async (args) => runTool("find-class", args, findClassSchema, async (input) =>
     sourceService.findClass({
       className: input.className,
-      artifactId: input.artifactId,
+      artifactId: await resolveFlatArtifactId(input),
       limit: input.limit
     }) as unknown as Record<string, unknown>
   )
@@ -986,7 +1013,7 @@ expertTool("search-class-source",
           : undefined;
 
       return sourceService.searchClassSource({
-        artifactId: input.artifactId,
+        artifactId: await resolveFlatArtifactId(input),
         query: input.query,
         intent: input.intent as SearchIntent | undefined,
         match: input.match as SearchMatch | undefined,
@@ -1014,7 +1041,7 @@ expertTool("get-artifact-file",
   { readOnlyHint: true },
   async (args) => runTool("get-artifact-file", args, getArtifactFileSchema, async (input) =>
     sourceService.getArtifactFile({
-      artifactId: input.artifactId,
+      artifactId: await resolveFlatArtifactId(input),
       filePath: input.filePath,
       maxBytes: input.maxBytes
     }) as Promise<Record<string, unknown>>
@@ -1028,7 +1055,7 @@ expertTool("list-artifact-files",
   { readOnlyHint: true },
   async (args) => runTool("list-artifact-files", args, listArtifactFilesSchema, async (input) =>
     sourceService.listArtifactFiles({
-      artifactId: input.artifactId,
+      artifactId: await resolveFlatArtifactId(input),
       prefix: input.prefix,
       limit: input.limit,
       cursor: input.cursor
@@ -1228,12 +1255,12 @@ server.tool("json-to-nbt",
 registerToolSchema("json-to-nbt", jsonToNbtSchema);
 
 expertTool("index-artifact",
-  "Rebuild indexed files/symbols metadata for an existing artifactId. Does not resolve new artifacts.",
+  "Rebuild indexed files/symbols metadata for an artifact addressed by artifactId or target. A new target is resolved and ingested first; force rebuilds an existing index.",
   indexArtifactShape,
   { readOnlyHint: false, idempotentHint: true },
   async (args) => runTool("index-artifact", args, indexArtifactSchema, async (input) =>
     sourceService.indexArtifact({
-      artifactId: input.artifactId,
+      artifactId: await resolveFlatArtifactId(input),
       force: input.force
     }) as Promise<Record<string, unknown>>
   )

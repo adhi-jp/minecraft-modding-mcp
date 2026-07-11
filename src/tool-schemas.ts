@@ -440,8 +440,39 @@ export const batchMappingsShape = {
 };
 export const batchMappingsSchema = z.object(batchMappingsShape);
 
+// Exactly one of artifactId/target addresses the artifact on flat tools.
+// `target` is additive: existing flat-artifactId calls stay valid.
+function requireExactlyOneArtifactRef(
+  value: { artifactId?: string; target?: unknown },
+  ctx: z.RefinementCtx
+): void {
+  if (value.artifactId && value.target) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["target"],
+      message: "artifactId and target are mutually exclusive."
+    });
+  }
+  if (!value.artifactId && !value.target) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["artifactId"],
+      message: "Either artifactId or target must be provided."
+    });
+  }
+}
+
+export const findClassShape = {
+  className: nonEmptyString.describe("Simple name (e.g. Blocks) or fully-qualified name (e.g. net.minecraft.world.level.block.Blocks)"),
+  artifactId: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  limit: optionalPositiveInt.describe("default 20, max 200")
+};
+export const findClassSchema = z.object(findClassShape).superRefine(requireExactlyOneArtifactRef);
+
 export const searchClassSourceShape = {
-  artifactId: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   query: nonEmptyString,
   intent: searchIntentSchema.optional(),
   match: searchMatchSchema.optional(),
@@ -460,6 +491,7 @@ export const searchClassSourceShape = {
   include: responseIncludeParam
 };
 export const searchClassSourceSchema = z.object(searchClassSourceShape).superRefine((value, ctx) => {
+  requireExactlyOneArtifactRef(value, ctx);
   if (value.symbolKind && value.intent && value.intent !== "symbol") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -470,21 +502,23 @@ export const searchClassSourceSchema = z.object(searchClassSourceShape).superRef
 });
 
 export const getArtifactFileShape = {
-  artifactId: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   filePath: nonEmptyString,
   maxBytes: optionalPositiveInt
 };
-export const getArtifactFileSchema = z.object(getArtifactFileShape);
+export const getArtifactFileSchema = z.object(getArtifactFileShape).superRefine(requireExactlyOneArtifactRef);
 
 export const listArtifactFilesShape = {
-  artifactId: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   prefix: optionalNonEmptyString,
   limit: optionalPositiveInt,
   cursor: optionalNonEmptyString,
   detail: detailParam("standard"),
   include: responseIncludeParam
 };
-export const listArtifactFilesSchema = z.object(listArtifactFilesShape);
+export const listArtifactFilesSchema = z.object(listArtifactFilesShape).superRefine(requireExactlyOneArtifactRef);
 
 export const traceSymbolLifecycleShape = {
   symbol: nonEmptyString.describe("fully.qualified.Class.method"),
@@ -836,10 +870,11 @@ export const jsonToNbtShape = {
 export const jsonToNbtSchema = z.object(jsonToNbtShape);
 
 export const indexArtifactShape = {
-  artifactId: nonEmptyString,
+  artifactId: optionalNonEmptyString,
+  target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   force: z.boolean().default(false)
 };
-export const indexArtifactSchema = z.object(indexArtifactShape);
+export const indexArtifactSchema = z.object(indexArtifactShape).superRefine(requireExactlyOneArtifactRef);
 
 export const validateMixinShape = {
   input: z.discriminatedUnion("mode", [
