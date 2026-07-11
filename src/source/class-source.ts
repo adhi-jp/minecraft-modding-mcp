@@ -33,6 +33,7 @@ import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
+import { collectDidYouMeanCandidates } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
 import { resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
@@ -247,7 +248,7 @@ export function buildFallbackProvenance(svc: SourceService, input: {
   };
 }
 
-export function buildClassSourceNotFoundError(_svc: SourceService, input: {
+export function buildClassSourceNotFoundError(svc: SourceService, input: {
   className: string;
   lookupClassName: string;
   artifactId: string;
@@ -275,7 +276,10 @@ export function buildClassSourceNotFoundError(_svc: SourceService, input: {
     ...(input.targetKind ? { targetKind: input.targetKind } : {}),
     ...(input.targetValue ? { targetValue: input.targetValue } : {}),
     ...(input.attemptedBinaryFallback ? { binaryFallbackAttempted: true } : {}),
-    ...(input.nestedJars && input.nestedJars.length > 0 ? { nestedJars: input.nestedJars } : {})
+    ...(input.nestedJars && input.nestedJars.length > 0 ? { nestedJars: input.nestedJars } : {}),
+    // Candidates are hints from the symbol index, never assertions that the
+    // class exists at the suggested location; empty when nothing usable.
+    didYouMean: collectDidYouMeanCandidates(svc, input.artifactId, input.className)
   };
 
   let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;

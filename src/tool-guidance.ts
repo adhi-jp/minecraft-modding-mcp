@@ -8,6 +8,7 @@ import {
 } from "./errors.js";
 import {
   extractAllowlistedContext,
+  extractDidYouMean,
   issueOriginForErrorCode,
   retryClassForErrorCode,
   statusForErrorCode,
@@ -921,6 +922,7 @@ export function mapErrorToProblem(
     const { suggestedCall, exampleCalls, primaryDropped } =
       extractValidatedSuggestionAndExamples(caughtError.details);
     const sanitizedContext = extractAllowlistedContext(caughtError.details);
+    const extractedDidYouMean = extractDidYouMean(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
     if (
       !failedStage
@@ -947,6 +949,7 @@ export function mapErrorToProblem(
       hints: hintsWithFallback,
       ...(suggestedCall ? { suggestedCall } : {}),
       ...(exampleCalls ? { exampleCalls } : {}),
+      ...(extractedDidYouMean ? { didYouMean: extractedDidYouMean } : {}),
       ...(failedStage ? { failedStage } : {}),
       ...(sanitizedContext ? { context: sanitizedContext } : {})
     };

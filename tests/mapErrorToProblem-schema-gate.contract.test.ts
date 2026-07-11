@@ -117,3 +117,52 @@ test("D14: a non-AppError throw maps to a non-retryable server fault (retryClass
   assert.equal(problem.issueOrigin, "tool_issue");
   assert.equal(problem.detail, "Unexpected server error.");
 });
+
+test("mapErrorToProblem publishes details.didYouMean as a top-level typed field", async () => {
+  const { mapErrorToProblem } = await import("../src/index.ts");
+  const error = createError({
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    message: "synthetic not-found",
+    details: {
+      didYouMean: [
+        { className: "com.example.moved.ItemTransform", matchReason: "exact-simple-name" }
+      ]
+    }
+  });
+
+  const problem = mapErrorToProblem(error, "dym-req-1") as {
+    didYouMean?: DidYouMeanCandidate[];
+    context?: Record<string, unknown>;
+  };
+  assert.deepEqual(problem.didYouMean, [
+    { className: "com.example.moved.ItemTransform", matchReason: "exact-simple-name" }
+  ]);
+  // The primitive-only context allowlist must not absorb the structured array.
+  assert.equal(problem.context?.didYouMean, undefined);
+});
+
+test("mapErrorToProblem drops malformed didYouMean payloads instead of publishing them", async () => {
+  const { mapErrorToProblem } = await import("../src/index.ts");
+  const error = createError({
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    message: "synthetic not-found",
+    details: {
+      didYouMean: [{ className: 42, matchReason: { nested: true } }]
+    }
+  });
+
+  const problem = mapErrorToProblem(error, "dym-req-2") as { didYouMean?: unknown };
+  assert.equal(problem.didYouMean, undefined);
+});
+
+test("mapErrorToProblem publishes an empty didYouMean array unchanged", async () => {
+  const { mapErrorToProblem } = await import("../src/index.ts");
+  const error = createError({
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    message: "synthetic not-found without candidates",
+    details: { didYouMean: [] }
+  });
+
+  const problem = mapErrorToProblem(error, "dym-req-3") as { didYouMean?: unknown };
+  assert.deepEqual(problem.didYouMean, []);
+});

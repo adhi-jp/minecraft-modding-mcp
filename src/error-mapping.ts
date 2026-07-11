@@ -45,6 +45,11 @@ export type RetryClass = "transient" | "permanent" | "server" | "environment" | 
  */
 export type IssueOrigin = "code_issue" | "tool_issue" | "environment";
 
+export type DidYouMeanCandidate = {
+  className: string;
+  matchReason: string;
+};
+
 export type ProblemDetails = {
   type: string;
   title: string;
@@ -58,9 +63,38 @@ export type ProblemDetails = {
   hints?: string[];
   suggestedCall?: SuggestedCall;
   exampleCalls?: ExampleCall[];
+  /** Ranked near-miss candidates for a class/symbol that was not found. */
+  didYouMean?: DidYouMeanCandidate[];
   failedStage?: string;
   context?: Record<string, string | number | boolean>;
 };
+
+const MAX_DID_YOU_MEAN_ENTRIES = 16;
+
+/**
+ * Validates and extracts a `didYouMean` array from error details. Like
+ * `suggestedCall`, it travels as a dedicated typed field — the primitive-only
+ * context allowlist is not loosened for it. Malformed payloads are dropped
+ * whole rather than partially published.
+ */
+export function extractDidYouMean(details: unknown): DidYouMeanCandidate[] | undefined {
+  const raw = (details as { didYouMean?: unknown } | undefined)?.didYouMean;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const cleaned: DidYouMeanCandidate[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      return undefined;
+    }
+    const { className, matchReason } = entry as { className?: unknown; matchReason?: unknown };
+    if (typeof className !== "string" || typeof matchReason !== "string") {
+      return undefined;
+    }
+    cleaned.push({ className, matchReason });
+  }
+  return cleaned.slice(0, MAX_DID_YOU_MEAN_ENTRIES);
+}
 
 export function statusForErrorCode(code: string): number {
   if (code === ERROR_CODES.BATCH_ABORTED) {
@@ -344,6 +378,7 @@ export function errorToBatchEntryProblem(
     const baseHints = extractHints(caughtError.details);
     const fieldErrors = extractFieldErrors(caughtError.details);
     const context = extractAllowlistedContext(caughtError.details);
+    const didYouMean = extractDidYouMean(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -356,6 +391,7 @@ export function errorToBatchEntryProblem(
       ...(fieldErrors ? { fieldErrors } : {}),
       ...(baseHints ? { hints: baseHints } : {}),
       ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {}),
+      ...(didYouMean ? { didYouMean } : {}),
       ...(context ? { context } : {})
     };
   }
