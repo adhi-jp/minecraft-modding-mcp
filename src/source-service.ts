@@ -230,6 +230,13 @@ export type GetArtifactFileOutput = {
   mappingApplied: SourceMapping;
   returnedNamespace: SourceMapping;
   artifactContents: ArtifactContentsSummary;
+  /**
+   * Present when the file was served directly from the backing jar instead of
+   * the source index (non-indexed assets/ and data/ text files).
+   */
+  deliveryMode?: "jar-read-through";
+  /** Set when content was withheld (e.g. a binary entry); explains why. */
+  contentOmittedReason?: string;
 };
 
 export type ListArtifactFilesInput = {

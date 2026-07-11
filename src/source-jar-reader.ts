@@ -19,6 +19,7 @@ export function __resetZipOpenCount(): void {
 
 interface ZipEntry {
   fileName: string;
+  uncompressedSize: number;
 }
 
 export interface ZipFile {
@@ -271,6 +272,113 @@ export async function readJarEntryAsBuffer(jarPath: string, entryPath: string): 
       return readEntryStream(zipFile, entry, jarPath);
     }
   });
+}
+
+export interface CappedJarEntry {
+  /** At most the requested byte budget of the entry (empty when maxBytes<=0). */
+  buffer: Buffer;
+  /** Full uncompressed size from the zip metadata, independent of the cap. */
+  entrySize: number;
+}
+
+/**
+ * Reads at most maxBytes of one entry, reporting the full uncompressed size
+ * from the zip metadata. Unlike readJarEntryAsBuffer, an oversized entry is
+ * never fully materialized: the stream is destroyed once the budget is
+ * exceeded and the collected prefix is returned. maxBytes<=0 skips the read
+ * entirely (metadata-only probe).
+ */
+export async function readJarEntryCapped(
+  jarPath: string,
+  entryPath: string,
+  maxBytes: number
+): Promise<CappedJarEntry> {
+  const normalizedTargetPath = entryPath.replaceAll("\\", "/");
+  if (!isSecureJarEntryPath(normalizedTargetPath)) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Entry path "${normalizedTargetPath}" is not allowed.`,
+      details: { jarPath, entryPath: normalizedTargetPath }
+    });
+  }
+
+  return withZipFile(jarPath, async (zipFile) => {
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        throw createError({
+          code: ERROR_CODES.SOURCE_NOT_FOUND,
+          message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
+          details: { jarPath, entryPath: normalizedTargetPath }
+        });
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (entry.fileName !== normalizedTargetPath) {
+        continue;
+      }
+      const entrySize = entry.uncompressedSize;
+      if (maxBytes <= 0) {
+        return { buffer: Buffer.alloc(0), entrySize };
+      }
+      const buffer = await readEntryStreamPrefix(zipFile, entry, jarPath, maxBytes);
+      return { buffer: buffer.length > maxBytes ? buffer.slice(0, maxBytes) : buffer, entrySize };
+    }
+  });
+}
+
+/** Like readEntryStream, but resolves with the collected prefix instead of rejecting when the budget is exceeded. */
+function readEntryStreamPrefix(
+  zipFile: ZipFile,
+  entry: ZipEntry,
+  jarPath: string,
+  maxBytes: number
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    zipFile.openReadStream(entry, (error, stream) => {
+      if (error || !stream) {
+        reject(
+          new Error(
+            `Failed to read entry "${entry.fileName}" from "${jarPath}": ${toErrorMessage(error)}`
+          )
+        );
+        return;
+      }
+      let settled = false;
+      let totalBytes = 0;
+      const chunks: Buffer[] = [];
+      stream.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        chunks.push(buf);
+        if (totalBytes >= maxBytes) {
+          settled = true;
+          stream.destroy();
+          resolve(Buffer.concat(chunks));
+        }
+      });
+      stream.once("error", (streamError: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new Error(
+            `Failed to read entry "${entry.fileName}" from "${jarPath}": ${toErrorMessage(streamError)}`
+          )
+        );
+      });
+      stream.once("end", () => {
+        if (settled) return;
+        settled = true;
+        resolve(Buffer.concat(chunks));
+      });
+    });
+  });
+}
+
+export function decodeJarEntryUtf8OrThrow(contentBuffer: Buffer, jarPath: string, entryPath: string): string {
+  return decodeUtf8OrThrow(contentBuffer, jarPath, entryPath);
 }
 
 export interface JarEntryReader {
