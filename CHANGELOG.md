@@ -11,6 +11,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - `validate-project` calls now have a supervisor-owned 120-second end-to-end deadline, configurable with `MCP_VALIDATE_PROJECT_TIMEOUT_MS` from 10,000 through 600,000 ms. Expiry returns the standard synthetic `{ error, meta }` tool-result envelope with `ERR_TOOL_TIMEOUT`, queue/running phase diagnostics, redacted progress context, and restart-initiation state. Queue expiry leaves the active worker untouched; running expiry replaces the isolated worker and preserves admitted later requests when initialization replay succeeds. Replacement startup/replay failure terminalizes queued work with existing restart errors. The supervisor FIFO holds at most two worker-bound requests and returns `ERR_LIMIT_EXCEEDED` (tool calls) or JSON-RPC `-32000` (non-tool requests) on overflow; cap-blocked requests fail immediately and undeliverable notifications are warning-dropped. POSIX process-group cleanup treats an already-gone process group as clean so stale cleanup tokens do not block later validation.
 
+### Fixed
+
+- Dependency version detection probes the snake_case transforms of hyphenated artifact names (`fabric_api_version` and the compound `fabric_api_fabric_api_version` for `net.fabricmc.fabric-api:fabric-api`). Previously only submodules received a snake_case umbrella fallback key, so resolving the umbrella artifact itself against a standard Fabric template that declares `fabric_api_version` failed with `ERR_DEPENDENCY_VERSION_UNRESOLVED`.
+
 ## [6.1.1] - 2026-07-04
 
 ### Fixed

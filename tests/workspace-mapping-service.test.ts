@@ -175,12 +175,149 @@ test("detectDependencyVersion enumerates 4 dedup'd property keys in order", asyn
 
     assert.equal(result.resolved, false);
     const propsAttempts = result.attempts.filter((entry) => entry.startsWith("gradle.properties:"));
+    // Hyphen-less names dedupe their snake_case transforms into the raw keys,
+    // so the enumeration stays at 4 entries.
     assert.deepEqual(propsAttempts, [
       "gradle.properties:architectury_version",
       "gradle.properties:architecturyVersion",
       "gradle.properties:architectury_architectury_version",
       "gradle.properties:architecturyArchitecturyVersion"
     ]);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion enumerates snake_case probe keys for hyphenated umbrella names", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-umbrella-keys-"));
+  await writeFile(join(root, "gradle.properties"), "# no version here\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-umbrella-keys-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(root, "net.fabricmc.fabric-api", "fabric-api");
+
+    assert.equal(result.resolved, false);
+    const propsAttempts = result.attempts.filter((entry) => entry.startsWith("gradle.properties:"));
+    // The umbrella artifact itself (groupSegment === name) gets no umbrella
+    // fallback keys, so the snake_case transforms of the artifact name and the
+    // group/name compound must be part of the base enumeration.
+    assert.deepEqual(propsAttempts, [
+      "gradle.properties:fabric-api_version",
+      "gradle.properties:fabric_api_version",
+      "gradle.properties:fabricApiVersion",
+      "gradle.properties:fabric-api_fabric-api_version",
+      "gradle.properties:fabric_api_fabric_api_version",
+      "gradle.properties:fabricApiFabricApiVersion"
+    ]);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion resolves the umbrella via the snake_case fabric_api_version key", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-umbrella-snake-"));
+  // Golden fixture: real-world Fabric templates declare the umbrella version
+  // only as snake_case fabric_api_version.
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.153.0+26.2\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-umbrella-snake-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(root, "net.fabricmc.fabric-api", "fabric-api");
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "0.153.0+26.2");
+      assert.match(result.source, /gradle\.properties:fabric_api_version/);
+      assert.ok(result.attempts.includes("gradle.properties:fabric_api_version"));
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion prefers fabric_api_version over fabricApiVersion when both are present", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-umbrella-precedence-"));
+  await writeFile(
+    join(root, "gradle.properties"),
+    ["fabricApiVersion=0.130.0", "fabric_api_version=0.153.0+26.2"].join("\n"),
+    "utf8"
+  );
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-umbrella-precedence-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(root, "net.fabricmc.fabric-api", "fabric-api");
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      // The snake_case key precedes the camelCase key in the probe order.
+      assert.equal(result.version, "0.153.0+26.2");
+      assert.equal(result.source, "gradle.properties:fabric_api_version");
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion enumerates probe keys for a multi-hyphen submodule name", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-submodule-keys-"));
+  await writeFile(join(root, "gradle.properties"), "# no version here\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-submodule-keys-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, false);
+    const propsAttempts = result.attempts.filter((entry) => entry.startsWith("gradle.properties:"));
+    // Six base keys (the snake_case transforms of the name and the group/name
+    // compound differ from both the raw and camelCase forms), then the two
+    // umbrella fallback keys for submodules.
+    assert.deepEqual(propsAttempts, [
+      "gradle.properties:fabric-screen-handler-api-v1_version",
+      "gradle.properties:fabric_screen_handler_api_v1_version",
+      "gradle.properties:fabricScreenHandlerApiV1Version",
+      "gradle.properties:fabric-api_fabric-screen-handler-api-v1_version",
+      "gradle.properties:fabric_api_fabric_screen_handler_api_v1_version",
+      "gradle.properties:fabricApiFabricScreenHandlerApiV1Version",
+      "gradle.properties:fabric_api_version",
+      "gradle.properties:fabricApiVersion"
+    ]);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion does not pick up unrelated *_version keys for the umbrella", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-umbrella-unrelated-"));
+  await writeFile(
+    join(root, "gradle.properties"),
+    ["loader_version=0.16.9", "minecraft_version=26.2", "yarn_mappings_version=26.2+build.1"].join("\n"),
+    "utf8"
+  );
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-umbrella-unrelated-"));
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(root, "net.fabricmc.fabric-api", "fabric-api");
+
+    assert.equal(result.resolved, false);
   } finally {
     delete process.env.GRADLE_USER_HOME;
   }

@@ -129,10 +129,18 @@ function buildDependencyPropertyKeys(group: string, name: string): string[] {
   const camelName = camelCaseDependencyName(name);
   const groupSegment = lastGroupSegment(group);
   const camelGroupName = camelCaseDependencyName(`${groupSegment}_${name}`);
+  const snakeName = name.replace(/-/g, "_");
+  const snakeGroupSegment = groupSegment.replace(/-/g, "_");
+  // Hyphenated artifact names (e.g. fabric-api) are declared in
+  // gradle.properties as snake_case keys (fabric_api_version), so the base
+  // enumeration must probe the snake_case transforms too — including for the
+  // umbrella artifact itself, which never reaches the umbrella fallback below.
   const keys = [
     `${name}_version`,
+    `${snakeName}_version`,
     `${camelName}Version`,
     `${groupSegment}_${name}_version`,
+    `${snakeGroupSegment}_${snakeName}_version`,
     `${camelGroupName}Version`
   ];
   // Umbrella fallback: submodules of an umbrella package (e.g. Fabric API's

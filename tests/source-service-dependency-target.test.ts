@@ -294,7 +294,7 @@ test("synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_
   }
 });
 
-test("synthesizeDependencyTarget tries the four de-duplicated property keys", async () => {
+test("synthesizeDependencyTarget tries the de-duplicated property keys for a hyphen-less name", async () => {
   const project = await mkdtemp(join(tmpdir(), "dep-target-keys-"));
   const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-keys-"));
   await writeFile(join(project, "gradle.properties"), "# none\n", "utf8");
