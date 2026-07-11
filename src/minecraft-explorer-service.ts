@@ -246,6 +246,22 @@ function extractVersionFromPath(inputPath: string): string | undefined {
   return inputPath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
 }
 
+// Super classes/interfaces from these packages are never inside a Minecraft
+// jar, so failing to resolve them during inherited-member expansion is
+// expected, not a signal. Suppression is allowlist-only and per-prefix
+// verified: JDK packages by definition, com.mojang.serialization because the
+// DataFixerUpper serialization library ships as its own dependency jar
+// (checked against 26.x client-only/common and 1.21.10 client jars). A broad
+// com.mojang.* entry would be wrong — com.mojang.blaze3d.* IS client-jar
+// content and its resolution failures must stay visible.
+const KNOWN_ABSENT_PLATFORM_PREFIXES = [
+  "java/",
+  "javax/",
+  "jdk/",
+  "sun/",
+  "com/mojang/serialization/"
+];
+
 type SignatureCacheNode = {
   key: string;
   value: CachedSignatureOutput;
@@ -602,6 +618,9 @@ export class MinecraftExplorerService {
     const parsedClassCache = new Map<string, ParsedClassFile>([[parsed.internalName, parsed]]);
     const warnings: string[] = [];
     const warnMissingInheritedClass = (internalName: string, relation: "super" | "interface"): void => {
+      if (KNOWN_ABSENT_PLATFORM_PREFIXES.some((prefix) => internalName.startsWith(prefix))) {
+        return;
+      }
       warnings.push(
         `Could not resolve ${relation} class "${internalName.replace(/\//g, ".")}" while expanding inherited members.`
       );
