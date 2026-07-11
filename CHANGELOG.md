@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-07-11
+
 ### Added
 
 - Workspace ergonomics for artifact addressing, all additive: (1) `find-class`, `get-artifact-file`, `list-artifact-files`, `search-class-source`, and `index-artifact` accept the shared `target` shape as an alternative to a flat `artifactId` (mutually exclusive — exactly one must be supplied; existing `artifactId` calls are unchanged). (2) `analyze-symbol` infers an omitted `version` from a supplied `projectPath` instead of rejecting at schema time; inferred runs always carry a `versionInference { version, source }` block plus a warning, an explicit `version` is never overridden, and an undetectable version fails with `ERR_WORKSPACE_VERSION_UNRESOLVED`. (3) `inspect-minecraft` direct subjects (`class`/`file`/`search`) without `subject.artifact` auto-resolve through the workspace only when exactly one workspace is known, always with a provenance warning; several known workspaces refuse with `workspaceCandidates`, and an explicit `subject.artifact` is never overridden.
