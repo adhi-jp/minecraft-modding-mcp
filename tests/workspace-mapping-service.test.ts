@@ -136,10 +136,175 @@ test("detectDependencyVersion reads camelCase property fabricApiVersion", async 
   }
 });
 
-test("detectDependencyVersion resolves a fabric-api submodule via the umbrella property", async () => {
+// Builds a synthetic modules-2 umbrella POM the way gradle caches it:
+// <home>/caches/modules-2/files-2.1/<group>/<umbrella>/<version>/<hash>/<umbrella>-<version>.pom
+// Real Fabric API umbrella POMs list submodule versions as direct
+// <dependencies> entries (not <dependencyManagement>).
+async function writeUmbrellaPom(
+  gradleHome: string,
+  group: string,
+  umbrellaName: string,
+  umbrellaVersion: string,
+  entries: Array<{ group: string; name: string; version: string }>
+): Promise<string> {
+  const pomDir = join(
+    gradleHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    group,
+    umbrellaName,
+    umbrellaVersion,
+    "0f148680b920d01cbdca21114170eea7a4fc8356"
+  );
+  await mkdir(pomDir, { recursive: true });
+  const deps = entries
+    .map(
+      (entry) =>
+        [
+          "    <dependency>",
+          `      <groupId>${entry.group}</groupId>`,
+          `      <artifactId>${entry.name}</artifactId>`,
+          `      <version>${entry.version}</version>`,
+          "      <scope>compile</scope>",
+          "    </dependency>"
+        ].join("\n")
+    )
+    .join("\n");
+  const pom = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<project>",
+    `  <groupId>${group}</groupId>`,
+    `  <artifactId>${umbrellaName}</artifactId>`,
+    `  <version>${umbrellaVersion}</version>`,
+    "  <dependencies>",
+    deps,
+    "  </dependencies>",
+    "</project>",
+    ""
+  ].join("\n");
+  const pomPath = join(pomDir, `${umbrellaName}-${umbrellaVersion}.pom`);
+  await writeFile(pomPath, pom, "utf8");
+  return pomPath;
+}
+
+async function writeSubmoduleVersions(
+  gradleHome: string,
+  group: string,
+  name: string,
+  versions: string[]
+): Promise<void> {
+  for (const version of versions) {
+    await mkdir(
+      join(gradleHome, "caches", "modules-2", "files-2.1", group, name, version),
+      { recursive: true }
+    );
+  }
+}
+
+test("detectDependencyVersion fails closed on several submodule versions when no umbrella property is declared", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-no-umbrella-prop-"));
+  await writeFile(join(root, "gradle.properties"), "# no version here\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-no-umbrella-prop-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  await writeUmbrellaPom(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-api", "0.131.0", [
+    { group: "net.fabricmc.fabric-api", name: "fabric-screen-handler-api-v1", version: "2.0.5+06488ac19e" }
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    // Without a declared umbrella version there is no project evidence for
+    // which POM applies, so the POM on disk must not be consulted.
+    assert.equal(result.resolved, false);
+    assert.ok(!result.attempts.some((entry) => entry.startsWith("umbrella-pom:")));
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion rejects an unsafe umbrella property value before touching the cache path", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-unsafe-umbrella-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=../../../etc\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-unsafe-umbrella-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, false);
+    assert.ok(!result.attempts.some((entry) => entry.startsWith("umbrella-pom:")));
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion fails closed when the umbrella POM content is not parseable", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-garbage-pom-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-garbage-pom-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  const pomDir = join(
+    fakeGradleHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-api",
+    "0.131.0",
+    "0f148680b920d01cbdca2111"
+  );
+  await mkdir(pomDir, { recursive: true });
+  await writeFile(join(pomDir, "fabric-api-0.131.0.pom"), "not xml at all  ", "utf8");
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, false);
+    assert.deepEqual([...result.candidatesSeen].sort(), ["2.0.5+06488ac19c", "2.0.5+06488ac19e"]);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion does not adopt the umbrella property as a submodule version when nothing is cached", async () => {
   const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "dep-version-fabric-submodule-"));
-  // Only the umbrella version is declared, as is conventional for Fabric API submodules.
+  // Only the umbrella version is declared, as is conventional for Fabric API
+  // submodules. The umbrella version is not the submodule's own version, so
+  // with no cached submodule evidence the resolution must fail closed instead
+  // of synthesizing a nonexistent coordinate like
+  // net.fabricmc.fabric-api:fabric-screen-handler-api-v1:0.131.0.
   await writeFile(join(root, "gradle.properties"), "fabricApiVersion=0.131.0\n", "utf8");
   const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-fabric-submodule-"));
 
@@ -152,10 +317,202 @@ test("detectDependencyVersion resolves a fabric-api submodule via the umbrella p
       "fabric-screen-handler-api-v1"
     );
 
+    assert.equal(result.resolved, false);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion adopts the umbrella POM version when modules-2 has several submodule versions", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-pom-adopt-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-pom-adopt-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  await writeUmbrellaPom(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-api", "0.131.0", [
+    { group: "net.fabricmc.fabric-api", name: "fabric-api-base", version: "1.0.0+aaaa" },
+    { group: "net.fabricmc.fabric-api", name: "fabric-screen-handler-api-v1", version: "2.0.5+06488ac19e" }
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
     assert.equal(result.resolved, true);
     if (result.resolved) {
-      assert.equal(result.version, "0.131.0");
-      assert.match(result.source, /fabricApiVersion/);
+      assert.equal(result.version, "2.0.5+06488ac19e");
+      assert.match(result.source, /^umbrella-pom:/);
+      assert.equal(result.submoduleVersionSource, "umbrella-pom");
+      assert.deepEqual([...result.candidatesSeen].sort(), ["2.0.5+06488ac19c", "2.0.5+06488ac19e"]);
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion fails closed on several submodule versions without an umbrella POM", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-pom-missing-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-pom-missing-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, false);
+    assert.deepEqual([...result.candidatesSeen].sort(), ["2.0.5+06488ac19c", "2.0.5+06488ac19e"]);
+    assert.ok(result.attempts.some((entry) => entry.startsWith("umbrella-pom:")));
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion skips a version-less POM dependency block and adopts a later concrete one", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-pom-versionless-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-pom-versionless-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  // Hand-write a POM whose first matching block is a managed entry without a
+  // literal <version>; the concrete <dependencies> entry follows it.
+  const pomDir = join(
+    fakeGradleHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-api",
+    "0.131.0",
+    "0f148680b920d01cbdca21114170eea7a4fc8356"
+  );
+  await mkdir(pomDir, { recursive: true });
+  await writeFile(
+    join(pomDir, "fabric-api-0.131.0.pom"),
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      "<project>",
+      "  <dependencyManagement>",
+      "    <dependencies>",
+      "      <dependency>",
+      "        <groupId>net.fabricmc.fabric-api</groupId>",
+      "        <artifactId>fabric-screen-handler-api-v1</artifactId>",
+      "      </dependency>",
+      "    </dependencies>",
+      "  </dependencyManagement>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>net.fabricmc.fabric-api</groupId>",
+      "      <artifactId>fabric-screen-handler-api-v1</artifactId>",
+      "      <version>2.0.5+06488ac19c</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "2.0.5+06488ac19c");
+      assert.equal(result.submoduleVersionSource, "umbrella-pom");
+    }
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion fails closed when the umbrella POM names a version that is not cached", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-pom-stale-"));
+  await writeFile(join(root, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-pom-stale-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  // The POM names a version whose jar is not in the cache; adopting it would
+  // synthesize an unresolvable coordinate, so the lookup must fail closed.
+  await writeUmbrellaPom(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-api", "0.131.0", [
+    { group: "net.fabricmc.fabric-api", name: "fabric-screen-handler-api-v1", version: "3.0.0+ffffffffff" }
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, false);
+    assert.deepEqual([...result.candidatesSeen].sort(), ["2.0.5+06488ac19c", "2.0.5+06488ac19e"]);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
+test("detectDependencyVersion prefers the submodule's own property key over cache and POM evidence", async () => {
+  const { WorkspaceMappingService } = await import("../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "dep-version-own-key-"));
+  await writeFile(
+    join(root, "gradle.properties"),
+    ["fabric_screen_handler_api_v1_version=9.9.9", "fabric_api_version=0.131.0"].join("\n"),
+    "utf8"
+  );
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-own-key-"));
+  await writeSubmoduleVersions(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-screen-handler-api-v1", [
+    "2.0.5+06488ac19c",
+    "2.0.5+06488ac19e"
+  ]);
+  await writeUmbrellaPom(fakeGradleHome, "net.fabricmc.fabric-api", "fabric-api", "0.131.0", [
+    { group: "net.fabricmc.fabric-api", name: "fabric-screen-handler-api-v1", version: "2.0.5+06488ac19e" }
+  ]);
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new WorkspaceMappingService();
+    const result = await service.detectDependencyVersion(
+      root,
+      "net.fabricmc.fabric-api",
+      "fabric-screen-handler-api-v1"
+    );
+
+    assert.equal(result.resolved, true);
+    if (result.resolved) {
+      assert.equal(result.version, "9.9.9");
+      assert.equal(result.source, "gradle.properties:fabric_screen_handler_api_v1_version");
     }
   } finally {
     delete process.env.GRADLE_USER_HOME;
@@ -284,18 +641,18 @@ test("detectDependencyVersion enumerates probe keys for a multi-hyphen submodule
 
     assert.equal(result.resolved, false);
     const propsAttempts = result.attempts.filter((entry) => entry.startsWith("gradle.properties:"));
-    // Six base keys (the snake_case transforms of the name and the group/name
-    // compound differ from both the raw and camelCase forms), then the two
-    // umbrella fallback keys for submodules.
+    // Six base keys: the snake_case transforms of the name and the group/name
+    // compound differ from both the raw and camelCase forms. Umbrella
+    // properties (fabric_api_version / fabricApiVersion) are not probed as
+    // direct version sources for submodules — they only locate the umbrella
+    // POM when modules-2 has several cached submodule versions.
     assert.deepEqual(propsAttempts, [
       "gradle.properties:fabric-screen-handler-api-v1_version",
       "gradle.properties:fabric_screen_handler_api_v1_version",
       "gradle.properties:fabricScreenHandlerApiV1Version",
       "gradle.properties:fabric-api_fabric-screen-handler-api-v1_version",
       "gradle.properties:fabric_api_fabric_screen_handler_api_v1_version",
-      "gradle.properties:fabricApiFabricScreenHandlerApiV1Version",
-      "gradle.properties:fabric_api_version",
-      "gradle.properties:fabricApiVersion"
+      "gradle.properties:fabricApiFabricScreenHandlerApiV1Version"
     ]);
   } finally {
     delete process.env.GRADLE_USER_HOME;

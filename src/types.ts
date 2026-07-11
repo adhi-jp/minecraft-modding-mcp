@@ -68,6 +68,8 @@ export interface DependencyResolutionProvenance {
   candidatesSeen?: string[];
   attempts?: string[];
   cacheHit: boolean;
+  /** Set when a submodule version was adopted from the cached umbrella POM. */
+  submoduleVersionSource?: "umbrella-pom";
 }
 
 export interface ArtifactProvenance {

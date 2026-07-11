@@ -330,6 +330,68 @@ test("synthesizeDependencyTarget tries the de-duplicated property keys for a hyp
   }
 });
 
+test("synthesizeDependencyTarget carries umbrella POM adoption provenance to the coordinate target", async () => {
+  const project = await mkdtemp(join(tmpdir(), "dep-target-pom-adopt-"));
+  await writeFile(join(project, "gradle.properties"), "fabric_api_version=0.131.0\n", "utf8");
+  const fakeGradleHome = await mkdtemp(join(tmpdir(), "fake-gradle-target-pom-"));
+  const modulesRoot = join(fakeGradleHome, "caches", "modules-2", "files-2.1", "net.fabricmc.fabric-api");
+  for (const version of ["2.0.5+06488ac19c", "2.0.5+06488ac19e"]) {
+    await mkdir(join(modulesRoot, "fabric-screen-handler-api-v1", version), { recursive: true });
+  }
+  const pomDir = join(modulesRoot, "fabric-api", "0.131.0", "0f148680b920d01cbdca2111");
+  await mkdir(pomDir, { recursive: true });
+  await writeFile(
+    join(pomDir, "fabric-api-0.131.0.pom"),
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      "<project>",
+      "  <dependencies>",
+      "    <dependency>",
+      "      <groupId>net.fabricmc.fabric-api</groupId>",
+      "      <artifactId>fabric-screen-handler-api-v1</artifactId>",
+      "      <version>2.0.5+06488ac19e</version>",
+      "    </dependency>",
+      "  </dependencies>",
+      "</project>",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const host = await makeHost();
+
+  process.env.GRADLE_USER_HOME = fakeGradleHome;
+  try {
+    const service = new SourceService(
+      buildTestConfig(host),
+      undefined,
+      { workspaceContextCache: createWorkspaceContextCache() }
+    ) as unknown as AnySourceService;
+
+    const synthesized = (await service.synthesizeDependencyTarget(
+      { target: { kind: "dependency" }, projectPath: project },
+      { kind: "dependency", group: "net.fabricmc.fabric-api", name: "fabric-screen-handler-api-v1" }
+    )) as {
+      target: { kind: string; value: string };
+      provenance: {
+        resolvedVersion: string;
+        source: string;
+        submoduleVersionSource?: string;
+        candidatesSeen?: string[];
+      };
+    };
+
+    assert.equal(synthesized.target.kind, "coordinate");
+    assert.equal(
+      synthesized.target.value,
+      "net.fabricmc.fabric-api:fabric-screen-handler-api-v1:2.0.5+06488ac19e"
+    );
+    assert.equal(synthesized.provenance.submoduleVersionSource, "umbrella-pom");
+    assert.match(synthesized.provenance.source, /^umbrella-pom:/);
+  } finally {
+    delete process.env.GRADLE_USER_HOME;
+  }
+});
+
 test("get-class-members accepts and dispatches a dependency target", async () => {
   // Schema-level: the source-lookup tools accept a dependency target verbatim.
   const { getClassMembersSchema } = await import("../src/tool-schemas.ts");

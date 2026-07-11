@@ -14,6 +14,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 
 - Dependency version detection probes the snake_case transforms of hyphenated artifact names (`fabric_api_version` and the compound `fabric_api_fabric_api_version` for `net.fabricmc.fabric-api:fabric-api`). Previously only submodules received a snake_case umbrella fallback key, so resolving the umbrella artifact itself against a standard Fabric template that declares `fabric_api_version` failed with `ERR_DEPENDENCY_VERSION_UNRESOLVED`.
+- Umbrella submodule dependency targets (e.g. `net.fabricmc.fabric-api:fabric-gametest-api-v1`) no longer copy the umbrella's version into the submodule coordinate, which synthesized nonexistent coordinates like `fabric-gametest-api-v1:0.153.0+26.2` and failed downstream. Resolution now adopts the single cached modules-2 version, or — when several are cached — the version named by the cached umbrella POM's `<dependency>` entry (recorded as `provenance.submoduleVersionSource: "umbrella-pom"`). Anything still ambiguous fails closed with `ERR_DEPENDENCY_VERSION_UNRESOLVED` and `candidatesSeen` instead of guessing.
 
 ## [6.1.1] - 2026-07-04
 

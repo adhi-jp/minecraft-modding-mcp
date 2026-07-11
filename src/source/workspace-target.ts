@@ -299,7 +299,7 @@ export async function synthesizeDependencyTarget(
       ? `Multiple cached versions for ${group}:${name} in ~/.gradle/caches/modules-2 (${result.candidatesSeen.join(", ")}); refusing to pick without project-specific evidence.`
       : `Could not resolve a version for dependency ${group}:${name} from gradle.properties or modules-2 cache.`;
     const nextAction = ambiguous
-      ? `Set ${name}_version (or another supported gradle.properties key) so the project's intended version is unambiguous, or pass an explicit version on the dependency target.`
+      ? `Set ${name}_version (or another supported gradle.properties key) so the project's intended version is unambiguous, pass an explicit version on the dependency target, or declare the umbrella version property so the cached umbrella POM can supply the submodule version.`
       : "Provide an explicit version on the dependency target, or add a property to gradle.properties so detectDependencyVersion can find it.";
     throw createError({
       code: ERROR_CODES.DEPENDENCY_VERSION_UNRESOLVED,
@@ -362,7 +362,10 @@ export async function synthesizeDependencyTarget(
       source: result.source,
       candidatesSeen: result.candidatesSeen,
       attempts: result.attempts,
-      cacheHit: false
+      cacheHit: false,
+      ...(result.submoduleVersionSource
+        ? { submoduleVersionSource: result.submoduleVersionSource }
+        : {})
     }
   };
 }

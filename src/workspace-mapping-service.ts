@@ -49,6 +49,7 @@ export type DependencyVersionResolution =
       source: string;
       candidatesSeen: string[];
       attempts: string[];
+      submoduleVersionSource?: "umbrella-pom";
     }
   | {
       resolved: false;
@@ -143,18 +144,27 @@ function buildDependencyPropertyKeys(group: string, name: string): string[] {
     `${snakeGroupSegment}_${snakeName}_version`,
     `${camelGroupName}Version`
   ];
-  // Umbrella fallback: submodules of an umbrella package (e.g. Fabric API's
-  // net.fabricmc.fabric-api:fabric-screen-handler-api-v1) rarely declare their own
-  // version — the parent declares a single umbrella property (fabric_api_version /
-  // fabricApiVersion) that all submodules inherit. When the artifact name differs from
-  // the group's last segment, append the umbrella's keys as LOWER-priority candidates so
-  // submodule version detection no longer fails with ERR_DEPENDENCY_VERSION_UNRESOLVED.
-  if (groupSegment !== name) {
-    keys.push(
-      `${groupSegment.replace(/-/g, "_")}_version`,
-      `${camelCaseDependencyName(groupSegment)}Version`
-    );
+  return dedupeKeys(keys);
+}
+
+// Umbrella properties (fabric_api_version / fabricApiVersion) declare the
+// UMBRELLA package's version, not a submodule's. They are never adopted as a
+// submodule version directly — the umbrella version differs from every
+// submodule version (e.g. fabric-api 0.153.0+26.2 vs
+// fabric-screen-handler-api-v1 2.0.5+...). They only locate the cached
+// umbrella POM, which names the real per-submodule versions.
+function buildUmbrellaPropertyKeys(group: string, name: string): string[] {
+  const groupSegment = lastGroupSegment(group);
+  if (groupSegment === name) {
+    return [];
   }
+  return dedupeKeys([
+    `${groupSegment.replace(/-/g, "_")}_version`,
+    `${camelCaseDependencyName(groupSegment)}Version`
+  ]);
+}
+
+function dedupeKeys(keys: string[]): string[] {
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const key of keys) {
@@ -164,6 +174,112 @@ function buildDependencyPropertyKeys(group: string, name: string): string[] {
     }
   }
   return deduped;
+}
+
+function readPomDependencyVersion(
+  pomContent: string,
+  group: string,
+  name: string
+): string | undefined {
+  const blocks = pomContent.match(/<dependency>[\s\S]*?<\/dependency>/g) ?? [];
+  for (const block of blocks) {
+    const groupId = block.match(/<groupId>\s*([^<]+?)\s*<\/groupId>/)?.[1];
+    const artifactId = block.match(/<artifactId>\s*([^<]+?)\s*<\/artifactId>/)?.[1];
+    if (groupId !== group || artifactId !== name) {
+      continue;
+    }
+    // A matching block without a literal <version> (e.g. a managed entry
+    // relying on inheritance) must not end the scan — a later block for the
+    // same artifact may carry the concrete version.
+    const version = block.match(/<version>\s*([^<]+?)\s*<\/version>/)?.[1];
+    if (version) {
+      return version;
+    }
+  }
+  return undefined;
+}
+
+// When modules-2 caches several versions of a submodule, the cached umbrella
+// POM (modules-2/files-2.1/<group>/<umbrella>/<version>/<hash>/<umbrella>-<version>.pom)
+// is the only local evidence of which one the declared umbrella version maps
+// to. Adoption is fail-closed: no umbrella property, no readable POM, no
+// matching <dependency> entry, or a POM version absent from the cached
+// candidates all leave the resolution unresolved instead of guessing.
+async function adoptSubmoduleVersionFromUmbrellaPom(args: {
+  group: string;
+  name: string;
+  propsContent: string | undefined;
+  candidates: string[];
+  candidatesSeen: string[];
+  attempts: string[];
+}): Promise<DependencyVersionResolution | undefined> {
+  const { group, name, propsContent, candidates, candidatesSeen, attempts } = args;
+  const groupSegment = lastGroupSegment(group);
+  const umbrellaKeys = buildUmbrellaPropertyKeys(group, name);
+  if (umbrellaKeys.length === 0) {
+    return undefined;
+  }
+
+  let umbrellaVersion: string | undefined;
+  if (propsContent !== undefined) {
+    for (const key of umbrellaKeys) {
+      attempts.push(`umbrella-property:${key}`);
+      const value = readPropertyValue(propsContent, key);
+      if (value && isSafeMavenVersionToken(value)) {
+        umbrellaVersion = value;
+        break;
+      }
+    }
+  }
+  if (!umbrellaVersion) {
+    return undefined;
+  }
+
+  const umbrellaDir = resolve(
+    resolveGradleUserHome(),
+    "caches",
+    "modules-2",
+    "files-2.1",
+    group,
+    groupSegment,
+    umbrellaVersion
+  );
+  attempts.push(`umbrella-pom:${umbrellaDir}`);
+
+  let hashDirs: string[] = [];
+  try {
+    hashDirs = await readdir(umbrellaDir);
+  } catch {
+    return undefined;
+  }
+
+  const pomFileName = `${groupSegment}-${umbrellaVersion}.pom`;
+  for (const hashDir of hashDirs) {
+    const pomPath = resolve(umbrellaDir, hashDir, pomFileName);
+    let pomContent: string;
+    try {
+      pomContent = await readFile(pomPath, "utf8");
+    } catch {
+      continue;
+    }
+    const version = readPomDependencyVersion(pomContent, group, name);
+    if (!version || !isSafeMavenVersionToken(version)) {
+      continue;
+    }
+    if (!candidates.includes(version)) {
+      attempts.push(`umbrella-pom:${pomPath}:names-uncached-version:${version}`);
+      return undefined;
+    }
+    return {
+      resolved: true,
+      version,
+      source: `umbrella-pom:${pomPath}`,
+      candidatesSeen,
+      attempts,
+      submoduleVersionSource: "umbrella-pom"
+    };
+  }
+  return undefined;
 }
 
 function readPropertyValue(content: string, key: string): string | undefined {
@@ -445,6 +561,17 @@ export class WorkspaceMappingService {
     }
 
     if (sorted.length > 1) {
+      const pomAdoption = await adoptSubmoduleVersionFromUmbrellaPom({
+        group,
+        name,
+        propsContent,
+        candidates: sorted,
+        candidatesSeen,
+        attempts
+      });
+      if (pomAdoption) {
+        return pomAdoption;
+      }
       return { resolved: false, candidatesSeen, attempts };
     }
 
