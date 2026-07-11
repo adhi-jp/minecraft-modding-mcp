@@ -4,6 +4,7 @@ import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js"
 import { createJarEntryReader } from "./source-jar-reader.js";
 import { matchesMemberPattern } from "./source/member-pattern.js";
 import type { Config } from "./types.js";
+import { isUnobfuscatedVersion } from "./version-service.js";
 
 export type MappingNamespace = "obfuscated" | "mojang" | "yarn";
 
@@ -822,10 +823,15 @@ export class MinecraftExplorerService {
   }
 
   private contextForJar(jarPath: string): ResponseContext {
+    const minecraftVersion = extractVersionFromPath(jarPath);
     return {
-      minecraftVersion: extractVersionFromPath(jarPath) ?? "unknown",
+      minecraftVersion: minecraftVersion ?? "unknown",
       mappingType: "unknown",
-      mappingNamespace: "obfuscated",
+      // Unobfuscated releases ship mojang names in their bytecode; claiming
+      // "obfuscated" for them misled namespace reconciliation downstream.
+      // With no derivable version the conservative "obfuscated" stands.
+      mappingNamespace:
+        minecraftVersion && isUnobfuscatedVersion(minecraftVersion) ? "mojang" : "obfuscated",
       jarHash: artifactSignatureFromFile(jarPath).sourceArtifactId,
       generatedAt: new Date().toISOString()
     };

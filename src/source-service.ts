@@ -868,13 +868,13 @@ export class SourceService {
     const result = await this.mappingService.checkSymbolExists(input);
     // On unobfuscated versions the mapping graph is empty, so the mapping service can
     // only ever report symbols as missing. We then validate against runtime bytecode.
-    // Classes/fields surface as `mapping_unavailable` when the graph yields nothing, but
-    // a method query with a non-empty graph returns `not_found` (empty member lookup) —
-    // which previously skipped the runtime fallback and produced false negatives for
-    // methods that genuinely exist. Treat `not_found` methods as fallback-eligible.
+    // A non-empty graph that simply lacks the queried record returns `not_found` for
+    // ANY kind — methods, fields, and classes alike — and skipping the runtime check
+    // produced false negatives (e.g. a real EntityType.ITEM field reported missing).
+    // Every `not_found` is therefore fallback-eligible alongside `mapping_unavailable`;
+    // the runtime check itself keeps genuinely-missing symbols `not_found`.
     const fallbackEligible =
-      result.status === "mapping_unavailable" ||
-      (result.status === "not_found" && input.kind === "method");
+      result.status === "mapping_unavailable" || result.status === "not_found";
     if (
       !fallbackEligible ||
       !isUnobfuscatedVersion(input.version) ||

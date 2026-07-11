@@ -105,6 +105,7 @@ Workspace detection is memoised in a process-resident `WorkspaceContextCache` (1
 - `search-class-source` returns compact hits only. Use `get-artifact-file` or `get-class-source` to inspect returned files.
 - `find-class` and `get-class-source` on `mapping="obfuscated"` expect Mojang obfuscated names. Deobfuscated queries warn and usually need `mapping="mojang"` or a `find-mapping` step first.
 - `check-symbol-exists` defaults to strict FQCN class lookup. Use `nameMode="auto"` for short class names.
+- On unobfuscated versions, every `not_found` and `mapping_unavailable` verdict from the mapping graph — classes and fields included, not just methods — is re-validated against runtime bytecode before being returned, so a graph that lacks a record for a real symbol (e.g. `EntityType.ITEM`) no longer produces false negatives. Genuinely-missing symbols still return `not_found` after the runtime check. Bytecode-derived response contexts report `mappingNamespace: "mojang"` on unobfuscated versions instead of a hardcoded `"obfuscated"`.
 - `check-symbol-exists` can use `signatureMode="name-only"` for overload discovery, but exact `descriptor` matching is still the most reliable path.
 - `analyze-symbol task="api-overview"` inherits `sourceMapping` as the default `classNameMapping`; it falls back to `obfuscated` only when neither value is provided.
 - `find-mapping` accepts short class ids such as `dhl` only when `sourceMapping="obfuscated"`. Other class lookup paths still validate class names as fully-qualified.
