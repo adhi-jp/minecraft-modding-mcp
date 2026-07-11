@@ -1142,9 +1142,22 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     }
     warnings.push(...signature.warnings);
     signatureContext = signature.context;
-    signatureConstructors = signature.constructors;
-    signatureFields = signature.fields;
-    signatureMethods = signature.methods;
+    // Member annotations are opt-in: strip them unless requested. The
+    // annotationDefault of annotation-type members is always kept. Cached
+    // signature objects must not be mutated, so stripping copies.
+    const stripAnnotations = (member: SignatureMember): SignatureMember => {
+      if (!member.annotations) {
+        return member;
+      }
+      const { annotations: _omitted, ...rest } = member;
+      return rest;
+    };
+    const includeAnnotations = input.includeAnnotations ?? false;
+    signatureConstructors = includeAnnotations
+      ? signature.constructors
+      : signature.constructors.map(stripAnnotations);
+    signatureFields = includeAnnotations ? signature.fields : signature.fields.map(stripAnnotations);
+    signatureMethods = includeAnnotations ? signature.methods : signature.methods.map(stripAnnotations);
   } catch (error) {
     if (isAppError(error) && error.code === ERROR_CODES.NESTED_JAR_AMBIGUOUS) {
       // A class living in several nested jars needs the caller's choice; the

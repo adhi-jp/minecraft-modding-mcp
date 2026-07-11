@@ -141,3 +141,21 @@ test("verify-mixin-target member schema normalizes empty/whitespace descriptor t
     assert.equal(real.data.descriptor, "()V");
   }
 });
+
+test("get-class-members accepts the optional includeAnnotations flag", () => {
+  const parsed = getClassMembersSchema.safeParse({
+    className: "net.minecraft.world.level.block.Block",
+    target: { kind: "artifact", artifactId: "abc123" },
+    includeAnnotations: true
+  });
+  assert.equal(parsed.success, true);
+
+  const defaulted = getClassMembersSchema.safeParse({
+    className: "net.minecraft.world.level.block.Block",
+    target: { kind: "artifact", artifactId: "abc123" }
+  });
+  assert.equal(defaulted.success, true);
+  if (defaulted.success) {
+    assert.equal(defaulted.data.includeAnnotations, false);
+  }
+});

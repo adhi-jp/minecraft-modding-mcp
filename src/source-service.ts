@@ -390,6 +390,7 @@ export type GetClassMembersInput = {
   access?: MemberAccess;
   includeSynthetic?: boolean;
   includeInherited?: boolean;
+  includeAnnotations?: boolean;
   memberPattern?: string;
   maxMembers?: number;
   cursor?: string;

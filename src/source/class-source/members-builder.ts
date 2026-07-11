@@ -142,6 +142,10 @@ export type WireMember = {
   ownerFqn?: string;
   /** Present only when true. */
   isSynthetic?: boolean;
+  /** Rendered default value of an annotation-type member. */
+  annotationDefault?: string;
+  /** Runtime-visible annotations; present only under the opt-in projection. */
+  annotations?: string[];
 };
 
 export type WireMembersBlock = {
@@ -179,7 +183,9 @@ export function projectMembersForWire(
     javaSignature: m.javaSignature,
     ...(keepDescriptor ? { jvmDescriptor: m.jvmDescriptor } : {}),
     ...(hoistOwner ? {} : { ownerFqn: m.ownerFqn }),
-    ...(m.isSynthetic ? { isSynthetic: true } : {})
+    ...(m.isSynthetic ? { isSynthetic: true } : {}),
+    ...(m.annotationDefault !== undefined ? { annotationDefault: m.annotationDefault } : {}),
+    ...(m.annotations?.length ? { annotations: m.annotations } : {})
   });
   return {
     ...(hoistOwner ? { ownerFqn: [...owners][0]! } : {}),

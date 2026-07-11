@@ -226,6 +226,7 @@ export const getClassMembersShape = {
   access: memberAccessSchema.default("public"),
   includeSynthetic: z.boolean().default(false),
   includeInherited: z.boolean().default(false),
+  includeAnnotations: z.boolean().default(false).describe("Opt-in: include runtime-visible member annotations (e.g. @Deprecated) on each member."),
   memberPattern: optionalNonEmptyString.describe(MEMBER_PATTERN_DESCRIPTION),
   projection: memberProjectionSchema.optional().describe(MEMBER_PROJECTION_DESCRIPTION),
   maxMembers: optionalPositiveInt.describe("default 150, max 5000. Page beyond the first 150 with cursor."),

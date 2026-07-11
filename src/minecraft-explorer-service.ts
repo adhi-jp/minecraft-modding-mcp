@@ -23,6 +23,8 @@ interface ParsedClassMember {
   descriptor: string;
   accessFlags: number;
   isSynthetic: boolean;
+  annotationDefault?: string;
+  annotations?: string[];
 }
 
 interface ParsedClassFile {
@@ -41,6 +43,10 @@ export interface SignatureMember {
   jvmDescriptor: string;
   accessFlags: number;
   isSynthetic: boolean;
+  /** Rendered default value of an annotation-type member (AnnotationDefault). */
+  annotationDefault?: string;
+  /** Rendered runtime-visible annotations on the member, e.g. "@java.lang.Deprecated". */
+  annotations?: string[];
 }
 
 export interface GetSignatureInput {
@@ -392,7 +398,7 @@ type ConstantPoolEntry =
   | { tag: 7 | 8 | 16 | 19 | 20; index: number }
   | { tag: 9 | 10 | 11 | 12 | 17 | 18; index1: number; index2: number }
   | { tag: 15; refKind: number; refIndex: number }
-  | { tag: 3 | 4 | 5 | 6 };
+  | { tag: 3 | 4 | 5 | 6; numericValue?: number | string };
 
 function readUtf8(cp: Array<ConstantPoolEntry | undefined>, index: number): string {
   const entry = cp[index];
@@ -428,20 +434,128 @@ function readOptionalClassName(
   return readClassName(cp, index);
 }
 
+type ReadAttributesResult = {
+  names: string[];
+  annotationDefault?: string;
+  annotations?: string[];
+};
+
+function descriptorToClassName(descriptor: string): string {
+  if (descriptor.startsWith("L") && descriptor.endsWith(";")) {
+    return descriptor.slice(1, -1).replace(/\//g, ".");
+  }
+  return descriptor;
+}
+
+function readNumericConstant(cp: Array<ConstantPoolEntry | undefined>, index: number): string {
+  const entry = cp[index];
+  if (entry && (entry.tag === 3 || entry.tag === 4 || entry.tag === 5 || entry.tag === 6)) {
+    return String(entry.numericValue);
+  }
+  return "<unknown-constant>";
+}
+
+// JVMS 4.7.16.1 element_value, rendered as compact Java-ish text. Every
+// branch reads exactly its encoded bytes so nested/array values stay aligned.
+function readElementValue(
+  reader: ByteReader,
+  cp: Array<ConstantPoolEntry | undefined>
+): string {
+  const tag = String.fromCharCode(reader.readU1());
+  switch (tag) {
+    case "B":
+    case "I":
+    case "S":
+    case "D":
+    case "F":
+    case "J":
+      return readNumericConstant(cp, reader.readU2());
+    case "C": {
+      const raw = readNumericConstant(cp, reader.readU2());
+      const code = Number(raw);
+      return Number.isFinite(code) ? `'${String.fromCharCode(code)}'` : raw;
+    }
+    case "Z": {
+      const raw = readNumericConstant(cp, reader.readU2());
+      return raw === "1" ? "true" : raw === "0" ? "false" : raw;
+    }
+    case "s":
+      return JSON.stringify(readUtf8(cp, reader.readU2()));
+    case "e": {
+      const typeDescriptor = readUtf8(cp, reader.readU2());
+      const constantName = readUtf8(cp, reader.readU2());
+      return `${descriptorToClassName(typeDescriptor)}.${constantName}`;
+    }
+    case "c":
+      return `${descriptorToClassName(readUtf8(cp, reader.readU2()))}.class`;
+    case "@":
+      return readAnnotationText(reader, cp);
+    case "[": {
+      const count = reader.readU2();
+      const parts: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        parts.push(readElementValue(reader, cp));
+      }
+      return `{${parts.join(", ")}}`;
+    }
+    default:
+      return "<unsupported-element-value>";
+  }
+}
+
+function readAnnotationText(
+  reader: ByteReader,
+  cp: Array<ConstantPoolEntry | undefined>
+): string {
+  const typeDescriptor = readUtf8(cp, reader.readU2());
+  const pairCount = reader.readU2();
+  const pairs: string[] = [];
+  for (let index = 0; index < pairCount; index += 1) {
+    const name = readUtf8(cp, reader.readU2());
+    pairs.push(`${name} = ${readElementValue(reader, cp)}`);
+  }
+  return `@${descriptorToClassName(typeDescriptor)}${pairs.length > 0 ? `(${pairs.join(", ")})` : ""}`;
+}
+
 function readAttributes(
   reader: ByteReader,
   cp: Array<ConstantPoolEntry | undefined>,
   count: number
-): string[] {
+): ReadAttributesResult {
   const names: string[] = [];
+  let annotationDefault: string | undefined;
+  let annotations: string[] | undefined;
   for (let index = 0; index < count; index += 1) {
     const nameIndex = reader.readU2();
     const length = reader.readU4();
     const attributeName = readUtf8(cp, nameIndex);
     names.push(attributeName);
-    reader.skip(length);
+    const body = reader.readBytes(length);
+    // Malformed attribute bodies must never fail the whole class parse; the
+    // rendered value is best-effort metadata, not a structural field.
+    if (attributeName === "AnnotationDefault") {
+      try {
+        annotationDefault = readElementValue(new ByteReader(body), cp);
+      } catch {
+        annotationDefault = undefined;
+      }
+    } else if (attributeName === "RuntimeVisibleAnnotations") {
+      try {
+        const bodyReader = new ByteReader(body);
+        const annotationCount = bodyReader.readU2();
+        const rendered: string[] = [];
+        for (let a = 0; a < annotationCount; a += 1) {
+          rendered.push(readAnnotationText(bodyReader, cp));
+        }
+        if (rendered.length > 0) {
+          annotations = rendered;
+        }
+      } catch {
+        annotations = undefined;
+      }
+    }
   }
-  return names;
+  return { names, annotationDefault, annotations };
 }
 
 function parseClassFile(buffer: Buffer): ParsedClassFile {
@@ -466,17 +580,28 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
         cp[index] = { tag: 1, value: reader.readBytes(length).toString("utf8") };
         break;
       }
-      case 3:
-      case 4:
-        reader.skip(4);
-        cp[index] = { tag };
+      case 3: {
+        const bytes = reader.readBytes(4);
+        cp[index] = { tag, numericValue: bytes.readInt32BE(0) };
         break;
-      case 5:
-      case 6:
-        reader.skip(8);
-        cp[index] = { tag };
+      }
+      case 4: {
+        const bytes = reader.readBytes(4);
+        cp[index] = { tag, numericValue: bytes.readFloatBE(0) };
+        break;
+      }
+      case 5: {
+        const bytes = reader.readBytes(8);
+        cp[index] = { tag, numericValue: bytes.readBigInt64BE(0).toString() };
         index += 1;
         break;
+      }
+      case 6: {
+        const bytes = reader.readBytes(8);
+        cp[index] = { tag, numericValue: bytes.readDoubleBE(0) };
+        index += 1;
+        break;
+      }
       case 7:
       case 8:
       case 16:
@@ -522,14 +647,18 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
       const nameIndex = reader.readU2();
       const descriptorIndex = reader.readU2();
       const attributesCount = reader.readU2();
-      const attributeNames = readAttributes(reader, cp, attributesCount);
+      const attributeResult = readAttributes(reader, cp, attributesCount);
       members.push({
         name: readUtf8(cp, nameIndex),
         descriptor: readUtf8(cp, descriptorIndex),
         accessFlags,
         isSynthetic:
           (accessFlags & ACC_SYNTHETIC) !== 0 ||
-          attributeNames.some((attributeName) => attributeName === "Synthetic")
+          attributeResult.names.some((attributeName) => attributeName === "Synthetic"),
+        ...(attributeResult.annotationDefault !== undefined
+          ? { annotationDefault: attributeResult.annotationDefault }
+          : {}),
+        ...(attributeResult.annotations ? { annotations: attributeResult.annotations } : {})
       });
     }
     return members;
@@ -734,7 +863,9 @@ export class MinecraftExplorerService {
           javaSignature: `${modifiers ? `${modifiers} ` : ""}${fieldType} ${member.name}`.trim(),
           jvmDescriptor: member.descriptor,
           accessFlags: member.accessFlags,
-          isSynthetic: member.isSynthetic
+          isSynthetic: member.isSynthetic,
+          ...(member.annotationDefault !== undefined ? { annotationDefault: member.annotationDefault } : {}),
+          ...(member.annotations ? { annotations: member.annotations } : {})
         };
       }
 
@@ -748,7 +879,9 @@ export class MinecraftExplorerService {
           javaSignature: `${modifiers ? `${modifiers} ` : ""}${ownerSimpleClassName}(${args})`.trim(),
           jvmDescriptor: member.descriptor,
           accessFlags: member.accessFlags,
-          isSynthetic: member.isSynthetic
+          isSynthetic: member.isSynthetic,
+          ...(member.annotationDefault !== undefined ? { annotationDefault: member.annotationDefault } : {}),
+          ...(member.annotations ? { annotations: member.annotations } : {})
         };
       }
 
@@ -758,7 +891,9 @@ export class MinecraftExplorerService {
         javaSignature: `${modifiers ? `${modifiers} ` : ""}${parsedMethod.returnType} ${member.name}(${args})`.trim(),
         jvmDescriptor: member.descriptor,
         accessFlags: member.accessFlags,
-        isSynthetic: member.isSynthetic
+        isSynthetic: member.isSynthetic,
+        ...(member.annotationDefault !== undefined ? { annotationDefault: member.annotationDefault } : {}),
+        ...(member.annotations ? { annotations: member.annotations } : {})
       };
     };
 
