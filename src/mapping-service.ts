@@ -264,12 +264,12 @@ export class MappingService {
       });
     }
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
-    const mappingContext = {
+    const mappingContext: FindMappingOutput["mappingContext"] = {
       version,
       sourceMapping,
       targetMapping,
       sourcePriorityApplied: priority
-    } satisfies FindMappingOutput["mappingContext"];
+    };
 
     if (sourceMapping === targetMapping) {
       const identity = toResolutionCandidate({
@@ -298,6 +298,9 @@ export class MappingService {
       input.projectPath,
       input.gradleUserHome
     );
+    if (graph.unobfuscatedRuntime) {
+      mappingContext.unobfuscatedRuntime = true;
+    }
     const path = namespacePath(graph, sourceMapping, targetMapping);
     if (!path) {
       return {
@@ -543,12 +546,12 @@ export class MappingService {
       });
     }
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
-    const mappingContext = {
+    const mappingContext: ResolveMethodMappingExactOutput["mappingContext"] = {
       version,
       sourceMapping,
       targetMapping,
       sourcePriorityApplied: priority
-    } satisfies ResolveMethodMappingExactOutput["mappingContext"];
+    };
 
     if (sourceMapping === targetMapping) {
       const resolvedCandidate = toResolutionCandidate({
@@ -577,6 +580,9 @@ export class MappingService {
       input.projectPath,
       input.gradleUserHome
     );
+    if (graph.unobfuscatedRuntime) {
+      mappingContext.unobfuscatedRuntime = true;
+    }
     const path = namespacePath(graph, sourceMapping, targetMapping);
 
     if (!path) {
@@ -714,6 +720,7 @@ export class MappingService {
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
     const graph = await this.loadGraph(version, priority, "full", undefined, input.gradleUserHome);
     const warnings = [...graph.warnings];
+    const unobfuscatedRuntime = graph.unobfuscatedRuntime === true;
     const includeKinds = normalizeIncludedKinds(input.includeKinds);
     const pathCache = new Map<PairKey, SourceMapping[] | undefined>();
     const resolvePath = (
@@ -771,6 +778,7 @@ export class MappingService {
         },
         rows: [],
         rowCount: 0,
+        ...(unobfuscatedRuntime ? { unobfuscatedRuntime: true } : {}),
         warnings
       };
     }
@@ -919,6 +927,7 @@ export class MappingService {
       version,
       className,
       classNameMapping,
+      ...(unobfuscatedRuntime ? { unobfuscatedRuntime: true } : {}),
       classIdentity: {
         obfuscated: classByMapping.obfuscated?.symbol,
         mojang: classByMapping.mojang?.symbol,
@@ -958,11 +967,11 @@ export class MappingService {
     }
 
     const priority = mappingPriorityFromInput(this.config.mappingSourcePriority, input.sourcePriority);
-    const mappingContext = {
+    const mappingContext: SymbolExistenceOutput["mappingContext"] = {
       version,
       sourceMapping,
       sourcePriorityApplied: priority
-    } satisfies SymbolExistenceOutput["mappingContext"];
+    };
 
     const classNameMode = input.nameMode === "auto" ? "auto" : "fqcn";
     // Normalize the effective signatureMode exactly once (mirrors findMapping) so an omitted
@@ -1029,6 +1038,9 @@ export class MappingService {
       undefined,
       input.gradleUserHome
     );
+    if (graph.unobfuscatedRuntime) {
+      mappingContext.unobfuscatedRuntime = true;
+    }
     const warnings = [...graph.warnings];
     const records = collectTargetRecords(graph, sourceMapping);
     if (records.length === 0) {
@@ -1526,9 +1538,10 @@ export class MappingService {
         recordsByTarget: new Map(),
         exactRecordIndex: new Map(),
         classProjectionCache: new Map(),
-        warnings: [
-          `Version ${version} is unobfuscated; mapping graph is empty because the runtime already uses deobfuscated names.`
-        ]
+        // No warning sentence: consumers surface this as the structured
+        // mappingContext.unobfuscatedRuntime flag instead.
+        unobfuscatedRuntime: true,
+        warnings: []
       };
     }
 

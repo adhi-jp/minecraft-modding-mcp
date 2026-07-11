@@ -87,7 +87,11 @@ test("a field reported not_found by the mapping graph is runtime-checked on unob
 
   assert.equal(result.resolved, true);
   assert.equal(result.status, "resolved");
-  assert.ok(result.warnings.some((warning) => warning.includes("runtime bytecode")));
+  // Runtime validation surfaces as a structured flag, not a warning sentence.
+  assert.equal(
+    (result.mappingContext as { runtimeValidated?: boolean }).runtimeValidated,
+    true
+  );
 });
 
 test("a class reported not_found by the mapping graph is runtime-checked on unobfuscated versions", async () => {

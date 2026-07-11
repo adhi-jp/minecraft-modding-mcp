@@ -90,16 +90,19 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
     };
   }
 
-  const warnings = [
-    ...fallbackBase.warnings,
-    ...signature.warnings,
-    `Version ${version} is unobfuscated; validated symbol existence against runtime bytecode.`
-  ];
+  const warnings = [...fallbackBase.warnings, ...signature.warnings];
+  // Runtime validation is reported as the structured
+  // mappingContext.runtimeValidated flag instead of a per-response sentence.
+  const runtimeValidatedContext = {
+    ...fallbackBase.mappingContext,
+    runtimeValidated: true
+  };
 
   const buildResolved = (
     resolvedSymbol: MappingSymbolResolutionOutput["resolvedSymbol"]
   ): CheckSymbolExistsOutput => ({
     ...fallbackBase,
+    mappingContext: runtimeValidatedContext,
     querySymbol,
     resolved: true,
     status: "resolved",
@@ -117,6 +120,7 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
 
   const buildUnresolved = (status: CheckSymbolExistsOutput["status"]): CheckSymbolExistsOutput => ({
     ...fallbackBase,
+    mappingContext: runtimeValidatedContext,
     querySymbol,
     resolved: false,
     status,

@@ -69,6 +69,13 @@ export type CandidateAccumulator = {
 
 export type LoadedGraph = {
   version: string;
+  /**
+   * True when the runtime already uses deobfuscated names, so the graph is
+   * deliberately empty. Surfaces on outputs as
+   * mappingContext.unobfuscatedRuntime instead of a per-response warning
+   * sentence.
+   */
+  unobfuscatedRuntime?: boolean;
   priority: import("../types.js").MappingSourcePriority;
   mode: GraphLoadMode;
   pairs: Map<PairKey, PairRecord>;

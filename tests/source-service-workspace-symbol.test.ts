@@ -534,7 +534,11 @@ test("SourceService checkSymbolExists falls back to unobfuscated runtime bytecod
   assert.equal(result.resolved, true);
   assert.equal(result.status, "resolved");
   assert.equal(result.resolvedSymbol?.name, "net.minecraft.client.Minecraft");
-  assert.ok(result.warnings.some((warning) => warning.includes("runtime bytecode")));
+  // Runtime validation surfaces as a structured flag, not a warning sentence.
+  assert.equal(
+    (result.mappingContext as { runtimeValidated?: boolean }).runtimeValidated,
+    true
+  );
 });
 
 test("SourceService checkSymbolExists keeps mapping_unavailable when unobfuscated runtime jar resolution fails", async () => {

@@ -49,6 +49,19 @@ export type SymbolResolutionOutput = {
     sourceMapping: SourceMapping;
     targetMapping?: SourceMapping;
     sourcePriorityApplied: MappingSourcePriority;
+    /**
+     * The runtime already uses deobfuscated names, so the mapping graph is
+     * deliberately empty. Replaces the former per-response warning
+     * "Version X is unobfuscated; mapping graph is empty because the runtime
+     * already uses deobfuscated names."
+     */
+    unobfuscatedRuntime?: boolean;
+    /**
+     * Symbol existence was validated against runtime bytecode. Replaces the
+     * former per-response warning "Version X is unobfuscated; validated
+     * symbol existence against runtime bytecode."
+     */
+    runtimeValidated?: boolean;
   };
   resolved: boolean;
   status: SymbolResolutionStatus;
@@ -144,6 +157,11 @@ export type ClassApiMatrixRow = {
 };
 
 export type ClassApiMatrixOutput = {
+  /**
+   * The runtime already uses deobfuscated names, so non-mojang matrix
+   * columns are empty by design (the mapping graph is deliberately empty).
+   */
+  unobfuscatedRuntime?: boolean;
   version: string;
   className: string;
   classNameMapping: SourceMapping;
