@@ -326,6 +326,31 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
   details.nextAction = nextAction;
   Object.assign(details, buildSuggestedCall(suggestionSpec));
 
+  // Split-source workspaces can omit client-only classes from merged indexes;
+  // the vanilla scope decompiles the client jar, which contains them. Offer
+  // the retry as an example using existing scope enum values only.
+  if (input.targetKind === "version" && input.version && input.scope !== "vanilla") {
+    const scopeRetry = buildSuggestedCall({
+      tool: "get-class-source",
+      params: undefined,
+      examples: [
+        {
+          params: {
+            className: input.className,
+            target: { kind: "version", value: input.version },
+            scope: "vanilla"
+          },
+          reason:
+            "Client-only classes can be missing from merged split-source indexes; scope \"vanilla\" decompiles the client jar, which contains them."
+        }
+      ]
+    });
+    if (scopeRetry.exampleCalls?.length) {
+      const existing = Array.isArray(details.exampleCalls) ? details.exampleCalls : [];
+      details.exampleCalls = [...existing, ...scopeRetry.exampleCalls];
+    }
+  }
+
   return createError({
     code: ERROR_CODES.CLASS_NOT_FOUND,
     message: `Source for class "${input.className}" was not found.`,

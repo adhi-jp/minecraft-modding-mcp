@@ -101,6 +101,13 @@ export interface ArtifactProvenance {
     entryName: string;
     shellArtifactId: string;
   };
+  /**
+   * Additional sources jars indexed into this artifact alongside
+   * resolvedFrom.sourceJarPath — the other half of a Loom split-source pair
+   * (minecraft-common / minecraft-clientOnly), so client-only classes are not
+   * lost to single-jar selection.
+   */
+  companionSourceJars?: string[];
 }
 
 export interface RuntimeValidationProvenance<

@@ -62,6 +62,8 @@ export type VersionSourceDiscovery = {
   candidateArtifacts: string[];
   selectedSourceJarPath?: string;
   selectedHasMinecraftNamespace?: boolean;
+  /** The other half of a Loom split-source pair (common/clientOnly), when present. */
+  companionSourceJarPaths?: string[];
 };
 
 type RuntimeJarCandidate = {
@@ -324,12 +326,36 @@ export async function discoverVersionSourceJar(_svc: SourceService, input: {
     .slice(0, 20)
     .map((candidate) => `${candidate.jarPath}#java=${candidate.javaEntryCount}#net_minecraft=${candidate.hasMinecraftNamespace ? 1 : 0}`);
 
+  // Loom split-source workspaces publish the version as a common/clientOnly
+  // PAIR with no merged jar; selecting one loses the other half's classes
+  // (e.g. net.minecraft.client.* when common wins). Surface the best-scored
+  // jar of the other half so ingestion can index both.
+  const selectedHalf = selected ? splitSourceHalf(selected.jarPath) : undefined;
+  const companion = selectedHalf
+    ? candidates.find(
+        (candidate) =>
+          candidate !== selected &&
+          candidate.looksLikeMinecraftArtifact &&
+          splitSourceHalf(candidate.jarPath) !== undefined &&
+          splitSourceHalf(candidate.jarPath) !== selectedHalf &&
+          // Version affinity: a leftover other-half jar from a different
+          // version must never be spliced into this version's index.
+          hasExactVersionToken(candidate.jarPath, input.version)
+      )
+    : undefined;
+
   return {
     searchedPaths,
     candidateArtifacts,
     selectedSourceJarPath: selected?.jarPath,
-    selectedHasMinecraftNamespace: selected?.hasMinecraftNamespace
+    selectedHasMinecraftNamespace: selected?.hasMinecraftNamespace,
+    ...(companion ? { companionSourceJarPaths: [companion.jarPath] } : {})
   };
+}
+
+function splitSourceHalf(jarPath: string): "common" | "clientonly" | undefined {
+  const match = /minecraft-(common|clientonly)/i.exec(jarPath);
+  return match ? (match[1]!.toLowerCase() as "common" | "clientonly") : undefined;
 }
 
 export async function probeMinecraftArtifact(
@@ -1522,6 +1548,12 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     }
     if (dependencyProvenance) {
       provenance.dependencyResolution = dependencyProvenance;
+    }
+    if (
+      versionSourceDiscovery?.companionSourceJarPaths?.length &&
+      resolved.sourceJarPath === versionSourceDiscovery.selectedSourceJarPath
+    ) {
+      provenance.companionSourceJars = versionSourceDiscovery.companionSourceJarPaths;
     }
 
     if (dependencyOrigin && dependencyRequestedMapping && dependencyRequestedMapping !== "obfuscated") {

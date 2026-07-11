@@ -279,6 +279,28 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
   let files: IndexedFileRecord[] = [];
   if (resolved.sourceJarPath) {
     files = await loadFromSourceJar(svc, resolved.sourceJarPath);
+    // Loom split-source pairs (common/clientOnly) publish the version across
+    // two sources jars; index the companion half too so neither side's
+    // classes go missing. The primary jar wins on duplicate paths. Note the
+    // artifact signature derives from the primary jar only: a regenerated
+    // companion lands at a new hash-addressed path, so persisted provenance
+    // can point at a deleted companion — that must degrade to a primary-only
+    // index, never fail the primary rebuild.
+    for (const companion of resolved.provenance?.companionSourceJars ?? []) {
+      let extra: IndexedFileRecord[];
+      try {
+        extra = await loadFromSourceJar(svc, companion);
+      } catch (companionError) {
+        log("warn", "index.companion_source_skipped", {
+          artifactId: resolved.artifactId,
+          companion,
+          reason: companionError instanceof Error ? companionError.message : String(companionError)
+        });
+        continue;
+      }
+      const seenPaths = new Set(files.map((file) => file.filePath));
+      files.push(...extra.filter((file) => !seenPaths.has(file.filePath)));
+    }
   } else if (resolved.binaryJarPath) {
     // Jar-in-Jar shells (near-zero own classes, all content in nested jars)
     // would decompile to zero Java files and dead-end in
