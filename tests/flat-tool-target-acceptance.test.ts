@@ -74,3 +74,18 @@ test("an artifact-kind target passes its artifactId through without a resolve ro
   const matches = await service.findClass({ className: "Lib", artifactId: resolved.artifactId });
   assert.equal(matches.total, 1);
 });
+
+test("find-class preserves top-level projectPath for workspace-relative targets", () => {
+  const parsed = findClassSchema.parse({
+    className: "Widget",
+    target: {
+      kind: "dependency",
+      group: "com.example",
+      name: "fixture-lib",
+      versionFromProject: true
+    },
+    projectPath: " /tmp/example-workspace "
+  });
+
+  assert.equal(parsed.projectPath, "/tmp/example-workspace");
+});

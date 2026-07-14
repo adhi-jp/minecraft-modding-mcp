@@ -7,6 +7,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `find-class` accepts top-level `projectPath` for workspace-relative `target.kind="workspace"` and dependency targets using `versionFromProject`, and searches simple or qualified class names across nested `.class` inventories when the resolved artifact is a Jar-in-Jar shell such as the Fabric API umbrella JAR. Nested matches retain the existing response shape, deduplicate repeated qualified names, and honor `limit`; top-level matches remain directly usable by the source/member tools.
+
+### Fixed
+
+- `find-class` no longer interprets a native dependency or Jar-in-Jar shell miss as evidence of obfuscated Minecraft runtime names, so it does not recommend `mapping="mojang"` for those artifacts. Dotted inner-class names discovered in a shell also continue through `get-class-source` instead of missing the binary `$` entry.
+
 ## [6.2.0] - 2026-07-11
 
 ### Added

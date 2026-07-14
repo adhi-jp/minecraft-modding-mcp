@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import { collectNestedJars } from "../mod-analyzer.js";
+import { isSecureJarEntryPath } from "../path-resolver.js";
 import {
   listJarEntries,
   readJarEntryAsBuffer,
@@ -25,6 +26,13 @@ export interface NestedJarMatch {
   extractedPath: string;
 }
 
+export interface NestedClassMatch {
+  qualifiedName: string;
+  filePath: string;
+  line: number;
+  symbolKind: "class";
+}
+
 // In-process cache of class listings per extracted nested jar, so repeated
 // class lookups against the same shell never re-open its nested jars. The
 // shell's own inventory is persisted with the artifact record; this cache is
@@ -42,6 +50,110 @@ function rememberClassSet(key: string, value: Set<string>): void {
     }
     classSetCache.delete(oldest);
   }
+}
+
+async function loadNestedJarClassSet(args: {
+  cacheDir: string;
+  outerJarPath: string;
+  outerSignature: string;
+  entryName: string;
+}): Promise<{ extractedPath: string; classSet: Set<string> } | undefined> {
+  let extractedPath: string;
+  try {
+    extractedPath = await extractNestedJar(
+      args.cacheDir,
+      args.outerJarPath,
+      args.outerSignature,
+      args.entryName
+    );
+  } catch {
+    return undefined;
+  }
+
+  let classSet = classSetCache.get(extractedPath);
+  if (!classSet) {
+    try {
+      const entries = await listJarEntries(extractedPath);
+      classSet = new Set(
+        entries.filter((entry) => entry.endsWith(".class") && isSecureJarEntryPath(entry))
+      );
+    } catch {
+      return undefined;
+    }
+    rememberClassSet(extractedPath, classSet);
+  }
+  return { extractedPath, classSet };
+}
+
+function nestedClassMatch(entry: string): NestedClassMatch | undefined {
+  const internalName = entry.slice(0, -".class".length);
+  if (internalName.startsWith("META-INF/versions/")) {
+    return undefined;
+  }
+  const binarySimpleName = internalName.split("/").at(-1) ?? internalName;
+  if (binarySimpleName === "module-info" || binarySimpleName === "package-info") {
+    return undefined;
+  }
+  const innerSegments = binarySimpleName.split("$").slice(1);
+  if (innerSegments.some((segment) => segment.length === 0 || /^\d/.test(segment))) {
+    return undefined;
+  }
+
+  return {
+    qualifiedName: internalName.replaceAll("/", ".").replaceAll("$", "."),
+    filePath: `${internalName.split("$")[0]}.java`,
+    line: 1,
+    symbolKind: "class"
+  };
+}
+
+/**
+ * Finds exact class-name matches across a shell's nested bytecode inventory.
+ * Results use the same binary-backed class representation as entry-tool search:
+ * an inferred outer Java path, line 1, and the broad class symbol kind.
+ */
+export async function findNestedJarClasses(args: {
+  cacheDir: string;
+  outerJarPath: string;
+  outerSignature: string;
+  inventory: string[];
+  className: string;
+  limit: number;
+}): Promise<NestedClassMatch[]> {
+  const normalizedQuery = args.className.trim().replaceAll("/", ".").replaceAll("$", ".");
+  const isQualified = normalizedQuery.includes(".");
+  const matches = new Map<string, NestedClassMatch>();
+
+  inventory: for (const entryName of args.inventory) {
+    const loaded = await loadNestedJarClassSet({
+      cacheDir: args.cacheDir,
+      outerJarPath: args.outerJarPath,
+      outerSignature: args.outerSignature,
+      entryName
+    });
+    if (!loaded) {
+      continue;
+    }
+    for (const classEntry of [...loaded.classSet].sort((left, right) => left.localeCompare(right))) {
+      const match = nestedClassMatch(classEntry);
+      if (!match) {
+        continue;
+      }
+      const simpleName = match.qualifiedName.split(".").at(-1) ?? match.qualifiedName;
+      if (
+        (isQualified && match.qualifiedName !== normalizedQuery) ||
+        (!isQualified && simpleName !== normalizedQuery)
+      ) {
+        continue;
+      }
+      matches.set(match.qualifiedName, match);
+      if (isQualified || matches.size >= args.limit) {
+        break inventory;
+      }
+    }
+  }
+
+  return [...matches.values()];
 }
 
 /**
@@ -160,32 +272,21 @@ export async function findNestedJarsContainingClass(args: {
   internalName: string;
 }): Promise<NestedJarMatch[]> {
   const classEntry = `${args.internalName}.class`;
+  const qualifiedName = args.internalName.replaceAll("/", ".").replaceAll("$", ".");
   const matches: NestedJarMatch[] = [];
   for (const entryName of args.inventory) {
-    let extractedPath: string;
-    try {
-      extractedPath = await extractNestedJar(
-        args.cacheDir,
-        args.outerJarPath,
-        args.outerSignature,
-        entryName
-      );
-    } catch {
-      // Unsafe or unreadable nested entries never become candidates.
-      continue;
-    }
-    let classSet = classSetCache.get(extractedPath);
-    if (!classSet) {
-      try {
-        const entries = await listJarEntries(extractedPath);
-        classSet = new Set(entries.filter((entry) => entry.endsWith(".class")));
-      } catch {
-        continue;
-      }
-      rememberClassSet(extractedPath, classSet);
-    }
-    if (classSet.has(classEntry)) {
-      matches.push({ entryName, extractedPath });
+    const loaded = await loadNestedJarClassSet({
+      cacheDir: args.cacheDir,
+      outerJarPath: args.outerJarPath,
+      outerSignature: args.outerSignature,
+      entryName
+    });
+    const containsClass = loaded?.classSet.has(classEntry) || [...(loaded?.classSet ?? [])].some((entry) =>
+      entry.endsWith(".class") &&
+      entry.slice(0, -".class".length).replaceAll("/", ".").replaceAll("$", ".") === qualifiedName
+    );
+    if (loaded && containsClass) {
+      matches.push({ entryName, extractedPath: loaded.extractedPath });
     }
   }
   return matches;

@@ -272,7 +272,7 @@ const workspaceMappingService = new WorkspaceMappingService();
 const inspectMinecraftService = new InspectMinecraftService({
   listVersions: (input) => sourceService.listVersions(input),
   resolveArtifact: (input) => sourceService.resolveArtifact(input),
-  findClass: (input) => Promise.resolve(sourceService.findClass(input)),
+  findClass: (input) => sourceService.findClassIncludingNested(input),
   checkSymbolExists: (input) => sourceService.checkSymbolExists(input),
   getClassSource: (input) => sourceService.getClassSource(input),
   getClassMembers: (input) => sourceService.getClassMembers(input),
@@ -893,6 +893,7 @@ registerToolSchema("resolve-artifact", resolveArtifactSchema);
 async function resolveFlatArtifactId(input: {
   artifactId?: string;
   target?: unknown;
+  projectPath?: string;
 }): Promise<string> {
   if (input.artifactId) {
     return input.artifactId;
@@ -907,11 +908,10 @@ async function resolveFlatArtifactId(input: {
   if (target?.kind === "artifact" && target.artifactId) {
     return target.artifactId;
   }
+  const projectPath = input.projectPath ?? target?.projectPath;
   const resolved = await sourceService.resolveArtifact({
     target: target as Parameters<typeof sourceService.resolveArtifact>[0]["target"],
-    ...(target && "projectPath" in target && target.projectPath
-      ? { projectPath: target.projectPath }
-      : {})
+    ...(projectPath ? { projectPath } : {})
   });
   return resolved.artifactId;
 }
@@ -921,11 +921,11 @@ expertTool("find-class",
   findClassShape,
   { readOnlyHint: true },
   async (args) => runTool("find-class", args, findClassSchema, async (input) =>
-    sourceService.findClass({
+    sourceService.findClassIncludingNested({
       className: input.className,
       artifactId: await resolveFlatArtifactId(input),
       limit: input.limit
-    }) as unknown as Record<string, unknown>
+    }) as unknown as Promise<Record<string, unknown>>
   )
 );
 registerToolSchema("find-class", findClassSchema);

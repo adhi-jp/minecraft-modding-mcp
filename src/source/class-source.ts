@@ -35,7 +35,7 @@ import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
 import { collectDidYouMeanCandidates } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
-import { resolveUniqueNestedJarForClass } from "./nested-jars.js";
+import { findNestedJarClasses, resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
@@ -126,6 +126,20 @@ function obfuscatedNamespaceHint(className: string): string {
 
 function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
+}
+
+function shouldSuggestObfuscatedMapping(
+  artifact: ReturnType<SourceService["getArtifact"]>,
+  className: string
+): boolean {
+  const nativeDependency = artifact.provenance?.dependencyResolution != null;
+  const shellArtifact = artifact.qualityFlags.includes("shell-jar");
+  return (
+    artifact.mappingApplied === "obfuscated" &&
+    !nativeDependency &&
+    !shellArtifact &&
+    looksLikeDeobfuscatedClassName(className)
+  );
 }
 
 function classNameToClassPath(className: string): string {
@@ -513,7 +527,7 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
         `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
       );
     }
-    if (filteredMatches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+    if (filteredMatches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
       warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
     }
     return { matches: filteredMatches, total: filteredMatches.length, warnings };
@@ -552,10 +566,46 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
       `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
     );
   }
-  if (filteredMatches.length === 0 && artifact.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(className)) {
+  if (filteredMatches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
     warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
   }
   return { matches: filteredMatches, total: filteredMatches.length, warnings };
+}
+
+export async function findClassIncludingNested(
+  svc: SourceService,
+  input: FindClassInput
+): Promise<FindClassOutput> {
+  const indexed = findClass(svc, input);
+  if (indexed.total > 0) {
+    return indexed;
+  }
+
+  const artifact = svc.getArtifact(input.artifactId.trim());
+  const inventory = artifact.provenance?.nestedJars;
+  if (
+    !artifact.qualityFlags.includes("shell-jar") ||
+    !artifact.binaryJarPath ||
+    !inventory ||
+    inventory.length === 0
+  ) {
+    return indexed;
+  }
+
+  const limit = Math.max(1, Math.min(input.limit ?? 20, 200));
+  const matches = await findNestedJarClasses({
+    cacheDir: svc.config.cacheDir,
+    outerJarPath: artifact.binaryJarPath,
+    outerSignature: artifact.artifactId,
+    inventory,
+    className: input.className,
+    limit
+  });
+  return {
+    matches,
+    total: matches.length,
+    warnings: indexed.warnings
+  };
 }
 
 export async function getClassSource(svc: SourceService, input: GetClassSourceInput): Promise<GetClassSourceOutput> {

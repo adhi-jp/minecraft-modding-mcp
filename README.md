@@ -278,7 +278,7 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 | --- | --- |
 | `list-versions` | List available Minecraft versions from Mojang metadata and local cache |
 | `resolve-artifact` | Resolve source artifacts from versions, JAR paths, or Maven coordinates |
-| `find-class` | Find simple or fully-qualified class names inside an artifact |
+| `find-class` | Find simple or fully-qualified class names, including classes bundled in nested JARs |
 | `get-class-source` | Read class source from an artifact or resolve the backing artifact on demand |
 | `get-class-members` | List constructors, fields, and methods from bytecode |
 | `search-class-source` | Search indexed class source by symbol, text, or path |
@@ -286,6 +286,8 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 | `list-artifact-files` | List indexed source file paths with cursor pagination |
 | `index-artifact` | Rebuild indexed metadata for an existing artifact |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
+
+`find-class` accepts either an `artifactId` or the shared object `target` shape. For a workspace-relative dependency, pass `target: { kind: "dependency", group, name, versionFromProject: true }` with top-level `projectPath`. Fabric-style umbrella JARs are searched through their nested `.class` inventories; a top-level class match can then be passed to `get-class-source` or `get-class-members`, which resolve the containing nested JAR. Dotted inner-class matches are also readable through `get-class-source`. An empty result still means that the requested class name is absent from the resolved dependency version.
 
 For unobfuscated releases such as `26.1+`, `mapping="mojang"` uses the runtime/decompile path directly and skips Loom source-jar discovery, while `intermediary` and `yarn` fall back to `obfuscated` with a warning.
 

@@ -41,7 +41,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
     en: [
       "| `list-versions` | List available Minecraft versions from Mojang metadata and local cache |",
       "| `resolve-artifact` | Resolve source artifacts from versions, JAR paths, or Maven coordinates |",
-      "| `find-class` | Find simple or fully-qualified class names inside an artifact |",
+      "| `find-class` | Find simple or fully-qualified class names, including classes bundled in nested JARs |",
       "| `get-class-source` | Read class source from an artifact or resolve the backing artifact on demand |",
       "| `get-class-members` | List constructors, fields, and methods from bytecode |",
       "| `search-class-source` | Search indexed class source by symbol, text, or path |",

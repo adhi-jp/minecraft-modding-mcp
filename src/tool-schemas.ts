@@ -466,6 +466,7 @@ export const findClassShape = {
   className: nonEmptyString.describe("Simple name (e.g. Blocks) or fully-qualified name (e.g. net.minecraft.world.level.block.Blocks)"),
   artifactId: optionalNonEmptyString,
   target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  projectPath: optionalNonEmptyString.describe("Workspace root for dependency or workspace target resolution."),
   limit: optionalPositiveInt.describe("default 20, max 200")
 };
 export const findClassSchema = z.object(findClassShape).superRefine(requireExactlyOneArtifactRef);

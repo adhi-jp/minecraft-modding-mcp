@@ -986,6 +986,10 @@ export class SourceService {
     return classSource.findClass(this, input);
   }
 
+  async findClassIncludingNested(input: FindClassInput): Promise<FindClassOutput> {
+    return classSource.findClassIncludingNested(this, input);
+  }
+
   async getClassSource(input: GetClassSourceInput): Promise<GetClassSourceOutput> {
     return classSource.getClassSource(this, input);
   }

@@ -434,6 +434,45 @@ test("SourceService findClass warns when obfuscated mapping is queried with deob
   assert.ok(result.warnings.some((warning) => warning.includes("mapping=\"mojang\"")));
 });
 
+test("SourceService findClass does not label a native dependency miss as Minecraft obfuscation", async () => {
+  const { SourceService } = await import("../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-findclass-dependency-warning-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "native-dependency",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: ["dependency-mapping-unverified"],
+    files: [],
+    symbols: [],
+    provenance: {
+      target: { kind: "coordinate", value: "com.example:fixture-lib:1.0.0" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: {
+        origin: "local-m2",
+        coordinate: "com.example:fixture-lib:1.0.0"
+      },
+      transformChain: [],
+      dependencyResolution: {
+        group: "com.example",
+        name: "fixture-lib",
+        resolvedVersion: "1.0.0",
+        source: "gradle.properties:fixture_lib_version",
+        cacheHit: false
+      }
+    }
+  });
+
+  const result = service.findClass({
+    artifactId: "native-dependency",
+    className: "MissingApi"
+  });
+
+  assert.equal(result.total, 0);
+  assert.ok(result.warnings.every((warning) => !warning.includes("obfuscated runtime names")));
+});
+
 test("SourceService getClassSource rejects representative invalid input combinations", async (t) => {
   const { SourceService } = await import("../src/source-service.ts");
 

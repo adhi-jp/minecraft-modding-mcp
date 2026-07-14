@@ -72,6 +72,158 @@ test("getClassMembers answers from the nested jar with redirect provenance", asy
   assert.equal(result.provenance?.nestedJar?.entryName, "META-INF/jars/api.jar");
 });
 
+test("findClassIncludingNested resolves simple and qualified names from a shell jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-find-class-names-"));
+  const inner = await buildMixedInnerJar();
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: shellPath },
+    mapping: "obfuscated"
+  });
+
+  const simple = await service.findClassIncludingNested({
+    className: "Api",
+    artifactId: resolved.artifactId
+  });
+  const qualified = await service.findClassIncludingNested({
+    className: "com.example.inner.Api",
+    artifactId: resolved.artifactId
+  });
+
+  const expected = {
+    qualifiedName: "com.example.inner.Api",
+    filePath: "com/example/inner/Api.java",
+    line: 1,
+    symbolKind: "class"
+  };
+  assert.deepEqual(simple.matches, [expected]);
+  assert.deepEqual(qualified.matches, [expected]);
+});
+
+test("findClassIncludingNested normalizes inner classes to their outer source path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-find-class-inner-"));
+  const inner = await buildInnerJarBytes({
+    "com/example/Outer.class": buildClassFile({ internalName: "com/example/Outer" }),
+    "com/example/Outer$Inner.class": buildClassFile({ internalName: "com/example/Outer$Inner" }),
+    "com/example/Outer$1.class": buildClassFile({ internalName: "com/example/Outer$1" }),
+    "module-info.class": buildClassFile({ internalName: "module-info" }),
+    "com/example/package-info.class": buildClassFile({ internalName: "com/example/package-info" })
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: shellPath },
+    mapping: "obfuscated"
+  });
+
+  const simple = await service.findClassIncludingNested({
+    className: "Inner",
+    artifactId: resolved.artifactId
+  });
+  const qualified = await service.findClassIncludingNested({
+    className: "com.example.Outer.Inner",
+    artifactId: resolved.artifactId
+  });
+
+  assert.deepEqual(simple.matches, [{
+    qualifiedName: "com.example.Outer.Inner",
+    filePath: "com/example/Outer.java",
+    line: 1,
+    symbolKind: "class"
+  }]);
+  assert.deepEqual(qualified.matches, simple.matches);
+});
+
+test("a dotted inner-class match remains readable through the shell source redirect", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-inner-source-redirect-"));
+  const inner = await buildInnerJarBytes({
+    "com/example/Outer.class": buildClassFile({ internalName: "com/example/Outer" }),
+    "com/example/Outer$Inner.class": buildClassFile({ internalName: "com/example/Outer$Inner" }),
+    "com/example/Outer.java": [
+      "package com.example;",
+      "public class Outer {",
+      "  public static class Inner {}",
+      "}"
+    ].join("\n")
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const result = await service.getClassSource({
+    className: "com.example.Outer.Inner",
+    target: { kind: "jar", value: shellPath },
+    mapping: "obfuscated",
+    mode: "full"
+  });
+
+  assert.match(result.sourceText, /static class Inner/);
+  assert.equal(result.provenance?.nestedJar?.entryName, "META-INF/jars/api.jar");
+});
+
+test("findClassIncludingNested deduplicates names deterministically and honors limit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-find-class-limit-"));
+  const alpha = await buildInnerJarBytes({
+    "alpha/Shared.class": buildClassFile({ internalName: "alpha/Shared" })
+  });
+  const beta = await buildInnerJarBytes({
+    "alpha/Shared.class": buildClassFile({ internalName: "alpha/Shared" }),
+    "beta/Shared.class": buildClassFile({ internalName: "beta/Shared" })
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, {
+    "META-INF/jars/z-beta.jar": beta,
+    "META-INF/jars/a-alpha.jar": alpha
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: shellPath },
+    mapping: "obfuscated"
+  });
+
+  const all = await service.findClassIncludingNested({
+    className: "Shared",
+    artifactId: resolved.artifactId,
+    limit: 20
+  });
+  const limited = await service.findClassIncludingNested({
+    className: "Shared",
+    artifactId: resolved.artifactId,
+    limit: 1
+  });
+
+  assert.deepEqual(all.matches.map((match) => match.qualifiedName), ["alpha.Shared", "beta.Shared"]);
+  assert.equal(all.total, 2);
+  assert.deepEqual(limited.matches.map((match) => match.qualifiedName), ["alpha.Shared"]);
+  assert.equal(limited.total, 1);
+});
+
+test("findClassIncludingNested omits vanilla obfuscation advice for a shell miss", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-find-class-miss-"));
+  const inner = await buildMixedInnerJar();
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: shellPath },
+    mapping: "obfuscated"
+  });
+  const result = await service.findClassIncludingNested({
+    className: "MissingApi",
+    artifactId: resolved.artifactId
+  });
+
+  assert.equal(result.total, 0);
+  assert.ok(result.warnings.every((warning) => !warning.includes("obfuscated runtime names")));
+});
+
 test("a class present in two nested jars returns candidates instead of a silent pick", async () => {
   const root = await mkdtemp(join(tmpdir(), "nested-redirect-collision-"));
   const inner = await buildMixedInnerJar();
