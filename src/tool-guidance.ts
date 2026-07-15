@@ -822,10 +822,119 @@ function gatedGuidance(
   };
 }
 
+function buildInspectWorkspaceSubject(source: Record<string, unknown>): Record<string, unknown> {
+  const subject: Record<string, unknown> = {
+    kind: "workspace",
+    projectPath: asNonEmptyString(source.projectPath) ?? "<workspace-path>"
+  };
+  if (
+    typeof source.mapping === "string" &&
+    ["obfuscated", "mojang", "intermediary", "yarn"].includes(source.mapping)
+  ) {
+    subject.mapping = source.mapping;
+  }
+  if (
+    typeof source.scope === "string" &&
+    ["vanilla", "merged", "loader"].includes(source.scope)
+  ) {
+    subject.scope = source.scope;
+  }
+  const gradleUserHome = asNonEmptyString(source.gradleUserHome);
+  if (gradleUserHome) {
+    subject.gradleUserHome = gradleUserHome;
+  }
+  if (typeof source.preferProjectVersion === "boolean") {
+    subject.preferProjectVersion = source.preferProjectVersion;
+  }
+  if (typeof source.strictVersion === "boolean") {
+    subject.strictVersion = source.strictVersion;
+  }
+  return subject;
+}
+
+function inspectTaskForFocus(task: string | undefined, focusKind: "class" | "search" | "file"): string {
+  if (
+    focusKind === "class" &&
+    (task === "auto" || task === "class-overview" || task === "class-source" || task === "class-members")
+  ) {
+    return task;
+  }
+  if (focusKind === "search" && (task === "auto" || task === "search")) {
+    return task;
+  }
+  if (focusKind === "file" && (task === "auto" || task === "file")) {
+    return task;
+  }
+  return "auto";
+}
+
+function buildInspectMinecraftInvalidFocusGuidance(normalizedInput: unknown): InvalidInputGuidance | undefined {
+  const input = asObjectRecord(normalizedInput);
+  const originalSubject = asObjectRecord(input?.subject);
+  if (
+    originalSubject?.kind !== "workspace" ||
+    originalSubject.focus === undefined ||
+    asObjectRecord(originalSubject.focus)
+  ) {
+    return undefined;
+  }
+
+  const requestedTask = asNonEmptyString(input?.task);
+  const workspaceSubject = buildInspectWorkspaceSubject(originalSubject);
+  const examples = [
+    {
+      params: {
+        task: inspectTaskForFocus(requestedTask, "class"),
+        subject: {
+          ...workspaceSubject,
+          focus: { kind: "class", className: "<fully-qualified-class-name>" }
+        }
+      },
+      reason: "Use class focus for class overview, source, or member inspection."
+    },
+    {
+      params: {
+        task: inspectTaskForFocus(requestedTask, "search"),
+        subject: {
+          ...workspaceSubject,
+          focus: { kind: "search", query: "<search-query>" }
+        }
+      },
+      reason: "Use search focus for symbol, text, or path search."
+    },
+    {
+      params: {
+        task: inspectTaskForFocus(requestedTask, "file"),
+        subject: {
+          ...workspaceSubject,
+          focus: { kind: "file", filePath: "<artifact-relative-file-path>" }
+        }
+      },
+      reason: "Use file focus for an artifact-relative file read."
+    }
+  ];
+  const validated = buildSuggestedCall({
+    tool: "inspect-minecraft",
+    params: undefined,
+    examples
+  });
+  return {
+    hints: [
+      "inspect-minecraft subject.focus must be a structured object, not a string.",
+      "Choose focus.kind=class with className, search with query, or file with filePath; task=auto dispatches from that kind and does not interpret prose."
+    ],
+    ...(validated.exampleCalls ? { exampleCalls: validated.exampleCalls } : {})
+  };
+}
+
 export function buildInvalidInputGuidance(
   tool: string,
   normalizedInput: unknown
 ): InvalidInputGuidance | undefined {
+  if (tool === "inspect-minecraft") {
+    return buildInspectMinecraftInvalidFocusGuidance(normalizedInput);
+  }
+
   if (tool === "validate-mixin") {
     return gatedGuidance(
       tool,
@@ -921,6 +1030,14 @@ export function mapErrorToProblem(
   if (isAppError(caughtError)) {
     const { suggestedCall, exampleCalls, primaryDropped } =
       extractValidatedSuggestionAndExamples(caughtError.details);
+    const invalidInputGuidance =
+      context?.tool === "inspect-minecraft" && caughtError.code === ERROR_CODES.INVALID_INPUT
+        ? buildInvalidInputGuidance(context.tool, context.normalizedInput)
+        : undefined;
+    const effectiveSuggestedCall = invalidInputGuidance
+      ? invalidInputGuidance.suggestedCall
+      : suggestedCall;
+    const effectiveExampleCalls = invalidInputGuidance?.exampleCalls ?? exampleCalls;
     const sanitizedContext = extractAllowlistedContext(caughtError.details);
     const extractedDidYouMean = extractDidYouMean(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
@@ -931,11 +1048,14 @@ export function mapErrorToProblem(
     ) {
       failedStage = "input-validation";
     }
-    const baseHints = toHints(caughtError.details);
+    const baseHints = [
+      ...(toHints(caughtError.details) ?? []),
+      ...(invalidInputGuidance?.hints ?? [])
+    ];
     const hintsWithFallback =
-      primaryDropped && !suggestedCall
-        ? [...(baseHints ?? []), VALIDATION_FALLBACK_HINT]
-        : baseHints;
+      primaryDropped && !effectiveSuggestedCall
+        ? [...baseHints, VALIDATION_FALLBACK_HINT]
+        : baseHints.length > 0 ? baseHints : undefined;
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -947,8 +1067,8 @@ export function mapErrorToProblem(
       issueOrigin: issueOriginForErrorCode(caughtError.code),
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: hintsWithFallback,
-      ...(suggestedCall ? { suggestedCall } : {}),
-      ...(exampleCalls ? { exampleCalls } : {}),
+      ...(effectiveSuggestedCall ? { suggestedCall: effectiveSuggestedCall } : {}),
+      ...(effectiveExampleCalls ? { exampleCalls: effectiveExampleCalls } : {}),
       ...(extractedDidYouMean ? { didYouMean: extractedDidYouMean } : {}),
       ...(failedStage ? { failedStage } : {}),
       ...(sanitizedContext ? { context: sanitizedContext } : {})

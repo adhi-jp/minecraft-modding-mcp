@@ -48,27 +48,27 @@ export const artifactRefSchema = z.discriminatedUnion("type", [
 
 export const workspaceFocusSchema = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("class"),
-    className: nonEmptyString,
-    artifact: artifactRefSchema.optional()
-  }),
+    kind: z.literal("class").describe("Select class inspection."),
+    className: nonEmptyString.describe("Fully-qualified class name to inspect."),
+    artifact: artifactRefSchema.optional().describe("Optional explicit artifact override; otherwise resolve it from the workspace.")
+  }).describe('Class focus object: {"kind":"class","className":"net.minecraft.world.item.Item"}. task=auto dispatches it to class-overview; select class-source or class-members explicitly when needed.'),
   z.object({
-    kind: z.literal("file"),
-    filePath: nonEmptyString,
-    artifact: artifactRefSchema.optional()
-  }),
+    kind: z.literal("file").describe("Select an artifact-relative file read."),
+    filePath: nonEmptyString.describe("Artifact-relative file path to read."),
+    artifact: artifactRefSchema.optional().describe("Optional explicit artifact override; otherwise resolve it from the workspace.")
+  }).describe('File focus object: {"kind":"file","filePath":"net/minecraft/world/item/Item.java"}. task=auto dispatches it to file.'),
   z.object({
-    kind: z.literal("search"),
-    query: nonEmptyString,
-    artifact: artifactRefSchema.optional(),
+    kind: z.literal("search").describe("Select source search."),
+    query: nonEmptyString.describe("Source, symbol, or path query to search for."),
+    artifact: artifactRefSchema.optional().describe("Optional explicit artifact override; otherwise resolve it from the workspace."),
     intent: z.enum(["symbol", "text", "path"]).optional(),
     match: z.enum(["exact", "prefix", "contains", "regex"]).optional(),
     symbolKind: z.enum(["class", "interface", "enum", "record", "method", "field"]).optional(),
     packagePrefix: nonEmptyString.optional(),
     fileGlob: nonEmptyString.optional(),
     queryMode: z.enum(["auto", "token", "literal"]).default("auto")
-  })
-]);
+  }).describe('Search focus object: {"kind":"search","query":"CreativeModeTab"}. task=auto dispatches it to search.')
+]).describe('Structured workspace focus. Object, not string. Choose {kind:"class",className}, {kind:"file",filePath}, or {kind:"search",query}.');
 
 export const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -127,8 +127,8 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     preferProjectVersion: z.boolean().optional(),
     strictVersion: z.boolean().optional(),
     focus: workspaceFocusSchema.optional()
-  })
-]);
+  }).describe("Workspace subject. Resolves Minecraft artifact context from projectPath; add a structured focus object for class, file, or search work.")
+]).describe("Structured inspection subject. Use kind=workspace with a structured focus object when the workspace should resolve artifact context.");
 
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 export type Subject = z.infer<typeof subjectSchema>;

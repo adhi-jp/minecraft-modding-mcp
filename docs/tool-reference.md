@@ -60,6 +60,75 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - Heavy analysis tools are serialized in-process to protect stdio stability. Queue overflow returns `ERR_LIMIT_EXCEEDED`.
 - All tools and JSON resources use the standard `{ result?, error?, meta }` envelope. `class-source` and `artifact-file` resources return raw text on success and structured JSON on failure.
 
+## inspect-minecraft workspace focus
+
+Use `subject.kind="workspace"` when `inspect-minecraft` should resolve Minecraft artifact context from a project. Its `focus` is a structured object, not a string:
+
+| Focus shape | `task="auto"` dispatch | Explicit tasks |
+| --- | --- | --- |
+| `focus: { kind: "class", className: "..." }` | `class-overview` | `class-overview`, `class-source`, `class-members` |
+| `focus: { kind: "search", query: "..." }` | `search` | `search` |
+| `focus: { kind: "file", filePath: "..." }` | `file` | `file` |
+
+`task="auto"` is structured dispatch based on `subject.kind` and `focus.kind`; it is not a natural-language planner and does not interpret prose. A string `focus` remains invalid and returns `ERR_INVALID_INPUT` with three schema-validated class/search/file `exampleCalls`; the server never guesses which object shape the text meant.
+
+Class source from a workspace:
+
+```json
+{
+  "tool": "inspect-minecraft",
+  "arguments": {
+    "task": "class-source",
+    "subject": {
+      "kind": "workspace",
+      "projectPath": "/path/to/workspace",
+      "focus": {
+        "kind": "class",
+        "className": "net.minecraft.world.item.Item"
+      }
+    }
+  }
+}
+```
+
+Source search from a workspace:
+
+```json
+{
+  "tool": "inspect-minecraft",
+  "arguments": {
+    "task": "auto",
+    "subject": {
+      "kind": "workspace",
+      "projectPath": "/path/to/workspace",
+      "focus": {
+        "kind": "search",
+        "query": "CreativeModeTab"
+      }
+    }
+  }
+}
+```
+
+Artifact-relative file read from a workspace:
+
+```json
+{
+  "tool": "inspect-minecraft",
+  "arguments": {
+    "task": "auto",
+    "subject": {
+      "kind": "workspace",
+      "projectPath": "/path/to/workspace",
+      "focus": {
+        "kind": "file",
+        "filePath": "net/minecraft/world/item/Item.java"
+      }
+    }
+  }
+}
+```
+
 ## Workspace and dependency target shapes
 
 `resolve-artifact`, `get-class-source`, and `get-class-members` accept two synthesizing `target.kind` values in addition to the canonical `"version"` / `"jar"` / `"coordinate"` shapes. The synthesizer rewrites the call into one of those canonical shapes before downstream resolution, so behaviour from the resolver onward is unchanged.

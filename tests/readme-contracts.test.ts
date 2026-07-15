@@ -112,6 +112,13 @@ test("README documents MCP client quick start commands", async () => {
   assert.match(readme, /\/mcp list/);
 });
 
+test("README tells inspect-minecraft callers to use structured workspace focus", async () => {
+  const readme = await readFile("README.md", "utf8");
+
+  assert.match(readme, /subject\.focus.*object, not a string/i);
+  assert.match(readme, /task="auto".*subject\.kind.*focus\.kind.*not a natural-language planner/is);
+});
+
 test("Example docs use the current get-class-members target schema", async () => {
   const examples = await readFile("docs/examples.md", "utf8");
   const memberListExample = examples.match(

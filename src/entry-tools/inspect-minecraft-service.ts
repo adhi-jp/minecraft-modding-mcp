@@ -23,7 +23,7 @@ const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "desc
 const nonEmptyString = z.string().trim().min(1);
 
 export const inspectMinecraftShape = {
-  task: z.enum(TASKS).optional(),
+  task: z.enum(TASKS).optional().describe("Workflow task. auto dispatches only from subject.kind and workspace focus.kind; it is not a natural-language planner."),
   subject: subjectSchema.optional(),
   includeSnapshots: z.boolean().default(false),
   detail: detailSchema.optional(),

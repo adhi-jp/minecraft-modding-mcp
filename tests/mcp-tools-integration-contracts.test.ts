@@ -163,6 +163,38 @@ test("validate-mixin tools/list schema exposes all mode-based inputs to clients"
   assert.match(inputSchema.properties?.input?.description ?? "", /inline.*path.*paths.*config.*project/s);
 });
 
+test("inspect-minecraft tools/list schema explains structured workspace focus dispatch", async () => {
+  const tool = (await listTools()).find((entry) => entry.name === "inspect-minecraft");
+  assert.ok(tool);
+
+  type SchemaNode = {
+    description?: string;
+    const?: string;
+    anyOf?: SchemaNode[];
+    properties?: Record<string, SchemaNode>;
+  };
+
+  const schema = tool.inputSchema as SchemaNode;
+  assert.match(
+    schema.properties?.task?.description ?? "",
+    /auto.*subject\.kind.*focus\.kind.*not.*natural-language/is
+  );
+
+  const subjectBranches = schema.properties?.subject?.anyOf ?? [];
+  const workspace = subjectBranches.find((entry) => entry.properties?.kind?.const === "workspace");
+  const focus = workspace?.properties?.focus;
+  assert.match(focus?.description ?? "", /Object, not string\./);
+  assert.match(focus?.description ?? "", /class.*file.*search/is);
+
+  const focusBranches = new Map(
+    (focus?.anyOf ?? []).map((entry) => [entry.properties?.kind?.const, entry])
+  );
+  assert.deepEqual([...focusBranches.keys()].sort(), ["class", "file", "search"]);
+  assert.match(focusBranches.get("class")?.description ?? "", /className/);
+  assert.match(focusBranches.get("file")?.description ?? "", /filePath/);
+  assert.match(focusBranches.get("search")?.description ?? "", /query/);
+});
+
 test("validate-mixin tools/list input schema does NOT introduce budget/test-only parameters", async () => {
   const tool = (await listTools()).find((entry) => entry.name === "validate-mixin");
   assert.ok(tool);

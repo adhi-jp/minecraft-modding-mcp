@@ -54,6 +54,19 @@ test("tool-reference.md documents the workspace and dependency target shapes", a
   }
 });
 
+test("tool-reference.md documents inspect-minecraft workspace focus objects", async () => {
+  const doc = await loadDoc();
+  for (const token of [
+    'focus: { kind: "class", className',
+    'focus: { kind: "search", query',
+    'focus: { kind: "file", filePath'
+  ]) {
+    assert.ok(doc.includes(token), `tool-reference.md must mention inspect focus shape "${token}"`);
+  }
+  assert.match(doc, /task="auto".*structured dispatch.*not a natural-language planner/is);
+  assert.match(doc, /string `focus`.*ERR_INVALID_INPUT.*exampleCalls/is);
+});
+
 test("tool-reference.md documents meta.restart and meta.stageBudgetExhausted", async () => {
   const doc = await loadDoc();
   assert.ok(doc.includes("meta.restart"), "tool-reference.md must mention meta.restart");

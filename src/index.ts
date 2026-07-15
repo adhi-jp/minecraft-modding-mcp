@@ -736,7 +736,7 @@ expertTool("list-versions",
 registerToolSchema("list-versions", listVersionsSchema);
 
 server.tool("inspect-minecraft",
-  "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings.",
+  "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings. Workspace subject.focus is a structured class/file/search object, never a string; task=auto dispatches from subject.kind and focus.kind.",
   inspectMinecraftShape,
   { readOnlyHint: true },
   async (args) => runTool("inspect-minecraft", args, inspectMinecraftSchema, async (input) =>

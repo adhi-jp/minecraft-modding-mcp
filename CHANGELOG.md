@@ -13,6 +13,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- `inspect-minecraft` now describes `task`, structured workspace `subject.focus`, and each class/search/file focus branch in `tools/list`. A string focus remains invalid instead of being guessed or coerced, but its `ERR_INVALID_INPUT` response now includes three schema-validated `exampleCalls` that preserve valid workspace context and show the exact object shapes for retrying.
 - `find-class` no longer interprets a native dependency or Jar-in-Jar shell miss as evidence of obfuscated Minecraft runtime names, so it does not recommend `mapping="mojang"` for those artifacts. Dotted inner-class names discovered in a shell also continue through `get-class-source` instead of missing the binary `$` entry.
 
 ## [6.2.0] - 2026-07-11
