@@ -3,10 +3,11 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 168;
-// Baseline before the migration was 144 ordinary files with 1522 top-level test declarations.
-// The new contract tests add four declarations, while behavior-preserving splits increase only the file count.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1526;
+const EXPECTED_ORDINARY_TEST_FILES = 176;
+// These constants pin the approved inventory so accidental runner-selection regressions
+// surface as failures. Deliberately adding or splitting test files must update them:
+// new behavior tests raise both counts, behavior-preserving splits raise only the file count.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1622;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
