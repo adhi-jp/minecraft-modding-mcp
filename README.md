@@ -417,11 +417,15 @@ pnpm test
 
 Run these when relevant:
 
+- `pnpm test:file <path...>` for focused ordinary suites
+- `pnpm test:grep <name-pattern>` for recursive ordinary suites filtered by test name
 - `pnpm test:manual:stdio-smoke` for MCP transport, registration, or manual workflow changes
 - `pnpm test:manual:package-smoke` when checking packaged install and distribution behavior
 - `pnpm test:perf` for search, index, or performance-sensitive changes
 - `pnpm test:coverage` or `pnpm test:coverage:lcov` for coverage checks (`lines=80`, `branches=70`, `functions=80`)
 - `pnpm validate` for the full local validation suite
+
+Ordinary `.test.ts` files live in domain directories under `tests/` (for example `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, and `utils/`). Keep helper-only modules in `tests/helpers`; manual smoke, performance, resource, and smoke-only files remain in their existing special directories.
 
 ## License
 

@@ -1,0 +1,415 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+import { createError, ERROR_CODES } from "../../src/errors.js";
+import { errorResource, objectResource } from "../../src/mcp-helpers.js";
+import { registerResources } from "../../src/resources.js";
+
+function createStubSourceService(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    listVersions: async () => ({ versions: [] }),
+    getRuntimeMetrics: () => ({ uptime: 0 }),
+    getClassSource: async () => ({ sourceText: "" }),
+    getArtifactFile: async () => ({ content: "" }),
+    findMapping: async () => ({}),
+    getClassMembers: async () => ({ members: {} }),
+    getArtifact: () => ({}),
+    ...overrides
+  };
+}
+
+function captureResources(sourceServiceOverrides: Record<string, unknown> = {}) {
+  const registrations = new Map<string, { handler: (...args: any[]) => Promise<any> }>();
+  const server = {
+    resource(
+      name: string,
+      _target: unknown,
+      _metadata: unknown,
+      handler: (...args: any[]) => Promise<any>
+    ) {
+      registrations.set(name, { handler });
+      return undefined;
+    }
+  } as unknown as McpServer;
+
+  registerResources(server, createStubSourceService(sourceServiceOverrides) as never);
+  return registrations;
+}
+
+function parseJsonResource(result: { contents: Array<{ text?: string }> }) {
+  return JSON.parse(result.contents[0]!.text as string) as Record<string, any>;
+}
+
+test("registerResources registers exactly 9 resources (2 fixed + 7 template)", () => {
+  const server = new McpServer({ name: "test", version: "0.0.0" });
+  const stub = createStubSourceService();
+
+  let resourceCount = 0;
+  const origResource = server.resource.bind(server);
+
+  server.resource = (...args: Parameters<typeof server.resource>) => {
+    resourceCount++;
+    return origResource(...args);
+  };
+
+  registerResources(server, stub as never);
+
+  assert.equal(resourceCount, 9, "expected 9 total resources (2 fixed + 7 template)");
+});
+
+test("class-source-json resource returns a structured JSON envelope with metadata", async () => {
+  let receivedInput: Record<string, unknown> | undefined;
+  const registrations = captureResources({
+    async getClassSource(input: Record<string, unknown>) {
+      receivedInput = input;
+      return {
+        sourceText: "class Example {}",
+        mode: "full",
+        totalLines: 1,
+        returnedRange: { start: 1, end: 1 },
+        artifactId: "artifact-1",
+        mappingApplied: "obfuscated",
+        warnings: []
+      };
+    }
+  });
+
+  const handler = registrations.get("class-source-json")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://source-json/artifact-1/com.example%2FMain"),
+    { artifactId: "artifact-1", className: "com.example%2FMain" }
+  );
+
+  assert.equal(receivedInput?.className, "com.example/Main");
+  assert.equal(receivedInput?.mode, "full");
+  const payload = parseJsonResource(result);
+  assert.equal(payload.result.sourceText, "class Example {}");
+  assert.equal(payload.result.totalLines, 1);
+  assert.equal(payload.result.mappingApplied, "obfuscated");
+});
+
+test("find-member-mapping resource forwards owner for field/method lookups", async () => {
+  let receivedInput: Record<string, unknown> | undefined;
+  const registrations = captureResources({
+    async findMapping(input: Record<string, unknown>) {
+      receivedInput = input;
+      return { resolved: true, resolvedSymbol: { kind: "method", name: "m_obf", owner: "a_obf", symbol: "a_obf.m_obf" } };
+    }
+  });
+
+  const handler = registrations.get("find-member-mapping")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://mappings/1.21.10/mojang/obfuscated/method/net.minecraft.Foo/tickServer"),
+    {
+      version: "1.21.10",
+      sourceMapping: "mojang",
+      targetMapping: "obfuscated",
+      kind: "method",
+      owner: "net.minecraft.Foo",
+      name: "tickServer"
+    }
+  );
+
+  assert.equal(receivedInput?.owner, "net.minecraft.Foo");
+  assert.equal(receivedInput?.kind, "method");
+  assert.equal(receivedInput?.name, "tickServer");
+  const payload = parseJsonResource(result);
+  assert.equal(payload.result.resolved, true);
+});
+
+test("objectResource wraps JSON resources in a structured result envelope", () => {
+  const result = objectResource("mc://versions/list", { versions: [] });
+  const payload = JSON.parse(result.contents[0]!.text as string) as Record<string, unknown>;
+
+  assert.deepEqual(payload.result, { versions: [] });
+  assert.deepEqual(payload.meta, { uri: "mc://versions/list" });
+});
+
+test("errorResource returns structured problem details instead of a bare string", () => {
+  const result = errorResource("mc://artifact/test", "Resource failed.");
+  const payload = JSON.parse(result.contents[0]!.text as string) as Record<string, unknown>;
+
+  assert.equal(typeof payload.error, "object");
+  assert.deepEqual(payload.meta, { uri: "mc://artifact/test" });
+  assert.deepEqual(payload.error, {
+    type: "https://minecraft-modding-mcp.dev/problems/resource",
+    title: "Resource read failed",
+    detail: "Resource failed.",
+    status: 400,
+    code: "ERR_INVALID_INPUT",
+    instance: "mc://artifact/test",
+    // String form defaults to ERR_INVALID_INPUT, so it now also carries the
+    // always-present recovery classifiers (no details => no conditional fields).
+    retryClass: "input",
+    issueOrigin: "code_issue"
+  });
+});
+
+test("class-source resource decodes template params before calling sourceService", async () => {
+  let receivedInput: Record<string, string> | undefined;
+  const registrations = captureResources({
+    async getClassSource(input: Record<string, string>) {
+      receivedInput = input;
+      return { sourceText: "class Example {}" };
+    }
+  });
+
+  const handler = registrations.get("class-source")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(
+    new URL("mc://source/artifact-1/com.example%2FMain"),
+    { artifactId: "artifact-1", className: "com.example%2FMain" }
+  );
+
+  assert.deepEqual(receivedInput, {
+    artifactId: "artifact-1",
+    className: "com.example/Main",
+    mode: "full"
+  });
+  assert.equal(result.contents[0]?.text, "class Example {}");
+});
+
+test("class-source resource requests full source, not the metadata outline", async () => {
+  let receivedMode: string | undefined;
+  const registrations = captureResources({
+    async getClassSource(input: Record<string, string>) {
+      receivedMode = input.mode;
+      // Emulate metadata mode returning only an outline when mode is omitted/metadata.
+      const sourceText = input.mode === "full" ? "package a;\nclass Example {}\n" : "// [class] line 1";
+      return { sourceText };
+    }
+  });
+
+  const handler = registrations.get("class-source")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(
+    new URL("mc://source/artifact-1/a.Example"),
+    { artifactId: "artifact-1", className: "a.Example" }
+  );
+
+  assert.equal(receivedMode, "full");
+  assert.match(result.contents[0]?.text as string, /class Example/);
+});
+
+test("class-source resource returns an invalid-input envelope for missing template params", async () => {
+  const registrations = captureResources();
+  const handler = registrations.get("class-source")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(
+    new URL("mc://source/artifact-1"),
+    { artifactId: "artifact-1" }
+  );
+  const payload = parseJsonResource(result);
+
+  assert.equal(payload.error.code, ERROR_CODES.INVALID_INPUT);
+  assert.match(payload.error.detail, /Missing template parameter: className/);
+  assert.deepEqual(payload.meta, { uri: "mc://source/artifact-1" });
+});
+
+test("class-source resource returns an invalid-input envelope for invalid URL encoding", async () => {
+  const registrations = captureResources();
+  const handler = registrations.get("class-source")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(
+    new URL("mc://source/artifact-1/%25E0"),
+    { artifactId: "artifact-1", className: "%E0%A4%A" }
+  );
+  const payload = parseJsonResource(result);
+
+  assert.equal(payload.error.code, ERROR_CODES.INVALID_INPUT);
+  assert.match(payload.error.detail, /className contains invalid URL encoding/);
+});
+
+test("versions-list resource converts AppError failures into resource error envelopes", async () => {
+  const registrations = captureResources({
+    async listVersions() {
+      throw createError({
+        code: ERROR_CODES.VERSION_NOT_FOUND,
+        message: "manifest unavailable"
+      });
+    }
+  });
+  const handler = registrations.get("versions-list")?.handler;
+  assert.ok(handler);
+
+  const result = await handler(new URL("mc://versions/list"));
+  const payload = parseJsonResource(result);
+
+  assert.equal(payload.error.code, ERROR_CODES.VERSION_NOT_FOUND);
+  assert.equal(payload.error.status, 404);
+  assert.equal(payload.error.detail, "manifest unavailable");
+  assert.deepEqual(payload.meta, { uri: "mc://versions/list" });
+});
+
+test("remaining resources delegate to the expected source-service methods", async () => {
+  const received: Record<string, unknown> = {};
+  const registrations = captureResources({
+    getRuntimeMetrics() {
+      received.runtimeMetrics = true;
+      return { uptime: 12 };
+    },
+    async getArtifactFile(input: Record<string, string>) {
+      received.artifactFile = input;
+      return { content: "artifact-body" };
+    },
+    async findMapping(input: Record<string, string>) {
+      received.findMapping = input;
+      return { resolved: true };
+    },
+    async getClassMembers(input: Record<string, string>) {
+      received.classMembers = input;
+      return { methods: ["run"] };
+    },
+    getArtifact(artifactId: string) {
+      received.artifactId = artifactId;
+      return { artifactId, origin: "cache" };
+    }
+  });
+
+  const runtimeResult = await registrations.get("runtime-metrics")!.handler(new URL("mc://metrics"));
+  const runtimePayload = parseJsonResource(runtimeResult);
+  assert.deepEqual(runtimePayload.result, { uptime: 12 });
+  assert.equal(received.runtimeMetrics, true);
+
+  const artifactFileResult = await registrations.get("artifact-file")!.handler(
+    new URL("mc://artifact/artifact-1/files/src%2FMain.java"),
+    { artifactId: "artifact-1", filePath: "src%2FMain.java" }
+  );
+  assert.equal(artifactFileResult.contents[0]?.text, "artifact-body");
+  assert.deepEqual(received.artifactFile, {
+    artifactId: "artifact-1",
+    filePath: "src/Main.java"
+  });
+
+  const findMappingResult = await registrations.get("find-mapping")!.handler(
+    new URL("mc://mappings/1.21.4/obfuscated/mojang/class/com.example%2FMain"),
+    {
+      version: "1.21.4",
+      kind: "class",
+      name: "com.example%2FMain",
+      sourceMapping: "obfuscated",
+      targetMapping: "mojang"
+    }
+  );
+  const findMappingPayload = parseJsonResource(findMappingResult);
+  assert.deepEqual(received.findMapping, {
+    version: "1.21.4",
+    kind: "class",
+    name: "com.example/Main",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang"
+  });
+  assert.deepEqual(findMappingPayload.result, { resolved: true });
+
+  const classMembersResult = await registrations.get("class-members")!.handler(
+    new URL("mc://artifact/artifact-1/members/com.example%2FMain"),
+    { artifactId: "artifact-1", className: "com.example%2FMain" }
+  );
+  const classMembersPayload = parseJsonResource(classMembersResult);
+  assert.deepEqual(received.classMembers, {
+    artifactId: "artifact-1",
+    className: "com.example/Main"
+  });
+  assert.deepEqual(classMembersPayload.result, { methods: ["run"] });
+
+  const artifactMetadataResult = await registrations.get("artifact-metadata")!.handler(
+    new URL("mc://artifact/artifact-1"),
+    { artifactId: "artifact-1" }
+  );
+  const artifactMetadataPayload = parseJsonResource(artifactMetadataResult);
+  assert.equal(received.artifactId, "artifact-1");
+  assert.deepEqual(artifactMetadataPayload.result, {
+    artifactId: "artifact-1",
+    origin: "cache"
+  });
+});
+
+test("class-source-json resource error envelope forwards AppError details (hints + suggestedCall)", async () => {
+  const registrations = captureResources({
+    async getClassSource() {
+      throw createError({
+        code: ERROR_CODES.CLASS_NOT_FOUND,
+        message: "no class",
+        details: {
+          nextAction: "Resolve the artifact first.",
+          suggestedCall: {
+            tool: "get-class-source",
+            params: {
+              target: { kind: "version", value: "1.21.10" },
+              className: "net.minecraft.Foo"
+            }
+          },
+          artifactId: "artifact-1"
+        }
+      });
+    }
+  });
+
+  const handler = registrations.get("class-source-json")?.handler;
+  assert.ok(handler);
+  const result = await handler(
+    new URL("mc://source-json/artifact-1/net.minecraft.Foo"),
+    { artifactId: "artifact-1", className: "net.minecraft.Foo" }
+  );
+  const payload = parseJsonResource(result);
+
+  assert.equal(payload.error.code, ERROR_CODES.CLASS_NOT_FOUND);
+  assert.equal(payload.error.retryClass, "permanent");
+  assert.equal(payload.error.issueOrigin, "code_issue");
+  assert.deepEqual(payload.error.hints, ["Resolve the artifact first."]);
+  assert.equal(payload.error.suggestedCall.tool, "get-class-source");
+  assert.equal(payload.error.context.artifactId, "artifact-1");
+});
+
+test("all 9 resource handlers forward AppError details into the error envelope", async () => {
+  const fail = () => {
+    throw createError({
+      code: ERROR_CODES.CLASS_NOT_FOUND,
+      message: "boom",
+      details: { nextAction: "Resolve the artifact first." }
+    });
+  };
+  const registrations = captureResources({
+    listVersions: async () => fail(),
+    getRuntimeMetrics: () => fail(),
+    getClassSource: async () => fail(),
+    getArtifactFile: async () => fail(),
+    findMapping: async () => fail(),
+    getClassMembers: async () => fail(),
+    getArtifact: () => fail()
+  });
+
+  const cases: Array<{ name: string; url: string; params?: Record<string, string> }> = [
+    { name: "versions-list", url: "mc://versions/list" },
+    { name: "runtime-metrics", url: "mc://metrics" },
+    { name: "class-source", url: "mc://source/artifact-1/a.Example", params: { artifactId: "artifact-1", className: "a.Example" } },
+    { name: "class-source-json", url: "mc://source-json/artifact-1/a.Example", params: { artifactId: "artifact-1", className: "a.Example" } },
+    { name: "artifact-file", url: "mc://artifact/artifact-1/files/src%2FMain.java", params: { artifactId: "artifact-1", filePath: "src%2FMain.java" } },
+    { name: "find-mapping", url: "mc://mappings/1.21.4/obfuscated/mojang/class/com.example%2FMain", params: { version: "1.21.4", kind: "class", name: "com.example%2FMain", sourceMapping: "obfuscated", targetMapping: "mojang" } },
+    { name: "find-member-mapping", url: "mc://mappings/1.21.4/obfuscated/mojang/method/com.example%2FOwner/foo", params: { version: "1.21.4", kind: "method", owner: "com.example%2FOwner", name: "foo", sourceMapping: "obfuscated", targetMapping: "mojang" } },
+    { name: "class-members", url: "mc://artifact/artifact-1/members/com.example%2FMain", params: { artifactId: "artifact-1", className: "com.example%2FMain" } },
+    { name: "artifact-metadata", url: "mc://artifact/artifact-1", params: { artifactId: "artifact-1" } }
+  ];
+
+  for (const c of cases) {
+    const handler = registrations.get(c.name)?.handler;
+    assert.ok(handler, `${c.name} must be registered`);
+    const result = await handler(new URL(c.url), c.params);
+    const payload = parseJsonResource(result);
+    assert.equal(payload.error.code, ERROR_CODES.CLASS_NOT_FOUND, `${c.name} code`);
+    assert.deepEqual(
+      payload.error.hints,
+      ["Resolve the artifact first."],
+      `${c.name} must forward details.nextAction into error.hints`
+    );
+    assert.equal(payload.error.retryClass, "permanent", `${c.name} retryClass`);
+  }
+});

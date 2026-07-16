@@ -405,11 +405,15 @@ pnpm test
 
 必要に応じて実行:
 
+- `pnpm test:file <path...>`: 通常テストをファイル指定で絞り込む場合
+- `pnpm test:grep <name-pattern>`: 通常テストを再帰的に集め、テスト名で絞り込む場合
 - `pnpm test:manual:stdio-smoke`: MCP トランスポート、登録、手動ワークフローの変更時
 - `pnpm test:manual:package-smoke`: パッケージインストールや配布形態の検証時
 - `pnpm test:perf`: 検索、インデックス、性能に影響する変更時
 - `pnpm test:coverage` または `pnpm test:coverage:lcov`: カバレッジ確認時（`lines=80`, `branches=70`, `functions=80`）
 - `pnpm validate`: ローカルの完全検証スイートを実行する場合
+
+通常の `.test.ts` ファイルは `tests/` 配下のドメイン別ディレクトリ（例: `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, `utils/`）に置きます。ヘルパー専用モジュールは `tests/helpers` に残し、手動 smoke、性能、リソース、smoke 専用ファイルは既存の専用ディレクトリに残します。
 
 ## ライセンス
 
