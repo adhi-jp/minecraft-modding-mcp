@@ -71,18 +71,18 @@ test("publish workflow runs install, check, test, build, then publish in that or
     "expected order install → check → test → build → publish");
 });
 
-test("package.json version is reflected in CHANGELOG and [Unreleased] is a permanent placeholder (Keep a Changelog)", async () => {
+test("package.json version is reflected in CHANGELOG and [Unreleased] is omitted when empty", async () => {
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
   const changelog = await readFile("CHANGELOG.md", "utf8");
   const versionHeader = new RegExp(`^##\\s+\\[${pkg.version.replace(/\./g, "\\.")}\\]`, "m");
   assert.match(changelog, versionHeader);
 
-  // Keep a Changelog: `## [Unreleased]` is a permanent placeholder. On release
-  // its items move down into the new `## [x.y.z]` section, but the header
-  // itself stays — even when empty — so it is never removed.
-  assert.match(
-    changelog,
-    /^##\s+\[Unreleased\]/m,
-    "CHANGELOG must keep a permanent `## [Unreleased]` header (Keep a Changelog)"
-  );
+  const unreleased = changelog.match(/^##\s+\[Unreleased\]\s*$([\s\S]*?)(?=^##\s+\[|(?![\s\S]))/m);
+  if (unreleased) {
+    assert.match(
+      unreleased[1],
+      /^-\s+\S/m,
+      "CHANGELOG must omit an empty `## [Unreleased]` section"
+    );
+  }
 });
