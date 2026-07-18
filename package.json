@@ -1,6 +1,6 @@
 {
   "name": "@adhisang/minecraft-modding-mcp",
-  "version": "6.2.0",
+  "version": "6.3.0",
   "description": "MCP server for AI-assisted Minecraft modding: inspect decompiled source, resolve Mojang/Yarn/Intermediary mappings, diff versions, analyze Fabric/Forge/NeoForge mod JARs, and validate Mixin, Access Widener, and Access Transformer files.",
   "type": "module",
   "main": "dist/index.js",
