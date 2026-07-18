@@ -913,7 +913,7 @@ async function main(): Promise<boolean> {
 async function runSupervisorTimeoutProbe(): Promise<void> {
   await execFileAsync(
     process.execPath,
-    ["--import", "tsx", "--test", "tests/stdio-supervisor-timeout.test.ts"],
+    ["--import", "tsx", "--test", "tests/stdio/stdio-supervisor-timeout.test.ts"],
     { cwd: process.cwd(), timeout: 60_000 }
   );
   console.log("Manual stdio supervisor timeout smoke passed: queue/running timeout, overflow, cancellation, and queued recovery validated.");
