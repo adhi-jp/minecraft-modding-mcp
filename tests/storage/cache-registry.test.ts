@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -281,6 +281,47 @@ test("cache registry matches artifact-index entries by mapping, scope, and proje
   });
 
   assert.deepEqual(result.entries.map((entry) => entry.entryId), ["artifact-merged"]);
+});
+
+test("cache registry backs up and recovers a corrupt artifact-index database while listing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-corrupt-db-"));
+  const sqlitePath = join(root, "source-cache.db");
+  await writeFile(sqlitePath, "not a sqlite database");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath
+  });
+
+  const result = await registry.listEntries({
+    cacheKinds: ["artifact-index"],
+    limit: 10
+  });
+
+  assert.deepEqual(result.entries, []);
+  assert.equal(existsSync(sqlitePath), true);
+  const backupNames = (await readdir(root)).filter((name) =>
+    name.startsWith("source-cache.db.corrupted.")
+  );
+  assert.equal(backupNames.length, 1);
+  assert.equal(await readFile(join(root, backupNames[0]!), "utf8"), "not a sqlite database");
+});
+
+test("cache registry does not create a missing artifact-index database while listing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-missing-db-"));
+  const sqlitePath = join(root, "source-cache.db");
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath
+  });
+
+  const result = await registry.listEntries({
+    cacheKinds: ["artifact-index"],
+    limit: 10
+  });
+
+  assert.deepEqual(result.entries, []);
+  assert.equal(existsSync(sqlitePath), false);
 });
 
 

@@ -5,7 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { normalizeOptionalPathForHost, type PathRuntimeInfo } from "./path-converter.js";
-import Database from "./storage/sqlite.js";
+import { openDatabase } from "./storage/db.js";
+import type Database from "./storage/sqlite.js";
 import {
   getProcessWorkspaceContextCache,
   type WorkspaceContextCache
@@ -298,11 +299,11 @@ function prepareSelector(selector: CacheSelector | undefined, runtimeInfo?: Path
   };
 }
 
-function openDb(sqlitePath: string): Database | undefined {
-  if (!existsSync(sqlitePath)) {
+function openDb(config: CacheRegistryConfig): Database | undefined {
+  if (!existsSync(config.sqlitePath)) {
     return undefined;
   }
-  return new Database(sqlitePath);
+  return openDatabase(config).db;
 }
 
 function candidatePathsForEntry(entry: CacheEntry): string[] {
@@ -488,7 +489,7 @@ function matchesSelector(entry: CacheEntry, selector: PreparedSelector | undefin
 }
 
 async function artifactIndexEntries(config: CacheRegistryConfig): Promise<CacheEntry[]> {
-  const db = openDb(config.sqlitePath);
+  const db = openDb(config);
   if (!db) {
     return [];
   }
@@ -827,7 +828,7 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
       const selectedBytes = entries.reduce((total, entry) => total + entry.sizeBytes, 0);
 
       if (input.executionMode === "apply") {
-        const db = openDb(config.sqlitePath);
+        const db = openDb(config);
         try {
           for (const entry of entries) {
             if (entry.cacheKind === "artifact-index") {

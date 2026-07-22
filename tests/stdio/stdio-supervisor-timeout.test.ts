@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
@@ -10,16 +13,63 @@ type RpcResponse = {
   error?: Record<string, unknown>;
 };
 
-function startFixture(): ChildProcessWithoutNullStreams {
+function startFixture(env: NodeJS.ProcessEnv = {}): ChildProcessWithoutNullStreams {
   return spawn(
     process.execPath,
     ["--import", "tsx", "tests/helpers/stdio-supervisor-timeout-worker.runtime.ts"],
     {
       cwd: process.cwd(),
-      env: { ...process.env, MCP_VALIDATE_PROJECT_TIMEOUT_MS: "10000" },
+      env: { ...process.env, MCP_VALIDATE_PROJECT_TIMEOUT_MS: "10000", ...env },
       stdio: ["pipe", "pipe", "pipe"]
     }
   );
+}
+
+function collectLogEvents(child: ChildProcessWithoutNullStreams): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  let buffer = "";
+  child.stderr.on("data", (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        events.push(event);
+      } catch {
+        // Ignore non-structured fixture diagnostics.
+      }
+    }
+  });
+  return events;
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 5_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(message);
+}
+
+async function stopFixture(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.stdin.end();
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 1_000);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+  }
 }
 
 async function canUseNativeStdioPipes(): Promise<boolean> {
@@ -230,4 +280,47 @@ test("running cancellation suppresses timeout output but still recovers queued w
 
   await replies.next(32, 13_000);
   await assert.rejects(replies.next(31, 250), /timed out waiting/);
+});
+
+test("fatal worker exception exits, restarts, replays initialization, and serves the next call", { timeout: 15_000 }, async (t) => {
+  if (!(await canUseNativeStdioPipes())) {
+    t.skip("native child-process stdio pipes close immediately in this runtime");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-fatal-"));
+  const child = startFixture({ MCP_TEST_FATAL_WORKER_MARKER: join(root, "first-worker-faulted") });
+  t.after(async () => {
+    await stopFixture(child);
+    await rm(root, { recursive: true, force: true });
+  });
+  const replies = collectResponses(child);
+  const events = collectLogEvents(child);
+
+  send(child, {
+    jsonrpc: "2.0",
+    id: 40,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "fatal-worker-test", version: "1.0.0" }
+    }
+  }, "line");
+  await replies.next(40);
+  send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, "line");
+
+  await waitFor(
+    () => events.filter(({ event }) => event === "supervisor.worker_spawn").length >= 2,
+    "fatal worker did not produce a replacement generation"
+  );
+  assert.equal(events.some(({ event }) => event === "process.uncaught_exception"), true);
+  const spawnedPids = events
+    .filter(({ event }) => event === "supervisor.worker_spawn")
+    .map(({ pid }) => pid);
+  assert.notEqual(spawnedPids[0], spawnedPids[1]);
+
+  send(child, { jsonrpc: "2.0", id: 41, method: "tools/list", params: {} }, "line");
+  const recovered = await replies.next(41, 5_000);
+  assert.ok(recovered.result);
+  assert.equal(recovered.error, undefined);
 });

@@ -16,7 +16,7 @@ const buildTestConfig: typeof _buildTestConfig = (root, overrides = {}) =>
 
 const DEFAULT_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
-type FetchRoute = () => Response | Promise<Response>;
+type FetchRoute = (init?: RequestInit) => Response | Promise<Response>;
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -27,14 +27,14 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 function createFetchStub(routes: Record<string, FetchRoute>): typeof fetch & { calls: string[] } {
   const calls: string[] = [];
-  const fetchFn = (async (input: RequestInfo | URL) => {
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     calls.push(url);
     const route = routes[url];
     if (!route) {
       return new Response("", { status: 404 });
     }
-    return route();
+    return route(init);
   }) as typeof fetch & { calls: string[] };
 
   fetchFn.calls = calls;
@@ -315,6 +315,46 @@ test("listVersions wraps invalid JSON manifest responses as repository fetch err
       return true;
     }
   );
+});
+
+test("listVersions aborts a hung manifest fetch after the configured timeout", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-fetch-timeout-"));
+  const fetchFn = createFetchStub({
+    [DEFAULT_MANIFEST_URL]: (init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const error = new Error("The operation was aborted");
+            error.name = "AbortError";
+            reject(error);
+          },
+          { once: true }
+        );
+      })
+  });
+  const svc = new VersionService(buildTestConfig(root, { fetchTimeoutMs: 50 }), fetchFn);
+  const startedAt = Date.now();
+  let guardTimer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    await assert.rejects(
+      Promise.race([
+        svc.listVersions(),
+        new Promise<never>((_resolve, reject) => {
+          guardTimer = setTimeout(() => reject(new Error("Timed out waiting for fetchJson")), 500);
+        })
+      ]),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, ERROR_CODES.REPO_FETCH_FAILED);
+        assert.equal((error as { details?: { timeoutMs?: number } }).details?.timeoutMs, 50);
+        return true;
+      }
+    );
+  } finally {
+    clearTimeout(guardTimer);
+  }
+  assert.ok(Date.now() - startedAt < 500, "expected the fetch timeout to resolve promptly");
 });
 
 test("resolveServerJar reuses an existing cached download without fetching the jar again", async () => {

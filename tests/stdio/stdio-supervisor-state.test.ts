@@ -17,6 +17,7 @@ type Harness = {
   pendingRequests: Map<string, unknown>;
   queuedNotifications: JSONRPCMessage[];
   restartTimer?: NodeJS.Timeout;
+  cleanupRetryTimer?: NodeJS.Timeout;
   startupWatchdog?: NodeJS.Timeout;
   retryPaused: boolean;
   validateBarrierKey?: string;
@@ -36,6 +37,7 @@ type Harness = {
   spawnWorker(): void;
   recoverTimedOutWorker(): void;
   liveCapOccupancy(): number;
+  readonly unresolvedTreeTokenCount: number;
   shutdown(): Promise<void>;
 };
 
@@ -533,32 +535,132 @@ test("old stale cleanup plus failed replacement stays at two logical slots until
   supervisor.handleWorkerExit(oldStale, null, null);
   assert.equal(supervisor.liveCapOccupancy(), 2);
   assert.deepEqual([...supervisor.unresolvedTreeTokens], [oldStale.pid]);
-  assert.equal(timers.length, 0);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].at, 1_000);
 
   supervisor.finishTreeTermination(oldStale, true);
   assert.equal(supervisor.liveCapOccupancy(), 1);
   assert.equal(supervisor.retryPaused, false);
-  assert.equal(timers.length, 1);
-  assert.equal(timers[0].at, 100);
+  assert.equal(timers[0].cleared, true);
+  assert.equal(timers.length, 2);
+  assert.equal(timers[1].at, 100);
   now = 100;
 });
 
 test("shutdown retries token-only tree cleanup without scheduling restart", async () => {
   const retried: number[] = [];
   const outbound: JSONRPCMessage[] = [];
+  let cleanupTimerCleared = false;
   const supervisor = new StdioSupervisor({
     entryFile: "fixture.ts",
     clientWriter: (message) => outbound.push(message),
+    cleanupTokenRetryBaseMs: 10,
+    timerScheduler: (callback, delayMs) => ({
+      callback,
+      delayMs,
+      unref() { return this; }
+    }) as unknown as NodeJS.Timeout,
+    timerClearer: () => { cleanupTimerCleared = true; },
     treeTokenRetrier: async (pid: number) => {
       retried.push(pid);
       return true;
     }
   } as never) as unknown as Harness;
-  supervisor.unresolvedTreeTokens.add(444_444);
+  const stale = createLifecycleChild(444_444, []);
+  supervisor.liveChildren.add(stale);
+  supervisor.cleanupStates.set(stale, {
+    pid: stale.pid,
+    status: "pending",
+    parentExited: false
+  });
+  supervisor.handleWorkerExit(stale, null, null);
+  assert.ok(supervisor.cleanupRetryTimer);
   await supervisor.shutdown();
   assert.deepEqual(retried, [444_444]);
   assert.equal(supervisor.unresolvedTreeTokens.size, 0);
+  assert.equal(cleanupTimerCleared, true);
   assert.equal(outbound.length, 0);
+});
+
+test("normal operation retries unresolved cleanup tokens and unblocks restart and queued work", async () => {
+  let now = 0;
+  const timers: FakeScheduledTimer[] = [];
+  const events: Array<{ level: string; event: string; details?: Record<string, unknown> }> = [];
+  const attempts = new Map<number, number>();
+  const workerWrites: string[] = [];
+  const replacement = createLifecycleChild(444_445, workerWrites);
+  let spawns = 0;
+  const supervisor = new StdioSupervisor({
+    entryFile: "fixture.ts",
+    cleanupTokenRetryBaseMs: 10,
+    cleanupTokenRetryCapMs: 20,
+    eventWriter: (level, event, details) => events.push({ level, event, details }),
+    monotonicNow: () => now,
+    treeTokenRetrier: async (pid: number) => {
+      const attempt = (attempts.get(pid) ?? 0) + 1;
+      attempts.set(pid, attempt);
+      return attempt > 1;
+    },
+    workerSpawner: () => {
+      spawns += 1;
+      return replacement as never;
+    },
+    timerScheduler: (callback, delayMs) => {
+      const timer = {
+        at: now + delayMs,
+        callback,
+        cleared: false,
+        unref() { return this; }
+      } as unknown as FakeScheduledTimer;
+      timers.push(timer);
+      return timer;
+    },
+    timerClearer: (timer) => { (timer as FakeScheduledTimer).cleared = true; }
+  } as never) as unknown as Harness;
+
+  for (const pid of [444_441, 444_442]) {
+    const stale = createLifecycleChild(pid, []);
+    supervisor.liveChildren.add(stale);
+    supervisor.cleanupStates.set(stale, { pid, status: "pending", parentExited: false });
+    supervisor.handleWorkerExit(stale, null, null);
+  }
+  supervisor.queuedRequests.push({
+    message: call(90, "list-versions"),
+    pending: { id: 90, method: "tools/call", toolName: "list-versions", startedAt: 0 }
+  } as never);
+  supervisor.scheduleRestart(true);
+
+  assert.equal(supervisor.unresolvedTreeTokenCount, 2);
+  assert.equal(supervisor.retryPaused, true);
+  assert.equal(events.filter(({ event }) => event === "supervisor.live_cap.saturated").length, 1);
+  const firstRetry = timers.find((timer) => timer.at === 10 && !timer.cleared);
+  assert.ok(firstRetry);
+
+  now = 10;
+  firstRetry.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual([...attempts.values()], [1, 1]);
+  assert.equal(supervisor.unresolvedTreeTokenCount, 2);
+  const secondRetry = timers.find((timer) => timer.at === 30 && !timer.cleared);
+  assert.ok(secondRetry);
+
+  now = 30;
+  secondRetry.callback();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual([...attempts.values()], [2, 2]);
+  assert.equal(supervisor.unresolvedTreeTokenCount, 0);
+  assert.equal(supervisor.retryPaused, false);
+  assert.equal(events.filter(({ event }) => event === "supervisor.cleanup_token.retry").length, 4);
+  assert.equal(events.filter(({ event }) => event === "supervisor.cleanup_token.recovered").length, 2);
+
+  const restart = timers.find((timer) => timer.at === 100 && !timer.cleared);
+  assert.ok(restart);
+  now = 100;
+  restart.callback();
+  supervisor.handleWorkerReady(replacement);
+  assert.equal(spawns, 1);
+  assert.equal(supervisor.queuedRequests.length, 0);
+  assert.equal(workerWrites.length, 1);
 });
 
 test("shutdown bounds a never-settling token cleanup retry", async () => {

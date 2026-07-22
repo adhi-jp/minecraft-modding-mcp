@@ -117,7 +117,10 @@ function buildDefaultLogger(): Logger {
   };
 }
 
-export function openDatabase(config: Config, logger: Logger = buildDefaultLogger()): InitializedDatabase {
+export function openDatabase(
+  config: Pick<Config, "sqlitePath">,
+  logger: Logger = buildDefaultLogger()
+): InitializedDatabase {
   let db: SqliteDatabase | undefined;
   try {
     ensureParentDirectory(config.sqlitePath);

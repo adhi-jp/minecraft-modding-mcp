@@ -3,7 +3,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { buildSuggestedCall } from "./build-suggested-call.js";
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { computeFileSha1 } from "./hash.js";
 import { defaultDownloadPath, downloadToCache } from "./repo-downloader.js";
 import type { Config } from "./types.js";
@@ -494,26 +494,48 @@ export class VersionService {
   }
 
   private async fetchJson(url: string): Promise<unknown> {
-    const response = await this.fetchFn(url);
-    if (!response.ok) {
-      throw createError({
-        code: ERROR_CODES.REPO_FETCH_FAILED,
-        message: `Request failed for "${url}" with status ${response.status}.`,
-        details: {
-          url,
-          statusCode: response.status
-        }
-      });
-    }
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), this.config.fetchTimeoutMs);
 
     try {
-      return await response.json();
-    } catch {
+      const response = await this.fetchFn(url, { signal: timeout.signal });
+      if (!response.ok) {
+        throw createError({
+          code: ERROR_CODES.REPO_FETCH_FAILED,
+          message: `Request failed for "${url}" with status ${response.status}.`,
+          details: {
+            url,
+            statusCode: response.status
+          }
+        });
+      }
+
+      try {
+        return await response.json();
+      } catch {
+        throw createError({
+          code: ERROR_CODES.REPO_FETCH_FAILED,
+          message: `Response from "${url}" is not valid JSON.`,
+          details: { url }
+        });
+      }
+    } catch (error) {
+      // A typed status/JSON error is more precise than the timeout mapping even
+      // when the abort timer fired concurrently — never rewrite it.
+      if (isAppError(error) || !timeout.signal.aborted) {
+        throw error;
+      }
+
       throw createError({
         code: ERROR_CODES.REPO_FETCH_FAILED,
-        message: `Response from "${url}" is not valid JSON.`,
-        details: { url }
+        message: `Request timed out for "${url}" after ${this.config.fetchTimeoutMs}ms.`,
+        details: {
+          url,
+          timeoutMs: this.config.fetchTimeoutMs
+        }
       });
+    } finally {
+      clearTimeout(timer);
     }
   }
 

@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `MCP_MAX_FRAME_BYTES` bounds the JSON-RPC frame size accepted by the stdio supervisor and worker transport (default 64 MiB, clamped to at least 1 MiB). An oversized or `Content-Length`-abusive frame is rejected with a diagnostic naming the observed size and the configured limit, its body is skipped without wedging the reader, header sections are capped at 8 KiB, and line-delimited frames obey the same limit.
+
+### Fixed
+
+- Version manifest and version-detail fetches now abort after `MCP_FETCH_TIMEOUT_MS` with a typed `ERR_REPO_FETCH_FAILED` error instead of hanging indefinitely when a repository stops responding.
+- `manage-cache` opens the artifact index through the integrity-checking recovery path: a corrupt SQLite file is backed up and rebuilt instead of crashing cache inspection, and a missing database file is still not created as a side effect of inspection.
+- In supervised stdio mode, a worker that hits a fatal `uncaughtException`/`unhandledRejection` exits after logging so the supervisor restart/replay path replaces it; previously the faulted worker stayed alive with only `exitCode` set, bypassing recovery.
+- The stdio supervisor retries unresolved process-tree cleanup tokens during normal operation with capped exponential backoff, emitting `supervisor.cleanup_token.retry`/`supervisor.cleanup_token.recovered` events and unblocking the 2-slot live cap without waiting for shutdown. Live-cap saturation that blocks a restart is surfaced as `supervisor.live_cap.saturated`.
+- Tool responses keep their typed error envelopes when SQLite is unavailable: input validation still returns `ERR_INVALID_INPUT`, database-independent tools (such as the NBT utilities) still return their successful results, and a metrics-recording failure no longer replaces a completed response.
+
 ## [6.3.0] - 2026-07-18
 
 ### Added

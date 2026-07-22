@@ -535,8 +535,9 @@ Path-based overrides treat blank values and the literal strings `undefined` and 
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MCP_FETCH_TIMEOUT_MS` | `15000` | HTTP request timeout in milliseconds |
+| `MCP_FETCH_TIMEOUT_MS` | `15000` | HTTP request timeout in milliseconds (also bounds version-manifest fetches) |
 | `MCP_FETCH_RETRIES` | `2` | HTTP request retry count |
+| `MCP_MAX_FRAME_BYTES` | `67108864` | Maximum accepted JSON-RPC frame size in bytes for the stdio supervisor and worker transport (clamped to at least 1 MiB); oversized frames are rejected with a diagnostic and skipped |
 
 ### Decompilation and Remapping
 

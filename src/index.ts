@@ -8,6 +8,7 @@ import { ZodError, z } from "zod";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
 
 import { objectResult } from "./mcp-helpers.js";
+import { runWithRequestContext } from "./request-context.js";
 import { prepareToolInput } from "./tool-input.js";
 import {
   DETAIL_ENABLED_TOOL_NAMES,
@@ -31,6 +32,7 @@ import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
 import { ToolExecutionGate } from "./tool-execution-gate.js";
+import { STDIO_WORKER_MODE_ENV } from "./stdio-supervisor.js";
 import { capWarningDetailsForSummary, classifyWarnings } from "./warning-details.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
 import { WorkspaceMappingService } from "./workspace-mapping-service.js";
@@ -268,6 +270,18 @@ const sourceService = new Proxy({} as SourceService, {
     return typeof value === "function" ? value.bind(service) : value;
   }
 });
+
+function recordToolCallBestEffort(tool: string, durationMs: number): void {
+  try {
+    sourceService.recordToolCall(tool, durationMs);
+  } catch (caughtError) {
+    log("warn", "tool.metrics.record.failed", {
+      tool,
+      reason: caughtError instanceof Error ? caughtError.message : String(caughtError)
+    });
+  }
+}
+
 const workspaceMappingService = new WorkspaceMappingService();
 const inspectMinecraftService = new InspectMinecraftService({
   listVersions: (input) => sourceService.listVersions(input),
@@ -459,6 +473,9 @@ function attachProcessErrorHandlers(): void {
       message: error.message,
       stack: error.stack
     });
+    if (process.env[STDIO_WORKER_MODE_ENV] === "1") {
+      process.exit(1);
+    }
     process.exitCode = 1;
   });
 
@@ -468,6 +485,9 @@ function attachProcessErrorHandlers(): void {
       message: error.message,
       stack: error.stack
     });
+    if (process.env[STDIO_WORKER_MODE_ENV] === "1") {
+      process.exit(1);
+    }
     process.exitCode = 1;
   });
 }
@@ -580,96 +600,98 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   let normalizedInput: unknown = rawInput;
 
   try {
-    const preparedInput = prepareToolInput(rawInput);
-    normalizedInput = preparedInput.normalizedInput;
-    const { removedOfficialPaths, suggestedReplacementInput } = preparedInput;
-    if (removedOfficialPaths.length > 0) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: `The "official" mapping namespace was removed. Use "obfuscated" instead.`,
-        details: {
-          fieldErrors: removedOfficialPaths.map((path) => ({
-            path,
-            message: `"official" is no longer supported for this field. Use "obfuscated".`,
-            code: "invalid_enum_value"
-          })),
-          nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
-          // Route construction through buildSuggestedCall to satisfy the D12
-          // invariant (tests/suggested-call-invariant.test.ts): every emitted
-          // suggestedCall must be built by the helper. The downstream
-          // mapErrorToProblem gate re-validates on emission; that second pass is
-          // the intentional, cheap cost of the two complementary safety gates.
-          ...(suggestedReplacementInput
-            ? buildSuggestedCall({
-                tool,
-                params: suggestedReplacementInput as Record<string, unknown>
-              })
-            : {})
-        }
-      });
-    }
+    return await runWithRequestContext({ requestId }, async () => {
+      const preparedInput = prepareToolInput(rawInput);
+      normalizedInput = preparedInput.normalizedInput;
+      const { removedOfficialPaths, suggestedReplacementInput } = preparedInput;
+      if (removedOfficialPaths.length > 0) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `The "official" mapping namespace was removed. Use "obfuscated" instead.`,
+          details: {
+            fieldErrors: removedOfficialPaths.map((path) => ({
+              path,
+              message: `"official" is no longer supported for this field. Use "obfuscated".`,
+              code: "invalid_enum_value"
+            })),
+            nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
+            // Route construction through buildSuggestedCall to satisfy the D12
+            // invariant (tests/suggested-call-invariant.test.ts): every emitted
+            // suggestedCall must be built by the helper. The downstream
+            // mapErrorToProblem gate re-validates on emission; that second pass is
+            // the intentional, cheap cost of the two complementary safety gates.
+            ...(suggestedReplacementInput
+              ? buildSuggestedCall({
+                  tool,
+                  params: suggestedReplacementInput as Record<string, unknown>
+                })
+              : {})
+          }
+        });
+      }
 
-    const parsedInput = schema.parse(normalizedInput);
-    const payload = await (
-      HEAVY_TOOL_NAMES.has(tool)
-        ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
-        : action(parsedInput)
-    );
-    const { result, warnings, meta: resultMeta } = splitWarnings(payload);
-
-    // Expert tools share the entry-tool detail/include response contract (the old
-    // per-tool `compact` boolean is gone). projectByDetail reproduces the previous
-    // compact defaults byte-identically: resolution tools default detail=summary
-    // (old compact:true), source/file tools default detail=standard (old compact:false).
-    // The legacy includeProvenance/includeDescriptors flags are folded into the
-    // include set as aliases so Phase-4 behavior is preserved.
-    const shapeInput = readResponseShapeInput(parsedInput);
-    const effectiveDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
-      ? (shapeInput.detail ?? "summary")
-      : (shapeInput.detail ?? DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary");
-    let projectedResult = result;
-    if (DETAIL_ENABLED_TOOL_NAMES.has(tool)) {
-      projectedResult = projectByDetail(
-        tool,
-        projectedResult as Record<string, unknown>,
-        effectiveDetail,
-        shapeInput.include
+      const parsedInput = schema.parse(normalizedInput);
+      const payload = await (
+        HEAVY_TOOL_NAMES.has(tool)
+          ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
+          : action(parsedInput)
       );
-    }
+      const { result, warnings, meta: resultMeta } = splitWarnings(payload);
 
-    // Entry, expert, and batch tools report the applied detail/include shape in meta.
-    // detailApplied is omitted when it matches the tool's default to keep responses lean.
-    const defaultDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
-      ? "summary"
-      : DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary";
-    const entryMeta =
-      ENTRY_TOOL_NAMES.has(tool) ||
-      DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
-      BATCH_DETAIL_TOOL_NAMES.has(tool)
-        ? buildEntryToolMeta({
-            detail: effectiveDetail,
-            defaultDetail,
-            include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
-          })
-        : undefined;
+      // Expert tools share the entry-tool detail/include response contract (the old
+      // per-tool `compact` boolean is gone). projectByDetail reproduces the previous
+      // compact defaults byte-identically: resolution tools default detail=summary
+      // (old compact:true), source/file tools default detail=standard (old compact:false).
+      // The legacy includeProvenance/includeDescriptors flags are folded into the
+      // include set as aliases so Phase-4 behavior is preserved.
+      const shapeInput = readResponseShapeInput(parsedInput);
+      const effectiveDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+        ? (shapeInput.detail ?? "summary")
+        : (shapeInput.detail ?? DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary");
+      let projectedResult = result;
+      if (DETAIL_ENABLED_TOOL_NAMES.has(tool)) {
+        projectedResult = projectByDetail(
+          tool,
+          projectedResult as Record<string, unknown>,
+          effectiveDetail,
+          shapeInput.include
+        );
+      }
 
-    const durationMs = Date.now() - startedAt;
-    sourceService.recordToolCall(tool, durationMs);
-    const warningDetails = capWarningDetailsForSummary(
-      classifyWarnings(warnings),
-      effectiveDetail === "summary"
-    );
-    return objectResult({
-      result: projectedResult,
-      meta: {
-        ...(entryMeta ?? {}),
-        ...resultMeta,
-        requestId,
-        tool,
-        durationMs,
-        ...(warnings.length > 0 ? { warnings } : {}),
-        ...(warningDetails.length > 0 ? { warningDetails } : {})
-      } satisfies ToolMeta
+      // Entry, expert, and batch tools report the applied detail/include shape in meta.
+      // detailApplied is omitted when it matches the tool's default to keep responses lean.
+      const defaultDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+        ? "summary"
+        : DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary";
+      const entryMeta =
+        ENTRY_TOOL_NAMES.has(tool) ||
+        DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
+        BATCH_DETAIL_TOOL_NAMES.has(tool)
+          ? buildEntryToolMeta({
+              detail: effectiveDetail,
+              defaultDetail,
+              include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
+            })
+          : undefined;
+
+      const durationMs = Date.now() - startedAt;
+      recordToolCallBestEffort(tool, durationMs);
+      const warningDetails = capWarningDetailsForSummary(
+        classifyWarnings(warnings),
+        effectiveDetail === "summary"
+      );
+      return objectResult({
+        result: projectedResult,
+        meta: {
+          ...(entryMeta ?? {}),
+          ...resultMeta,
+          requestId,
+          tool,
+          durationMs,
+          ...(warnings.length > 0 ? { warnings } : {}),
+          ...(warningDetails.length > 0 ? { warningDetails } : {})
+        } satisfies ToolMeta
+      });
     });
   } catch (caughtError) {
     const problem = mapErrorToProblem(caughtError, requestId, {
@@ -708,7 +730,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
     }
 
     const errorDurationMs = Date.now() - startedAt;
-    sourceService.recordToolCall(tool, errorDurationMs);
+    recordToolCallBestEffort(tool, errorDurationMs);
     const errorMeta: ToolMeta = {
       requestId,
       tool,

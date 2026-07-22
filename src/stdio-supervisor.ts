@@ -32,6 +32,8 @@ const MAX_VALIDATE_PROJECT_TIMEOUT_MS = 600_000;
 const MAX_WORKER_STARTUP_WATCHDOG_MS = 30_000;
 const MAX_SUPERVISOR_QUEUE = 2;
 const DEFAULT_TREE_CLEANUP_TIMEOUT_MS = 5_000;
+const DEFAULT_CLEANUP_TOKEN_RETRY_BASE_MS = 1_000;
+const DEFAULT_CLEANUP_TOKEN_RETRY_CAP_MS = 30_000;
 
 export function loadValidateProjectTimeoutMs(value = process.env.MCP_VALIDATE_PROJECT_TIMEOUT_MS): number {
   if (!/^[0-9]+$/.test(value ?? "")) {
@@ -141,6 +143,8 @@ export type SupervisorOptions = {
   clientWriter?: (message: JSONRPCMessage) => void;
   treeTokenRetrier?: (pid: number) => boolean | Promise<boolean>;
   treeCleanupTimeoutMs?: number;
+  cleanupTokenRetryBaseMs?: number;
+  cleanupTokenRetryCapMs?: number;
   eventWriter?: (
     level: "warn" | "error" | "info",
     event: string,
@@ -693,6 +697,8 @@ export class StdioSupervisor {
   private readonly clientWriter: ((message: JSONRPCMessage) => void) | undefined;
   private readonly treeTokenRetrier: ((pid: number) => boolean | Promise<boolean>) | undefined;
   private readonly treeCleanupTimeoutMs: number;
+  private readonly cleanupTokenRetryBaseMs: number;
+  private readonly cleanupTokenRetryCapMs: number;
   private readonly eventWriter: NonNullable<SupervisorOptions["eventWriter"]>;
   private readonly monotonicNow: () => number;
   private readonly timerScheduler: NonNullable<SupervisorOptions["timerScheduler"]>;
@@ -716,6 +722,10 @@ export class StdioSupervisor {
   private childReady = false;
   private shuttingDown = false;
   private restartTimer: NodeJS.Timeout | undefined;
+  private cleanupRetryTimer: NodeJS.Timeout | undefined;
+  private cleanupRetryIndex = 0;
+  private readonly cleanupRetryAttempts = new Map<number, number>();
+  private readonly cleanupRetriesInFlight = new Map<number, Promise<void>>();
   private startupWatchdog: NodeJS.Timeout | undefined;
   private validateBarrierKey: string | undefined;
   private runningValidateKey: string | undefined;
@@ -738,6 +748,14 @@ export class StdioSupervisor {
     this.clientWriter = options.clientWriter;
     this.treeTokenRetrier = options.treeTokenRetrier;
     this.treeCleanupTimeoutMs = options.treeCleanupTimeoutMs ?? DEFAULT_TREE_CLEANUP_TIMEOUT_MS;
+    this.cleanupTokenRetryBaseMs = Math.max(
+      1,
+      Math.floor(options.cleanupTokenRetryBaseMs ?? DEFAULT_CLEANUP_TOKEN_RETRY_BASE_MS)
+    );
+    this.cleanupTokenRetryCapMs = Math.max(
+      this.cleanupTokenRetryBaseMs,
+      Math.floor(options.cleanupTokenRetryCapMs ?? DEFAULT_CLEANUP_TOKEN_RETRY_CAP_MS)
+    );
     this.eventWriter = options.eventWriter ?? log;
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.timerScheduler = options.timerScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
@@ -1164,6 +1182,7 @@ export class StdioSupervisor {
       this.staleChildren.delete(child);
       if (cleanup.status === "pending" || cleanup.status === "unresolved") {
         this.unresolvedTreeTokens.add(cleanup.pid);
+        this.scheduleCleanupTokenRetry();
       } else {
         this.cleanupStates.delete(child);
       }
@@ -1448,6 +1467,10 @@ export class StdioSupervisor {
     return this.liveChildren.size + this.unresolvedTreeTokens.size;
   }
 
+  get unresolvedTreeTokenCount(): number {
+    return this.unresolvedTreeTokens.size;
+  }
+
   private clearStartupWatchdog(): void {
     if (this.startupWatchdog) {
       this.timerClearer(this.startupWatchdog);
@@ -1584,15 +1607,69 @@ export class StdioSupervisor {
     if (!cleanup.parentExited) return;
     if (success) {
       this.unresolvedTreeTokens.delete(cleanup.pid);
+      this.cleanupRetryAttempts.delete(cleanup.pid);
       this.cleanupStates.delete(child);
+      this.stopCleanupTokenRetryIfIdle();
     } else {
       this.unresolvedTreeTokens.add(cleanup.pid);
+      this.scheduleCleanupTokenRetry();
     }
     this.resumePausedRestart();
     this.drainQueue();
   }
 
-  private async retryUnresolvedTreeToken(pid: number): Promise<void> {
+  private scheduleCleanupTokenRetry(): void {
+    if (this.shuttingDown || this.cleanupRetryTimer || this.unresolvedTreeTokens.size === 0) return;
+    const delayMs = Math.min(
+      this.cleanupTokenRetryBaseMs * (2 ** this.cleanupRetryIndex),
+      this.cleanupTokenRetryCapMs
+    );
+    this.cleanupRetryIndex += 1;
+    this.cleanupRetryTimer = this.timerScheduler(() => {
+      this.cleanupRetryTimer = undefined;
+      void this.runCleanupTokenRetries();
+    }, delayMs);
+    this.cleanupRetryTimer.unref();
+  }
+
+  private async runCleanupTokenRetries(): Promise<void> {
+    await Promise.all(
+      [...this.unresolvedTreeTokens].map((pid) => this.retryUnresolvedTreeToken(pid))
+    );
+    if (this.unresolvedTreeTokens.size === 0) {
+      this.cleanupRetryIndex = 0;
+      return;
+    }
+    this.scheduleCleanupTokenRetry();
+  }
+
+  private stopCleanupTokenRetryIfIdle(): void {
+    if (this.unresolvedTreeTokens.size > 0) return;
+    if (this.cleanupRetryTimer) {
+      this.timerClearer(this.cleanupRetryTimer);
+      this.cleanupRetryTimer = undefined;
+    }
+    this.cleanupRetryIndex = 0;
+    this.cleanupRetryAttempts.clear();
+  }
+
+  private retryUnresolvedTreeToken(pid: number): Promise<void> {
+    const existing = this.cleanupRetriesInFlight.get(pid);
+    if (existing) return existing;
+    const retry = this.performUnresolvedTreeTokenRetry(pid);
+    this.cleanupRetriesInFlight.set(pid, retry);
+    return retry.finally(() => {
+      if (this.cleanupRetriesInFlight.get(pid) === retry) {
+        this.cleanupRetriesInFlight.delete(pid);
+      }
+    });
+  }
+
+  private async performUnresolvedTreeTokenRetry(pid: number): Promise<void> {
+    if (!this.unresolvedTreeTokens.has(pid)) return;
+    const attempt = (this.cleanupRetryAttempts.get(pid) ?? 0) + 1;
+    this.cleanupRetryAttempts.set(pid, attempt);
+    this.eventWriter("warn", "supervisor.cleanup_token.retry", { pid, attempt });
     let success = false;
     if (this.treeTokenRetrier) {
       success = await settleTreeCleanupWithin(
@@ -1626,13 +1703,22 @@ export class StdioSupervisor {
         try { taskkill?.kill("SIGKILL"); } catch { /* best effort */ }
       });
     }
-    if (!success) return;
+    if (!success || !this.unresolvedTreeTokens.has(pid)) return;
     this.unresolvedTreeTokens.delete(pid);
+    this.cleanupRetryAttempts.delete(pid);
     for (const [child, cleanup] of this.cleanupStates) {
       if (cleanup.pid === pid && cleanup.parentExited) {
         this.cleanupStates.delete(child);
       }
     }
+    this.eventWriter("info", "supervisor.cleanup_token.recovered", {
+      pid,
+      attempt,
+      unresolvedTreeTokens: this.unresolvedTreeTokens.size
+    });
+    this.stopCleanupTokenRetryIfIdle();
+    this.resumePausedRestart();
+    this.drainQueue();
   }
 
   private handleStartupFailure(token: number, exit: ExitInfo): void {
@@ -1673,6 +1759,13 @@ export class StdioSupervisor {
     this.currentRetryEpoch = reservation.epoch;
     if (this.liveCapOccupancy() >= 2) {
       this.retryPaused = true;
+      this.eventWriter("warn", "supervisor.live_cap.saturated", {
+        occupancy: this.liveCapOccupancy(),
+        cap: 2,
+        liveChildren: this.liveChildren.size,
+        unresolvedTreeTokens: this.unresolvedTreeTokens.size,
+        reason: "restart-blocked"
+      });
       return;
     }
     this.armRestartReservation(reservation);
@@ -1722,6 +1815,10 @@ export class StdioSupervisor {
     }
 
     this.shuttingDown = true;
+    if (this.cleanupRetryTimer) {
+      this.timerClearer(this.cleanupRetryTimer);
+      this.cleanupRetryTimer = undefined;
+    }
     if (this.restartTimer) {
       this.timerClearer(this.restartTimer);
       this.restartTimer = undefined;

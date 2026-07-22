@@ -1,4 +1,5 @@
 import process from "node:process";
+import { existsSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
@@ -9,6 +10,30 @@ import { STDIO_WORKER_MODE_ENV, StdioSupervisor } from "../../src/stdio-supervis
 if (process.env[STDIO_WORKER_MODE_ENV] !== "1") {
   const supervisor = new StdioSupervisor({ entryFile: fileURLToPath(import.meta.url) });
   await supervisor.start();
+} else if (process.env.MCP_TEST_FATAL_WORKER_MARKER) {
+  const markerPath = process.env.MCP_TEST_FATAL_WORKER_MARKER;
+  if (!existsSync(markerPath)) {
+    const fatalReader = new JsonRpcFrameReader();
+    let faultScheduled = false;
+    process.stdin.on("data", (chunk: Buffer) => {
+      fatalReader.processChunk(chunk, {
+        onFrame: ({ message }) => {
+          if (faultScheduled || !("method" in message) || message.method !== "notifications/initialized") {
+            return;
+          }
+          faultScheduled = true;
+          writeFileSync(markerPath, `${process.pid}\n`, "utf8");
+          queueMicrotask(() => { throw new Error("fatal worker fixture"); });
+        },
+        onError: (error) => process.stderr.write(`${error.message}\n`)
+      });
+    });
+  }
+  const keepAlive = setInterval(() => undefined, 1_000);
+  process.once("exit", () => clearInterval(keepAlive));
+  const { startServer } = await import("../../src/index.ts");
+  await startServer();
+  process.stderr.write("__MCP_STDIO_WORKER_READY__\n");
 } else {
   const reader = new JsonRpcFrameReader();
   const keepAlive = setInterval(() => undefined, 1_000);

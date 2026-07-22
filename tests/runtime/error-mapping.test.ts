@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES, createError } from "../../src/errors.ts";
@@ -10,6 +13,84 @@ import {
   type IssueOrigin,
   type RetryClass
 } from "../../src/error-mapping.ts";
+
+type RequestHandler = (
+  request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
+  extra: Record<string, unknown>
+) => Promise<unknown>;
+
+const dbDownRoot = await mkdtemp(join(tmpdir(), "mcp-tool-envelope-db-down-"));
+const blockingParent = join(dbDownRoot, "regular-file");
+await writeFile(blockingParent, "not a directory", "utf8");
+
+const originalSqlitePath = process.env.MCP_SQLITE_PATH;
+const dbDownServer = await (async () => {
+  process.env.MCP_SQLITE_PATH = join(blockingParent, "source-cache.db");
+  try {
+    return (await import("../../src/index.ts")).server;
+  } finally {
+    if (originalSqlitePath === undefined) {
+      delete process.env.MCP_SQLITE_PATH;
+    } else {
+      process.env.MCP_SQLITE_PATH = originalSqlitePath;
+    }
+  }
+})();
+
+const dbDownHandler = (
+  dbDownServer.server as { _requestHandlers: Map<string, RequestHandler> }
+)._requestHandlers.get("tools/call");
+assert.ok(dbDownHandler);
+
+async function callToolWithDatabaseDown(
+  name: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  return dbDownHandler({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name, arguments: args }
+  }, {});
+}
+
+test("input validation keeps ERR_INVALID_INPUT when SQLite cannot open", async () => {
+  const response = await callToolWithDatabaseDown("nbt-to-json", {}) as {
+    isError?: boolean;
+    structuredContent?: { error?: { code?: string }; result?: unknown; meta?: { tool?: string } };
+  };
+
+  assert.equal(response.isError, true);
+  assert.equal(response.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.equal(response.structuredContent?.result, undefined);
+  assert.equal(response.structuredContent?.meta?.tool, "nbt-to-json");
+});
+
+test("a database-independent NBT tool succeeds when SQLite cannot open", async () => {
+  const response = await callToolWithDatabaseDown("nbt-to-json", {
+    nbtBase64: "CgAAAA=="
+  }) as {
+    isError?: boolean;
+    structuredContent?: { error?: unknown; result?: unknown; meta?: { tool?: string } };
+  };
+
+  assert.equal(response.isError, undefined);
+  assert.equal(response.structuredContent?.error, undefined);
+  assert.ok(response.structuredContent?.result);
+  assert.equal(response.structuredContent?.meta?.tool, "nbt-to-json");
+});
+
+test("a database-backed tool keeps ERR_DB_FAILURE when SQLite cannot open", async () => {
+  const response = await callToolWithDatabaseDown("list-versions", {}) as {
+    isError?: boolean;
+    structuredContent?: { error?: { code?: string }; result?: unknown; meta?: { tool?: string } };
+  };
+
+  assert.equal(response.isError, true);
+  assert.equal(response.structuredContent?.error?.code, "ERR_DB_FAILURE");
+  assert.equal(response.structuredContent?.result, undefined);
+  assert.equal(response.structuredContent?.meta?.tool, "list-versions");
+});
 
 test("issueOriginForErrorCode separates caller input from tool capability and environment", () => {
   assert.equal(issueOriginForErrorCode(ERROR_CODES.INVALID_INPUT), "code_issue");
