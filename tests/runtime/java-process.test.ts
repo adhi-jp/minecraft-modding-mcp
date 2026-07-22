@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,7 +7,75 @@ import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
-import { assertJavaAvailable, runJavaProcess } from "../../src/java-process.ts";
+import {
+  assertJavaAvailable,
+  resetJavaAvailabilityCacheForTests,
+  runJavaProcess
+} from "../../src/java-process.ts";
+
+function stubJavaAvailabilitySpawn(outcomes: Array<"success" | "error">): {
+  spawn: typeof import("node:child_process").spawn;
+  count: () => number;
+} {
+  let spawnCount = 0;
+  const spawnStub = (() => {
+    const outcome = outcomes[spawnCount] ?? outcomes.at(-1) ?? "success";
+    spawnCount += 1;
+    const proc = new EventEmitter() as EventEmitter & { kill: () => boolean };
+    proc.kill = () => true;
+    queueMicrotask(() => {
+      if (outcome === "error") {
+        proc.emit("error", new Error("java missing"));
+      } else {
+        proc.emit("exit", 0);
+      }
+    });
+    return proc;
+  }) as unknown as typeof import("node:child_process").spawn;
+  return { spawn: spawnStub, count: () => spawnCount };
+}
+
+test("assertJavaAvailable memoizes a successful probe process-wide", async (t) => {
+  const stub = stubJavaAvailabilitySpawn(["success"]);
+  resetJavaAvailabilityCacheForTests(stub.spawn);
+  t.after(() => resetJavaAvailabilityCacheForTests());
+
+  for (let index = 0; index < 5; index += 1) {
+    await assertJavaAvailable();
+  }
+
+  assert.equal(stub.count(), 1);
+});
+
+test("assertJavaAvailable does not cache unavailable-Java failures after reset", async (t) => {
+  const stub = stubJavaAvailabilitySpawn(["error", "error"]);
+  resetJavaAvailabilityCacheForTests(stub.spawn);
+  t.after(() => resetJavaAvailabilityCacheForTests());
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      () => assertJavaAvailable(),
+      (error: unknown) => (error as { code?: string }).code === ERROR_CODES.JAVA_UNAVAILABLE
+    );
+  }
+
+  assert.equal(stub.count(), 2);
+});
+
+test("assertJavaAvailable caches a success that follows a failed probe", async (t) => {
+  const stub = stubJavaAvailabilitySpawn(["error", "success"]);
+  resetJavaAvailabilityCacheForTests(stub.spawn);
+  t.after(() => resetJavaAvailabilityCacheForTests());
+
+  await assert.rejects(
+    () => assertJavaAvailable(),
+    (error: unknown) => (error as { code?: string }).code === ERROR_CODES.JAVA_UNAVAILABLE
+  );
+  await assertJavaAvailable();
+  await assertJavaAvailable();
+
+  assert.equal(stub.count(), 2);
+});
 
 test("assertJavaAvailable resolves when java is installed", async () => {
   // This test will skip gracefully in environments without Java

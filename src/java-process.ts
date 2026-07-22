@@ -6,6 +6,9 @@ import { normalizePathForHost } from "./path-converter.js";
 const JAVA_CHECK_TIMEOUT_MS = 2_000;
 export const MAX_STDIO_SNAPSHOT = 6_240;
 
+let javaAvailabilitySpawn: typeof spawn = spawn;
+let javaAvailabilityPromise: Promise<void> | undefined;
+
 export interface JavaProcessOptions {
   jarPath: string;
   args: string[];
@@ -49,9 +52,9 @@ export function normalizeArgs(args: string[]): string[] {
   });
 }
 
-export async function assertJavaAvailable(): Promise<void> {
+function probeJavaAvailability(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("java", ["-version"], { stdio: "ignore" });
+    const proc = javaAvailabilitySpawn("java", ["-version"], { stdio: "ignore" });
     const timer = setTimeout(() => {
       proc.kill();
       reject(
@@ -86,6 +89,29 @@ export async function assertJavaAvailable(): Promise<void> {
       resolve();
     });
   });
+}
+
+export function assertJavaAvailable(): Promise<void> {
+  if (javaAvailabilityPromise) {
+    return javaAvailabilityPromise;
+  }
+
+  const probePromise = Promise.resolve().then(() => probeJavaAvailability());
+  const cachedPromise = probePromise.catch((error: unknown) => {
+    if (javaAvailabilityPromise === cachedPromise) {
+      javaAvailabilityPromise = undefined;
+    }
+    throw error;
+  });
+  javaAvailabilityPromise = cachedPromise;
+  return cachedPromise;
+}
+
+export function resetJavaAvailabilityCacheForTests(
+  spawnHook: typeof spawn = spawn
+): void {
+  javaAvailabilityPromise = undefined;
+  javaAvailabilitySpawn = spawnHook;
 }
 
 export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcessResult> {

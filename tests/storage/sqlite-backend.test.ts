@@ -58,6 +58,53 @@ test("openDatabase initializes cache schema without native addon prerequisites",
     assert.equal(contentBytesInsertTrigger?.name, "trg_files_content_bytes_insert");
   }));
 
+test("openDatabase applies WAL tuning and preserves rows written before tuning", () =>
+  withTempDir("sqlite-tuning-", async (root) => {
+    const config = buildTestConfig(root);
+    await mkdir(join(root, "cache"), { recursive: true });
+
+    const baseline = new Database(config.sqlitePath);
+    baseline.pragma("foreign_keys = ON");
+    baseline.pragma("journal_mode = WAL");
+    baseline.pragma("synchronous = NORMAL");
+    baseline.pragma("busy_timeout = 5000");
+    baseline.prepare("CREATE TABLE tuning_identity (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)").run();
+    const expected = Buffer.from([0x00, 0x7f, 0x80, 0xff]);
+    baseline.prepare("INSERT INTO tuning_identity (id, payload) VALUES (?, ?)").run(1, expected);
+    const before = baseline.prepare("SELECT id, payload FROM tuning_identity").get();
+    baseline.close();
+
+    const initialized = openDatabase({
+      sqlitePath: config.sqlitePath,
+      sqliteCacheKb: 16_384,
+      sqliteMmapSize: 268_435_456
+    });
+    try {
+      assert.equal(
+        (initialized.db.pragma("journal_mode") as Array<{ journal_mode: string }>)[0]?.journal_mode,
+        "wal"
+      );
+      assert.equal(
+        (initialized.db.pragma("cache_size") as Array<{ cache_size: number }>)[0]?.cache_size,
+        -16_384
+      );
+      assert.equal(
+        (initialized.db.pragma("mmap_size") as Array<{ mmap_size: number }>)[0]?.mmap_size,
+        268_435_456
+      );
+      assert.equal(
+        (initialized.db.pragma("temp_store") as Array<{ temp_store: number }>)[0]?.temp_store,
+        2
+      );
+      assert.deepEqual(
+        initialized.db.prepare("SELECT id, payload FROM tuning_identity").get(),
+        before
+      );
+    } finally {
+      initialized.db.close();
+    }
+  }));
+
 test("openDatabase fails when cache schema_version exceeds supported version", () =>
   withTempDir("sqlite-backend-", async (root) => {
     const config = buildTestConfig(root);
@@ -89,8 +136,24 @@ test("openDatabase backs up and rebuilds a corrupted database file", () =>
     await mkdir(join(root, "cache"), { recursive: true });
     await writeFile(config.sqlitePath, "this is not a sqlite database");
 
-    const initialized = openDatabase(config);
+    const initialized = openDatabase({
+      sqlitePath: config.sqlitePath,
+      sqliteCacheKb: 4_096,
+      sqliteMmapSize: 0
+    });
     assert.equal(initialized.schemaVersion, LATEST_SCHEMA_VERSION);
+    assert.equal(
+      (initialized.db.pragma("cache_size") as Array<{ cache_size: number }>)[0]?.cache_size,
+      -4_096
+    );
+    assert.equal(
+      (initialized.db.pragma("mmap_size") as Array<{ mmap_size: number }>)[0]?.mmap_size,
+      0
+    );
+    assert.equal(
+      (initialized.db.pragma("temp_store") as Array<{ temp_store: number }>)[0]?.temp_store,
+      2
+    );
     initialized.db.close();
 
     const cacheEntries = await readdir(join(root, "cache"));

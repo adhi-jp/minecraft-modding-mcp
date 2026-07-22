@@ -25,6 +25,12 @@ type SqliteIntegrityResult = {
   integrity_check: string;
 };
 
+type DatabaseConfig = Pick<Config, "sqlitePath"> &
+  Partial<Pick<Config, "sqliteCacheKb" | "sqliteMmapSize">>;
+
+const DEFAULT_SQLITE_CACHE_KB = 8_000;
+const DEFAULT_SQLITE_MMAP_SIZE = 268_435_456;
+
 function ensureParentDirectory(path: string): void {
   mkdirSync(dirname(path), { recursive: true });
 }
@@ -38,6 +44,19 @@ function runIntegrityCheck(db: SqliteDatabase): void {
       details: { reason: "integrity_check_failed", integrityCheck: result }
     });
   }
+}
+
+function applyPragmas(db: SqliteDatabase, config: DatabaseConfig): void {
+  const sqliteCacheKb = config.sqliteCacheKb ?? DEFAULT_SQLITE_CACHE_KB;
+  const sqliteMmapSize = config.sqliteMmapSize ?? DEFAULT_SQLITE_MMAP_SIZE;
+
+  db.pragma("foreign_keys = ON");
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("busy_timeout = 5000");
+  db.pragma(`cache_size = -${sqliteCacheKb}`);
+  db.pragma(`mmap_size = ${sqliteMmapSize}`);
+  db.pragma("temp_store = MEMORY");
 }
 
 function backupCorruptedDb(sqlitePath: string): string {
@@ -118,7 +137,7 @@ function buildDefaultLogger(): Logger {
 }
 
 export function openDatabase(
-  config: Pick<Config, "sqlitePath">,
+  config: DatabaseConfig,
   logger: Logger = buildDefaultLogger()
 ): InitializedDatabase {
   let db: SqliteDatabase | undefined;
@@ -127,10 +146,7 @@ export function openDatabase(
 
     db = new Database(config.sqlitePath);
 
-    db.pragma("foreign_keys = ON");
-    db.pragma("journal_mode = WAL");
-    db.pragma("synchronous = NORMAL");
-    db.pragma("busy_timeout = 5000");
+    applyPragmas(db, config);
 
     const schemaVersion = runMigrations(db);
     runIntegrityCheck(db);
@@ -177,10 +193,7 @@ export function openDatabase(
       });
 
       const rebuilt = new Database(config.sqlitePath);
-      rebuilt.pragma("foreign_keys = ON");
-      rebuilt.pragma("journal_mode = WAL");
-      rebuilt.pragma("synchronous = NORMAL");
-      rebuilt.pragma("busy_timeout = 5000");
+      applyPragmas(rebuilt, config);
 
       const schemaVersion = runMigrations(rebuilt);
       runIntegrityCheck(rebuilt);

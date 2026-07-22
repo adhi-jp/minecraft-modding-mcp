@@ -347,6 +347,7 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
         vineflowerJarPath: vineflowerPath,
         artifactIdCandidate: resolved.artifactId,
         timeoutMs: 120_000,
+        maxMemoryMb: svc.config.decompileMaxMemoryMb,
         signature: resolved.artifactId
       });
       files = decompileResult.javaFiles.map((entry) => ({

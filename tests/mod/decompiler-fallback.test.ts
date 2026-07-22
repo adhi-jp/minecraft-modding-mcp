@@ -3,10 +3,11 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 
 import { ERROR_CODES, isAppError } from "../../src/errors.ts";
 import { decompileBinaryJar } from "../../src/decompiler/vineflower.ts";
+import { mockJavaRunner } from "../helpers/java-runner-mock.ts";
 
 test("decompileBinaryJar returns ERR_DECOMPILER_UNAVAILABLE when vineflower path is missing", async () => {
   await assert.rejects(
@@ -215,12 +216,51 @@ writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
       .split("\n--\n")[0]
       .trim()
       .split("\n");
-    const vineflowerArgs = firstInvocation.slice(2);
+    const jarIndex = firstInvocation.indexOf("-jar");
+    assert.equal(firstInvocation.filter((arg) => arg === "-Xmx4096m").length, 1);
+    assert.ok(firstInvocation.indexOf("-Xmx4096m") < jarIndex);
+    const vineflowerArgs = firstInvocation.slice(jarIndex + 2);
 
     assert.deepEqual(vineflowerArgs.slice(0, 3), ["-din=1", "-rbr=1", "-dgs=1"]);
     assert.equal(vineflowerArgs[3], binaryJarPath);
   } finally {
     process.env.PATH = originalPath;
+  }
+});
+
+test("decompileBinaryJar forwards the configured heap without changing Vineflower arguments", async () => {
+  const root = await mkdtemp(join(tmpdir(), "decompile-heap-"));
+  const cacheDir = join(root, "cache");
+  const binaryJarPath = join(root, "test.jar");
+  const vineflowerJarPath = join(root, "vineflower.jar");
+  writeFileSync(binaryJarPath, Buffer.from([0xca, 0xfe]));
+  writeFileSync(vineflowerJarPath, Buffer.from([0x50, 0x4b]));
+
+  const recording = mockJavaRunner(async (options) => {
+    const outputDir = options.args.at(-1);
+    assert.ok(outputDir);
+    mkdirSync(outputDir, { recursive: true });
+    writeFileSync(join(outputDir, "Example.java"), "public class Example {}");
+    return { exitCode: 0, stdoutTail: "", stderrTail: "" };
+  });
+
+  try {
+    const result = await decompileBinaryJar(binaryJarPath, cacheDir, {
+      vineflowerJarPath,
+      signature: "heap-args-test",
+      timeoutMs: 120_000
+    });
+
+    assert.equal(recording.calls.length, 1);
+    assert.deepEqual(recording.calls[0], {
+      jarPath: vineflowerJarPath,
+      args: ["-din=1", "-rbr=1", "-dgs=1", binaryJarPath, result.outputDir],
+      timeoutMs: 120_000,
+      maxMemoryMb: 4_096,
+      normalizePathArgs: true
+    });
+  } finally {
+    mock.restoreAll();
   }
 });
 

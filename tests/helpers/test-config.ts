@@ -30,9 +30,12 @@ function baseTestConfig(root: string): Config {
     maxNbtInputBytes: 4 * 1024 * 1024,
     maxNbtInflatedBytes: 16 * 1024 * 1024,
     maxNbtResponseBytes: 8 * 1024 * 1024,
+    sqliteCacheKb: 8_000,
+    sqliteMmapSize: 268_435_456,
     tinyRemapperJarPath: undefined,
     remapTimeoutMs: 600_000,
     remapMaxMemoryMb: 4_096,
+    decompileMaxMemoryMb: 4_096,
   };
 }
 

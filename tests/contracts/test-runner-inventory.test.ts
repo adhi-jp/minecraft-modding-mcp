@@ -7,7 +7,7 @@ const EXPECTED_ORDINARY_TEST_FILES = 178;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1641;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1647;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

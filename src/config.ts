@@ -34,8 +34,11 @@ const DEFAULTS = {
   maxNbtInputBytes: 4 * 1024 * 1024,
   maxNbtInflatedBytes: 16 * 1024 * 1024,
   maxNbtResponseBytes: 8 * 1024 * 1024,
+  sqliteCacheKb: 8_000,
+  sqliteMmapSize: 268_435_456,
   remapTimeoutMs: 600_000,
-  remapMaxMemoryMb: 4096
+  remapMaxMemoryMb: 4096,
+  decompileMaxMemoryMb: 4096
 } as const;
 
 const MAX_RETRIES_LOWER_BOUND = 0;
@@ -293,6 +296,18 @@ export function loadConfig(): Config {
       MAX_BYTES_LOWER_BOUND,
       Number.MAX_SAFE_INTEGER
     ),
+    sqliteCacheKb: parseNumber(
+      process.env.MCP_SQLITE_CACHE_KB,
+      DEFAULTS.sqliteCacheKb,
+      1,
+      Number.MAX_SAFE_INTEGER
+    ),
+    sqliteMmapSize: parseNumber(
+      process.env.MCP_SQLITE_MMAP_SIZE,
+      DEFAULTS.sqliteMmapSize,
+      0,
+      Number.MAX_SAFE_INTEGER
+    ),
     tinyRemapperJarPath: parseOptionalJarPath(
       process.env.MCP_TINY_REMAPPER_JAR_PATH,
       "MCP_TINY_REMAPPER_JAR_PATH"
@@ -306,6 +321,12 @@ export function loadConfig(): Config {
     remapMaxMemoryMb: parseNumber(
       process.env.MCP_REMAP_MAX_MEMORY_MB,
       DEFAULTS.remapMaxMemoryMb,
+      64,
+      Number.MAX_SAFE_INTEGER
+    ),
+    decompileMaxMemoryMb: parseNumber(
+      process.env.MCP_DECOMPILE_MAX_MEMORY_MB,
+      DEFAULTS.decompileMaxMemoryMb,
       64,
       Number.MAX_SAFE_INTEGER
     )

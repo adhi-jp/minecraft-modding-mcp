@@ -9,6 +9,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Added
 
+- SQLite and decompiler tuning knobs: `MCP_SQLITE_CACHE_KB` (page cache in KiB, default `8000`) and `MCP_SQLITE_MMAP_SIZE` (bytes, default `268435456`, `0` disables) tune the artifact-index database, which now also uses `temp_store=MEMORY`; `MCP_DECOMPILE_MAX_MEMORY_MB` (default `4096`) caps the Vineflower JVM heap the same way `MCP_REMAP_MAX_MEMORY_MB` caps remapping. Defaults preserve existing behavior on typical installations.
 - `MCP_MAX_FRAME_BYTES` bounds the JSON-RPC frame size accepted by the stdio supervisor and worker transport (default 64 MiB, clamped to at least 1 MiB). An oversized or `Content-Length`-abusive frame is rejected with a diagnostic naming the observed size and the configured limit, its body is skipped without wedging the reader, header sections are capped at 8 KiB, and line-delimited frames obey the same limit.
 
 ### Fixed

@@ -153,9 +153,12 @@ export interface Config {
   maxNbtInputBytes: number;
   maxNbtInflatedBytes: number;
   maxNbtResponseBytes: number;
+  sqliteCacheKb: number;
+  sqliteMmapSize: number;
   tinyRemapperJarPath: string | undefined;
   remapTimeoutMs: number;
   remapMaxMemoryMb: number;
+  decompileMaxMemoryMb: number;
 }
 
 export interface ArtifactSignature {

@@ -54,6 +54,8 @@ test("loadConfig applies defaults for missing environment variables", async () =
     assert.equal(config.maxCacheBytes, DEFAULTS.maxCacheBytes);
     assert.equal(config.fetchTimeoutMs, DEFAULTS.fetchTimeoutMs);
     assert.equal(config.fetchRetries, DEFAULTS.fetchRetries);
+    assert.equal(config.sqliteCacheKb, DEFAULTS.sqliteCacheKb);
+    assert.equal(config.sqliteMmapSize, DEFAULTS.sqliteMmapSize);
     assert.equal(config.searchScanPageSize, DEFAULTS.searchScanPageSize);
     assert.equal(config.searchScanMaxBytes, DEFAULTS.searchScanMaxBytes);
     assert.equal(config.indexInsertChunkSize, DEFAULTS.indexInsertChunkSize);
@@ -66,6 +68,7 @@ test("loadConfig applies defaults for missing environment variables", async () =
     assert.equal(config.vineflowerJarPath, undefined);
     assert.equal(config.indexedSearchEnabled, true);
     assert.equal(config.mappingSourcePriority, "loom-first");
+    assert.equal(config.decompileMaxMemoryMb, DEFAULTS.decompileMaxMemoryMb);
   });
 });
 
@@ -148,7 +151,10 @@ test("loadConfig falls back for malformed numeric values", async () => {
     MCP_CACHE_VERSION_DETAIL_MAX: "0",
     MCP_MAX_NBT_INPUT_BYTES: "0",
     MCP_MAX_NBT_INFLATED_BYTES: "0",
-    MCP_MAX_NBT_RESPONSE_BYTES: "0"
+    MCP_MAX_NBT_RESPONSE_BYTES: "0",
+    MCP_SQLITE_CACHE_KB: "0",
+    MCP_SQLITE_MMAP_SIZE: "-1",
+    MCP_DECOMPILE_MAX_MEMORY_MB: "63"
   }, () => {
     const config = loadConfig();
     assert.equal(config.maxContentBytes, DEFAULTS.maxContentBytes);
@@ -166,7 +172,26 @@ test("loadConfig falls back for malformed numeric values", async () => {
     assert.equal(config.maxNbtInputBytes, 4 * 1024 * 1024);
     assert.equal(config.maxNbtInflatedBytes, 16 * 1024 * 1024);
     assert.equal(config.maxNbtResponseBytes, 8 * 1024 * 1024);
+    assert.equal(config.sqliteCacheKb, DEFAULTS.sqliteCacheKb);
+    assert.equal(config.sqliteMmapSize, DEFAULTS.sqliteMmapSize);
+    assert.equal(config.decompileMaxMemoryMb, DEFAULTS.decompileMaxMemoryMb);
   });
+});
+
+test("loadConfig parses SQLite tuning and decompiler heap environment variables", async () => {
+  await withEnv(
+    {
+      MCP_SQLITE_CACHE_KB: "16384",
+      MCP_SQLITE_MMAP_SIZE: "0",
+      MCP_DECOMPILE_MAX_MEMORY_MB: "6144"
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.sqliteCacheKb, 16_384);
+      assert.equal(config.sqliteMmapSize, 0);
+      assert.equal(config.decompileMaxMemoryMb, 6_144);
+    }
+  );
 });
 
 test("loadConfig parses NBT size limit environment variables", async () => {

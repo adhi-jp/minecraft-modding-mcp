@@ -5,10 +5,11 @@ import { basename, join, relative, sep } from "node:path";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
-import { assertJavaAvailable, runJavaProcess } from "../java-process.js";
+import { javaRunner } from "../java-process.js";
 import { log } from "../logger.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_MEMORY_MB = 4_096;
 const DECOMPILED_JAVA_READ_CONCURRENCY = 8;
 const DECOMPILE_COMPLETE_MARKER = ".decompile-complete";
 
@@ -30,6 +31,7 @@ export interface DecompileResult {
 interface DecompileBinaryOptions {
   vineflowerJarPath?: string;
   timeoutMs?: number;
+  maxMemoryMb?: number;
   signature?: string;
   artifactIdCandidate?: string;
 }
@@ -132,12 +134,14 @@ async function runVineflower(
   binaryJarPath: string,
   outputDir: string,
   timeoutMs: number,
+  maxMemoryMb: number,
   flags: string[] = VINEFLOWER_FLAG_PROFILES[0].flags
 ): Promise<void> {
-  const result = await runJavaProcess({
+  const result = await javaRunner.run({
     jarPath: vineflowerJarPath,
     args: [...flags, binaryJarPath, outputDir],
     timeoutMs,
+    maxMemoryMb,
     normalizePathArgs: true
   });
 
@@ -177,6 +181,7 @@ export async function decompileBinaryJar(
   });
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxMemoryMb = options.maxMemoryMb ?? DEFAULT_MAX_MEMORY_MB;
   const signature = options.signature ?? basename(normalizedBinaryJarPath);
   const outputDir = decompileOutputDir(cacheDir, normalizedBinaryJarPath, signature).replace(/[/\\]$/, "");
 
@@ -217,7 +222,7 @@ export async function decompileBinaryJar(
     clearOutputDir(outputDir);
 
     await assertVineflowerAvailable(options.vineflowerJarPath);
-    await assertJavaAvailable();
+    await javaRunner.assertAvailable();
 
     const profilesAttempted: string[] = [];
     let lastDecompileError: unknown;
@@ -234,7 +239,14 @@ export async function decompileBinaryJar(
           });
         }
 
-        await runVineflower(options.vineflowerJarPath, normalizedBinaryJarPath, outputDir, timeoutMs, profile.flags);
+        await runVineflower(
+          options.vineflowerJarPath,
+          normalizedBinaryJarPath,
+          outputDir,
+          timeoutMs,
+          maxMemoryMb,
+          profile.flags
+        );
         const javaFileNames = await collectJavaFiles(outputDir);
         if (javaFileNames.length === 0) {
           throw createError({

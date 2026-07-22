@@ -511,6 +511,8 @@ Path-based overrides treat blank values and the literal strings `undefined` and 
 | --- | --- | --- |
 | `MCP_CACHE_DIR` | `~/.cache/minecraft-modding-mcp` | Cache root for downloads and SQLite |
 | `MCP_SQLITE_PATH` | `<cacheDir>/source-cache.db` | SQLite database path |
+| `MCP_SQLITE_CACHE_KB` | `8000` | SQLite page-cache size in KiB (applied as a negative `cache_size` pragma) |
+| `MCP_SQLITE_MMAP_SIZE` | `268435456` | SQLite `mmap_size` in bytes; `0` disables memory-mapped I/O |
 | `MCP_SOURCE_REPOS` | Maven Central + Fabric + Forge + NeoForge | Comma-separated Maven repository URLs |
 | `MCP_LOCAL_M2` | `~/.m2/repository` | Local Maven repository path |
 | `MCP_ENABLE_INDEXED_SEARCH` | `true` | Enable indexed query path for `search-class-source` |
@@ -549,6 +551,7 @@ Path-based overrides treat blank values and the literal strings `undefined` and 
 | `MCP_TINY_REMAPPER_VERSION` | `0.10.3` | tiny-remapper version to auto-download when no JAR path override is set |
 | `MCP_REMAP_TIMEOUT_MS` | `600000` | Remap operation timeout in milliseconds |
 | `MCP_REMAP_MAX_MEMORY_MB` | `4096` | Maximum JVM heap for remap operations |
+| `MCP_DECOMPILE_MAX_MEMORY_MB` | `4096` | Maximum JVM heap for Vineflower decompile operations |
 
 ### NBT Limits
 

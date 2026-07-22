@@ -288,6 +288,7 @@ export class ModDecompileService {
     const decompileResult = await decompileBinaryJar(jarPath, this.config.cacheDir, {
       vineflowerJarPath: vineflowerPath,
       timeoutMs: DECOMPILE_TIMEOUT_MS,
+      maxMemoryMb: this.config.decompileMaxMemoryMb,
       signature: cacheKey
     });
 
