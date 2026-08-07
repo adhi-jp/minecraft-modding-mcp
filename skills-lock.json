@@ -17,13 +17,13 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/systematic-debugging/SKILL.md",
-      "computedHash": "792a368e074981d7e3138edb439e138489b2ac247cd1e5739fab52af680fb17b"
+      "computedHash": "a2750dfbaed1690da73b120254892c4f926b4576cb82eb16fc877783941fe39b"
     },
     "test-driven-development": {
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/test-driven-development/SKILL.md",
-      "computedHash": "eee144aea35d783296d178017e9fe843c6d16cc8b240e106f5e50910f6caf329"
+      "computedHash": "a4126a9c5f17be3c228aa9e5755898ade283448b86099f56f40852e8c14532be"
     },
     "typescript-advanced-types": {
       "source": "wshobson/agents",
@@ -35,67 +35,79 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-brainstorm/SKILL.md",
-      "computedHash": "b0e0c72f5a640a21f216e07a1c1b12d99cae9a4e70dd193339306e53009045bd"
+      "computedHash": "53984f366a829ec037ff9ddea0b42483a1bee824504bc2aa0dde33b0444e7893"
     },
     "vibe-code-research": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-code-research/SKILL.md",
-      "computedHash": "63cc053351138396bd12c1dcb135df7aba752d298f9b375735d1ebb3e2e764b0"
+      "computedHash": "f376a14d32a9ab28e692b13130b1596d8021eb5a31d06d496b17ab9677f43adb"
     },
     "vibe-coding": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-coding/SKILL.md",
-      "computedHash": "747b63cee0ea5b4d3906bf5be73f8b201e47adca149e5b79c807721e7b6f77ab"
+      "computedHash": "3cedec420b6271c8bdb8d6a9568e1c704ae4b8b03e824e5e52033b6ed259e85a"
     },
     "vibe-commit": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-commit/SKILL.md",
-      "computedHash": "9ec5fec92525fb14400b7ccdebf7e221f1ca3d02c790c23a1dcb6569fc209b50"
+      "computedHash": "6726a54e11a379c74e5312c8b6dc18a76d2be106794777b65eb5986d1257dc5a"
     },
     "vibe-debug": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-debug/SKILL.md",
-      "computedHash": "dce109579a600069e64ea7c9a557b8736bbcb913fa56aa40c3443e4b2b0567a3"
+      "computedHash": "04b27135a7b499f6df54bb984e2ed91637ec38455cd75c7b74b1e66a1ba2ef43"
+    },
+    "vibe-goal-alignment": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-goal-alignment/SKILL.md",
+      "computedHash": "070cbab77a2aa5e082cdf19e0e3e0869da597a4aea0b0353b528b7b0993e9f67"
+    },
+    "vibe-orchestrate": {
+      "source": "adhi-jp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vibe-orchestrate/SKILL.md",
+      "computedHash": "aea77bb8e44dc47cb614bed22d3bc878ec96ca620af12dbe621dff4ad305989e"
     },
     "vibe-plan-execution": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-plan-execution/SKILL.md",
-      "computedHash": "c912457a80e9941277337f94e7bc4273f296a0928d46ef4c03c73dd8f4e25e36"
+      "computedHash": "125ab6f46fdfc841d6ef754f3db77d1d69f8d0fe4df52b77e9b7546da108a4a8"
     },
     "vibe-plan-review": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-plan-review/SKILL.md",
-      "computedHash": "3ef04051bfd4726d062b8c1e99de062473427139e24bf18544b404f5ed7daf28"
+      "computedHash": "9ab894c34d8dc5be498058adc07ee0c3e3f2c8e5260aef89a96782bf81cea3cf"
     },
     "vibe-planning": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-planning/SKILL.md",
-      "computedHash": "0d7ab08b32dfa0f965fd5a002d6fda696ca128692ae853a2e815eeab8aff3621"
+      "computedHash": "e1342a3868cff2390c705692974ba71e7d5a3cee8d78f67ea294c6741b3b4702"
     },
     "vibe-requirements-spec": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-requirements-spec/SKILL.md",
-      "computedHash": "9010ccffc8ccfdd3aa675f316ed7cc74d4599fb9cd3fd5ceda85368240863120"
+      "computedHash": "c88a301fa498c3aea714f4cbc519554ca63a7e5b1120e0e4f240bb0a40779c8e"
     },
     "vibe-review": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-review/SKILL.md",
-      "computedHash": "97209943100b94816af7e183e56e957d4cad1a6de39dce40d85b771ed5faccb2"
+      "computedHash": "99cb4b87fcb9a7973b589ccf149d5ea566d3f291b0f2ecbb19783bf01ad6962f"
     },
     "vibe-writing": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-writing/SKILL.md",
-      "computedHash": "f0ef21182440dee02e141ba16d8a2261d9e7a2a21d7ab1d4b1e41580cc1f7c68"
+      "computedHash": "52b4fe7a1c4fbbd39af33ec583dfbfa5116aac2e0ade3605e796c8e09d22cbf3"
     }
   }
 }
