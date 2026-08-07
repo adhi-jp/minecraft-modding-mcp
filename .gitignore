@@ -27,8 +27,6 @@ coverage/
 
 # Agent local settings
 .claude/*
-!.claude/skills/
-!.claude/skills/**
 .cursor/
 .windsurf/
 .continue/
@@ -40,8 +38,6 @@ coverage/
 
 # Codex/agents local assets
 .agents/*
-!.agents/skills/
-!.agents/skills/**
 .codex
 
 # Development artifacts
