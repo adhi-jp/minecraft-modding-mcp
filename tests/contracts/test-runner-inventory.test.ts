@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 181;
+const EXPECTED_ORDINARY_TEST_FILES = 185;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -15,7 +15,21 @@ const EXPECTED_ORDINARY_TEST_FILES = 181;
 // tests/stdio/json-rpc-framing.test.ts gains 5 mid-stream framing-switch tests.
 // 1672 -> 1673: tests/utils/zod3-parity.test.ts gains the entry-tool
 // positiveIntSchema integer-acceptance/float-bytes parity test.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1673;
+// 181 -> 184 / 1673 -> 1698: supervisor era state machine (dual-era gate):
+// tests/stdio/stdio-supervisor-era-state.test.ts adds 15 admission/rejection/
+// notification tests, tests/stdio/stdio-supervisor-era-lifecycle.test.ts adds
+// 9 replay-gating/discover-neutrality/capture-ordering tests, and
+// tests/stdio/stdio-supervisor-era-wire.test.ts adds 1 real-worker -32022
+// passthrough + era-lock wire test.
+// 184 -> 185 / 1698 -> 1718 (era repair round): era-state gains 5 tests
+// (era-aware cancellation forwarding, listen shallow-check ordering,
+// enveloped-initialize legacy lock), era-lifecycle gains 3 (restart
+// first-frame guard, cap-rejected-initialize capture hole, in-flight
+// discover cancellation limitation), era-wire gains 3 (pipelined
+// discover+initialize, worker-down discover release, Content-Length
+// rejection framing), and tests/utils/era-classifier.test.ts adds 9
+// classifier/builder unit tests.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1718;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

@@ -153,22 +153,46 @@ function call(id: number, name: string): JSONRPCRequest {
   } as JSONRPCRequest;
 }
 
+const ERA_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
+const ERA_CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
+
+/** Shallow-valid modern-era `_meta` envelope (protocol revision 2026-07-28). */
+function modernMeta(): Record<string, unknown> {
+  return { [ERA_PROTOCOL_VERSION_KEY]: "2026-07-28", [ERA_CLIENT_CAPABILITIES_KEY]: {} };
+}
+
+/**
+ * tools/call carrying the modern era signal. The mechanics under test in this
+ * file (queueing, validate barrier, timeouts, cancellation, cleanup, watchdog)
+ * are era-independent; driving them with a shallow-valid modern envelope
+ * establishes/keeps the supervisor's modern era at admission so the tests do
+ * not depend on unselected-state admission rules.
+ */
+function modernCall(id: number, name: string): JSONRPCRequest {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { _meta: modernMeta(), name, arguments: {} }
+  } as JSONRPCRequest;
+}
+
 test("running validate barrier queues two requests, forwards notifications, and overflows the third", (t) => {
   const { supervisor, outbound, workerWrites } = createHarness();
   t.after(() => clearHarnessTimers(supervisor));
-  supervisor.handleClientMessage(call(1, "validate-project"));
-  supervisor.handleClientMessage(call(2, "list-versions"));
-  supervisor.handleClientMessage(call(3, "list-versions"));
+  supervisor.handleClientMessage(modernCall(1, "validate-project"));
+  supervisor.handleClientMessage(modernCall(2, "list-versions"));
+  supervisor.handleClientMessage(modernCall(3, "list-versions"));
   const writesBeforeNotification = workerWrites.length;
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/progress",
-    params: { progressToken: "p", progress: 1 }
+    params: { _meta: modernMeta(), progressToken: "p", progress: 1 }
   } as JSONRPCMessage);
   assert.equal(workerWrites.length, writesBeforeNotification + 1);
   assert.equal(supervisor.queuedRequests.length, 2);
 
-  supervisor.handleClientMessage(call(4, "list-versions"));
+  supervisor.handleClientMessage(modernCall(4, "list-versions"));
   const overflow = outbound.at(-1) as { result?: { structuredContent?: { error?: { code?: string }; meta?: { queue?: { queuedCount?: number } } } } };
   assert.equal(overflow.result?.structuredContent?.error?.code, "ERR_LIMIT_EXCEEDED");
   assert.equal(overflow.result?.structuredContent?.meta?.queue?.queuedCount, 2);
@@ -177,7 +201,7 @@ test("running validate barrier queues two requests, forwards notifications, and 
     jsonrpc: "2.0",
     id: 5,
     method: "resources/read",
-    params: { uri: "mc://versions" }
+    params: { _meta: modernMeta(), uri: "mc://versions" }
   } as JSONRPCRequest);
   assert.deepEqual(outbound.at(-1), {
     jsonrpc: "2.0",
@@ -205,11 +229,11 @@ test("overflowing validate-project never acquires a deadline timer or barrier", 
   supervisor.childReady = true;
   supervisor.liveChildren.add(child);
 
-  supervisor.handleClientMessage(call(7, "validate-project"));
-  supervisor.handleClientMessage(call(8, "list-versions"));
-  supervisor.handleClientMessage(call(9, "list-versions"));
+  supervisor.handleClientMessage(modernCall(7, "validate-project"));
+  supervisor.handleClientMessage(modernCall(8, "list-versions"));
+  supervisor.handleClientMessage(modernCall(9, "list-versions"));
   assert.equal(scheduled, 1);
-  supervisor.handleClientMessage(call(10, "validate-project"));
+  supervisor.handleClientMessage(modernCall(10, "validate-project"));
 
   assert.equal(scheduled, 1);
   assert.equal(supervisor.validateBarrierKey, "number:7");
@@ -220,10 +244,10 @@ test("overflowing validate-project never acquires a deadline timer or barrier", 
 test("queued validate barrier counts as one FIFO slot and cancellation releases later work", (t) => {
   const { supervisor, outbound, workerWrites } = createHarness();
   t.after(() => clearHarnessTimers(supervisor));
-  supervisor.handleClientMessage(call(10, "list-versions"));
-  supervisor.handleClientMessage(call(11, "validate-project"));
-  supervisor.handleClientMessage(call(12, "list-versions"));
-  supervisor.handleClientMessage(call(13, "list-versions"));
+  supervisor.handleClientMessage(modernCall(10, "list-versions"));
+  supervisor.handleClientMessage(modernCall(11, "validate-project"));
+  supervisor.handleClientMessage(modernCall(12, "list-versions"));
+  supervisor.handleClientMessage(modernCall(13, "list-versions"));
   assert.equal(supervisor.queuedRequests.length, 2);
   assert.equal((outbound.at(-1) as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code, "ERR_LIMIT_EXCEEDED");
 
@@ -241,8 +265,8 @@ test("queued validate barrier counts as one FIFO slot and cancellation releases 
 test("queue deadline returns phase queue without worker recovery", (t) => {
   const { supervisor, outbound } = createHarness();
   t.after(() => clearHarnessTimers(supervisor));
-  supervisor.handleClientMessage(call(20, "list-versions"));
-  supervisor.handleClientMessage(call(21, "validate-project"));
+  supervisor.handleClientMessage(modernCall(20, "list-versions"));
+  supervisor.handleClientMessage(modernCall(21, "validate-project"));
   supervisor.handleValidateProjectDeadline("number:21");
   const response = outbound.at(-1) as { result?: { structuredContent?: { error?: { code?: string }; meta?: { timeout?: { phase?: string; workerRestartInitiated?: boolean } } } } };
   assert.equal(response.result?.structuredContent?.error?.code, "ERR_TOOL_TIMEOUT");
@@ -262,11 +286,11 @@ test("cap-blocked degraded admission fails requests immediately and drops notifi
   supervisor.child = undefined;
   supervisor.unresolvedTreeTokens.add(1001);
   supervisor.unresolvedTreeTokens.add(1002);
-  supervisor.handleClientMessage(call(30, "list-versions"));
+  supervisor.handleClientMessage(modernCall(30, "list-versions"));
   assert.equal(supervisor.queuedRequests.length, 0);
   assert.equal((outbound.at(-1) as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code, "ERR_WORKER_RESTART");
 
-  supervisor.handleClientMessage({ jsonrpc: "2.0", method: "notifications/progress", params: {} } as JSONRPCMessage);
+  supervisor.handleClientMessage({ jsonrpc: "2.0", method: "notifications/progress", params: { _meta: modernMeta() } } as JSONRPCMessage);
   assert.equal(supervisor.queuedRequests.length, 0);
   assert.equal(supervisor.queuedNotifications.length, 0);
   assert.deepEqual(events.at(-1), {
@@ -327,9 +351,9 @@ test("outbound failure cannot prevent queue timeout from draining later work", (
   supervisor.liveChildren.add(child);
   t.after(() => clearHarnessTimers(supervisor));
 
-  supervisor.handleClientMessage(call(32, "list-versions"));
-  supervisor.handleClientMessage(call(33, "validate-project"));
-  supervisor.handleClientMessage(call(34, "list-versions"));
+  supervisor.handleClientMessage(modernCall(32, "list-versions"));
+  supervisor.handleClientMessage(modernCall(33, "validate-project"));
+  supervisor.handleClientMessage(modernCall(34, "list-versions"));
   supervisor.handleValidateProjectDeadline("number:33");
 
   assert.equal(supervisor.queuedRequests.length, 0);
@@ -352,7 +376,7 @@ test("outbound failure cannot prevent one running-timeout recovery", (t) => {
   supervisor.recoverTimedOutWorker = () => { recoveries += 1; };
   t.after(() => clearHarnessTimers(supervisor));
 
-  supervisor.handleClientMessage(call(35, "validate-project"));
+  supervisor.handleClientMessage(modernCall(35, "validate-project"));
   supervisor.handleValidateProjectDeadline("number:35");
 
   assert.equal(recoveries, 1);
@@ -369,9 +393,9 @@ test("unavailable worker queue enforces the same two-request overflow bound", ()
   } as never) as unknown as Harness;
   supervisor.scheduleRestart = () => {};
 
-  supervisor.handleClientMessage(call(36, "list-versions"));
-  supervisor.handleClientMessage(call(37, "list-versions"));
-  supervisor.handleClientMessage(call(38, "list-versions"));
+  supervisor.handleClientMessage(modernCall(36, "list-versions"));
+  supervisor.handleClientMessage(modernCall(37, "list-versions"));
+  supervisor.handleClientMessage(modernCall(38, "list-versions"));
 
   assert.equal(supervisor.queuedRequests.length, 2);
   assert.equal((outbound[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code, "ERR_LIMIT_EXCEEDED");
@@ -380,18 +404,32 @@ test("unavailable worker queue enforces the same two-request overflow bound", ()
 test("worker exit and deadline races each produce one terminal response", (t) => {
   const first = createHarness();
   const firstChild = first.supervisor.child as FakeChild;
-  first.supervisor.handleClientMessage(call(39, "validate-project"));
+  first.supervisor.handleClientMessage(modernCall(39, "validate-project"));
   first.supervisor.handleWorkerExit(firstChild, 1, null);
   first.supervisor.handleValidateProjectDeadline("number:39");
-  assert.equal(first.outbound.filter((message) => "id" in message && message.id === 39).length, 1);
+  const firstResponses = first.outbound.filter((message) => "id" in message && message.id === 39);
+  assert.equal(firstResponses.length, 1);
+  // Pinned semantics: exit-first must terminalize via the worker-restart
+  // synthesis, not any admission-time rejection.
+  assert.equal(
+    (firstResponses[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code,
+    "ERR_WORKER_RESTART"
+  );
 
   const second = createHarness();
   const secondChild = second.supervisor.child as FakeChild;
   second.supervisor.recoverTimedOutWorker = () => {};
-  second.supervisor.handleClientMessage(call(40, "validate-project"));
+  second.supervisor.handleClientMessage(modernCall(40, "validate-project"));
   second.supervisor.handleValidateProjectDeadline("number:40");
   second.supervisor.handleWorkerExit(secondChild, 1, null);
-  assert.equal(second.outbound.filter((message) => "id" in message && message.id === 40).length, 1);
+  const secondResponses = second.outbound.filter((message) => "id" in message && message.id === 40);
+  assert.equal(secondResponses.length, 1);
+  // Pinned semantics: deadline-first must terminalize via the timeout
+  // synthesis, not any admission-time rejection.
+  assert.equal(
+    (secondResponses[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code,
+    "ERR_TOOL_TIMEOUT"
+  );
   t.after(() => {
     clearHarnessTimers(first.supervisor);
     clearHarnessTimers(second.supervisor);
@@ -403,13 +441,13 @@ test("worker exit and deadline races each produce one terminal response", (t) =>
 test("stale buffered response is ignored and the request ID can be reused on the replacement", (t) => {
   const { supervisor, outbound, workerWrites } = createHarness();
   const stale = supervisor.child as FakeChild;
-  supervisor.handleClientMessage(call(41, "list-versions"));
+  supervisor.handleClientMessage(modernCall(41, "list-versions"));
   supervisor.handleWorkerExit(stale, 1, null);
   const replacement = createLifecycleChild(99_999_986, workerWrites);
   supervisor.child = replacement;
   supervisor.childReady = true;
   supervisor.liveChildren.add(replacement);
-  supervisor.handleClientMessage(call(41, "list-versions"));
+  supervisor.handleClientMessage(modernCall(41, "list-versions"));
 
   supervisor.handleWorkerMessage(stale, { jsonrpc: "2.0", id: 41, result: { stale: true } } as JSONRPCMessage);
   supervisor.handleWorkerMessage(replacement, { jsonrpc: "2.0", id: 41, result: { fresh: true } } as JSONRPCMessage);
@@ -482,7 +520,7 @@ test("failed tree cleanup retains one logical token in both event orders and res
     supervisor.child = replacement;
     supervisor.childReady = true;
     supervisor.liveChildren.add(replacement);
-    supervisor.handleClientMessage(call(resultFirst ? 75 : 76, "validate-project"));
+    supervisor.handleClientMessage(modernCall(resultFirst ? 75 : 76, "validate-project"));
     assert.equal(supervisor.queuedRequests.length, 1);
     assert.equal(supervisor.liveCapOccupancy(), 2);
 
@@ -763,7 +801,7 @@ test("startup watchdog terminalizes queued work and late ready cannot adopt the 
 
   supervisor.spawnWorker();
   const stale = supervisor.child as FakeChild;
-  supervisor.handleClientMessage(call(70, "list-versions"));
+  supervisor.handleClientMessage(modernCall(70, "list-versions"));
   assert.equal(supervisor.queuedRequests.length, 1);
   now = 10_000;
   timers.find((timer) => timer.at === 10_000)?.callback();
@@ -963,8 +1001,8 @@ test("running cancellation suppresses a worker response and drains queued work",
   const { supervisor, outbound, workerWrites } = createHarness();
   t.after(() => clearHarnessTimers(supervisor));
   const child = supervisor.child as FakeChild;
-  supervisor.handleClientMessage(call(40, "validate-project"));
-  supervisor.handleClientMessage(call(41, "list-versions"));
+  supervisor.handleClientMessage(modernCall(40, "validate-project"));
+  supervisor.handleClientMessage(modernCall(41, "list-versions"));
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/cancelled",
@@ -982,7 +1020,7 @@ test("running cancellation suppresses a worker response and drains queued work",
 
 test("running cancellation followed by shutdown emits no terminal response or replacement", async () => {
   const { supervisor, outbound } = createHarness();
-  supervisor.handleClientMessage(call(42, "validate-project"));
+  supervisor.handleClientMessage(modernCall(42, "validate-project"));
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/cancelled",
@@ -1002,7 +1040,7 @@ test("cancel-first deadline performs cleanup without ERR_TOOL_TIMEOUT", (t) => {
     clearHarnessTimers(supervisor);
     if (supervisor.restartTimer) clearTimeout(supervisor.restartTimer);
   });
-  supervisor.handleClientMessage(call(50, "validate-project"));
+  supervisor.handleClientMessage(modernCall(50, "validate-project"));
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/cancelled",
@@ -1020,7 +1058,7 @@ test("timeout-first cancellation does not create a second terminal response", (t
     clearHarnessTimers(supervisor);
     if (supervisor.restartTimer) clearTimeout(supervisor.restartTimer);
   });
-  supervisor.handleClientMessage(call(60, "validate-project"));
+  supervisor.handleClientMessage(modernCall(60, "validate-project"));
   supervisor.child = undefined;
   supervisor.liveChildren.clear();
   supervisor.handleValidateProjectDeadline("number:60");
@@ -1029,5 +1067,12 @@ test("timeout-first cancellation does not create a second terminal response", (t
     method: "notifications/cancelled",
     params: { requestId: 60 }
   } as JSONRPCMessage);
-  assert.equal(outbound.filter((message) => "id" in message && message.id === 60).length, 1);
+  const responses = outbound.filter((message) => "id" in message && message.id === 60);
+  assert.equal(responses.length, 1);
+  // Pinned semantics: the single terminal response must be the timeout
+  // synthesis, not any admission-time rejection.
+  assert.equal(
+    (responses[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code,
+    "ERR_TOOL_TIMEOUT"
+  );
 });

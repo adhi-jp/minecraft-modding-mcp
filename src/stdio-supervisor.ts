@@ -12,6 +12,13 @@ import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } fr
 import { log } from "./logger.js";
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { getToolSchema } from "./tool-schema-registry.js";
+import {
+  buildEraConflictRejection,
+  buildMethodNotFoundRejection,
+  buildMissingMetaRejection,
+  classifyEraSignal,
+  type Era
+} from "./era-classifier.js";
 
 const DEFAULT_CLIENT_MODE: ConcreteFramingMode = "line";
 const WORKER_MODE_ENV = "MCP_STDIO_WORKER_MODE";
@@ -764,6 +771,14 @@ export class StdioSupervisor {
   private clientInitialized = false;
   private replayingInitialization = false;
   private initializeSentToWorker = false;
+  /**
+   * Process-lifetime era state. The supervisor is the SOLE era gatekeeper:
+   * classification happens at admission (handleClientMessage), in stdin
+   * order. The first valid NON-discover era signal locks the era (initialize
+   * → legacy; shallow-valid modern `_meta` request → modern); the lock is
+   * one-way and survives worker restarts.
+   */
+  private era: Era = "unselected";
 
   constructor(options: SupervisorOptions) {
     this.entryFile = options.entryFile;
@@ -845,30 +860,8 @@ export class StdioSupervisor {
       id: "id" in message ? message.id : undefined,
       childReady: this.childReady
     });
-    if (isRequest(message) && message.method === "initialize") {
-      this.initializeRequest = message;
-      this.clientInitialized = false;
-    } else if (isNotification(message) && message.method === "notifications/initialized") {
-      this.initializedNotification = message;
-    }
-
     if (isNotification(message)) {
-      if (message.method === "notifications/cancelled") {
-        this.handleCancellation(message);
-        return;
-      }
-      if (!this.childReady) {
-        if (!shouldRetainUnavailableNotification(message.method)) {
-          this.eventWriter("warn", "supervisor.notification_dropped", {
-            method: message.method,
-            reason: this.liveCapOccupancy() >= 2 ? "live-cap-blocked" : "worker-unavailable"
-          });
-        }
-        return;
-      }
-      if (this.child && !this.child.stdin.destroyed) {
-        this.writeToWorker(this.child, message);
-      }
+      this.handleClientNotification(message);
       return;
     }
 
@@ -877,11 +870,29 @@ export class StdioSupervisor {
     }
 
     if (message.method === "initialize") {
+      // initialize is the legacy era signal regardless of any _meta envelope
+      // it carries: the envelope is ignored for era classification here.
+      if (this.era === "modern") {
+        // One-way era lock: a rejected initialize is NEVER captured into the
+        // replay cache.
+        this.writeToClient(
+          buildEraConflictRejection(message.id as RequestId, "modern"),
+          this.modeForMessage(message)
+        );
+        return;
+      }
+      this.era = "legacy";
       if (!this.child && this.liveCapOccupancy() >= 2) {
+        // Capture-ordering fix: the cap-blocked rejection happens BEFORE
+        // capture, so a rejected initialize can never enter (or corrupt) the
+        // replay cache. clearInitialInitializationState() still discards any
+        // NOT-yet-completed earlier handshake, exactly as before.
         this.clearInitialInitializationState();
         this.writeToClient(buildLegacyJsonRpcError(message.id as RequestId), this.modeForMessage(message));
         return;
       }
+      this.initializeRequest = message;
+      this.clientInitialized = false;
       if (this.childReady) {
         this.forwardRequest(message, this.createPendingRequest(message));
       } else {
@@ -891,6 +902,10 @@ export class StdioSupervisor {
         if (existing >= 0) this.queuedNotifications.splice(existing, 1);
         this.queuedNotifications.push(message);
       }
+      return;
+    }
+
+    if (!this.admitEraRequest(message)) {
       return;
     }
 
@@ -935,6 +950,171 @@ export class StdioSupervisor {
       return;
     }
     this.queuedRequests.push({ message, pending });
+  }
+
+  /**
+   * Era-aware notification dispatch. notifications/cancelled stays
+   * supervisor-side in ALL eras/states; notifications/initialized is captured
+   * and forwarded only within a legacy flow; every other notification is
+   * gated by the era rules before reaching the original forwarding path.
+   * Dropped variants emit NO response and never affect subsequent traffic.
+   */
+  private handleClientNotification(message: JSONRPCNotification): void {
+    if (message.method === "notifications/cancelled") {
+      this.handleCancellation(message);
+      return;
+    }
+
+    if (message.method === "notifications/initialized") {
+      if (this.era !== "legacy") {
+        // A stray initialized outside a legacy flow is dropped and NEVER
+        // captured: forwarding (or later replaying) it would pin a worker
+        // connection legacy.
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: this.era === "modern" ? "era-conflict" : "era-unselected"
+        });
+        return;
+      }
+      if (this.initializeRequest === undefined) {
+        // Legacy era but NO handshake in progress (e.g. after a cap-rejected
+        // initialize): capturing here could later replay the stray frame
+        // around an uninitialized worker. Drop, never capture.
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: "no-active-handshake"
+        });
+        return;
+      }
+      this.initializedNotification = message;
+    } else if (this.era === "unselected") {
+      if (this.childReady) {
+        // Consumed at the supervisor: forwarding any notification before an
+        // era is selected would pin the worker connection legacy. The
+        // worker-unavailable branch below keeps its original drop reasons.
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: "era-unselected"
+        });
+        return;
+      }
+    } else {
+      const signal = classifyEraSignal(message.params);
+      if (this.era === "legacy" && signal.classification === "modern-signal") {
+        // Only shallow-VALID modern signals conflict with the legacy lock;
+        // claim-less and claim-shaped-invalid notifications forward as today
+        // (the legacy era stays maximally permissive).
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: "era-conflict"
+        });
+        return;
+      }
+      if (this.era === "modern" && signal.classification !== "modern-signal") {
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: "missing-meta"
+        });
+        return;
+      }
+    }
+
+    if (!this.childReady) {
+      if (!shouldRetainUnavailableNotification(message.method)) {
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: this.liveCapOccupancy() >= 2 ? "live-cap-blocked" : "worker-unavailable"
+        });
+      }
+      return;
+    }
+    if (this.child && !this.child.stdin.destroyed) {
+      this.writeToWorker(this.child, message);
+    }
+  }
+
+  /**
+   * Era rules for non-initialize requests, applied at admission in stdin
+   * order. Returns false when the request was terminally rejected here (a
+   * supervisor-produced response was written; nothing may be forwarded or
+   * queued). When it returns true the caller proceeds through the original
+   * era-less admission path unchanged.
+   */
+  private admitEraRequest(message: JSONRPCRequest): boolean {
+    const signal = classifyEraSignal(message.params);
+    const mode = this.modeForMessage(message);
+    const id = message.id as RequestId;
+
+    if (message.method === "subscriptions/listen" && this.era !== "legacy") {
+      if (signal.classification !== "modern-signal") {
+        // The shallow envelope check applies to EVERY request at admission:
+        // a non-signal listen fails -32602 before the method-level -32601.
+        this.writeToClient(
+          buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
+          mode
+        );
+        return false;
+      }
+      if (this.era === "unselected") {
+        // The modern-signal on subscriptions/listen counts as the
+        // era-locking signal even though the method itself is rejected:
+        // lock modern first, then reject.
+        this.lockModernEra();
+      }
+      this.writeToClient(buildMethodNotFoundRejection(id), mode);
+      return false;
+    }
+
+    if (message.method === "server/discover") {
+      // server/discover is ERA-NEUTRAL: it forwards under the legacy lock
+      // (the legacy-pinned worker answers -32601) and a modern-signal
+      // discover forwards WITHOUT locking; only signal-less discovers in
+      // non-legacy states are rejected.
+      if (this.era === "legacy" || signal.classification === "modern-signal") {
+        return true;
+      }
+      this.writeToClient(
+        buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
+        mode
+      );
+      return false;
+    }
+
+    if (signal.classification === "modern-signal") {
+      if (this.era === "legacy") {
+        this.writeToClient(buildEraConflictRejection(id, "legacy"), mode);
+        return false;
+      }
+      if (this.era === "unselected") {
+        this.lockModernEra();
+      }
+      return true;
+    }
+
+    if (this.era === "legacy") {
+      // Legacy-locked behavior is otherwise UNCHANGED: claim-less AND
+      // claim-shaped-invalid traffic forwards exactly as before the era gate.
+      return true;
+    }
+    this.writeToClient(
+      buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
+      mode
+    );
+    return false;
+  }
+
+  /**
+   * One-way modern lock. Purges the cached legacy lifecycle state so no
+   * initialize/notifications/initialized can ever reach a worker in a
+   * modern-locked process — across ALL later worker generations.
+   */
+  private lockModernEra(): void {
+    this.era = "modern";
+    this.initializeRequest = undefined;
+    this.initializedNotification = undefined;
+    this.clientInitialized = false;
+    this.replayingInitialization = false;
+    this.initializeSentToWorker = false;
   }
 
   private createPendingRequest(message: JSONRPCRequest): PendingRequest {
@@ -1024,6 +1204,24 @@ export class StdioSupervisor {
     const pending = this.pendingRequests.get(key);
     if (pending?.toolName === "validate-project") {
       pending.clientCancelled = true;
+    }
+    if (this.era === "unselected") {
+      // Never forward: the cancellation could be a worker connection's first
+      // frame and would legacy-pin it. Supervisor-side bookkeeping above
+      // still applies — which means an in-flight era-neutral discover cannot
+      // be cancelled server-side (accepted limitation).
+      return;
+    }
+    if (this.era === "modern" && classifyEraSignal(message.params).classification !== "modern-signal") {
+      // A claim-less/invalid cancellation must never reach a modern-locked
+      // worker connection: after a restart it could be the fresh
+      // generation's FIRST frame and the SDK would classify the opening
+      // frame legacy. Bookkeeping above still cancels supervisor-side.
+      this.eventWriter("warn", "supervisor.notification_dropped", {
+        method: message.method,
+        reason: "missing-meta"
+      });
+      return;
     }
     const child = this.child;
     if (child && !child.stdin.destroyed) {
@@ -1385,7 +1583,10 @@ export class StdioSupervisor {
       clientInitialized: this.clientInitialized
     });
 
-    if (!this.initializeRequest) {
+    // Era-gated replay: initialize replay fires ONLY in the legacy era. The
+    // modern lock purges the cached lifecycle, so the era check is
+    // belt-and-braces — no initialize may ever reach a modern-locked worker.
+    if (this.era !== "legacy" || !this.initializeRequest) {
       this.adoptActiveChild();
       this.flushQueue();
       return;
