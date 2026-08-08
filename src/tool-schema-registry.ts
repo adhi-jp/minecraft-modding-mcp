@@ -45,6 +45,11 @@ export function listRegisteredTools(): string[] {
   return [...registry.keys()].sort();
 }
 
+/** O(1) registry size — the populated-registry probe for per-request paths. */
+export function registeredToolCount(): number {
+  return registry.size;
+}
+
 export function clearRegisteredToolsForTest(): void {
   registry.clear();
 }

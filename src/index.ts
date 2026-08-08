@@ -4,13 +4,18 @@ import {
   McpServer,
   type CallToolResult,
   type JSONRPCMessage,
+  type McpRequestContext,
   type ServerContext
 } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { makeStageEmitter, type StageEmitterExtra } from "./stage-emitter.js";
 import { ZodError, z } from "zod";
+import { RESOURCE_LISTS_CACHE_HINT } from "./cache-policy.js";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
-import { registerAppTool, registerExpertTool } from "./registration-adapter.js";
+import {
+  registerAppTool as registerAppToolDirect,
+  registerExpertTool as registerExpertToolDirect
+} from "./registration-adapter.js";
 
 import { objectResult } from "./mcp-helpers.js";
 import { runWithRequestContext } from "./request-context.js";
@@ -729,20 +734,59 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
  * McpServer so probe-instance mutations can never leak onto the re-pinned
  * legacy instance (frozen negotiate-down contract). Module-scope services,
  * config, and helpers stay shared; only the McpServer and its registrations
- * are per-instance. Registration ORDER inside this function is the frozen
- * tools/list order — do not reorder.
+ * are per-instance.
+ *
+ * Tool registration ORDER: the CALL-SITE order inside this function is the
+ * frozen legacy tools/list order — do not reorder the call sites. The calls
+ * are captured as deferred thunks and executed at the bottom of the
+ * function: in call-site order for legacy/ctx-less instances (byte-frozen
+ * golden contract), and in raw tool-name-ascending order when serveStdio
+ * constructs a MODERN-era instance (`ctx.era === "modern"` — the SDK's
+ * documented era-parameterized factory seam; the v2 SDK itself emits
+ * registration order and never sorts). Each instance serves exactly one era,
+ * so the two orders can never mix on one connection. (Adopted ordering
+ * policy.)
+ *
+ * Cache hints (adopted policy, src/cache-policy.ts): the constructor options
+ * configure the non-zero resources/list + resources/templates/list rows;
+ * per-resource rows live in registerResources(); all hints ride the SDK's
+ * never-serialized carrier, so 2025-era responses are unaffected.
  *
  * NOTE: the function body below intentionally keeps the original module-scope
  * indentation of the registration block to preserve a reviewable minimal diff.
  */
 // eslint-disable-next-line func-style
-function buildServer(): McpServer {
+function buildServer(ctx?: McpRequestContext): McpServer {
 const server = new McpServer({
   name: SERVER_IDENTITY.name,
   version: SERVER_IDENTITY.version
+}, {
+  cacheHints: {
+    "resources/list": RESOURCE_LISTS_CACHE_HINT,
+    "resources/templates/list": RESOURCE_LISTS_CACHE_HINT
+  }
 });
 
 registerResources(server, sourceService);
+
+// Deferred tool-registration capture: the adapter imports are RENAMED to
+// registerAppToolDirect/registerExpertToolDirect, and these local wrapper
+// functions take the original names, so every call site below records
+// {name, thunk} in call-site order; the executor at the bottom of this
+// function replays them in the era-appropriate order.
+const pendingToolRegistrations: Array<{ name: string; register: () => void }> = [];
+const registerAppTool: typeof registerAppToolDirect = (srv, name, description, shape, annotations, handler) => {
+  pendingToolRegistrations.push({
+    name,
+    register: () => registerAppToolDirect(srv, name, description, shape, annotations, handler)
+  });
+};
+const registerExpertTool: typeof registerExpertToolDirect = (srv, name, description, shape, annotations, handler) => {
+  pendingToolRegistrations.push({
+    name,
+    register: () => registerExpertToolDirect(srv, name, description, shape, annotations, handler)
+  });
+};
 
 // The app-level schema registry (tool-schema-registry) is register-once and
 // module-scoped: the eager `buildServer()` call at the bottom of this module
@@ -1489,6 +1533,18 @@ registerExpertTool(server, "remap-mod-jar",
 );
 registerToolSchema("remap-mod-jar", remapModJarSchema);
 
+// Deferred-registration executor: legacy (and the ctx-less module singleton)
+// keeps the frozen call-site order; a modern-era instance registers in raw
+// tool-name-ascending order (plain code-unit comparison — tool names are
+// ASCII, so this is byte order). The advertised tools/list order follows
+// registration order in the SDK, which is exactly what the two golden/pinned
+// contracts observe.
+const toolRegistrationOrder =
+  ctx?.era === "modern"
+    ? [...pendingToolRegistrations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    : pendingToolRegistrations;
+for (const pending of toolRegistrationOrder) pending.register();
+
 return server;
 }
 
@@ -1561,4 +1617,4 @@ export async function startServer(): Promise<void> {
   serverStarted = true;
 }
 
-export { server, sourceService, config, SERVER_VERSION };
+export { server, sourceService, config, SERVER_VERSION, buildServer };

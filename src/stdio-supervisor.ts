@@ -11,7 +11,7 @@ import type {
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "./json-rpc-framing.js";
 import { log } from "./logger.js";
 import { buildSuggestedCall } from "./build-suggested-call.js";
-import { getToolSchema } from "./tool-schema-registry.js";
+import { getToolSchema, registeredToolCount } from "./tool-schema-registry.js";
 import {
   buildEraConflictRejection,
   buildMethodNotFoundRejection,
@@ -274,6 +274,29 @@ function getTrackedRequestId(message: { id?: unknown }): RequestId | undefined {
 
 function requestKey(id: RequestId): string {
   return `${typeof id}:${String(id)}`;
+}
+
+/**
+ * Frozen premigration reply for a tools/call whose name is not registered
+ * (typo OR flag-disabled tool — indistinguishable, exactly as the v1 SDK
+ * answered): a SUCCESSFUL CallToolResult with isError:true and one text
+ * content entry embedding the v1 error string. The v2 SDK throws a raw
+ * -32602 instead, so the supervisor synthesizes this envelope for
+ * LEGACY-era registry misses (see handleClientMessage) to keep the legacy
+ * wire byte-identical to the premigration baseline
+ * (tests/fixtures/premigration/error-code-inventory.json, disabled-tool
+ * row). The modern era keeps the raw -32602 (sanctioned: tool absence is a
+ * params problem on 2026-07-28, mirroring the SDK's own not-found mapping).
+ */
+export function buildUnknownToolNotFoundReply(id: RequestId, toolName: string): JSONRPCResponse {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text: `MCP error -32602: Tool ${toolName} not found` }],
+      isError: true
+    }
+  } as JSONRPCResponse;
 }
 
 export function buildLegacyJsonRpcError(id: RequestId): JSONRPCResponse {
@@ -999,6 +1022,38 @@ export class StdioSupervisor {
         buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
       );
       this.drainQueue();
+      return;
+    }
+
+    if (
+      this.era === "legacy" &&
+      message.method === "tools/call" &&
+      typeof pending.toolName === "string" &&
+      registeredToolCount() > 0 &&
+      getToolSchema(pending.toolName) === undefined
+    ) {
+      // LEGACY-era registry miss (typo or flag-disabled tool): answer the
+      // frozen premigration isError envelope. The registry is authoritative
+      // in production (src/cli.ts imports ./index.js before the supervisor
+      // starts, under the same env flags the worker inherits); the
+      // populated-registry gate keeps white-box suites that construct the
+      // supervisor without the app import on today's forwarding behavior.
+      // Semantics: DEGRADED states answer first — the cap-blocked restart
+      // and queue-overflow branches above take precedence exactly as before
+      // the intercept existed — while in the normal state the miss is
+      // answered immediately, pre-queue: it never enters pendingRequests or
+      // queuedRequests, so writeSyntheticReply's forwarded-only entitlement
+      // records no finality tombstone, and — unlike v1, which forwarded the
+      // call — it consumes no queue slot and skips the worker round-trip
+      // (identical per-request reply bytes, different queue occupancy and
+      // latency). Modern-era misses pass through to the worker's raw -32602
+      // (sanctioned modern contract); the unselected state never reaches
+      // here (rule-5 rejection in admitEraRequest).
+      this.eventWriter("info", "supervisor.unknown_tool_intercepted", {
+        id: pending.id,
+        toolName: pending.toolName
+      });
+      this.writeSyntheticReply(pending, buildUnknownToolNotFoundReply(pending.id, pending.toolName));
       return;
     }
 

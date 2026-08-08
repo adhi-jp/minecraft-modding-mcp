@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 191;
+const EXPECTED_ORDINARY_TEST_FILES = 203;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -45,7 +45,30 @@ const EXPECTED_ORDINARY_TEST_FILES = 191;
 // structural drift guard, tests/utils/synthetic-decorator.test.ts adds 5
 // decorator unit tests, and tests/utils/server-identity.test.ts adds 3
 // canonical-identity unit tests.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1757;
+// 191 -> 199 / 1757 -> 1781 (modern-surface completion slice): cache-hint
+// values + era ordering + acceptance/inventory suites:
+// tests/utils/mcp-helpers-cache-fields.test.ts adds 3 errorResource cache
+// override tests, tests/stdio/stdio-modern-cache-hints.test.ts adds 6
+// adopted-cache-value wire tests, tests/stdio/stdio-modern-tools-list-order
+// .test.ts adds 2 ordering tests, tests/stdio/stdio-modern-discover-
+// contents.test.ts adds 1 full-contents pin, tests/stdio/stdio-legacy-
+// negotiation-matrix.test.ts adds 2 declarations (a 5-version matrix loop +
+// the bogus-version case), tests/stdio/stdio-modern-result-type-inventory
+// .test.ts adds 3 enumeration tests, tests/stdio/stdio-error-code-inventory
+// .test.ts adds 5 inventory/source-scan tests, and tests/stdio/stdio-
+// dependency-method-inventory.test.ts adds 2 per-era wire inventory tests.
+// 199 -> 200 / 1781 -> 1788 (disabled-tool restore disposition):
+// tests/stdio/stdio-supervisor-unknown-tool-intercept.test.ts adds 7
+// legacy-era unknown-tool intercept tests (wire restore + modern guard +
+// white-box queue/tombstone/registry-gate semantics).
+// 200 -> 203 / 1788 -> 1797 (modern-surface repair round 2): per-flag-config
+// tools/list ordering coverage — tests/stdio/stdio-modern-tools-list-order.
+// {batch-tools-off,verify-mixin-target-off,both-off}.test.ts add 2 ordering
+// tests each (per-process flag env, legacy golden order + modern sorted);
+// stdio-modern-cache-hints.test.ts gains 1 legacy claim-shaped-invalid
+// errorResource guard; stdio-supervisor-unknown-tool-intercept.test.ts
+// gains 2 degraded-state (cap-blocked restart / queue-overflow) rows.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1797;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
