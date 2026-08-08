@@ -17,7 +17,9 @@ import {
   buildMethodNotFoundRejection,
   buildMissingMetaRejection,
   classifyEraSignal,
-  type Era
+  extractModernRequestContext,
+  type Era,
+  type EraSignal
 } from "./era-classifier.js";
 
 const DEFAULT_CLIENT_MODE: ConcreteFramingMode = "line";
@@ -203,6 +205,27 @@ export type PendingRequestSnapshot = {
    * entry is discarded.
    */
   mode?: ConcreteFramingMode;
+  /**
+   * The supervisor's era at this request's admission ("unselected" occurs
+   * only for era-neutral server/discover admitted before any lock). Always
+   * set at runtime by createPendingRequest, the sole constructor; optional at
+   * the type level for tolerant synthetic-builder inputs and exported-type
+   * compatibility — no reply builder may read it.
+   */
+  era?: Era;
+  /**
+   * Per-request modern protocol context, captured SHALLOW (values aliased
+   * as-is from params._meta — nothing may mutate an inbound params graph
+   * after admission, or captured snapshots would change retroactively) for
+   * shallow-valid modern-signal requests only; undefined for claim-less
+   * legacy traffic and for every initialize (initialize envelopes are
+   * ignored). Captured for downstream synthetic-result decoration; the
+   * supervisor itself must never read these — no reply, synthesis, or
+   * forwarded frame may depend on them (the no-leak tests pin that).
+   */
+  protocolVersion?: string;
+  clientCapabilities?: Record<string, unknown>;
+  clientInfo?: unknown;
   lastStage?: string;
   lastStageStartedAt?: number;
   lastStageMeta?: unknown;
@@ -905,11 +928,12 @@ export class StdioSupervisor {
       return;
     }
 
-    if (!this.admitEraRequest(message)) {
+    const eraSignal = this.admitEraRequest(message);
+    if (!eraSignal) {
       return;
     }
 
-    const pending = this.createPendingRequest(message);
+    const pending = this.createPendingRequest(message, eraSignal);
     if (!this.child && this.liveCapOccupancy() >= 2) {
       const { reply } = buildWorkerRestartReply(
         pending,
@@ -1035,12 +1059,16 @@ export class StdioSupervisor {
 
   /**
    * Era rules for non-initialize requests, applied at admission in stdin
-   * order. Returns false when the request was terminally rejected here (a
+   * order. Returns undefined when the request was terminally rejected here (a
    * supervisor-produced response was written; nothing may be forwarded or
-   * queued). When it returns true the caller proceeds through the original
-   * era-less admission path unchanged.
+   * queued). On admission it returns the admission-time era signal, which the
+   * caller hands to createPendingRequest so snapshot capture uses the same
+   * result as the gating decision (extractModernRequestContext re-checks the
+   * same immutable params graph defensively — a pure re-evaluation, not a
+   * second authority); the caller then proceeds through the original era-less
+   * admission path unchanged.
    */
-  private admitEraRequest(message: JSONRPCRequest): boolean {
+  private admitEraRequest(message: JSONRPCRequest): EraSignal | undefined {
     const signal = classifyEraSignal(message.params);
     const mode = this.modeForMessage(message);
     const id = message.id as RequestId;
@@ -1053,7 +1081,7 @@ export class StdioSupervisor {
           buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
           mode
         );
-        return false;
+        return undefined;
       }
       if (this.era === "unselected") {
         // The modern-signal on subscriptions/listen counts as the
@@ -1062,7 +1090,7 @@ export class StdioSupervisor {
         this.lockModernEra();
       }
       this.writeToClient(buildMethodNotFoundRejection(id), mode);
-      return false;
+      return undefined;
     }
 
     if (message.method === "server/discover") {
@@ -1071,36 +1099,36 @@ export class StdioSupervisor {
       // discover forwards WITHOUT locking; only signal-less discovers in
       // non-legacy states are rejected.
       if (this.era === "legacy" || signal.classification === "modern-signal") {
-        return true;
+        return signal;
       }
       this.writeToClient(
         buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
         mode
       );
-      return false;
+      return undefined;
     }
 
     if (signal.classification === "modern-signal") {
       if (this.era === "legacy") {
         this.writeToClient(buildEraConflictRejection(id, "legacy"), mode);
-        return false;
+        return undefined;
       }
       if (this.era === "unselected") {
         this.lockModernEra();
       }
-      return true;
+      return signal;
     }
 
     if (this.era === "legacy") {
       // Legacy-locked behavior is otherwise UNCHANGED: claim-less AND
       // claim-shaped-invalid traffic forwards exactly as before the era gate.
-      return true;
+      return signal;
     }
     this.writeToClient(
       buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
       mode
     );
-    return false;
+    return undefined;
   }
 
   /**
@@ -1117,13 +1145,32 @@ export class StdioSupervisor {
     this.initializeSentToWorker = false;
   }
 
-  private createPendingRequest(message: JSONRPCRequest): PendingRequest {
+  /**
+   * `eraSignal` is the ADMISSION-time classification handed back by
+   * admitEraRequest — the initialize/replay/flush call sites omit it (an
+   * initialize snapshot is always era "legacy" with no modern context, even
+   * when the initialize carries a _meta envelope). Context is captured only
+   * for shallow-valid modern signals; this.era already reflects any lock
+   * admitEraRequest applied, so it IS the era at admission on every path.
+   */
+  private createPendingRequest(message: JSONRPCRequest, eraSignal?: EraSignal): PendingRequest {
     const pending: PendingRequest = {
       id: message.id as RequestId,
       method: message.method,
       startedAt: this.monotonicNow(),
-      mode: this.modeForMessage(message)
+      mode: this.modeForMessage(message),
+      era: this.era
     };
+    if (eraSignal?.classification === "modern-signal") {
+      const context = extractModernRequestContext(message.params);
+      if (context) {
+        pending.protocolVersion = context.protocolVersion;
+        pending.clientCapabilities = context.clientCapabilities;
+        if ("clientInfo" in context) {
+          pending.clientInfo = context.clientInfo;
+        }
+      }
+    }
     if (message.method === "tools/call") {
       const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
       if (typeof params.name === "string") pending.toolName = params.name;

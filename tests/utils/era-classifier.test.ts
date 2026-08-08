@@ -7,9 +7,11 @@ import {
   buildMissingMetaRejection,
   classifyEraSignal,
   CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
   ERA_CONFLICT_LEGACY_MESSAGE,
   ERA_CONFLICT_MODERN_MESSAGE,
   ERA_SUPPORTED_PROTOCOL_VERSIONS,
+  extractModernRequestContext,
   MISSING_META_MODERN_MESSAGE,
   MISSING_META_UNSELECTED_MESSAGE,
   type EraSignal
@@ -17,6 +19,7 @@ import {
 
 const PV = "io.modelcontextprotocol/protocolVersion";
 const CC = "io.modelcontextprotocol/clientCapabilities";
+const CI = "io.modelcontextprotocol/clientInfo";
 
 function signal(params: unknown): EraSignal {
   return classifyEraSignal(params);
@@ -192,4 +195,50 @@ test("buildMethodNotFoundRejection is a plain -32601 without data", () => {
 
 test("CLIENT_CAPABILITIES_META_KEY and companions match the reserved io.modelcontextprotocol names", () => {
   assert.equal(CLIENT_CAPABILITIES_META_KEY, CC);
+});
+
+test("extractModernRequestContext returns the shallow context verbatim for a modern-signal envelope", () => {
+  assert.equal(CLIENT_INFO_META_KEY, CI);
+  const clientCapabilities = { sampling: {} };
+  const clientInfo = { name: "sentinel-a", version: "1" };
+  const context = extractModernRequestContext({
+    _meta: { [PV]: "2026-07-28", [CC]: clientCapabilities, [CI]: clientInfo, progressToken: "p" }
+  });
+  assert.ok(context, "a shallow-valid modern envelope must yield a context");
+  assert.equal(context.protocolVersion, "2026-07-28");
+  assert.equal(context.clientCapabilities, clientCapabilities, "clientCapabilities must be the as-is reference (shallow copy)");
+  assert.equal(context.clientInfo, clientInfo, "clientInfo must be the as-is reference (shallow copy)");
+  // Deep value validation belongs to the worker: an unsupported version
+  // string still extracts verbatim.
+  assert.equal(
+    extractModernRequestContext({ _meta: { [PV]: "2027-01-01", [CC]: {} } })?.protocolVersion,
+    "2027-01-01"
+  );
+});
+
+test("extractModernRequestContext omits clientInfo when absent and passes a non-object clientInfo through as-is", () => {
+  const withoutInfo = extractModernRequestContext({ _meta: { [PV]: "2026-07-28", [CC]: {} } });
+  assert.ok(withoutInfo);
+  assert.equal(CI in withoutInfo ? "present" : "absent", "absent", "absent clientInfo key must not appear at all");
+  assert.equal("clientInfo" in withoutInfo, false, "absent clientInfo must be omitted, not set undefined");
+
+  // PINNED shallow policy: a present clientInfo is captured verbatim even
+  // when it is not Implementation-shaped — the worker validates values.
+  const nonObject = extractModernRequestContext({
+    _meta: { [PV]: "2026-07-28", [CC]: {}, [CI]: "not-an-object" }
+  });
+  assert.ok(nonObject);
+  assert.equal("clientInfo" in nonObject, true);
+  assert.equal(nonObject.clientInfo, "not-an-object");
+});
+
+test("extractModernRequestContext returns undefined for claim-less and claim-shaped-invalid params", () => {
+  assert.equal(extractModernRequestContext(undefined), undefined);
+  assert.equal(extractModernRequestContext({}), undefined);
+  assert.equal(extractModernRequestContext({ _meta: {} }), undefined);
+  assert.equal(extractModernRequestContext({ _meta: { [PV]: "2026-07-28" } }), undefined);
+  assert.equal(extractModernRequestContext({ _meta: { [PV]: 42, [CC]: {} } }), undefined);
+  assert.equal(extractModernRequestContext({ _meta: { [PV]: "2026-07-28", [CC]: [] } }), undefined);
+  // clientInfo alone is not an era signal and must not conjure a context.
+  assert.equal(extractModernRequestContext({ _meta: { [CI]: { name: "c", version: "1" } } }), undefined);
 });

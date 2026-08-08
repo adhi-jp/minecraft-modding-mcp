@@ -176,6 +176,63 @@ test("wire: unsupported modern protocol version locks modern and the worker's -3
   });
 });
 
+test("wire: two concurrent modern requests with different unsupported versions each get their own -32022 requested value", { timeout: 90_000 }, async (t) => {
+  if (!(await canUseNativeStdioPipes())) {
+    t.skip("native child-process stdio pipes close immediately in this runtime");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // Public-transport guard for per-request protocol-context carriage: two
+  // modern requests pipelined back-to-back with DIFFERENT unsupported
+  // versions must each be answered with their OWN data.requested — a
+  // last-seen-global version carrier would collapse both onto one value.
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+  session.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      _meta: { [PROTOCOL_VERSION_KEY]: "2027-01-01", [CLIENT_CAPABILITIES_KEY]: {} },
+      name: "list-versions",
+      arguments: {}
+    }
+  });
+  session.send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      _meta: { [PROTOCOL_VERSION_KEY]: "2028-02-02", [CLIENT_CAPABILITIES_KEY]: {} },
+      name: "list-versions",
+      arguments: {}
+    }
+  });
+
+  await waitFor(
+    () => session.frames.some((frame) => frame.id === 1) && session.frames.some((frame) => frame.id === 2),
+    60_000,
+    "-32022 replies for ids 1 and 2"
+  );
+  const first = session.frames.find((frame) => frame.id === 1) as { error?: unknown };
+  assert.deepEqual(first.error, {
+    code: -32022,
+    message: "Unsupported protocol version: 2027-01-01",
+    data: { supported: ["2026-07-28"], requested: "2027-01-01" }
+  });
+  const second = session.frames.find((frame) => frame.id === 2) as { error?: unknown };
+  assert.deepEqual(second.error, {
+    code: -32022,
+    message: "Unsupported protocol version: 2028-02-02",
+    data: { supported: ["2026-07-28"], requested: "2028-02-02" }
+  });
+});
+
 test("wire: ready-first pipelined modern discover and legacy initialize on one process serve a DiscoverResult, negotiate legacy, and end era-locked legacy", { timeout: 90_000 }, async (t) => {
   if (!(await canUseNativeStdioPipes())) {
     t.skip("native child-process stdio pipes close immediately in this runtime");

@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 185;
+const EXPECTED_ORDINARY_TEST_FILES = 186;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -29,7 +29,13 @@ const EXPECTED_ORDINARY_TEST_FILES = 185;
 // discover+initialize, worker-down discover release, Content-Length
 // rejection framing), and tests/utils/era-classifier.test.ts adds 9
 // classifier/builder unit tests.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1718;
+// 185 -> 186 / 1718 -> 1729 (per-request protocol-context carriage):
+// tests/stdio/stdio-supervisor-era-context.test.ts adds 7 snapshot
+// capture/concurrent-distinctness/queued-restart-carriage/no-leak tests,
+// era-wire gains 1 concurrent per-request -32022 distinctness guard, and
+// tests/utils/era-classifier.test.ts gains 3 extractModernRequestContext
+// unit tests.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1729;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
