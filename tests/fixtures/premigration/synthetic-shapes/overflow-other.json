@@ -1,0 +1,24 @@
+{
+  "description": "Pre-migration supervisor queue-limit reply for a non-tools/call method: raw JSON-RPC -32000 error. Same injection/session as overflow-toolscall.json (queue still full).",
+  "harness": "scripts/premigration/capture-synthetic-shapes.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/overflow.pid"
+  },
+  "injection": "same session as overflow-toolscall.json; queue still full; resources/list probe",
+  "request": {
+    "id": 6,
+    "jsonrpc": "2.0",
+    "method": "resources/list",
+    "params": {}
+  },
+  "reply": {
+    "error": {
+      "code": -32000,
+      "message": "MCP supervisor request queue is full."
+    },
+    "id": 6,
+    "jsonrpc": "2.0"
+  }
+}

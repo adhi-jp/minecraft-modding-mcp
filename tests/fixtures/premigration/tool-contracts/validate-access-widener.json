@@ -1,0 +1,169 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Validate Access Widener file entries against Minecraft bytecode signatures for a given version. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Access Widener file content"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Minecraft version"
+        },
+        "mapping": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ]
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ]
+        },
+        "projectPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional workspace root path for Loom cache-assisted runtime validation"
+        },
+        "gradleUserHome": {
+          "$ref": "#/properties/projectPath",
+          "description": "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "vanilla",
+            "merged",
+            "loader"
+          ],
+          "description": "vanilla = Mojang client jar only; merged = merged runtime discovery; loader = loader-transformed runtime jars."
+        },
+        "preferProjectVersion": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, detect MC version from gradle.properties and override version"
+        }
+      },
+      "required": [
+        "content",
+        "version"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "validate-access-widener"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 40,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "validate-access-widener"
+      }
+    },
+    "reply": {
+      "id": 40,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "content"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "version"
+                    }
+                  ],
+                  "hints": [
+                    "Check fieldErrors and submit a valid tool argument payload."
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "validate-access-widener"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "content"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "version"
+              }
+            ],
+            "hints": [
+              "Check fieldErrors and submit a valid tool argument payload."
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "validate-access-widener"
+          }
+        }
+      }
+    }
+  }
+}

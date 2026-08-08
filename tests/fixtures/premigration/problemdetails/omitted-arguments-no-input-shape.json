@@ -1,0 +1,352 @@
+{
+  "description": "Pre-migration ProblemDetails envelope golden for one Zod failure kind. Captured over the wire against the untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-problemdetails.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/problemdetails.pid"
+  },
+  "zodFailureKind": "omitted-arguments.no-input-shape",
+  "tool": "get-runtime-metrics",
+  "sentParams": {
+    "__argumentsOmitted": true
+  },
+  "omittedArguments": {
+    "note": "Context golden: this registration passes no params schema to the SDK, so an omitted-arguments call already SUCCEEDS today (the SDK invokes the handler without a validated args value and the passthrough schema accepts it). Not part of the approved error->success class."
+  },
+  "request": {
+    "id": 14,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "get-runtime-metrics"
+    }
+  },
+  "reply": {
+    "id": 14,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "meta": {
+                "durationMs": "<DURATION_MS>",
+                "requestId": "<REQUEST_ID>",
+                "tool": "get-runtime-metrics"
+              },
+              "result": {
+                "binary_remap_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "cache_artifact_bytes_lru": [],
+                "cache_entries": 0,
+                "cache_evictions": 0,
+                "cache_hit_rate": 0,
+                "cache_total_content_bytes": 0,
+                "decompile_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "get_file_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "indexed_disabled_count": 0,
+                "list_files_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "mapping_resolution_cache_hits": 0,
+                "mapping_resolution_cache_misses": 0,
+                "mapping_resolution_cache_size": 0,
+                "onehop_expand_count": 0,
+                "reindex_count": 0,
+                "reindex_skip_count": 0,
+                "repo_failover_count": 0,
+                "resolve_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "search_db_roundtrips": 0,
+                "search_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "search_fallback_count": 0,
+                "search_indexed_hit_count": 0,
+                "search_indexed_zero_shortcircuit_count": 0,
+                "search_intent_path_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "search_intent_symbol_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "search_intent_text_duration_ms": {
+                  "avgMs": "<DURATION_MS>",
+                  "count": 0,
+                  "lastMs": "<DURATION_MS>",
+                  "p95Ms": "<DURATION_MS>",
+                  "p99Ms": "<DURATION_MS>",
+                  "totalMs": "<DURATION_MS>"
+                },
+                "search_like_prefilter_count": 0,
+                "search_literal_explicit_count": 0,
+                "search_query_mode_auto_count": 0,
+                "search_query_mode_literal_count": 0,
+                "search_query_mode_token_count": 0,
+                "search_regex_fallback_count": 0,
+                "search_rows_returned": 0,
+                "search_rows_scanned": 0,
+                "search_scan_truncated_count": 0,
+                "search_token_bytes_returned": 0,
+                "tool_call_counts": {
+                  "analyze-mod": 7,
+                  "analyze-symbol": 1,
+                  "batch-class-members": 2,
+                  "batch-mappings": 1,
+                  "json-to-nbt": 1
+                },
+                "tool_call_duration_ms": {
+                  "analyze-mod": {
+                    "avgMs": "<DURATION_MS>",
+                    "count": 7,
+                    "lastMs": "<DURATION_MS>",
+                    "p95Ms": "<DURATION_MS>",
+                    "p99Ms": "<DURATION_MS>",
+                    "totalMs": "<DURATION_MS>"
+                  },
+                  "analyze-symbol": {
+                    "avgMs": "<DURATION_MS>",
+                    "count": 1,
+                    "lastMs": "<DURATION_MS>",
+                    "p95Ms": "<DURATION_MS>",
+                    "p99Ms": "<DURATION_MS>",
+                    "totalMs": "<DURATION_MS>"
+                  },
+                  "batch-class-members": {
+                    "avgMs": "<DURATION_MS>",
+                    "count": 2,
+                    "lastMs": "<DURATION_MS>",
+                    "p95Ms": "<DURATION_MS>",
+                    "p99Ms": "<DURATION_MS>",
+                    "totalMs": "<DURATION_MS>"
+                  },
+                  "batch-mappings": {
+                    "avgMs": "<DURATION_MS>",
+                    "count": 1,
+                    "lastMs": "<DURATION_MS>",
+                    "p95Ms": "<DURATION_MS>",
+                    "p99Ms": "<DURATION_MS>",
+                    "totalMs": "<DURATION_MS>"
+                  },
+                  "json-to-nbt": {
+                    "avgMs": "<DURATION_MS>",
+                    "count": 1,
+                    "lastMs": "<DURATION_MS>",
+                    "p95Ms": "<DURATION_MS>",
+                    "p99Ms": "<DURATION_MS>",
+                    "totalMs": "<DURATION_MS>"
+                  }
+                }
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "structuredContent": {
+        "meta": {
+          "durationMs": "<DURATION_MS>",
+          "requestId": "<REQUEST_ID>",
+          "tool": "get-runtime-metrics"
+        },
+        "result": {
+          "binary_remap_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "cache_artifact_bytes_lru": [],
+          "cache_entries": 0,
+          "cache_evictions": 0,
+          "cache_hit_rate": 0,
+          "cache_total_content_bytes": 0,
+          "decompile_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "get_file_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "indexed_disabled_count": 0,
+          "list_files_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "mapping_resolution_cache_hits": 0,
+          "mapping_resolution_cache_misses": 0,
+          "mapping_resolution_cache_size": 0,
+          "onehop_expand_count": 0,
+          "reindex_count": 0,
+          "reindex_skip_count": 0,
+          "repo_failover_count": 0,
+          "resolve_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "search_db_roundtrips": 0,
+          "search_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "search_fallback_count": 0,
+          "search_indexed_hit_count": 0,
+          "search_indexed_zero_shortcircuit_count": 0,
+          "search_intent_path_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "search_intent_symbol_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "search_intent_text_duration_ms": {
+            "avgMs": "<DURATION_MS>",
+            "count": 0,
+            "lastMs": "<DURATION_MS>",
+            "p95Ms": "<DURATION_MS>",
+            "p99Ms": "<DURATION_MS>",
+            "totalMs": "<DURATION_MS>"
+          },
+          "search_like_prefilter_count": 0,
+          "search_literal_explicit_count": 0,
+          "search_query_mode_auto_count": 0,
+          "search_query_mode_literal_count": 0,
+          "search_query_mode_token_count": 0,
+          "search_regex_fallback_count": 0,
+          "search_rows_returned": 0,
+          "search_rows_scanned": 0,
+          "search_scan_truncated_count": 0,
+          "search_token_bytes_returned": 0,
+          "tool_call_counts": {
+            "analyze-mod": 7,
+            "analyze-symbol": 1,
+            "batch-class-members": 2,
+            "batch-mappings": 1,
+            "json-to-nbt": 1
+          },
+          "tool_call_duration_ms": {
+            "analyze-mod": {
+              "avgMs": "<DURATION_MS>",
+              "count": 7,
+              "lastMs": "<DURATION_MS>",
+              "p95Ms": "<DURATION_MS>",
+              "p99Ms": "<DURATION_MS>",
+              "totalMs": "<DURATION_MS>"
+            },
+            "analyze-symbol": {
+              "avgMs": "<DURATION_MS>",
+              "count": 1,
+              "lastMs": "<DURATION_MS>",
+              "p95Ms": "<DURATION_MS>",
+              "p99Ms": "<DURATION_MS>",
+              "totalMs": "<DURATION_MS>"
+            },
+            "batch-class-members": {
+              "avgMs": "<DURATION_MS>",
+              "count": 2,
+              "lastMs": "<DURATION_MS>",
+              "p95Ms": "<DURATION_MS>",
+              "p99Ms": "<DURATION_MS>",
+              "totalMs": "<DURATION_MS>"
+            },
+            "batch-mappings": {
+              "avgMs": "<DURATION_MS>",
+              "count": 1,
+              "lastMs": "<DURATION_MS>",
+              "p95Ms": "<DURATION_MS>",
+              "p99Ms": "<DURATION_MS>",
+              "totalMs": "<DURATION_MS>"
+            },
+            "json-to-nbt": {
+              "avgMs": "<DURATION_MS>",
+              "count": 1,
+              "lastMs": "<DURATION_MS>",
+              "p95Ms": "<DURATION_MS>",
+              "p99Ms": "<DURATION_MS>",
+              "totalMs": "<DURATION_MS>"
+            }
+          }
+        }
+      }
+    }
+  }
+}

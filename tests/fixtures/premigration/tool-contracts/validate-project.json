@@ -1,0 +1,543 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Top-level workflow tool for project summary, direct mixin validation, and access widener/access transformer validation.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "enum": [
+            "project-summary",
+            "mixin",
+            "access-widener",
+            "access-transformer"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "workspace"
+                },
+                "projectPath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "gradleUserHome": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                },
+                "discover": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "mixins",
+                      "access-wideners",
+                      "access-transformers"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "projectPath"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "mixin"
+                },
+                "input": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "inline"
+                        },
+                        "source": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "source"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "path"
+                        },
+                        "path": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "paths"
+                        },
+                        "paths": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "paths"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "config"
+                        },
+                        "configPaths": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "configPaths"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "project"
+                        },
+                        "path": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "input"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "access-widener"
+                },
+                "input": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "inline"
+                        },
+                        "content": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "path"
+                        },
+                        "path": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "input"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "access-transformer"
+                },
+                "input": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "inline"
+                        },
+                        "content": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "const": "path"
+                        },
+                        "path": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "input"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "version": {
+          "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+        },
+        "mapping": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ]
+        },
+        "atNamespace": {
+          "type": "string",
+          "enum": [
+            "srg",
+            "mojang",
+            "obfuscated"
+          ]
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "vanilla",
+            "merged",
+            "loader"
+          ]
+        },
+        "preferProjectVersion": {
+          "type": "boolean"
+        },
+        "preferProjectMapping": {
+          "type": "boolean",
+          "default": false
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ]
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "issues",
+              "workspace",
+              "recovery"
+            ]
+          }
+        },
+        "sourceRoots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+          }
+        },
+        "configPaths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/subject/anyOf/0/properties/projectPath"
+          }
+        },
+        "minSeverity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "all"
+          ],
+          "default": "all"
+        },
+        "hideUncertain": {
+          "type": "boolean",
+          "default": false
+        },
+        "explain": {
+          "type": "boolean",
+          "default": false
+        },
+        "warningMode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "aggregated"
+          ]
+        },
+        "warningCategoryFilter": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "mapping",
+              "configuration",
+              "validation",
+              "resolution",
+              "parse"
+            ]
+          }
+        },
+        "treatInfoAsWarning": {
+          "type": "boolean",
+          "default": true
+        },
+        "includeIssues": {
+          "type": "boolean",
+          "default": true
+        },
+        "reportMode": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "full",
+            "summary-first"
+          ],
+          "default": "summary-first",
+          "description": "Mixin report shape forwarded to validate-mixin. Default 'summary-first'; pass 'full' (or explain=true) for per-result resolvedMembers/toolHealth/resolutionTrace."
+        }
+      },
+      "required": [
+        "task",
+        "subject"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "validate-project"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 42,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "validate-project"
+      }
+    },
+    "reply": {
+      "id": 42,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "exampleCalls": [
+                    {
+                      "params": {
+                        "subject": {
+                          "kind": "workspace",
+                          "projectPath": "<workspace-path>"
+                        },
+                        "task": "project-summary"
+                      },
+                      "reason": "Example validate-project call shape — replace any <…> placeholder values before sending.",
+                      "tool": "validate-project",
+                      "valid": true
+                    }
+                  ],
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "task"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "subject"
+                    }
+                  ],
+                  "hints": [
+                    "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener|access-transformer.",
+                    "task=\"project-summary\" uses {\"subject\":{\"kind\":\"workspace\",\"projectPath\":\"/workspace\"}}.",
+                    "Legacy include names like projectSummary/detectedConfig/validationSummary are not accepted; use include:[\"workspace\"] only when you need discovery details.",
+                    "suggested call payload failed schema validation; using fallback examples"
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "validate-project"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "exampleCalls": [
+              {
+                "params": {
+                  "subject": {
+                    "kind": "workspace",
+                    "projectPath": "<workspace-path>"
+                  },
+                  "task": "project-summary"
+                },
+                "reason": "Example validate-project call shape — replace any <…> placeholder values before sending.",
+                "tool": "validate-project",
+                "valid": true
+              }
+            ],
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "task"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "subject"
+              }
+            ],
+            "hints": [
+              "validate-project.subject must be an object with subject.kind=workspace|mixin|access-widener|access-transformer.",
+              "task=\"project-summary\" uses {\"subject\":{\"kind\":\"workspace\",\"projectPath\":\"/workspace\"}}.",
+              "Legacy include names like projectSummary/detectedConfig/validationSummary are not accepted; use include:[\"workspace\"] only when you need discovery details.",
+              "suggested call payload failed schema validation; using fallback examples"
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "validate-project"
+          }
+        }
+      }
+    }
+  }
+}

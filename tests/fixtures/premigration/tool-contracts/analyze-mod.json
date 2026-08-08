@@ -1,0 +1,279 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": false
+    },
+    "description": "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, bytecode-only class member reads, and safe remap previews/applies.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "decompile",
+            "search",
+            "class-source",
+            "members",
+            "remap"
+          ]
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "jar"
+                },
+                "jarPath": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "jarPath"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "class"
+                },
+                "jarPath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/jarPath"
+                },
+                "className": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/jarPath"
+                }
+              },
+              "required": [
+                "kind",
+                "jarPath",
+                "className"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "query": {
+          "$ref": "#/properties/subject/anyOf/0/properties/jarPath"
+        },
+        "searchType": {
+          "type": "string",
+          "enum": [
+            "class",
+            "method",
+            "field",
+            "content",
+            "all"
+          ],
+          "default": "all"
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 50
+        },
+        "includeFiles": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxFiles": {
+          "$ref": "#/properties/limit"
+        },
+        "maxLines": {
+          "$ref": "#/properties/limit"
+        },
+        "maxChars": {
+          "$ref": "#/properties/limit"
+        },
+        "targetMapping": {
+          "type": "string",
+          "enum": [
+            "yarn",
+            "mojang"
+          ]
+        },
+        "outputJar": {
+          "$ref": "#/properties/subject/anyOf/0/properties/jarPath"
+        },
+        "executionMode": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "apply"
+          ],
+          "default": "preview"
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ]
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "files",
+              "source",
+              "samples",
+              "timings"
+            ]
+          }
+        }
+      },
+      "required": [
+        "task",
+        "subject"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "analyze-mod"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 4,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "analyze-mod"
+      }
+    },
+    "reply": {
+      "id": 4,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "exampleCalls": [
+                    {
+                      "params": {
+                        "subject": {
+                          "jarPath": "<mod-jar-path>",
+                          "kind": "jar"
+                        },
+                        "task": "summary"
+                      },
+                      "reason": "Example analyze-mod call shape — replace any <…> placeholder values before sending.",
+                      "tool": "analyze-mod",
+                      "valid": true
+                    }
+                  ],
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "task"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "subject"
+                    }
+                  ],
+                  "hints": [
+                    "analyze-mod.subject must be an object with subject.kind=jar|class.",
+                    "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+                    "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+                    "suggested call payload failed schema validation; using fallback examples"
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "analyze-mod"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "exampleCalls": [
+              {
+                "params": {
+                  "subject": {
+                    "jarPath": "<mod-jar-path>",
+                    "kind": "jar"
+                  },
+                  "task": "summary"
+                },
+                "reason": "Example analyze-mod call shape — replace any <…> placeholder values before sending.",
+                "tool": "analyze-mod",
+                "valid": true
+              }
+            ],
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "task"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "subject"
+              }
+            ],
+            "hints": [
+              "analyze-mod.subject must be an object with subject.kind=jar|class.",
+              "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+              "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+              "suggested call payload failed schema validation; using fallback examples"
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "analyze-mod"
+          }
+        }
+      }
+    }
+  }
+}

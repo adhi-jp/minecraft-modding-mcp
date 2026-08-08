@@ -1,0 +1,248 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "$ref": "#/properties/projectPath"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "class",
+            "field",
+            "method"
+          ]
+        },
+        "name": {
+          "$ref": "#/properties/projectPath"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "descriptor": {
+          "type": "string",
+          "description": "JVM descriptor. Empty strings are treated as omitted."
+        },
+        "sourceMapping": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ]
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ]
+        },
+        "gradleUserHome": {
+          "$ref": "#/properties/owner",
+          "description": "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
+        },
+        "maxCandidates": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "default 5, max 200 (field/method lookups)"
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ],
+          "default": "summary",
+          "description": "summary = terse (drops diagnostics/empties, slims candidates); standard = keeps fields, drops heavy diagnostics; full = everything."
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "provenance",
+              "candidates",
+              "members",
+              "descriptors",
+              "source",
+              "files",
+              "samples",
+              "diff",
+              "issues",
+              "timeline",
+              "matrix",
+              "entries",
+              "workspace",
+              "health",
+              "recovery",
+              "paths",
+              "owners",
+              "preview",
+              "cacheEntries",
+              "timings",
+              "artifact",
+              "classes",
+              "registry"
+            ]
+          },
+          "description": "Field groups to include regardless of detail, e.g. [\"provenance\"]."
+        }
+      },
+      "required": [
+        "projectPath",
+        "version",
+        "kind",
+        "name",
+        "sourceMapping"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "resolve-workspace-symbol"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 35,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "resolve-workspace-symbol"
+      }
+    },
+    "reply": {
+      "id": 35,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "projectPath"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "version"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "kind"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "name"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "sourceMapping"
+                    }
+                  ],
+                  "hints": [
+                    "Check fieldErrors and submit a valid tool argument payload."
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "resolve-workspace-symbol"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "projectPath"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "version"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "kind"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "name"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "sourceMapping"
+              }
+            ],
+            "hints": [
+              "Check fieldErrors and submit a valid tool argument payload."
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "resolve-workspace-symbol"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,365 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "version"
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "jar"
+                },
+                "value": {
+                  "$ref": "#/properties/target/anyOf/0/properties/value"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "coordinate"
+                },
+                "value": {
+                  "$ref": "#/properties/target/anyOf/0/properties/value"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "workspace"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "dependency"
+                },
+                "group": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Maven group, e.g. \"net.fabricmc.fabric-api\" or \"dev.architectury\"."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Maven artifact name, e.g. \"fabric-api\" or \"architectury\"."
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Explicit version; omit and set versionFromProject to resolve it from the workspace."
+                },
+                "versionFromProject": {
+                  "type": "boolean",
+                  "description": "Resolve the version from the project's gradle.properties / gradle cache (requires projectPath)."
+                }
+              },
+              "required": [
+                "kind",
+                "group",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "artifact"
+                },
+                "artifactId": {
+                  "$ref": "#/properties/target/anyOf/0/properties/value"
+                }
+              },
+              "required": [
+                "kind",
+                "artifactId"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
+        },
+        "query": {
+          "$ref": "#/properties/target/anyOf/0/properties/value"
+        },
+        "intent": {
+          "type": "string",
+          "enum": [
+            "symbol",
+            "text",
+            "path"
+          ]
+        },
+        "match": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "prefix",
+            "contains",
+            "regex"
+          ]
+        },
+        "packagePrefix": {
+          "$ref": "#/properties/artifactId"
+        },
+        "fileGlob": {
+          "$ref": "#/properties/artifactId"
+        },
+        "symbolKind": {
+          "type": "string",
+          "enum": [
+            "class",
+            "interface",
+            "enum",
+            "record",
+            "method",
+            "field"
+          ]
+        },
+        "queryMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "token",
+            "literal"
+          ],
+          "default": "auto",
+          "description": "auto: indexed search incl. separator queries like foo.bar; token: indexed-only; literal: substring scan only"
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 20
+        },
+        "cursor": {
+          "$ref": "#/properties/artifactId"
+        },
+        "queryNamespace": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ],
+          "description": "Query namespace; symbol-intent FQCN queries are translated via find-mapping first. Ignored for text/path intents."
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ],
+          "description": "Used only when queryNamespace triggers translation."
+        },
+        "gradleUserHome": {
+          "$ref": "#/properties/artifactId",
+          "description": "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ],
+          "default": "standard",
+          "description": "summary = terse (drops diagnostics/empties, slims candidates); standard = keeps fields, drops heavy diagnostics; full = everything."
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "provenance",
+              "candidates",
+              "members",
+              "descriptors",
+              "source",
+              "files",
+              "samples",
+              "diff",
+              "issues",
+              "timeline",
+              "matrix",
+              "entries",
+              "workspace",
+              "health",
+              "recovery",
+              "paths",
+              "owners",
+              "preview",
+              "cacheEntries",
+              "timings",
+              "artifact",
+              "classes",
+              "registry"
+            ]
+          },
+          "description": "Field groups to include regardless of detail, e.g. [\"provenance\"]."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "search-class-source"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 36,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "search-class-source"
+      }
+    },
+    "reply": {
+      "id": 36,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "query"
+                    }
+                  ],
+                  "hints": [
+                    "Check fieldErrors and submit a valid tool argument payload."
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "search-class-source"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "query"
+              }
+            ],
+            "hints": [
+              "Check fieldErrors and submit a valid tool argument payload."
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "search-class-source"
+          }
+        }
+      }
+    }
+  }
+}

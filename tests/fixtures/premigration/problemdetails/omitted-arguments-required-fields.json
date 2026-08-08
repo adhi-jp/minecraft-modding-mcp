@@ -1,0 +1,129 @@
+{
+  "description": "Pre-migration ProblemDetails envelope golden for one Zod failure kind. Captured over the wire against the untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-problemdetails.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/problemdetails.pid"
+  },
+  "zodFailureKind": "omitted-arguments.required-fields",
+  "tool": "analyze-mod",
+  "sentParams": {
+    "__argumentsOmitted": true
+  },
+  "omittedArguments": {
+    "note": "Omitted-arguments golden: schema has required fields. The call stays an error post-migration; the error-text class shifts from top-level 'expected object, received undefined' to per-field messages."
+  },
+  "request": {
+    "id": 13,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "analyze-mod"
+    }
+  },
+  "reply": {
+    "id": 13,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "error": {
+                "code": "ERR_INVALID_INPUT",
+                "detail": "Request validation failed.",
+                "exampleCalls": [
+                  {
+                    "params": {
+                      "detail": "standard",
+                      "subject": {
+                        "jarPath": "<mod-jar-path>",
+                        "kind": "jar"
+                      },
+                      "task": "summary"
+                    },
+                    "reason": "Example analyze-mod call shape — replace any <…> placeholder values before sending.",
+                    "tool": "analyze-mod",
+                    "valid": true
+                  }
+                ],
+                "fieldErrors": [
+                  {
+                    "code": "invalid_type",
+                    "message": "Required",
+                    "path": "$"
+                  }
+                ],
+                "hints": [
+                  "analyze-mod.subject must be an object with subject.kind=jar|class.",
+                  "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+                  "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+                  "suggested call payload failed schema validation; using fallback examples"
+                ],
+                "instance": "<REQUEST_ID>",
+                "issueOrigin": "code_issue",
+                "retryClass": "input",
+                "status": 400,
+                "title": "Invalid input",
+                "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+              },
+              "meta": {
+                "durationMs": "<DURATION_MS>",
+                "requestId": "<REQUEST_ID>",
+                "tool": "analyze-mod"
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "error": {
+          "code": "ERR_INVALID_INPUT",
+          "detail": "Request validation failed.",
+          "exampleCalls": [
+            {
+              "params": {
+                "detail": "standard",
+                "subject": {
+                  "jarPath": "<mod-jar-path>",
+                  "kind": "jar"
+                },
+                "task": "summary"
+              },
+              "reason": "Example analyze-mod call shape — replace any <…> placeholder values before sending.",
+              "tool": "analyze-mod",
+              "valid": true
+            }
+          ],
+          "fieldErrors": [
+            {
+              "code": "invalid_type",
+              "message": "Required",
+              "path": "$"
+            }
+          ],
+          "hints": [
+            "analyze-mod.subject must be an object with subject.kind=jar|class.",
+            "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+            "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+            "suggested call payload failed schema validation; using fallback examples"
+          ],
+          "instance": "<REQUEST_ID>",
+          "issueOrigin": "code_issue",
+          "retryClass": "input",
+          "status": 400,
+          "title": "Invalid input",
+          "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+        },
+        "meta": {
+          "durationMs": "<DURATION_MS>",
+          "requestId": "<REQUEST_ID>",
+          "tool": "analyze-mod"
+        }
+      }
+    }
+  }
+}

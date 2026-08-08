@@ -1,0 +1,278 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "class",
+            "field",
+            "method"
+          ]
+        },
+        "name": {
+          "$ref": "#/properties/version"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "descriptor": {
+          "type": "string",
+          "description": "JVM descriptor; optional when signatureMode='name-only'. Empty = omitted."
+        },
+        "sourceMapping": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ]
+        },
+        "targetMapping": {
+          "$ref": "#/properties/sourceMapping"
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ]
+        },
+        "gradleUserHome": {
+          "$ref": "#/properties/owner",
+          "description": "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
+        },
+        "nameMode": {
+          "type": "string",
+          "enum": [
+            "fqcn",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "auto (default): FQCN, or dotless name where allowed; fqcn: require FQCN."
+        },
+        "signatureMode": {
+          "type": "string",
+          "enum": [
+            "exact",
+            "name-only"
+          ],
+          "default": "name-only",
+          "description": "exact: descriptor required for kind=method; name-only (default): match by owner+name only."
+        },
+        "disambiguation": {
+          "type": "object",
+          "properties": {
+            "ownerHint": {
+              "$ref": "#/properties/owner"
+            },
+            "descriptorHint": {
+              "$ref": "#/properties/owner"
+            }
+          },
+          "additionalProperties": false
+        },
+        "maxCandidates": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 5,
+          "description": "default 5, max 200"
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ],
+          "default": "summary",
+          "description": "summary = terse (drops diagnostics/empties, slims candidates); standard = keeps fields, drops heavy diagnostics; full = everything."
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "provenance",
+              "candidates",
+              "members",
+              "descriptors",
+              "source",
+              "files",
+              "samples",
+              "diff",
+              "issues",
+              "timeline",
+              "matrix",
+              "entries",
+              "workspace",
+              "health",
+              "recovery",
+              "paths",
+              "owners",
+              "preview",
+              "cacheEntries",
+              "timings",
+              "artifact",
+              "classes",
+              "registry"
+            ]
+          },
+          "description": "Field groups to include regardless of detail, e.g. [\"provenance\"]."
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "name",
+        "sourceMapping",
+        "targetMapping"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "find-mapping"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 17,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "find-mapping"
+      }
+    },
+    "reply": {
+      "id": 17,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "version"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "kind"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "name"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "sourceMapping"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "targetMapping"
+                    }
+                  ],
+                  "hints": [
+                    "Check fieldErrors and submit a valid tool argument payload."
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "find-mapping"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "version"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "kind"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "name"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "sourceMapping"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "targetMapping"
+              }
+            ],
+            "hints": [
+              "Check fieldErrors and submit a valid tool argument payload."
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "find-mapping"
+          }
+        }
+      }
+    }
+  }
+}

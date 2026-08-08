@@ -1,0 +1,142 @@
+{
+  "description": "Pre-migration startup-failure terminalization of queued work (replay failure = startup failure, same terminal path). Every worker generation dies pre-READY (exit code 1), so queued requests are failed, not hung: queued tools/call -> structured restart-shape reply (ERR_WORKER_RESTART), queued non-tools/call -> raw -32603, retained initialize -> raw -32603.",
+  "harness": "scripts/premigration/capture-synthetic-shapes.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/premigration-no-such-dir/worker.pid"
+  },
+  "injection": "MCP_SUPERVISOR_CHILD_PID_FILE points into a nonexistent directory; the worker-mode process throws in writeFileSync before startServer and exits 1 on every generation; initialize + tools/call + resources/list are pipelined before readiness",
+  "requests": {
+    "initialize": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "params": {
+        "capabilities": {},
+        "clientInfo": {
+          "name": "premigration-harness",
+          "version": "0.0.0"
+        },
+        "protocolVersion": "2025-11-25"
+      }
+    },
+    "toolsCall": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "get-runtime-metrics"
+      }
+    },
+    "other": {
+      "id": 3,
+      "jsonrpc": "2.0",
+      "method": "resources/list",
+      "params": {}
+    }
+  },
+  "replies": {
+    "initialize": {
+      "error": {
+        "code": -32603,
+        "message": "MCP worker restarted while handling the request. Retry the request."
+      },
+      "id": 1,
+      "jsonrpc": "2.0"
+    },
+    "toolsCall": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_WORKER_RESTART",
+                  "detail": "The worker process exited while handling tools/call (get-runtime-metrics).",
+                  "hints": [
+                    "worker exited before stage tracking began"
+                  ],
+                  "instance": "urn:mcp:request:2",
+                  "status": 503,
+                  "suggestedCall": {
+                    "params": {},
+                    "tool": "get-runtime-metrics"
+                  },
+                  "title": "MCP worker restarted",
+                  "type": "about:blank/mcp/worker-restart"
+                },
+                "meta": {
+                  "restart": {
+                    "durationMs": "<DURATION_MS>",
+                    "exit": {
+                      "code": 1,
+                      "signal": null
+                    },
+                    "lastStage": null,
+                    "lastStageElapsedMs": null,
+                    "lastStageMeta": null,
+                    "redactedToolArgs": {},
+                    "redactedToolArgsModified": false,
+                    "retryRecommendation": "same-request",
+                    "tool": "get-runtime-metrics"
+                  },
+                  "synthetic": true,
+                  "syntheticSource": "supervisor"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_WORKER_RESTART",
+            "detail": "The worker process exited while handling tools/call (get-runtime-metrics).",
+            "hints": [
+              "worker exited before stage tracking began"
+            ],
+            "instance": "urn:mcp:request:2",
+            "status": 503,
+            "suggestedCall": {
+              "params": {},
+              "tool": "get-runtime-metrics"
+            },
+            "title": "MCP worker restarted",
+            "type": "about:blank/mcp/worker-restart"
+          },
+          "meta": {
+            "restart": {
+              "durationMs": "<DURATION_MS>",
+              "exit": {
+                "code": 1,
+                "signal": null
+              },
+              "lastStage": null,
+              "lastStageElapsedMs": null,
+              "lastStageMeta": null,
+              "redactedToolArgs": {},
+              "redactedToolArgsModified": false,
+              "retryRecommendation": "same-request",
+              "tool": "get-runtime-metrics"
+            },
+            "synthetic": true,
+            "syntheticSource": "supervisor"
+          }
+        }
+      }
+    },
+    "other": {
+      "error": {
+        "code": -32603,
+        "message": "MCP worker restarted while handling the request. Retry the request."
+      },
+      "id": 3,
+      "jsonrpc": "2.0"
+    }
+  }
+}

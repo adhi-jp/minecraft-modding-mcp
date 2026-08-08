@@ -1,0 +1,107 @@
+{
+  "description": "Pre-migration ProblemDetails envelope golden for one Zod failure kind. Captured over the wire against the untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-problemdetails.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/problemdetails.pid"
+  },
+  "zodFailureKind": "omitted-arguments.all-optional",
+  "tool": "json-to-nbt",
+  "sentParams": {
+    "__argumentsOmitted": true
+  },
+  "omittedArguments": {
+    "note": "Omitted-arguments golden: shape-registered schema accepts {}. Today this call is a ProblemDetails validation error (schema.parse(undefined) fails); under the approved class merge it becomes a success post-migration.",
+    "acceptsEmptyObjectRegistrations": [
+      {
+        "tool": "get-runtime-metrics",
+        "registeredWithShape": false
+      },
+      {
+        "tool": "json-to-nbt",
+        "registeredWithShape": true
+      },
+      {
+        "tool": "list-versions",
+        "registeredWithShape": true
+      }
+    ]
+  },
+  "request": {
+    "id": 12,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "json-to-nbt"
+    }
+  },
+  "reply": {
+    "id": 12,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "error": {
+                "code": "ERR_INVALID_INPUT",
+                "detail": "Request validation failed.",
+                "fieldErrors": [
+                  {
+                    "code": "invalid_type",
+                    "message": "Required",
+                    "path": "$"
+                  }
+                ],
+                "hints": [
+                  "Check fieldErrors and submit a valid tool argument payload."
+                ],
+                "instance": "<REQUEST_ID>",
+                "issueOrigin": "code_issue",
+                "retryClass": "input",
+                "status": 400,
+                "title": "Invalid input",
+                "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+              },
+              "meta": {
+                "durationMs": "<DURATION_MS>",
+                "requestId": "<REQUEST_ID>",
+                "tool": "json-to-nbt"
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "error": {
+          "code": "ERR_INVALID_INPUT",
+          "detail": "Request validation failed.",
+          "fieldErrors": [
+            {
+              "code": "invalid_type",
+              "message": "Required",
+              "path": "$"
+            }
+          ],
+          "hints": [
+            "Check fieldErrors and submit a valid tool argument payload."
+          ],
+          "instance": "<REQUEST_ID>",
+          "issueOrigin": "code_issue",
+          "retryClass": "input",
+          "status": 400,
+          "title": "Invalid input",
+          "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+        },
+        "meta": {
+          "durationMs": "<DURATION_MS>",
+          "requestId": "<REQUEST_ID>",
+          "tool": "json-to-nbt"
+        }
+      }
+    }
+  }
+}

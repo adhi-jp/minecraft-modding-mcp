@@ -1,0 +1,424 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Get fields/methods/constructors for one class from binary bytecode. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "className": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "version"
+                },
+                "value": {
+                  "$ref": "#/properties/className"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "jar"
+                },
+                "value": {
+                  "$ref": "#/properties/className"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "coordinate"
+                },
+                "value": {
+                  "$ref": "#/properties/className"
+                }
+              },
+              "required": [
+                "kind",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "workspace"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "dependency"
+                },
+                "group": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Maven group, e.g. \"net.fabricmc.fabric-api\" or \"dev.architectury\"."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Maven artifact name, e.g. \"fabric-api\" or \"architectury\"."
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Explicit version; omit and set versionFromProject to resolve it from the workspace."
+                },
+                "versionFromProject": {
+                  "type": "boolean",
+                  "description": "Resolve the version from the project's gradle.properties / gradle cache (requires projectPath)."
+                }
+              },
+              "required": [
+                "kind",
+                "group",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "artifact"
+                },
+                "artifactId": {
+                  "$ref": "#/properties/className"
+                }
+              },
+              "required": [
+                "kind",
+                "artifactId"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
+        },
+        "mapping": {
+          "type": "string",
+          "enum": [
+            "obfuscated",
+            "mojang",
+            "intermediary",
+            "yarn"
+          ],
+          "description": "default obfuscated"
+        },
+        "sourcePriority": {
+          "type": "string",
+          "enum": [
+            "loom-first",
+            "maven-first"
+          ]
+        },
+        "allowDecompile": {
+          "type": "boolean",
+          "default": true
+        },
+        "access": {
+          "type": "string",
+          "enum": [
+            "public",
+            "all"
+          ],
+          "default": "public"
+        },
+        "includeSynthetic": {
+          "type": "boolean",
+          "default": false
+        },
+        "includeInherited": {
+          "type": "boolean",
+          "default": false
+        },
+        "includeAnnotations": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in: include runtime-visible member annotations (e.g. @Deprecated) on each member."
+        },
+        "memberPattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Case-insensitive substring filter on member names. Use \"|\" for OR alternatives, e.g. \"getStateForPlacement|canSurvive|setPlacedBy\" (each token is matched as a substring, not a regex)."
+        },
+        "projection": {
+          "type": "string",
+          "enum": [
+            "names",
+            "signatures",
+            "full"
+          ],
+          "description": "Per-member field projection: \"names\" (member name only), \"signatures\" (name + javaSignature, no jvmDescriptor), or \"full\" (default; complete member shape). Use \"names\"/\"signatures\" to cut response tokens for existence/signature checks."
+        },
+        "maxMembers": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "default 150, max 5000. Page beyond the first 150 with cursor."
+        },
+        "cursor": {
+          "$ref": "#/properties/memberPattern",
+          "description": "nextCursor from the previous response."
+        },
+        "projectPath": {
+          "$ref": "#/properties/memberPattern"
+        },
+        "gradleUserHome": {
+          "$ref": "#/properties/memberPattern",
+          "description": "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
+        },
+        "scope": {
+          "$ref": "#/properties/target/anyOf/3/properties/scope",
+          "description": "vanilla = Mojang client jar only; merged = merged runtime discovery; loader = loader-transformed runtime jars."
+        },
+        "preferProjectVersion": {
+          "type": "boolean",
+          "description": "Detect MC version from gradle.properties and override version"
+        },
+        "strictVersion": {
+          "type": "boolean",
+          "description": "Reject version-approximated results (default false)"
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ],
+          "default": "standard",
+          "description": "summary = terse (drops diagnostics/empties, slims candidates); standard = keeps fields, drops heavy diagnostics; full = everything."
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "provenance",
+              "candidates",
+              "members",
+              "descriptors",
+              "source",
+              "files",
+              "samples",
+              "diff",
+              "issues",
+              "timeline",
+              "matrix",
+              "entries",
+              "workspace",
+              "health",
+              "recovery",
+              "paths",
+              "owners",
+              "preview",
+              "cacheEntries",
+              "timings",
+              "artifact",
+              "classes",
+              "registry"
+            ]
+          },
+          "description": "Field groups to include regardless of detail, e.g. [\"provenance\"]."
+        },
+        "includeProvenance": {
+          "type": "boolean",
+          "default": false,
+          "description": "Alias for include:[\"provenance\"] (diagnostic metadata). Default false."
+        },
+        "includeDescriptors": {
+          "type": "boolean",
+          "default": false,
+          "description": "Alias for include:[\"descriptors\"]: also emit jvmDescriptor on FIELD members (method/constructor descriptors are always present). Default false."
+        }
+      },
+      "required": [
+        "className",
+        "target"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "get-class-members"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 20,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "get-class-members"
+      }
+    },
+    "reply": {
+      "id": 20,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "exampleCalls": [
+                    {
+                      "params": {
+                        "className": "<fully-qualified-class-name>",
+                        "target": {
+                          "kind": "version",
+                          "value": "<minecraft-version>"
+                        }
+                      },
+                      "reason": "Example get-class-members call shape — replace any <…> placeholder values before sending.",
+                      "tool": "get-class-members",
+                      "valid": true
+                    }
+                  ],
+                  "fieldErrors": [
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "className"
+                    },
+                    {
+                      "code": "invalid_type",
+                      "message": "Required",
+                      "path": "target"
+                    }
+                  ],
+                  "hints": [
+                    "get-class-members.target must be an object: {\"kind\":\"version|jar|coordinate\",\"value\":\"...\"}, {\"kind\":\"workspace\"}, {\"kind\":\"dependency\",\"group\":\"...\",\"name\":\"...\",\"versionFromProject\":true} (inspect a Fabric/loader dependency like vanilla), or {\"kind\":\"artifact\",\"artifactId\":\"...\"} (same shape as resolve-artifact).",
+                    "Bare string targets are not accepted; wrap the value under target.kind/target.value.",
+                    "suggested call payload failed schema validation; using fallback examples"
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "get-class-members"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "exampleCalls": [
+              {
+                "params": {
+                  "className": "<fully-qualified-class-name>",
+                  "target": {
+                    "kind": "version",
+                    "value": "<minecraft-version>"
+                  }
+                },
+                "reason": "Example get-class-members call shape — replace any <…> placeholder values before sending.",
+                "tool": "get-class-members",
+                "valid": true
+              }
+            ],
+            "fieldErrors": [
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "className"
+              },
+              {
+                "code": "invalid_type",
+                "message": "Required",
+                "path": "target"
+              }
+            ],
+            "hints": [
+              "get-class-members.target must be an object: {\"kind\":\"version|jar|coordinate\",\"value\":\"...\"}, {\"kind\":\"workspace\"}, {\"kind\":\"dependency\",\"group\":\"...\",\"name\":\"...\",\"versionFromProject\":true} (inspect a Fabric/loader dependency like vanilla), or {\"kind\":\"artifact\",\"artifactId\":\"...\"} (same shape as resolve-artifact).",
+              "Bare string targets are not accepted; wrap the value under target.kind/target.value.",
+              "suggested call payload failed schema validation; using fallback examples"
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "get-class-members"
+          }
+        }
+      }
+    }
+  }
+}

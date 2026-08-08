@@ -1,0 +1,257 @@
+{
+  "description": "Pre-migration observed wire error-code inventory. Classification: raw-jsonrpc-error (JSON-RPC error envelope with wireCode) vs isError-tool-result (successful CallToolResult with isError:true carrying a ProblemDetails code). Reserved-range check: no observed wire code in -32020..-32099.",
+  "harness": "scripts/premigration/build-error-code-inventory.mjs",
+  "observedWireCodes": [
+    -32603,
+    -32602,
+    -32000
+  ],
+  "reservedRangeViolations": [],
+  "entries": [
+    {
+      "path": "unmatched-resource-uri",
+      "method": "resources/read",
+      "source": "live probe (this harness): resources/read mc://premigration/no-such-resource",
+      "wireCode": -32602,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error",
+      "errorMessage": "MCP error -32602: Resource mc://premigration/no-such-resource not found",
+      "reply": {
+        "error": {
+          "code": -32602,
+          "message": "MCP error -32602: Resource mc://premigration/no-such-resource not found"
+        },
+        "id": 2,
+        "jsonrpc": "2.0"
+      }
+    },
+    {
+      "path": "disabled-tool",
+      "method": "tools/call",
+      "source": "live probe (this harness): BATCH_TOOLS_OFF=1, tools/call batch-class-source",
+      "env": {
+        "BATCH_TOOLS_OFF": "1"
+      },
+      "embedsMinus32602InText": true,
+      "wireCode": null,
+      "problemCode": null,
+      "classification": "isError-tool-result",
+      "embeddedText": "MCP error -32602: Tool batch-class-source not found",
+      "reply": {
+        "id": 2,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "MCP error -32602: Tool batch-class-source not found",
+              "type": "text"
+            }
+          ],
+          "isError": true
+        }
+      }
+    },
+    {
+      "path": "queue-overflow",
+      "method": "tools/call",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/overflow-toolscall.json",
+      "wireCode": null,
+      "problemCode": "ERR_LIMIT_EXCEEDED",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "queue-overflow",
+      "method": "resources/list",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/overflow-other.json",
+      "wireCode": -32000,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error"
+    },
+    {
+      "path": "worker-restart",
+      "method": "tools/call",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/restart-toolscall-structured.json",
+      "wireCode": null,
+      "problemCode": "ERR_WORKER_RESTART",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "worker-restart",
+      "method": "resources/list",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/restart-other-raw.json",
+      "wireCode": -32603,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error"
+    },
+    {
+      "path": "worker-restart-toggle-off",
+      "method": "tools/call",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/restart-toolscall-toggle-off.json",
+      "wireCode": -32603,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error"
+    },
+    {
+      "path": "validate-project-timeout",
+      "method": "tools/call",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/timeout-validate-project.json",
+      "wireCode": null,
+      "problemCode": "ERR_TOOL_TIMEOUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "startup-failure-terminalization",
+      "method": "initialize",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/startup-failure-terminalization.json",
+      "wireCode": -32603,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error"
+    },
+    {
+      "path": "startup-failure-terminalization",
+      "method": "tools/call",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/startup-failure-terminalization.json",
+      "wireCode": null,
+      "problemCode": "ERR_WORKER_RESTART",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "startup-failure-terminalization",
+      "method": "resources/list",
+      "source": "captured fixture: tests/fixtures/premigration/synthetic-shapes/startup-failure-terminalization.json",
+      "wireCode": -32603,
+      "problemCode": null,
+      "classification": "raw-jsonrpc-error"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "custom",
+      "tool": "analyze-symbol",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/custom.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "invalid_enum_value",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/invalid_enum_value.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "invalid_type.missing-required",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/invalid_type-missing-required.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "invalid_type.wrong-type",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/invalid_type-wrong-type.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "invalid_union_discriminator",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/invalid_union_discriminator.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "omitted-arguments.all-optional",
+      "tool": "json-to-nbt",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/omitted-arguments-all-optional.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "omitted-arguments.no-input-shape",
+      "tool": "get-runtime-metrics",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/omitted-arguments-no-input-shape.json",
+      "wireCode": null,
+      "problemCode": null,
+      "classification": "success"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "omitted-arguments.required-fields",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/omitted-arguments-required-fields.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "too_big.number",
+      "tool": "batch-class-members",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/too_big-number.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "too_small.array",
+      "tool": "batch-class-members",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/too_small-array.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "too_small.number",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/too_small-number.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "too_small.string",
+      "tool": "analyze-mod",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/too_small-string.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    },
+    {
+      "path": "tool-input-validation",
+      "method": "tools/call",
+      "zodFailureKind": "unrecognized_keys",
+      "tool": "batch-mappings",
+      "source": "captured fixture: tests/fixtures/premigration/problemdetails/unrecognized_keys.json",
+      "wireCode": null,
+      "problemCode": "ERR_INVALID_INPUT",
+      "classification": "isError-tool-result"
+    }
+  ]
+}

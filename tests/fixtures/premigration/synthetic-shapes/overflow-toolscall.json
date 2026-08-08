@@ -1,0 +1,81 @@
+{
+  "description": "Pre-migration supervisor queue-limit reply for tools/call: structured isError CallToolResult with ERR_LIMIT_EXCEEDED. Injection: worker SIGSTOPped, one pending tools/call, queued validate-project (dispatch barrier) + one more queued request fill MAX_SUPERVISOR_QUEUE=2, then this call overflows.",
+  "harness": "scripts/premigration/capture-synthetic-shapes.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/overflow.pid"
+  },
+  "injection": "SIGSTOP worker; 1 pending tools/call + queued validate-project + 1 queued tools/call; overflow probe",
+  "request": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {},
+      "name": "get-runtime-metrics"
+    }
+  },
+  "reply": {
+    "id": 5,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "error": {
+                "code": "ERR_LIMIT_EXCEEDED",
+                "detail": "The MCP supervisor request queue is full.",
+                "hints": [
+                  "Retry after the supervisor queue drains."
+                ],
+                "instance": "urn:mcp:request:5",
+                "issueOrigin": "tool_issue",
+                "retryClass": "transient",
+                "status": 413,
+                "title": "Supervisor queue limit exceeded",
+                "type": "about:blank/mcp/limit-exceeded"
+              },
+              "meta": {
+                "queue": {
+                  "maxQueued": 2,
+                  "queuedCount": 2,
+                  "reason": "supervisor-request-queue"
+                },
+                "synthetic": true,
+                "syntheticSource": "supervisor"
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "error": {
+          "code": "ERR_LIMIT_EXCEEDED",
+          "detail": "The MCP supervisor request queue is full.",
+          "hints": [
+            "Retry after the supervisor queue drains."
+          ],
+          "instance": "urn:mcp:request:5",
+          "issueOrigin": "tool_issue",
+          "retryClass": "transient",
+          "status": 413,
+          "title": "Supervisor queue limit exceeded",
+          "type": "about:blank/mcp/limit-exceeded"
+        },
+        "meta": {
+          "queue": {
+            "maxQueued": 2,
+            "queuedCount": 2,
+            "reason": "supervisor-request-queue"
+          },
+          "synthetic": true,
+          "syntheticSource": "supervisor"
+        }
+      }
+    }
+  }
+}

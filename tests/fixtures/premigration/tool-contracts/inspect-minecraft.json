@@ -1,0 +1,609 @@
+{
+  "description": "Pre-migration per-tool contract snapshot: advertised tools/list entry with VERBATIM inputSchema bytes (wire property order), plus one envelope sample. Untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-tool-contracts.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/tool-contracts.pid"
+  },
+  "advertised": {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings. Workspace subject.focus is a structured class/file/search object, never a string; task=auto dispatches from subject.kind and focus.kind.",
+    "execution": {
+      "taskSupport": "forbidden"
+    },
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "versions",
+            "artifact",
+            "class-overview",
+            "class-source",
+            "class-members",
+            "search",
+            "file",
+            "list-files"
+          ],
+          "description": "Workflow task. auto dispatches only from subject.kind and workspace focus.kind; it is not a natural-language planner."
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "version"
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "mapping": {
+                  "type": "string",
+                  "enum": [
+                    "obfuscated",
+                    "mojang",
+                    "intermediary",
+                    "yarn"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "projectPath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "gradleUserHome": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "preferProjectVersion": {
+                  "type": "boolean"
+                },
+                "strictVersion": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "version"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "artifact"
+                },
+                "artifact": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "resolved-id"
+                        },
+                        "artifactId": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/version"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "artifactId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "resolve-target"
+                        },
+                        "target": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "version",
+                                "jar",
+                                "coordinate"
+                              ]
+                            },
+                            "value": {
+                              "$ref": "#/properties/subject/anyOf/0/properties/version"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "target"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "mapping": {
+                  "type": "string",
+                  "enum": [
+                    "obfuscated",
+                    "mojang",
+                    "intermediary",
+                    "yarn"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "projectPath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "gradleUserHome": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "preferProjectVersion": {
+                  "type": "boolean"
+                },
+                "strictVersion": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "artifact"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "class"
+                },
+                "className": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "artifact": {
+                  "$ref": "#/properties/subject/anyOf/1/properties/artifact"
+                },
+                "mapping": {
+                  "type": "string",
+                  "enum": [
+                    "obfuscated",
+                    "mojang",
+                    "intermediary",
+                    "yarn"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "projectPath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "gradleUserHome": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "preferProjectVersion": {
+                  "type": "boolean"
+                },
+                "strictVersion": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "className"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "file"
+                },
+                "filePath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "artifact": {
+                  "$ref": "#/properties/subject/anyOf/1/properties/artifact"
+                }
+              },
+              "required": [
+                "kind",
+                "filePath"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "search"
+                },
+                "query": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "artifact": {
+                  "$ref": "#/properties/subject/anyOf/1/properties/artifact"
+                },
+                "intent": {
+                  "type": "string",
+                  "enum": [
+                    "symbol",
+                    "text",
+                    "path"
+                  ]
+                },
+                "match": {
+                  "type": "string",
+                  "enum": [
+                    "exact",
+                    "prefix",
+                    "contains",
+                    "regex"
+                  ]
+                },
+                "symbolKind": {
+                  "type": "string",
+                  "enum": [
+                    "class",
+                    "interface",
+                    "enum",
+                    "record",
+                    "method",
+                    "field"
+                  ]
+                },
+                "packagePrefix": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "fileGlob": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "queryMode": {
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "token",
+                    "literal"
+                  ],
+                  "default": "auto"
+                }
+              },
+              "required": [
+                "kind",
+                "query"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "workspace"
+                },
+                "projectPath": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "mapping": {
+                  "type": "string",
+                  "enum": [
+                    "obfuscated",
+                    "mojang",
+                    "intermediary",
+                    "yarn"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "vanilla",
+                    "merged",
+                    "loader"
+                  ]
+                },
+                "gradleUserHome": {
+                  "$ref": "#/properties/subject/anyOf/0/properties/version"
+                },
+                "preferProjectVersion": {
+                  "type": "boolean"
+                },
+                "strictVersion": {
+                  "type": "boolean"
+                },
+                "focus": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "class",
+                          "description": "Select class inspection."
+                        },
+                        "className": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Fully-qualified class name to inspect."
+                        },
+                        "artifact": {
+                          "$ref": "#/properties/subject/anyOf/1/properties/artifact",
+                          "description": "Optional explicit artifact override; otherwise resolve it from the workspace."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "className"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Class focus object: {\"kind\":\"class\",\"className\":\"net.minecraft.world.item.Item\"}. task=auto dispatches it to class-overview; select class-source or class-members explicitly when needed."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "file",
+                          "description": "Select an artifact-relative file read."
+                        },
+                        "filePath": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Artifact-relative file path to read."
+                        },
+                        "artifact": {
+                          "$ref": "#/properties/subject/anyOf/1/properties/artifact",
+                          "description": "Optional explicit artifact override; otherwise resolve it from the workspace."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "filePath"
+                      ],
+                      "additionalProperties": false,
+                      "description": "File focus object: {\"kind\":\"file\",\"filePath\":\"net/minecraft/world/item/Item.java\"}. task=auto dispatches it to file."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "search",
+                          "description": "Select source search."
+                        },
+                        "query": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Source, symbol, or path query to search for."
+                        },
+                        "artifact": {
+                          "$ref": "#/properties/subject/anyOf/1/properties/artifact",
+                          "description": "Optional explicit artifact override; otherwise resolve it from the workspace."
+                        },
+                        "intent": {
+                          "type": "string",
+                          "enum": [
+                            "symbol",
+                            "text",
+                            "path"
+                          ]
+                        },
+                        "match": {
+                          "type": "string",
+                          "enum": [
+                            "exact",
+                            "prefix",
+                            "contains",
+                            "regex"
+                          ]
+                        },
+                        "symbolKind": {
+                          "type": "string",
+                          "enum": [
+                            "class",
+                            "interface",
+                            "enum",
+                            "record",
+                            "method",
+                            "field"
+                          ]
+                        },
+                        "packagePrefix": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/version"
+                        },
+                        "fileGlob": {
+                          "$ref": "#/properties/subject/anyOf/0/properties/version"
+                        },
+                        "queryMode": {
+                          "type": "string",
+                          "enum": [
+                            "auto",
+                            "token",
+                            "literal"
+                          ],
+                          "default": "auto"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "query"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Search focus object: {\"kind\":\"search\",\"query\":\"CreativeModeTab\"}. task=auto dispatches it to search."
+                    }
+                  ],
+                  "description": "Structured workspace focus. Object, not string. Choose {kind:\"class\",className}, {kind:\"file\",filePath}, or {kind:\"search\",query}."
+                }
+              },
+              "required": [
+                "kind",
+                "projectPath"
+              ],
+              "additionalProperties": false,
+              "description": "Workspace subject. Resolves Minecraft artifact context from projectPath; add a structured focus object for class, file, or search work."
+            }
+          ],
+          "description": "Structured inspection subject. Use kind=workspace with a structured focus object when the workspace should resolve artifact context."
+        },
+        "includeSnapshots": {
+          "type": "boolean",
+          "default": false
+        },
+        "detail": {
+          "type": "string",
+          "enum": [
+            "summary",
+            "standard",
+            "full"
+          ]
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "warnings",
+              "provenance",
+              "candidates",
+              "members",
+              "descriptors",
+              "source",
+              "files",
+              "samples",
+              "artifact",
+              "timings"
+            ]
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "name": "inspect-minecraft"
+  },
+  "envelopeSample": {
+    "kind": "invalid-input",
+    "request": {
+      "id": 25,
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "arguments": {},
+        "name": "inspect-minecraft"
+      }
+    },
+    "reply": {
+      "id": 25,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": {
+              "__normalizedJson": {
+                "error": {
+                  "code": "ERR_INVALID_INPUT",
+                  "detail": "Request validation failed.",
+                  "fieldErrors": [
+                    {
+                      "code": "custom",
+                      "message": "subject is required unless task=versions.",
+                      "path": "subject"
+                    }
+                  ],
+                  "hints": [
+                    "Check fieldErrors and submit a valid tool argument payload."
+                  ],
+                  "instance": "<REQUEST_ID>",
+                  "issueOrigin": "code_issue",
+                  "retryClass": "input",
+                  "status": 400,
+                  "title": "Invalid input",
+                  "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+                },
+                "meta": {
+                  "durationMs": "<DURATION_MS>",
+                  "requestId": "<REQUEST_ID>",
+                  "tool": "inspect-minecraft"
+                }
+              }
+            },
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "error": {
+            "code": "ERR_INVALID_INPUT",
+            "detail": "Request validation failed.",
+            "fieldErrors": [
+              {
+                "code": "custom",
+                "message": "subject is required unless task=versions.",
+                "path": "subject"
+              }
+            ],
+            "hints": [
+              "Check fieldErrors and submit a valid tool argument payload."
+            ],
+            "instance": "<REQUEST_ID>",
+            "issueOrigin": "code_issue",
+            "retryClass": "input",
+            "status": 400,
+            "title": "Invalid input",
+            "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+          },
+          "meta": {
+            "durationMs": "<DURATION_MS>",
+            "requestId": "<REQUEST_ID>",
+            "tool": "inspect-minecraft"
+          }
+        }
+      }
+    }
+  }
+}

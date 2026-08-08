@@ -1,0 +1,1822 @@
+# Pre-migration named-test inventory. One line per TAP test point:
+# <subtest-depth>\t<ok|not ok>\t<test name>
+# Same file selection as npm test; indices and timings stripped; lines sorted
+# (set semantics for the planned named-test set-difference check).
+0	ok	@Accessor error includes inference hint with prefix removal
+0	ok	@Shadow field-not-found message includes available field count
+0	ok	@Shadow method-not-found message includes available method count
+0	ok	AnalyzeModService omits default search/decompile controls from summary.subject
+0	ok	AnalyzeModService remap preview includes summary.subject and apply follow-up
+0	ok	AnalyzeModService validates remap preview without mutating
+0	ok	AnalyzeSymbolService api-overview inherits sourceMapping when classNameMapping is omitted
+0	ok	AnalyzeSymbolService explicit kind=class emits no inference warning
+0	ok	AnalyzeSymbolService includes summary.subject for mapping flows
+0	ok	AnalyzeSymbolService keeps candidates for an exists query that did not resolve
+0	ok	AnalyzeSymbolService lifecycle forwards fromVersion/toVersion/maxVersions/includeTimeline range controls
+0	ok	AnalyzeSymbolService lifecycle scopes traceSymbolLifecycle to the requested version
+0	ok	AnalyzeSymbolService omits the redundant lone exact candidate on a resolved map
+0	ok	AnalyzeSymbolService returns matrix rows only when include=matrix is requested
+0	ok	AnalyzeSymbolService slims the unresolved candidate tail and flags candidateDetailsTruncated
+0	ok	AnalyzeSymbolService task=exists kind=symbol with no owner auto-detects class
+0	ok	AnalyzeSymbolService task=exists kind=symbol with owner only auto-detects field
+0	ok	AnalyzeSymbolService task=map kind=symbol with owner+descriptor auto-detects method and warns
+0	ok	AppError carries name === 'AppError' for diagnostic logging
+0	ok	ArtifactContentsSummary sourceCoverage contract only allows full or partial
+0	ok	ArtifactsRepo allows multiple null aliases (legacy rows tolerated)
+0	ok	ArtifactsRepo enforces alias UNIQUE across distinct artifact_ids
+0	ok	ArtifactsRepo round-trips alias and exposes it via getArtifact()
+0	ok	ArtifactsRepo.getArtifact resolves an artifact by its alias
+0	ok	ArtifactsRepo.getArtifact returns undefined for unknown id and unknown alias
+0	ok	ArtifactsRepo.setAlias backfills a NULL alias on a legacy row
+0	ok	ArtifactsRepo.setAlias is idempotent and rotates an existing alias
+0	ok	ArtifactsRepo.upsertArtifact updates alias on conflict for same artifact_id
+0	ok	BATCH_TOOLS_OFF env gate is true only when BATCH_TOOLS_OFF=1 at module load
+0	ok	C10: owner not found rethrows ERR_CLASS_NOT_FOUND with find-class suggestedCall
+0	ok	C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls
+0	ok	C12: exampleSnippet is deterministic for given (annotation, kind, accessFlags)
+0	ok	C13: explicit input.mapping that differs from resolved.mappingApplied throws ERR_NAMESPACE_MISMATCH
+0	ok	C14: autoRemap translates owner+member across namespaces instead of throwing
+0	ok	C15: autoRemap surfaces a NAMESPACE_MISMATCH when the owner cannot be translated
+0	ok	C16: autoRemap drops an untranslatable descriptor and matches by name
+0	ok	C17: autoRemap translates a field target
+0	ok	C18: autoRemap throws NAMESPACE_MISMATCH when the member (not the owner) cannot be translated
+0	ok	C19: @Accessor setter template emits void with parameter (not zero-arg)
+0	ok	C19b: @Accessor getter template stays zero-arg with return type
+0	ok	C1: existing method with explicit descriptor returns exists=true and matches=1
+0	ok	C20: missing target throws ERR_INVALID_INPUT pointing at the target field
+0	ok	C21: empty owner throws ERR_INVALID_INPUT
+0	ok	C22: empty member.name throws ERR_INVALID_INPUT
+0	ok	C23: resolved artifact without a binary jar throws ERR_CONTEXT_UNRESOLVED
+0	ok	C24: autoRemap without a findMapping translator throws ERR_NAMESPACE_MISMATCH
+0	ok	C25: autoRemap with no resolvable version throws ERR_INVALID_INPUT
+0	ok	C26: decodeAccessFlags labels static, final, abstract, and package-private members
+0	ok	C27: @Shadow @Final snippet emitted for a private final field
+0	ok	C28: getSignature errors other than CLASS_NOT_FOUND propagate unchanged
+0	ok	C2: existing method with descriptor omitted returns all overloads as matches
+0	ok	C3: name match with descriptor mismatch returns exists=false plus descriptor candidates
+0	ok	C4: method not found by name returns nearest neighbors via suggestSimilar
+0	ok	C5: private field without mixinMemberName returns @Shadow
+0	ok	C5b: private method without mixinMemberName returns null + candidates
+0	ok	C6: private field with getXxx mixinMemberName returns @Accessor
+0	ok	C7: private method with invokeXxx mixinMemberName returns @Invoker
+0	ok	C8: public method returns @Inject-only with reasoning
+0	ok	C9: workspace target populates provenance.workspaceResolution
+0	ok	COMPACT_MAPPING_TOOL_NAMES is a subset of COMPACT_ENABLED_TOOL_NAMES
+0	ok	COMPACT_SOURCE / MEMBERS / LIGHT tool name sets are subsets of COMPACT_ENABLED
+0	ok	CompareMinecraftService emits truncation metadata when summary samples are clipped
+0	ok	CompareMinecraftService falls back to artifact follow-up when migration overview has class counts without representative class names
+0	ok	CompareMinecraftService forwards sourcePriority for class diffs
+0	ok	CompareMinecraftService keeps truncation metadata for clipped summary classes when registry is included
+0	ok	CompareMinecraftService keeps truncation metadata for clipped summary registry data when classes are included
+0	ok	CompareMinecraftService promotes migration follow-up into summary.nextActions with summary.subject
+0	ok	CompareMinecraftService returns partial registry-diff results when one side detail fetch fails
+0	ok	CompareMinecraftService summarizes changed versions without full class lists by default
+0	ok	CompatStdioServerTransport emits Content-Length responses after Content-Length input
+0	ok	CompatStdioServerTransport emits newline-delimited responses after newline input
+0	ok	CompatStdioServerTransport handles mid-stream switch from line to Content-Length with CRLF endings
+0	ok	CompatStdioServerTransport parses Content-Length framed JSON-RPC messages
+0	ok	CompatStdioServerTransport parses newline-delimited JSON-RPC messages
+0	ok	CompatStdioServerTransport reports malformed Content-Length headers and recovers
+0	ok	CompatStdioServerTransport waits until full Content-Length body is available
+0	ok	D10: bug-shaped suggestedCall is dropped and error.hints carries the fallback line
+0	ok	D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation (subprocess; module-load read)
+0	ok	D12: no raw `suggestedCall: { ... }` or `.suggestedCall = { ... }` construction remains in src/
+0	ok	D13: byte-identical envelope for valid suggestions (no key additions, no defaults injected)
+0	ok	D14: a non-AppError throw maps to a non-retryable server fault (retryClass=server)
+0	ok	D5: valid params return suggestedCall with caller-supplied params (no safeParse re-emit)
+0	ok	D6: invalid params with no examples returns no suggestedCall and no exampleCalls
+0	ok	D7: invalid primary + one valid example yields exampleCalls with only the valid one
+0	ok	D8: invalid primary + partially-valid examples returns only the validated subset
+0	ok	D9: published suggestedCall validates against the registered schema for the tool
+0	ok	DEFAULT_DETAIL_BY_TOOL: resolution/mapping default summary, source/file default standard
+0	ok	E1/E8: warnings flow into per-entry envelope (not inline in result)
+0	ok	E1: 3 mapping entries return ok with the shared version threaded through
+0	ok	E1: 3 mixed-kind entries (class, method, field) return ok in input order
+0	ok	E1: 3 valid entries return 3 ok results in input order
+0	ok	E1: 3 valid entries return ok in input order
+0	ok	E2: failFast=false (default) keeps running and preserves the entry's underlying code
+0	ok	E2: failFast=false (default) keeps running and reports the entry's underlying code
+0	ok	E2: failFast=false (default) returns mixed ok/error with code passthrough
+0	ok	E2: failing entry preserves underlying error code
+0	ok	E4 (workspace): version is derived from workspace provenance.detected.minecraftVersion
+0	ok	E4: no shared artifact summary (mapping-only batch)
+0	ok	E4: shared artifact resolution runs exactly once and summary carries sharedArtifactId
+0	ok	E4: shared resolution runs exactly once and version is derived from version target
+0	ok	E7: per-entry error.suggestedCall proposes get-class-source with shared artifactId
+0	ok	E7: per-entry retry suggestedCall proposes find-mapping and validates
+0	ok	E7: per-entry retry suggestedCall validates against get-class-members schema
+0	ok	E7: per-entry suggestedCall proposes check-symbol-exists and validates
+0	ok	E8: batch-mappings detail=summary strips empty arrays and applies mapping projection
+0	ok	E8: detail=full preserves all single-tool fields
+0	ok	E8: detail=summary strips empty arrays and applies mapping projection
+0	ok	E8: detail=summary strips provenance/artifactContents/qualityFlags from per-entry result
+0	ok	E8: detail=summary strips provenance/artifactContents/qualityFlags/context
+0	ok	ERROR_CODES exposes ERR_DEPENDENCY_VERSION_UNRESOLVED
+0	ok	ERROR_CODES exposes ERR_MIXIN_PARSE_FAILED
+0	ok	ERROR_CODES exposes ERR_STAGE_BUDGET_PRE_PARSE
+0	ok	ERROR_CODES exposes ERR_TOOL_TIMEOUT
+0	ok	ERROR_CODES exposes ERR_WORKER_RESTART
+0	ok	ERROR_CODES exposes ERR_WORKSPACE_VERSION_UNRESOLVED
+0	ok	ERR_WORKSPACE_VERSION_UNRESOLVED when shared artifact lacks Minecraft version
+0	ok	Example docs use the current get-class-members target schema
+0	ok	F-01: resolveArtifact handles strictVersion for approximated version results
+0	ok	F-02: listFiles with invalid cursor throws ERR_INVALID_INPUT
+0	ok	F-02: listFiles with undefined/empty cursor returns first page (unchanged)
+0	ok	F-02: listFiles with valid base64 but wrong schema throws ERR_INVALID_INPUT
+0	ok	F-02: searchFiles with invalid cursor throws ERR_INVALID_INPUT
+0	ok	F-03: search-class-source handles representative queryMode behavior for separator queries
+0	ok	F-04: getModClassSource maxChars truncates output
+0	ok	F-04: getModClassSource maxLines truncates output
+0	ok	F-04: getModClassSource outputFile honors maxLines truncation
+0	ok	F-04: getModClassSource outputFile writes to file and returns placeholder
+0	ok	F-04: getModClassSource with no truncation params returns full content
+0	ok	InspectMinecraftService accepts workspace class focus for class-members
+0	ok	InspectMinecraftService auto routes workspace search focus through project-aware artifact resolution
+0	ok	InspectMinecraftService falls back to binary-backed metadata for workspace class overview when partial sources omit vanilla classes
+0	ok	InspectMinecraftService forwards include:["descriptors"] to getClassMembers as includeDescriptors
+0	ok	InspectMinecraftService marks workspace list-files results as partial when source coverage excludes net.minecraft
+0	ok	InspectMinecraftService omits includeSnapshots=false from versions summary subject
+0	ok	InspectMinecraftService prepends a binary-backed vanilla class hit when workspace partial-source search only finds non-vanilla matches
+0	ok	InspectMinecraftService preserves gradleUserHome through schema parsing and artifact resolution
+0	ok	InspectMinecraftService preserves workspace context for class overview without explicit artifact input
+0	ok	InspectMinecraftService preserves workspace context for class source without explicit artifact input
+0	ok	InspectMinecraftService preserves workspace context for file focus without explicit artifact input
+0	ok	InspectMinecraftService returns ambiguous class overview with follow-up candidates
+0	ok	InspectMinecraftService returns binary-backed class hits for workspace search when partial sources omit vanilla matches
+0	ok	InspectMinecraftService skips binary-backed class lookup for lowercase workspace search queries
+0	ok	InspectMinecraftService task=versions surfaces the listVersions clamp warning
+0	ok	InspectMinecraftService uses the outer source file path for binary-backed inner class search hits
+0	ok	JDK super-class resolution failures are suppressed during inherited-member expansion
+0	ok	Japanese README stays overview-first with summary-first guidance and natural Japanese
+0	ok	Japanese README tool surface tables are generated from the contract manifest
+0	ok	LivingEntity-style regression — never status=ok with counts.total === 0 when binary fails
+0	ok	MEMBERS_STATUS_LEGACY=1 strips the new fields
+0	ok	ManageCacheService normalizes read-only actions to preview mode and blocks broad delete apply
+0	ok	ManageCacheService preview delete includes summary.subject and apply follow-up
+0	ok	MappingService Loom cache version filter handles representative candidate path variants
+0	ok	MappingService builds class API matrix across mappings
+0	ok	MappingService caches Loom graphs by effective cwd when projectPath is omitted
+0	ok	MappingService checkMappingHealth skips tiny namespace loading for mojang and obfuscated requests
+0	ok	MappingService checkMappingHealth treats unobfuscated mojang runtime names as healthy
+0	ok	MappingService checkSymbolExists accepts partial projection when descriptor mixes remapped MC classes with unmapped JDK classes
+0	ok	MappingService checkSymbolExists matches a descriptor against an intermediary-coordinate yarn tiny
+0	ok	MappingService checkSymbolExists projects descriptor class references before matching overloads
+0	ok	MappingService checkSymbolExists supports maxCandidates
+0	ok	MappingService checks symbol existence across class/field/method kinds
+0	ok	MappingService does not issue unbounded Loom tiny version globs
+0	ok	MappingService extractTinyFromJar limits single-open tiny extraction to the first matching entry
+0	ok	MappingService falls back to Maven tiny when Loom cache is unavailable
+0	ok	MappingService findMapping handles representative ambiguity metadata flows
+0	ok	MappingService findMapping omitted signatureMode behaves as name-only at the service layer
+0	ok	MappingService findMapping signatureMode=exact accepts obfuscated-canonical descriptors on multi-hop paths
+0	ok	MappingService findMapping signatureMode=exact accepts partial projection for mixed MC + JDK descriptors
+0	ok	MappingService getClassApiMatrix includes competing candidates in ambiguity warnings
+0	ok	MappingService getClassApiMatrix maps only the windowed rows (per-row mapping scales with maxRows, not rowCount)
+0	ok	MappingService getClassApiMatrix paginates rows with a stable nextCursor
+0	ok	MappingService getClassApiMatrix prefers the explicit classNameMapping over obfuscated base rows
+0	ok	MappingService getClassApiMatrix scopes ambiguity warnings to the returned page
+0	ok	MappingService getClassApiMatrix supports maxRows
+0	ok	MappingService limits returned candidates while preserving ambiguity metadata
+0	ok	MappingService loads Loom tiny mappings from GRADLE_USER_HOME fabric-loom cache
+0	ok	MappingService maps descriptor-qualified methods through tiny mappings
+0	ok	MappingService maps field symbols and returns structured candidate metadata
+0	ok	MappingService maps obfuscated -> mojang and caches repeated lookups
+0	ok	MappingService maps obfuscated -> yarn from Loom tiny cache
+0	ok	MappingService merges Loom tiny mappings across project and GRADLE_USER_HOME roots
+0	ok	MappingService prefers explicit gradleUserHome over process GRADLE_USER_HOME
+0	ok	MappingService rejects class queries that include owner
+0	ok	MappingService releaseGraphCacheEntry evicts all mode/projectPath variants for a version
+0	ok	MappingService resolveMethodMappingExact reports representative unresolved result states
+0	ok	MappingService resolveMethodMappingExact resolves representative exact lookup backends
+0	ok	MappingService resolves exact method descriptor through mojang client mappings
+0	ok	MappingService resolves mojang named namespace paths through official tiny headers from Loom cache
+0	ok	MappingService resolves mojang named namespace paths through official tiny headers from Maven fallback
+0	ok	MappingService returns ambiguous for short class names when multiple FQCNs match nameMode=auto
+0	ok	MappingService returns empty graph for unobfuscated version (26.1)
+0	ok	MappingService returns identity candidate when source/target mapping are equal
+0	ok	MappingService returns mapping_unavailable for symbol existence when mapping graph is absent
+0	ok	MappingService shares class-descriptor projections across members on one graph
+0	ok	MappingService skips tiny namespace loading for mojang <-> obfuscated lookups
+0	ok	MappingService stops Maven tiny fallback at the first successful jar per artifact
+0	ok	MappingService supports short class name checks when nameMode=auto
+0	ok	MappingService supports sourcePriority override over config default
+0	ok	MappingService suppresses raw Loom miss warnings when Maven fallback resolves tiny mappings
+0	ok	MappingService.findMapping honors nameMode=auto for dotless non-obfuscated class names
+0	ok	MinecraftExplorerService avoids delete/set churn and spread copies on cache hits
+0	ok	MinecraftExplorerService detects class hierarchy cycles
+0	ok	MinecraftExplorerService expands inherited superclass and interface members
+0	ok	MinecraftExplorerService filters by access, synthetic flag, and member pattern
+0	ok	MinecraftExplorerService maps broken constant-pool references to class-safe errors
+0	ok	MinecraftExplorerService rejects malformed field descriptors
+0	ok	MinecraftExplorerService rejects malformed method descriptors
+0	ok	MinecraftExplorerService renders arrays, objects, primitives, and void signatures
+0	ok	MinecraftExplorerService reports invalid class magic as ERR_INTERNAL
+0	ok	MinecraftExplorerService reports unsupported constant pool tags as ERR_INTERNAL
+0	ok	MinecraftExplorerService reports void method arguments as invalid method descriptors
+0	ok	MinecraftExplorerService reuses cached signatures but refreshes response context
+0	ok	MinecraftExplorerService stops inherited expansion at max depth
+0	ok	MinecraftExplorerService treats memberPattern "|" as OR alternatives
+0	ok	MinecraftExplorerService warns when inherited classes or interfaces are missing
+0	ok	ModDecompileService refreshes cache hits before eviction so hot jars stay resident
+0	ok	P1: toolHealth absent when healthReport not provided
+0	ok	P1: toolHealth is included in result when healthReport provided
+0	ok	P2: field-not-found shadow downgrades to warning when memberRemapAvailable=false
+0	ok	P2: method-not-found downgrades to warning when memberRemapAvailable=false and remap failed
+0	ok	P2: target-not-found stays error when healthy
+0	ok	P2: target-not-found via signatureFailedTargets downgrades to warning when unhealthy
+0	ok	P6: confidenceBreakdown captures base score and applied penalties
+0	ok	P6: confidenceScore reflects representative health and provenance penalties
+0	ok	P7: falsePositiveRisk reflects representative resolution and health states
+0	ok	POSIX process-group termination removes a worker and its descendant
+0	ok	POSIX tree termination reports failure without hiding direct-child fallback need
+0	ok	POSIX tree termination targets the worker process group
+0	ok	POSIX tree termination treats an already-gone process group as cleaned up
+0	ok	POSIX unresolved-token shutdown retry clears already-gone process groups
+0	ok	POSIX unresolved-token shutdown retry targets the saved process group
+0	ok	README and tool-reference both document the removed-mapping migration token
+0	ok	README documents MCP client quick start commands
+0	ok	README keeps Start Here section with summary-first guidance before the tool table
+0	ok	README states the registered tool count and entry/expert split
+0	ok	README tells inspect-minecraft callers to use structured workspace focus
+0	ok	README tool surface tables are generated from the contract manifest
+0	ok	README, tool-reference, and CHANGELOG all reference the 4 batch tools (triangle parity)
+0	ok	README, tool-reference, and CHANGELOG all reference the 5 top-level workflow tools (triangle parity)
+0	ok	RegistryService dedups concurrent loads of the same version into one generation
+0	ok	RegistryService discards corrupt cached registries and regenerates them
+0	ok	RegistryService evicts the coldest version once the in-memory cache bound is exceeded
+0	ok	RegistryService maps invalid regenerated registry snapshots to ERR_REGISTRY_GENERATION_FAILED
+0	ok	RegistryService supports summary-only and entry-capped registry responses
+0	ok	RegistryService treats a cached registry value missing entries as corrupt and regenerates
+0	ok	RuntimeMetrics snapshots copy artifact byte accounting rows on read
+0	ok	SUGGESTED_CALL_DEFAULTS.reportMode matches the validate-mixin summary-first default
+0	ok	SearchHitAccumulator applies cursor filtering before pagination
+0	ok	SearchHitAccumulator finalize does not rely on Array.prototype.sort
+0	ok	SearchHitAccumulator keeps only top limit+1 hits while counting total matches
+0	ok	SearchHitAccumulator keeps top hits even when better matches arrive after heap is full
+0	ok	SourceService LRU eviction unlinks the artifact's `<cacheDir>/remapped/<id>.jar`
+0	ok	SourceService accepts artifactAlias on findClass and getClassSource
+0	ok	SourceService accepts unobfuscated mojang mapping for decompiled coordinate artifacts
+0	ok	SourceService accumulates indexed path metrics across multiple queries on one service
+0	ok	SourceService backfills alias on warm-cache resolveArtifact
+0	ok	SourceService can manually reindex an artifact
+0	ok	SourceService changes artifactId when source jar signature changes
+0	ok	SourceService checkSymbolExists falls back to unobfuscated runtime bytecode for mojang class queries
+0	ok	SourceService checkSymbolExists keeps mapping_unavailable when unobfuscated runtime jar resolution fails
+0	ok	SourceService checkSymbolExists reports short unobfuscated class names when nameMode is omitted
+0	ok	SourceService delegates representative mapping queries to MappingService
+0	ok	SourceService detectFabricLikeInputNamespace detects intermediary vs mojang jars
+0	ok	SourceService diffClassSignatures omits from/to snapshots when includeFullDiff=false
+0	ok	SourceService diffClassSignatures remaps non-obfuscated class per endpoint version
+0	ok	SourceService diffClassSignatures reports class added and absent_in_both states
+0	ok	SourceService diffClassSignatures returns member added/removed/modified deltas
+0	ok	SourceService diffClassSignatures validates version range order
+0	ok	SourceService diffClassSignatures with non-obfuscated mapping remaps member deltas
+0	ok	SourceService evicts oldest artifacts when maxArtifacts is exceeded
+0	ok	SourceService exposes searchedPaths diagnostics when mojang mapping cannot be applied for version target
+0	ok	SourceService fails mojang mapping when only decompiled source is available
+0	ok	SourceService findClass does not label a native dependency miss as Minecraft obfuscation
+0	ok	SourceService findClass pushes type symbolKinds and a bounded limit to findScopedSymbols
+0	ok	SourceService findClass resolves a qualified inner-class name to its outer file
+0	ok	SourceService findClass resolves qualified names even with many same-name symbols
+0	ok	SourceService findClass suppresses misleading non-vanilla matches for partial-source vanilla lookups
+0	ok	SourceService findClass warns when obfuscated mapping is queried with deobfuscated class names
+0	ok	SourceService getArtifactFile truncation preserves UTF-8 boundaries
+0	ok	SourceService getClassMembers applies '|'-OR memberPattern to decompiledFallback
+0	ok	SourceService getClassMembers applies memberPattern to decompiledFallback
+0	ok	SourceService getClassMembers caps the default first page at 150 members and advertises a continuation cursor
+0	ok	SourceService getClassMembers delegates to explorer and returns member payload
+0	ok	SourceService getClassMembers does not populate decompiledFallback when bytecode enumeration already has entries
+0	ok	SourceService getClassMembers enriches a binary-path CLASS_NOT_FOUND with recovery guidance
+0	ok	SourceService getClassMembers excludes method calls and local variables from decompiledFallback
+0	ok	SourceService getClassMembers infers missing artifact version from projectPath when preferred
+0	ok	SourceService getClassMembers keeps outer members declared after a nested type
+0	ok	SourceService getClassMembers looks up bytecode using the resolved artifact namespace
+0	ok	SourceService getClassMembers mapping fallback keeps original name and emits warning
+0	ok	SourceService getClassMembers paginates with a stable nextCursor and rejects foreign cursors
+0	ok	SourceService getClassMembers populates decompiledFallback when bytecode enumeration returns zero but decompiled source is indexed
+0	ok	SourceService getClassMembers projects decompiledFallback members per projection
+0	ok	SourceService getClassMembers rejects representative unresolved preconditions
+0	ok	SourceService getClassMembers restores FIELD jvmDescriptor with includeDescriptors:true
+0	ok	SourceService getClassMembers scopes decompiledFallback to the requested class body, excluding nested types
+0	ok	SourceService getClassMembers skips memberPattern on fallback when namespaces mismatch and warns
+0	ok	SourceService getClassMembers slims the wire member shape (hoist ownerFqn, drop accessFlags, keep jvmDescriptor)
+0	ok	SourceService getClassMembers uses sibling binary jar when artifact is resolved from a source jar input
+0	ok	SourceService getClassMembers uses the artifact-namespace lookup name when building decompiledFallback
+0	ok	SourceService getClassMembers with mojang mapping remaps className and member names
+0	ok	SourceService getClassMembers with non-obfuscated mapping applies memberPattern post-remap
+0	ok	SourceService getClassMembers with obfuscated mapping is unchanged (regression)
+0	ok	SourceService getClassSource accepts canonical inner-class dot notation
+0	ok	SourceService getClassSource does not flag non-decompiled origin
+0	ok	SourceService getClassSource falls back to sibling binary artifact when source jar coverage is partial
+0	ok	SourceService getClassSource flags decompiled origin as compile-unverified
+0	ok	SourceService getClassSource maxChars truncation resumes at a safe line boundary
+0	ok	SourceService getClassSource mode='snippet' applies the 200-line default truncation with a continuation
+0	ok	SourceService getClassSource omits a line continuation for metadata-mode maxChars truncation
+0	ok	SourceService getClassSource omits a line continuation when maxChars cuts within the first line
+0	ok	SourceService getClassSource rejects package-incompatible fallback matches
+0	ok	SourceService getClassSource rejects representative invalid input combinations
+0	ok	SourceService getClassSource remaps partial-source binary fallback lookups to the fallback artifact namespace
+0	ok	SourceService getClassSource reports partial-source fallback failures without redirecting to find-class
+0	ok	SourceService getClassSource truncation reports nextStartLine and an executable continuation suggestedCall
+0	ok	SourceService ignores projectPath Loom source discovery for obfuscated mapping
+0	ok	SourceService indexed search reports compact path hits and db I/O metrics
+0	ok	SourceService init scans `<cacheDir>/remapped/` and includes only live-artifact bytes in `cache_total_content_bytes`
+0	ok	SourceService listArtifactFiles explains that indexed artifacts do not include resources
+0	ok	SourceService maxCacheBytes does not chase orphaned remapped jars by evicting unrelated live artifacts
+0	ok	SourceService maxCacheBytes does not over-evict unrelated artifacts after a remapped-jar eviction
+0	ok	SourceService maxCacheBytes evicts when remapped jar bytes alone push over the limit
+0	ok	SourceService mod APIs align missing-jar existence errors with analyze-mod-jar
+0	ok	SourceService prefers explicit gradleUserHome over stale process GRADLE_USER_HOME source jars
+0	ok	SourceService produces identical alias when the same jar is resolved through a symlink
+0	ok	SourceService records list-files duration metric
+0	ok	SourceService rejects intermediary and yarn mappings when artifact version is unknown
+0	ok	SourceService rejects mojang binary-remap on jar inputs because the gate is restricted to target.kind="version"
+0	ok	SourceService remapSignatureMembers logs warning when resolveMethodMappingExact throws
+0	ok	SourceService reports representative cache byte-accounting states
+0	ok	SourceService resolveArtifact does not treat version-matching mod source jars as Minecraft merged sources
+0	ok	SourceService resolveArtifact handles unobfuscated version fallback warnings
+0	ok	SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial
+0	ok	SourceService resolveArtifact prefers Minecraft source jars from sibling Gradle user home over project remapped mod sources
+0	ok	SourceService resolveArtifact returns sampleEntries for source JAR
+0	ok	SourceService resolveArtifact returns undefined sampleEntries for decompile-only
+0	ok	SourceService resolveWorkspaceSymbol derives field status from kind-filtered findMapping candidates
+0	ok	SourceService resolveWorkspaceSymbol handles representative compile-visible symbol flows
+0	ok	SourceService resolveWorkspaceSymbol routes by kind once a workspace mapping is known
+0	ok	SourceService resolveWorkspaceSymbol validates input before any workspace detection
+0	ok	SourceService resolves intermediary mapping for source-backed coordinate artifacts
+0	ok	SourceService resolves mojang mapping for version target using workspace Loom source cache
+0	ok	SourceService resolves version target through manifest and downloads client jar
+0	ok	SourceService resolves/searches/reads class source through artifactId flow
+0	ok	SourceService returns class source with line range filtering
+0	ok	SourceService routes representative search queries through indexed and fallback paths
+0	ok	SourceService runtime-aware access widener candidate scan avoids loader-constant scoring and broad jar globs
+0	ok	SourceService searchClassSource does not translate when mapping result is ambiguous
+0	ok	SourceService searchClassSource handles representative edge cases
+0	ok	SourceService searchClassSource omits totalApprox from compact zero-hit results
+0	ok	SourceService searchClassSource preserves caller-supplied packagePrefix during translation
+0	ok	SourceService searchClassSource returns compact hits without snippets or relations
+0	ok	SourceService searchClassSource translated symbol query uses simple name + package scope
+0	ok	SourceService searchClassSource translates symbol intent via queryNamespace when artifact namespace differs
+0	ok	SourceService searchClassSource warns when queryNamespace cannot be applied because artifact has no version
+0	ok	SourceService searchClassSource warns when queryNamespace used with intent=path
+0	ok	SourceService searchClassSource warns when queryNamespace used with intent=text
+0	ok	SourceService searchClassSource warns when symbol intent query is not a fully-qualified class name
+0	ok	SourceService searchClassSource with ** glob pattern does not crash
+0	ok	SourceService supports mojang mapping on unobfuscated version targets without source jars
+0	ok	SourceService targetKind=jar handles representative sibling sources-jar adoption rules
+0	ok	SourceService text search respects exact (case-sensitive) and prefix (case-insensitive) match semantics
+0	ok	SourceService traceSymbolLifecycle evaluates versions with bounded parallelism while preserving timeline order
+0	ok	SourceService traceSymbolLifecycle ignores inline signature suffix when parsing symbol
+0	ok	SourceService traceSymbolLifecycle keeps mapping pressure bounded across versions when cache release is available
+0	ok	SourceService traceSymbolLifecycle rejects obvious class-like symbols before consulting mapping state or scanning jars
+0	ok	SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanned version
+0	ok	SourceService traceSymbolLifecycle surfaces invalid method mapping input details in warnings
+0	ok	SourceService traceSymbolLifecycle uses name-only mapping when descriptor is omitted
+0	ok	SourceService traceSymbolLifecycle with non-obfuscated mapping remaps descriptor before matching
+0	ok	SourceService traceSymbolLifecycle with non-obfuscated mapping resolves symbol to obfuscated
+0	ok	SourceService traces symbol lifecycle across versions and reports gaps
+0	ok	SourceService updates cache accounting without rescanning repo tables
+0	ok	SourceService validateAccessTransformer infers mojang namespace from NeoForge workspace loader scope
+0	ok	SourceService validateAccessTransformer infers srg namespace from Forge workspace loader scope
+0	ok	SourceService validateAccessTransformer remaps class references inside method descriptors
+0	ok	SourceService validateAccessTransformer requires explicit atNamespace without workspace context
+0	ok	SourceService validateAccessWidener chooses the expected mapping namespace
+0	ok	SourceService validateAccessWidener prefers explicit mapped merged jars over ambiguous merged jars
+0	ok	SourceService validateAccessWidener remaps class references inside method descriptors
+0	ok	SourceService validateAccessWidener resolves merged runtime artifacts and surfaces runtime access evidence
+0	ok	SourceService validateAccessWidener runtime-aware mode fails when no runtime jar can be resolved
+0	ok	SourceService validateAccessWidener runtime-aware namespace detection warnings appear in provenance.resolutionNotes
+0	ok	SourceService validateMixin detects the version from gradle.properties in project mode without an explicit version
+0	ok	SourceService validateMixin discovers representative config and project layouts
+0	ok	SourceService validateMixin handles representative report-shaping flows
+0	ok	SourceService validateMixin handles representative scope and mapping resolution flows
+0	ok	SourceService validateMixin handles representative scope fallback and reporting flows
+0	ok	SourceService validateMixin preserves an existing nested failedStage rather than overwriting it
+0	ok	SourceService validateMixin preserves mapping-health quickSummary note through the maven-first retry path under reportMode='compact'
+0	ok	SourceService validateMixin project/config discovery avoids sync glob and existence probes in discovery blocks
+0	ok	SourceService validateMixin quickSummary surfaces mapping-health probe failure as degradation
+0	ok	SourceService validateMixin quickSummary surfaces vanilla fallback after scope resolution failure
+0	ok	SourceService validateMixin reportMode='compact' keeps resolutionTrace when explain=true
+0	ok	SourceService validateMixin reuses class mapping lookups across batch entries
+0	ok	SourceService validateMixin tags failedStage='input-validation' across malformed-input triggers
+0	ok	SourceService validateMixin tags failedStage='input-validation' when a path mode input fails host normalization
+0	ok	SourceService validateMixin tags failedStage='resolve' when resolveVersionJar throws
+0	ok	SourceService version/runtime discovery blocks avoid sync glob scans on hot paths
+0	ok	TOOL_PRESERVE_PAYLOAD_KEYS covers zero-result primary-payload tools
+0	ok	Tool reference owns exact contract, migration, and environment details
+0	ok	ToolExecutionGate overflow guidance points find-mapping at its batch equivalent
+0	ok	ToolExecutionGate rejects overflow instead of starting more heavy jobs
+0	ok	ToolExecutionGate serializes heavy jobs with concurrency 1
+0	ok	ValidateProjectService access-transformer issues block only includes invalid entries
+0	ok	ValidateProjectService forwards the default reportMode (summary-first) to validateMixin
+0	ok	ValidateProjectService project-summary applies preferProjectVersion to discovered access wideners
+0	ok	ValidateProjectService project-summary blocked recovery suggests preferProjectVersion without a hardcoded version
+0	ok	ValidateProjectService project-summary blocks discovered validators when project version cannot be resolved
+0	ok	ValidateProjectService project-summary continues when one discovered mixin config fails validation
+0	ok	ValidateProjectService project-summary discovers and forwards runtime-aware access transformer inputs
+0	ok	ValidateProjectService project-summary does not discover access transformers unless requested
+0	ok	ValidateProjectService project-summary forwards runtime-aware access widener inputs
+0	ok	ValidateProjectService project-summary keeps empty mixin configs as warnings
+0	ok	ValidateProjectService project-summary uses detected project version consistently across mixins and access wideners
+0	ok	ValidateProjectService validates direct access transformer inline input
+0	ok	ValidateProjectService validates direct access widener inline input
+0	ok	ValidateProjectService version-required tasks throw ERR_INVALID_INPUT with a suggestedCall when no version is resolvable
+0	ok	VersionService trims version detail cache without iterative single-entry eviction
+0	ok	Windows tree termination command includes descendant and force flags
+0	ok	WorkspaceMappingService detects mojang mapping from NeoForge ModDevGradle workspace
+0	ok	WorkspaceMappingService detects mojang mapping from officialMojangMappings
+0	ok	WorkspaceMappingService detects yarn mapping from Fabric coordinates in Gradle Kotlin DSL
+0	ok	WorkspaceMappingService reports unresolved when modules disagree on mapping
+0	ok	Zod z.object() strips compact from schemas that do not define it
+0	ok	a binary asset entry answers with metadata and an explicit reason instead of content
+0	ok	a caller maxBytes below the read-through cap wins
+0	ok	a class absent from a version-target artifact suggests a vanilla-scope retry with existing enum values
+0	ok	a class absent from runtime bytecode stays not_found after the runtime check
+0	ok	a class in no nested jar keeps the class-not-found contract and names the inventory
+0	ok	a class missing from the runtime jar yields a clear 'not found' warning
+0	ok	a class present in two nested jars returns candidates instead of a silent pick
+0	ok	a class reported not_found by the mapping graph is runtime-checked on unobfuscated versions
+0	ok	a data JSON path (dimension_type) is served read-through
+0	ok	a database-backed tool keeps ERR_DB_FAILURE when SQLite cannot open
+0	ok	a database-independent NBT tool succeeds when SQLite cannot open
+0	ok	a deleted companion jar degrades to a primary-only index instead of failing the rebuild
+0	ok	a direct class subject auto-resolves through the unique known workspace with a provenance warning
+0	ok	a direct class subject with several known workspaces refuses to pick and lists candidates
+0	ok	a dotted inner-class match remains readable through the shell source redirect
+0	ok	a field absent from runtime bytecode stays not_found after the runtime check
+0	ok	a field reported not_found by the mapping graph is runtime-checked on unobfuscated versions
+0	ok	a malformed annotation attribute degrades to absent metadata without failing the parse
+0	ok	a missing asset path returns nearby-path hints including the relocated directory
+0	ok	a missing real Minecraft super class keeps its warning visible
+0	ok	a stale FQN lookup returns didYouMean naming the moved class with exact-simple-name reason
+0	ok	a unique workspace with no detectable version keeps the requires-artifact error
+0	ok	a wrong-version other-half jar is never picked as companion
+0	ok	accumulates distinct values under the trimmed key
+0	ok	active adoption invalidates a stale retry epoch and resets backoff
+0	ok	adds a dotted variant for a slash-separated internal name
+0	ok	adds a slash-separated variant for a dotted class name
+0	ok	all 9 resource handlers forward AppError details into the error envelope
+0	ok	allowlisted interface resolution failures are suppressed during inherited-member expansion
+0	ok	an archive containing a traversal-named entry is rejected outright
+0	ok	an artifact without symbol candidates returns an empty didYouMean array
+0	ok	an artifact-kind target passes its artifactId through without a resolve round-trip
+0	ok	an assets JSON path is served read-through from the backing jar with a delivery marker
+0	ok	an explicit subject.artifact is never overridden by workspace auto-resolution
+0	ok	an invalid jarPath for the members task is rejected as invalid input
+0	ok	an invalid-UTF-8 text entry is rejected instead of silently corrupted
+0	ok	an overlong line-delimited frame is rejected and the reader recovers
+0	ok	analyze-mod invalid legacy summary payload returns a structured suggestedCall
+0	ok	analyze-mod invalid legacy summary payload without detail still promotes metadata retries to standard detail
+0	ok	analyze-mod members task answers from bytecode without any decompiler involvement
+0	ok	analyze-mod remap preview returns an operation block without mutating
+0	ok	analyze-symbol fails with a clear error when inference finds no version
+0	ok	analyze-symbol infers an omitted version from projectPath with mandatory provenance
+0	ok	analyze-symbol keeps an explicit version even when projectPath is supplied
+0	ok	analyze-symbol rejects api-overview requests that include owner or descriptor selectors
+0	ok	analyzeModJar detects Fabric mod with full metadata
+0	ok	analyzeModJar detects Forge mod from META-INF/mods.toml
+0	ok	analyzeModJar detects Legacy Forge from mcmod.info
+0	ok	analyzeModJar detects NeoForge from META-INF/neoforge.mods.toml
+0	ok	analyzeModJar detects NeoForge from modLoader=lowcodefml in mods.toml
+0	ok	analyzeModJar detects Quilt mod with metadata
+0	ok	analyzeModJar excludes declared nested jars that are absent or escape the archive
+0	ok	analyzeModJar gracefully falls back on invalid fabric.mod.json
+0	ok	analyzeModJar includes class list when includeClasses=true
+0	ok	analyzeModJar includes declared nested jars outside META-INF/jars when present and safe
+0	ok	analyzeModJar leaves nestedJars absent for a mod without nested jars
+0	ok	analyzeModJar marks jars with both .class and .java entries as jarKind=mixed
+0	ok	analyzeModJar marks source-only jars with jarKind=source
+0	ok	analyzeModJar prioritizes fabric.mod.json over META-INF/mods.toml
+0	ok	analyzeModJar returns unknown loader when no metadata present
+0	ok	analyzeModJar surfaces the nested-jar inventory of a Jar-in-Jar shell
+0	ok	analyzeModJar throws AppError for invalid jar contents
+0	ok	analyzeModJar throws AppError for non-existent path
+0	ok	analyzeSymbolSchema accepts a toVersion-only lifecycle request without version
+0	ok	analyzeSymbolSchema accepts kind=symbol for task=api-overview (infers class)
+0	ok	analyzeSymbolSchema rejects lifecycle-only range fields on non-lifecycle tasks
+0	ok	analyzeSymbolSchema requires version for task=workspace
+0	ok	annotation-type classes expose member default values
+0	ok	applyDisambiguationHints narrows to the matching descriptor without warning
+0	ok	applyDisambiguationHints warns when a descriptorHint matches no candidate
+0	ok	applyErrorMetaExtensions does not touch meta for non-budget AppErrors or non-AppErrors
+0	ok	applyErrorMetaExtensions surfaces stageBudgetExhausted / budgetMs / elapsedMs on ERR_STAGE_BUDGET_PRE_PARSE
+0	ok	applyJsonPatch appends to an array via the "-" token
+0	ok	applyJsonPatch applies add/replace/test/remove and returns metadata
+0	ok	applyJsonPatch enforces typed-json invariants after mutation
+0	ok	applyJsonPatch inserts into an array at an existing index
+0	ok	applyJsonPatch is atomic and does not mutate input on failure
+0	ok	applyJsonPatch rejects a non-numeric array index
+0	ok	applyJsonPatch rejects a non-rooted JSON Pointer
+0	ok	applyJsonPatch rejects a patch that is not an array
+0	ok	applyJsonPatch rejects add/replace/test operations missing value
+0	ok	applyJsonPatch rejects an invalid JSON Pointer escape sequence
+0	ok	applyJsonPatch rejects an operation that is not an object
+0	ok	applyJsonPatch rejects an out-of-bounds array add index
+0	ok	applyJsonPatch rejects an unsupported operation name
+0	ok	applyJsonPatch rejects copy operations as unsupported
+0	ok	applyJsonPatch rejects operations with a non-string op or path
+0	ok	applyJsonPatch rejects out-of-bounds replace/remove/test array indices
+0	ok	applyJsonPatch rejects removing the document root
+0	ok	applyJsonPatch rejects replace/remove on a non-existent key
+0	ok	applyJsonPatch rejects the "-" array token for non-add operations
+0	ok	applyJsonPatch rejects traversal into a non-container value
+0	ok	applyJsonPatch rejects unsupported RFC6902 operations
+0	ok	applyJsonPatch supports add and replace targeting the document root
+0	ok	applyMappingPipeline authorizes binary-remap when mojang lands on binary-only artifact and gate is open
+0	ok	applyMappingPipeline ignores allowBinaryRemap when binary jar path is also missing
+0	ok	applyMappingPipeline keeps mojang for unobfuscated decompiled runtime artifacts
+0	ok	applyMappingPipeline keeps mojang for unobfuscated source-backed runtime artifacts
+0	ok	applyMappingPipeline still throws MAPPING_NOT_APPLIED when binary-only artifact is missing the gate
+0	ok	applyMappingPipeline throws MAPPING_UNAVAILABLE for an unsupported mapping kind
+0	ok	applyNbtJsonPatch enforces patched typedJson response bytes limit
+0	ok	applyNbtJsonPatch reports metadata and returns patched typed json
+0	ok	artifactSignatureFromFile yields a stable sha256 id for the same jar contents
+0	ok	artifact_content_bytes stays in sync when files rows change
+0	ok	assertJavaAvailable caches a success that follows a failed probe
+0	ok	assertJavaAvailable does not cache unavailable-Java failures after reset
+0	ok	assertJavaAvailable memoizes a successful probe process-wide
+0	ok	assertJavaAvailable resolves when java is installed
+0	ok	assertValidTypedNbtDocument accepts a valid typed NBT document
+0	ok	assertValidTypedNbtDocument accepts non-finite float/double sentinels
+0	ok	assertValidTypedNbtDocument escapes compound key tokens in the JSON pointer
+0	ok	assertValidTypedNbtDocument rejects a missing root node
+0	ok	assertValidTypedNbtDocument rejects a node missing its 'type' field
+0	ok	assertValidTypedNbtDocument rejects a non-object root
+0	ok	assertValidTypedNbtDocument rejects a non-record document
+0	ok	assertValidTypedNbtDocument rejects list element type mismatches
+0	ok	assertValidTypedNbtDocument rejects non-string long values
+0	ok	assertValidTypedNbtDocument rejects out-of-range byteArray values
+0	ok	assertValidTypedNbtDocument rejects out-of-range intArray values
+0	ok	assertValidTypedNbtDocument rejects out-of-range longArray values
+0	ok	assertValidTypedNbtDocument rejects raw non-finite float/double numbers
+0	ok	assertValidTypedNbtDocument rejects unrecognized float/double strings
+0	ok	binary remap temp output paths keep a jar suffix without the legacy jar.tmp shape
+0	ok	buildArtifactAlias differentiates mojang-remapped variant and other kinds
+0	ok	buildArtifactAlias hash suffix differs for distinct artifactIds with identical readable tokens
+0	ok	buildArtifactAlias is canonical: different mapping/scope inputs produce the same alias when the artifactId is the same
+0	ok	buildArtifactAlias produces a deterministic, canonical alias for version targets
+0	ok	buildClassSourceSnippet applies maxChars after maxLines and flags charsTruncated
+0	ok	buildClassSourceSnippet applies maxLines and reports truncated=true
+0	ok	buildClassSourceSnippet does not count a trailing newline as an extra line
+0	ok	buildClassSourceSnippet handles empty content without crashing
+0	ok	buildClassSourceSnippet maxChars only (no maxLines) still truncates and flags both
+0	ok	buildClassSourceSnippet reads the last real line of a file ending in a newline
+0	ok	buildClassSourceSnippet returns an empty out-of-range window when startLine is past EOF
+0	ok	buildClassSourceSnippet returns full content for mode='full'
+0	ok	buildClassSourceSnippet returns metadata regardless of range args when mode='metadata'
+0	ok	buildClassSourceSnippet treats CRLF newlines as line breaks
+0	ok	buildEntryToolMeta includes truncation details only when provided
+0	ok	buildEntryToolResult keeps summary and task while preserving selected blocks
+0	ok	buildExitTimestampGroups
+0	ok	buildJarSignature emits `<truncated mtime>:<size>` format
+0	ok	buildLegacyJsonRpcError
+0	ok	buildLoaderRuntimeSearchRoots prefers explicit Gradle user home over process default
+0	ok	buildMappingFallbackSuggestedCall does not redirect coordinate failures to the workspace target
+0	ok	buildMappingFallbackSuggestedCall does not redirect jar failures to the workspace target
+0	ok	buildMappingFallbackSuggestedCall does not redirect to workspace when MC version mismatches
+0	ok	buildMappingFallbackSuggestedCall falls back to legacy obfuscated retry when projectPath is absent
+0	ok	buildMappingFallbackSuggestedCall falls back to legacy retry when cold-cache detection finds nothing
+0	ok	buildMappingFallbackSuggestedCall returns legacy retry when the cached compile mapping is obfuscated
+0	ok	buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set
+0	ok	buildMappingFallbackSuggestedCall returns workspace retry when cache hit reports a non-obfuscated compile mapping AND matching MC version
+0	ok	buildMappingFallbackSuggestedCall runs cold-cache bounded detection and returns workspace retry on success
+0	ok	buildPackTarballName normalizes scoped package names the same way npm pack does
+0	ok	buildQuickSummary surfaces 'Budget exhausted before any target processed' for pre-target
+0	ok	buildQuickSummary surfaces 'deferred by stage budget' when targetsDeferredBudget > 0
+0	ok	buildRemoteBinaryUrls emits deterministic binary URL order
+0	ok	buildRemoteBinaryUrls includes classifier suffix in binary jar name
+0	ok	buildRemoteBinaryUrls strips a single trailing slash from repo base URL
+0	ok	buildRemoteSourceUrls and buildRemoteBinaryUrls both return [] for empty repo list
+0	ok	buildRemoteSourceUrls emits a single URL when no classifier (no duplicate fallback)
+0	ok	buildRemoteSourceUrls emits classifier and fallback source names
+0	ok	buildSyntheticCallToolResult
+0	ok	buildValidateMixinSuggestedParams preserves an explicit reportMode='full' end to end
+0	ok	buildVersionSourceSearchRoots accepts the legacy string overload (projectPath only)
+0	ok	buildVersionSourceSearchRoots prefers explicit Gradle user home over process default
+0	ok	buildWorkerRestartReply
+0	ok	bytecode-derived contexts report the version-appropriate namespace instead of hardcoded obfuscated
+0	ok	cache registry backs up and recovers a corrupt artifact-index database while listing
+0	ok	cache registry deleteEntries on binary-remap leaves non-binary-remap caches untouched (non-recursive scope)
+0	ok	cache registry deleteEntries(executionMode='preview') does not delete files but reports the deletion count
+0	ok	cache registry deletes a single workspace entry by projectPath selector
+0	ok	cache registry does not create a missing artifact-index database while listing
+0	ok	cache registry filters stale filesystem entries via olderThan and status selectors
+0	ok	cache registry inventories `<cacheDir>/remapped/<artifactId>.jar` as the binary-remap kind
+0	ok	cache registry inventories logical public cache kinds from filesystem state
+0	ok	cache registry listEntries paginates and normalizes WSL jarPath selectors
+0	ok	cache registry listEntries pagination does not drop mixed-case entries across pages
+0	ok	cache registry listEntries rejects invalid `olderThan` selector with ERR_INVALID_INPUT
+0	ok	cache registry lists and deletes corrupt top-level binary-remap directories by artifactId
+0	ok	cache registry matches artifact-index entries by mapping, scope, and projectPath selectors
+0	ok	cache registry summarizes and lists workspace context cache entries
+0	ok	cancel-first deadline performs cleanup without ERR_TOOL_TIMEOUT
+0	ok	cap-blocked degraded admission fails requests immediately and drops notifications
+0	ok	cap-blocked initialize is terminalized instead of retained indefinitely
+0	ok	cap-paused restart preserves remaining backoff and resumes once
+0	ok	capWarningDetailsForSummary caps the structured companion only at summary detail
+0	ok	check-symbol-exists accepts a dotless class name with the default nameMode
+0	ok	check-symbol-exists kind=method without descriptor is accepted by the default signatureMode
+0	ok	class-source resource decodes template params before calling sourceService
+0	ok	class-source resource requests full source, not the metadata outline
+0	ok	class-source resource returns an invalid-input envelope for invalid URL encoding
+0	ok	class-source resource returns an invalid-input envelope for missing template params
+0	ok	class-source-json resource error envelope forwards AppError details (hints + suggestedCall)
+0	ok	class-source-json resource returns a structured JSON envelope with metadata
+0	ok	classifies a lowercase-leading qualified tail as a field record
+0	ok	classifies an uppercase-leading or dollar-leading qualified tail as a class record
+0	ok	classifyWarnings classifies remap and mapping-lookup failures as mapping/warning
+0	ok	classifyWarnings classifies the AGGREGATED remap warning as namespace_fallback
+0	ok	classifyWarnings maps each high-value family to a code/category/severity
+0	ok	classifyWarnings references each warning by index and omits the message text
+0	ok	classifyWarnings returns an empty array for no warnings
+0	ok	client-only classes are findable via symbol search on split-source artifacts
+0	ok	collectMatchedJarEntriesAsBuffers collects raw latin1 buffers in a single jar open
+0	ok	collectMatchedJarEntriesAsBuffers stops after maxEntries matches
+0	ok	collectMatchedJarEntriesAsUtf8 stops after maxEntries successful matches
+0	ok	com.mojang.blaze3d stays outside the allowlist because it ships in the client jar
+0	ok	compact pipeline preserves all fields in a resolved SymbolResolutionOutput shape
+0	ok	compact pipeline strips empty candidates from a not_found SymbolResolutionOutput shape
+0	ok	compact projections are idempotent
+0	ok	compactArtifactResponse + compactResponse pipeline on resolve-artifact shape
+0	ok	compactArtifactResponse handles missing optional fields gracefully
+0	ok	compactArtifactResponse projects fields: omits diagnostic, keeps essential, passes through unknown
+0	ok	compactArtifactResponse reduces serialized size below 60% of full
+0	ok	compactLightResponse + compactResponse pipeline strips absent nextCursor and empty warnings
+0	ok	compactLightResponse + compactResponse preserves empty hits for search-class-source
+0	ok	compactLightResponse + compactResponse preserves empty items for list-artifact-files
+0	ok	compactLightResponse drops artifactContents only
+0	ok	compactLightResponse on list-artifact-files shape
+0	ok	compactMappingResponse + compactResponse pipeline strips candidates for resolved exact
+0	ok	compactMappingResponse + compactResponse pipeline strips empty candidates for not_found
+0	ok	compactMappingResponse + compactResponse reduces serialized size for resolved result
+0	ok	compactMappingResponse leaves small unresolved candidate arrays untouched
+0	ok	compactMappingResponse omits candidates when confidence is undefined (defaults to exact)
+0	ok	compactMappingResponse omits candidates when resolved + count=1 + exact + confidence=1
+0	ok	compactMappingResponse preserves candidates when ambiguous status
+0	ok	compactMappingResponse preserves candidates when candidateCount > 1
+0	ok	compactMappingResponse preserves candidates when candidateCount is absent
+0	ok	compactMappingResponse preserves candidates when candidates is not an array
+0	ok	compactMappingResponse preserves candidates when candidatesTruncated is true
+0	ok	compactMappingResponse preserves candidates when candidates[0] is null
+0	ok	compactMappingResponse preserves candidates when confidence < 1
+0	ok	compactMappingResponse preserves candidates when count/length mismatch
+0	ok	compactMappingResponse preserves candidates when matchKind is not exact
+0	ok	compactMappingResponse preserves empty candidates for not_found (P1 strips later)
+0	ok	compactMappingResponse preserves upstream candidatesTruncated when tail slimming also fires
+0	ok	compactMappingResponse slims unresolved candidates beyond the top-3 and flags candidateDetailsTruncated
+0	ok	compactMembersResponse + compactResponse preserves empty member buckets
+0	ok	compactMembersResponse omits context + metadata and preserves members/counts
+0	ok	compactMembersResponse preserves decompiledFallback and decompiledMemberCounts
+0	ok	compactResponse is shallow — nested empty structures stay
+0	ok	compactResponse preserveKeys keeps empty arrays/objects listed in the set
+0	ok	compactResponse preserveKeys still drops null/undefined values
+0	ok	compactResponse preserves Date values and class instances (non-plain objects)
+0	ok	compactResponse preserves non-empty arrays
+0	ok	compactResponse preserves non-empty objects
+0	ok	compactResponse preserves zero, false, and empty string
+0	ok	compactResponse returns empty object for null or undefined input
+0	ok	compactResponse returns empty object when all values stripped
+0	ok	compactResponse strips empty arrays
+0	ok	compactResponse strips empty objects
+0	ok	compactResponse strips null values
+0	ok	compactResponse strips undefined values
+0	ok	compactSourceResponse + compactResponse pipeline strips empty warnings
+0	ok	compactSourceResponse is idempotent and passes through unknown keys
+0	ok	compactSourceResponse omits provenance / artifactContents / qualityFlags and preserves payload
+0	ok	compactSourceResponse reduces serialized size vs full response
+0	ok	compareVersions filters class diffs, ignores nested classes, and warns on truncation
+0	ok	compareVersions keeps class results when registry comparison fails in all mode
+0	ok	compareVersions rejects blank version inputs
+0	ok	compareVersions summarizes registry additions, removals, and registry creation/removal
+0	ok	compareVersions throws when registry-only comparison fails
+0	ok	compareVersions warns when maxClassResults is clamped above 5000
+0	ok	complex annotation defaults render every element_value shape
+0	ok	computeFileSha1 rejects for non-existent file
+0	ok	computeFileSha1 returns correct hash for empty file
+0	ok	computeFileSha1 returns correct hash for known content
+0	ok	computeLineBraceDepths ignores braces in char literals and block comments
+0	ok	computeValidationStatus: degradedReason='stage-budget-pre-target' alone is partial
+0	ok	computeValidationStatus: targetsDeferredBudget alone promotes to partial
+0	ok	concurrent nested-jar extractions of the same entry all succeed
+0	ok	concurrent request contexts do not leak into each other
+0	ok	consecutive replay failures use one exponential retry owner and adoption resets it
+0	ok	constructor pseudo-name <init> is not treated as a placeholder
+0	ok	consumeFieldType rejects an empty L; reference token
+0	ok	consumeFieldType rejects array depth beyond 255 dimensions
+0	ok	consumeFieldType rejects void as an array element but allows a bare void return
+0	ok	countScopedSymbols restricts the count to the normalized package prefix
+0	ok	countScopedSymbols returns 0 for a blank query
+0	ok	createDirectWorkerBridgeTransport connects to the CLI worker over bash-managed stdio
+0	ok	createDirectWorkerBridgeTransport rejects startup promptly when the bridge process exits before FIFO open
+0	ok	createWorkspaceContextCache clear removes everything
+0	ok	createWorkspaceContextCache evicts the oldest entry when maxEntries is exceeded
+0	ok	createWorkspaceContextCache expires entries after ttlMs
+0	ok	createWorkspaceContextCache invalidate removes a single entry
+0	ok	createWorkspaceContextCache list returns all non-expired entries
+0	ok	createWorkspaceContextCache normalizes the projectPath using path.resolve
+0	ok	createWorkspaceContextCache returns undefined for an unknown projectPath
+0	ok	createWorkspaceContextCache write twice for the same projectPath updates and refreshes the entry
+0	ok	createWorkspaceContextCache write+read returns the same context
+0	ok	decideRetryRecommendation
+0	ok	declared-but-escaping nested jar paths are excluded from the shell inventory
+0	ok	decodeJavaNbt decodes MUTF-8 NUL (C0 80) as U+0000 in string payloads
+0	ok	decodeJavaNbt decodes a Java-style surrogate pair fixture (ED A0 BD ED B8 80) as U+1F600
+0	ok	decodeJavaNbt decodes a simple known Java NBT payload
+0	ok	decodeJavaNbt rejects a MUTF-8 string with an invalid continuation byte
+0	ok	decodeJavaNbt rejects a root TAG_End tag
+0	ok	decodeJavaNbt rejects an unknown NBT tag id
+0	ok	decodeJavaNbt rejects malformed MUTF-8 byte sequences
+0	ok	decodeJavaNbt rejects negative array and list lengths
+0	ok	decodeJavaNbt rejects trailing bytes after a complete payload
+0	ok	decodeJavaNbt throws structured parse errors for truncated payloads
+0	ok	decodeOffsetCursor rejects malformed and negative/non-integer cursors
+0	ok	decompileAndCache evicts the oldest entry once more than 8 jars are resident
+0	ok	decompileBinaryJar cache-hit traversal avoids sync listing and stat probes
+0	ok	decompileBinaryJar falls back default -> relaxed -> safe when no Java files are produced
+0	ok	decompileBinaryJar forwards the configured heap without changing Vineflower arguments
+0	ok	decompileBinaryJar includes profilesAttempted in error details on full failure
+0	ok	decompileBinaryJar passes Vineflower flags before input/output args
+0	ok	decompileBinaryJar re-decompiles when cached output lacks the completion marker
+0	ok	decompileBinaryJar rejects non-jar input path
+0	ok	decompileBinaryJar returns ERR_DECOMPILER_UNAVAILABLE when vineflower path is missing
+0	ok	decompileBinaryJar returns cached result with no decompileProfile when cache already has java files
+0	ok	decompileModJar can omit the class list for compact responses
+0	ok	decompileModJar dedups concurrent requests for the same jar via the in-flight map
+0	ok	decompileModJar normalizes jarPath before decompile pipeline
+0	ok	decompileModJar supports maxFiles for compact class listings
+0	ok	defaultDownloadPath is deterministic for the same URL
+0	ok	defaults warnings to an empty array when the validator output omits warnings
+0	ok	detectCompileMapping rejects empty projectPath with INVALID_INPUT
+0	ok	detectCompileMapping reports unresolved with warning when no build.gradle exists
+0	ok	detectCompileMapping resolves intermediary mapping from net.fabricmc:intermediary dependency
+0	ok	detectDependencyVersion adopts the umbrella POM version when modules-2 has several submodule versions
+0	ok	detectDependencyVersion does not adopt the umbrella property as a submodule version when nothing is cached
+0	ok	detectDependencyVersion does not pick up unrelated *_version keys for the umbrella
+0	ok	detectDependencyVersion enumerates 4 dedup'd property keys in order
+0	ok	detectDependencyVersion enumerates probe keys for a multi-hyphen submodule name
+0	ok	detectDependencyVersion enumerates snake_case probe keys for hyphenated umbrella names
+0	ok	detectDependencyVersion fails closed on several submodule versions when no umbrella property is declared
+0	ok	detectDependencyVersion fails closed on several submodule versions without an umbrella POM
+0	ok	detectDependencyVersion fails closed when the umbrella POM content is not parseable
+0	ok	detectDependencyVersion fails closed when the umbrella POM names a version that is not cached
+0	ok	detectDependencyVersion includes snapshots when opts.includeSnapshots is true
+0	ok	detectDependencyVersion prefers fabric_api_version over fabricApiVersion when both are present
+0	ok	detectDependencyVersion prefers the submodule's own property key over cache and POM evidence
+0	ok	detectDependencyVersion reads architectury_version from gradle.properties
+0	ok	detectDependencyVersion reads camelCase property fabricApiVersion
+0	ok	detectDependencyVersion refuses to pick when modules-2 has multiple non-snapshot entries
+0	ok	detectDependencyVersion rejects an unsafe umbrella property value before touching the cache path
+0	ok	detectDependencyVersion rejects path traversal in group/name
+0	ok	detectDependencyVersion rejects unsafe modules-2 directory entries
+0	ok	detectDependencyVersion rejects unsafe version tokens from gradle.properties (path traversal guard)
+0	ok	detectDependencyVersion resolves a single non-snapshot modules-2 entry
+0	ok	detectDependencyVersion resolves the umbrella via the snake_case fabric_api_version key
+0	ok	detectDependencyVersion returns unresolved when neither gradle.properties nor modules-2 has the dependency
+0	ok	detectDependencyVersion skips a version-less POM dependency block and adopts a later concrete one
+0	ok	detectFabricLikeInputNamespace opens the jar once for the sampled classes
+0	ok	detectProjectLoader reports unresolved when nothing in the workspace declares a loader
+0	ok	detectProjectLoader reports unresolved with descriptive warning when both fabric.mod.json and META-INF/mods.toml coexist
+0	ok	detectProjectLoader resolves fabric loader from architectury loom alias
+0	ok	detectProjectLoader resolves fabric loader from fabric-loom plugin id
+0	ok	detectProjectLoader resolves fabric loader from fabric.mod.json alone
+0	ok	detectProjectLoader resolves forge loader from META-INF/mods.toml
+0	ok	detectProjectLoader resolves forge loader from minecraft.accessTransformer block
+0	ok	detectProjectLoader resolves neoforge loader from META-INF/neoforge.mods.toml
+0	ok	detectProjectLoader resolves neoforge loader from neoForge.accessTransformers block
+0	ok	detectProjectLoader resolves quilt loader from quilt.mod.json
+0	ok	detectProjectMinecraftVersion accepts mc_version
+0	ok	detectProjectMinecraftVersion accepts minecraftVersion (camel)
+0	ok	detectProjectMinecraftVersion prefers minecraft_version over mc_version when both are present
+0	ok	detectProjectMinecraftVersion returns minecraft_version when set
+0	ok	detectProjectMinecraftVersion returns undefined for whitespace-only values
+0	ok	detectProjectMinecraftVersion returns undefined when gradle.properties is missing
+0	ok	didYouMean enumerates every same-simple-name FQN instead of collapsing them
+0	ok	didYouMean ranks exact-simple-name candidates before edit-distance candidates
+0	ok	didYouMean reports case-insensitive matches with their own reason
+0	ok	discoverWorkspaceAccessTransformers keeps accessTransformers block matches scoped to the block
+0	ok	downloadToCache gives up with ok:false after exhausting retries on a persistent 503
+0	ok	downloadToCache honors a positive retry-after header delay
+0	ok	downloadToCache rejects non-http schemes
+0	ok	downloadToCache rethrows a network error once retries are exhausted
+0	ok	downloadToCache retries 429 and then succeeds
+0	ok	downloadToCache retries a 503 and then succeeds
+0	ok	downloadToCache returns metadata without retrying on a non-retryable 403
+0	ok	downloadToCache returns not-found metadata for 404
+0	ok	drops a blank or absent descriptor from a directly constructed method record
+0	ok	duplicate className entries each produce a result (no de-duplication)
+0	ok	dynamic statement cache caps at 64 SQL shapes and evicts the least recently used one
+0	ok	elapsed backoff resumes immediately after cap cleanup
+0	ok	encodeJavaNbt ASCII strings still produce identical bytes to UTF-8 (regression guard)
+0	ok	encodeJavaNbt common BMP CJK strings still produce identical bytes to UTF-8 (regression guard)
+0	ok	encodeJavaNbt encodes U+0000 inside a string as MUTF-8 (C0 80)
+0	ok	encodeJavaNbt rejects out-of-range long values
+0	ok	encodeJavaNbt rejects strings whose MUTF-8 length exceeds uint16
+0	ok	encodeJavaNbt/decodeJavaNbt round-trip preserves a supplementary-character emoji (U+1F600)
+0	ok	encodeJavaNbt/decodeJavaNbt round-trip preserves non-finite float/double sentinels
+0	ok	encodeJavaNbt/decodeJavaNbt roundtrip preserves typed structure
+0	ok	encodeOffsetCursor round-trips through decodeOffsetCursor
+0	ok	enumerateLocalAlternativeSourceJars returns [] for missing directory and filters with prefix + .jar suffix
+0	ok	errorResource carries retryClass + issueOrigin for a coded AppError
+0	ok	errorResource drops a placeholder-only suggestedCall via the shared validation gate
+0	ok	errorResource extracts hints/suggestedCall/context from AppError details
+0	ok	errorResource falls back to ERR_INTERNAL + status 500 when error.code is undefined
+0	ok	errorResource forwards validated exampleCalls from AppError details
+0	ok	errorResource maps ErrorCode values to documented status (404 / 422 / 400 / 500)
+0	ok	errorResource returns structured problem details instead of a bare string
+0	ok	errorResource(string detail) carries the input/code_issue classifiers
+0	ok	errorResource(string detail) defaults to ERR_INVALID_INPUT with status 400
+0	ok	errorToBatchEntryProblem attaches issueOrigin and allowlisted context
+0	ok	errorToBatchEntryProblem attaches retryClass derived from the error code
+0	ok	errorToBatchEntryProblem labels a non-AppError as a non-retryable server fault
+0	ok	errorToBatchEntryProblem: AppError detail is preserved (AppErrors are intentionally caller-facing)
+0	ok	errorToBatchEntryProblem: non-AppError generic detail is sanitized (no Error.message leak)
+0	ok	every ERROR_CODES value maps to a documented HTTP status (no untyped 500 fallback)
+0	ok	exact method whose overridden copy is inherited resolves, not ambiguous
+0	ok	exact method with no descriptor match is not_found
+0	ok	expert and batch tools expose detail/include and no longer expose compact
+0	ok	expert tools steer callers to the entry tools, which keep plain descriptions
+0	ok	extractAllowlistedContext drops unknown and non-primitive fields
+0	ok	extractMethodDescriptor returns the descriptor portion when present
+0	ok	extractMethodName strips descriptors and owner prefixes across supported forms
+0	ok	extractSymbolsFromSource captures constructors and abstract method declarations
+0	ok	extractSymbolsFromSource captures fields with modifiers and spaced generics
+0	ok	extractSymbolsFromSource does not record call statements as methods
+0	ok	extractSymbolsFromSource extracts class/method/field with line numbers
+0	ok	extractSymbolsFromSource indexes sealed and non-sealed types without phantom fields
+0	ok	extractSymbolsFromSource keeps the field when its initializer is a call
+0	ok	extractSymbolsFromSource normalizes the file path once even for multiple symbols
+0	ok	extracts a field name from a type-prefixed declaration and rejects a bare token
+0	ok	extracts the method name from a return-type-prefixed signature
+0	ok	failed tree cleanup retains one logical token in both event orders and resumes once on proof
+0	ok	fallback ASCII contains uses the LIKE prefilter and stays case-insensitive
+0	ok	fallback ASCII exact match stays case-sensitive through the LIKE prefilter
+0	ok	fallback ASCII search recovers high-score matches beyond the LIKE candidate cap
+0	ok	fallback byte budget counts UTF-8 bytes, not UTF-16 code units
+0	ok	fallback non-ASCII needle skips the LIKE prefilter and stays correct
+0	ok	fallback regex text search never takes the LIKE prefilter branch
+0	ok	fallback text scan early-aborts at the byte budget with a truncation warning
+0	ok	fatal worker exception exits, restarts, replays initialization, and serves the next call
+0	ok	filesRepo keeps prepared path-count statements hot instead of clearing the entire cache
+0	ok	filesRepo path search treats LIKE wildcard characters literally
+0	ok	filesRepo.countTextCandidates and countPathCandidates return correct counts
+0	ok	filesRepo.listFiles omits nextCursor on the final partial page
+0	ok	filesRepo.listFiles paginates through all files without duplicates
+0	ok	filesRepo.listFiles prefix filter returns only matching files
+0	ok	filesRepo.searchContentLikeCandidatePaths matches both cases of an ASCII needle
+0	ok	filesRepo.searchContentLikeCandidatePaths returns an ASCII case-insensitive superset of JS contains
+0	ok	filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for deep pages
+0	ok	filesRepo.searchFileCandidates incorporates BM25 rank bonus for content matches
+0	ok	filesRepo.searchFileCandidates paginates text/path results without duplicates or gaps
+0	ok	filesRepo.searchFileCandidates returns merged path/content matches with stable cursor
+0	ok	filesRepo.searchFileCandidates supports mode-specific candidate queries
+0	ok	filesRepo.searchFiles cursor advances without duplicating previous hit
+0	ok	filesRepo.searchFiles does not re-emit a both-tier hit as a content hit across pages
+0	ok	find-class accepts a flat artifactId (unchanged)
+0	ok	find-class accepts a target instead of artifactId
+0	ok	find-class forwards projectPath while resolving a dependency version from a workspace
+0	ok	find-class maps invalid projectPath input to ERR_INVALID_INPUT
+0	ok	find-class preserves top-level projectPath for workspace-relative targets
+0	ok	find-class rejects artifactId and target together
+0	ok	find-class rejects neither artifactId nor target
+0	ok	find-class returns nested shell matches through the standard MCP envelope
+0	ok	find-class tools/list exposes workspace context for dependency targets
+0	ok	find-mapping accepts a dotless class name under the default nameMode and rejects it with nameMode=fqcn
+0	ok	find-mapping accepts short obfuscated class names
+0	ok	find-mapping descriptor validator accepts arrays at the JVM dimension limit
+0	ok	find-mapping descriptor validator rejects array dimensions above the JVM limit without a stack overflow
+0	ok	find-mapping descriptor validator rejects empty return type and unterminated L references
+0	ok	find-mapping detail=summary does not corrupt identity-branch result and preserves meta.warnings
+0	ok	find-mapping kind=method without descriptor is accepted (default signatureMode=name-only)
+0	ok	find-mapping on unobfuscated versions reports the graph flag without the sentence
+0	ok	find-mapping signatureMode=exact does not resolve to a different overload when the caller's descriptor is stale
+0	ok	find-mapping signatureMode=exact still rejects method lookups missing a descriptor
+0	ok	find-mapping signatureMode=name-only still rejects malformed descriptors
+0	ok	find-member-mapping resource forwards owner for field/method lookups
+0	ok	findBestClassFilePath breaks ties within a tier by ascending file path
+0	ok	findBestClassFilePath falls back to a simple-name match, then to a dotted-suffix qualified name
+0	ok	findBestClassFilePath ignores non-class symbols and returns undefined when nothing matches
+0	ok	findBestClassFilePath prefers an exact qualified name over a simple-name match
+0	ok	findBestClassFilePath returns undefined when the class or simple name is blank
+0	ok	findBySymbolNames matches case and whitespace variants of one name without duplicating rows and orders by name, path, then line
+0	ok	findBySymbolNames matches stored names case-insensitively and preserves original casing
+0	ok	findBySymbolNames returns an empty array when every name is blank
+0	ok	findBySymbolNames trims input names and drops blank entries
+0	ok	findClassIncludingNested deduplicates names deterministically and honors limit
+0	ok	findClassIncludingNested normalizes inner classes to their outer source path
+0	ok	findClassIncludingNested omits vanilla obfuscation advice for a shell miss
+0	ok	findClassIncludingNested resolves simple and qualified names from a shell jar
+0	ok	findContentMatchIndex exact requires the substring verbatim and is case-sensitive
+0	ok	findContentMatchIndex returns -1 for an empty query
+0	ok	findContentMatchIndex treats content prefix as a substring (contains) match
+0	ok	findPackedTarball resolves the tarball from pack destination without npm json output
+0	ok	findPackedTarball throws a descriptive error when no tarball was produced
+0	ok	findScopedSymbols cursor returns only rows strictly after the name/path/line tuple
+0	ok	findScopedSymbols filters file paths with a caller-supplied LIKE pattern
+0	ok	findScopedSymbols maps a missing qualified name to undefined in returned rows
+0	ok	findScopedSymbols normalizes package prefixes written with dots or trailing separators
+0	ok	findScopedSymbols paginates via its base64 next cursor without duplicates
+0	ok	findScopedSymbols prefix and contains match case-insensitively while exact match is case-sensitive
+0	ok	findScopedSymbols returns an empty page for a whitespace-only query
+0	ok	findScopedSymbols treats LIKE wildcards in the query as literal characters
+0	ok	findScopedSymbols treats an empty symbolKinds array as no kind filter
+0	ok	findScopedSymbols without an explicit limit returns all matches and no next cursor
+0	ok	findSymbols exact-match pagination visits each duplicate-name row exactly once
+0	ok	findSymbols ignores a base64 cursor whose payload has wrong field types
+0	ok	findSymbols ignores an undecodable cursor and serves the first page
+0	ok	findSymbols returns an empty page without a next cursor when limit is 0
+0	ok	findSymbols with exact match returns only symbols whose name equals the query
+0	ok	findSymbols without a name prefix returns every symbol and maps a missing qualified name to undefined
+0	ok	get-artifact-file accepts a flat artifactId (unchanged)
+0	ok	get-artifact-file accepts a target instead of artifactId
+0	ok	get-artifact-file rejects artifactId and target together
+0	ok	get-artifact-file rejects neither artifactId nor target
+0	ok	get-class-api-matrix reports the unobfuscated-runtime flag instead of the removed sentence
+0	ok	get-class-members accepts and dispatches a dependency target
+0	ok	get-class-members accepts the optional includeAnnotations flag
+0	ok	get-class-members drops FIELD jvmDescriptor by default and restores it with includeDescriptors (methods always keep it)
+0	ok	get-class-members emits isSynthetic only for synthetic members
+0	ok	get-class-members invalid string target suggestedCall preserves valid fields only
+0	ok	get-class-members keeps per-member ownerFqn and omits the block-level ownerFqn when includeInherited
+0	ok	get-class-members omits provenance/qualityFlags/artifactContents by default and restores them with includeProvenance
+0	ok	get-class-members status=ok when total > 0
+0	ok	get-class-members surfaces meta.warningDetails for the truncation family
+0	ok	get-class-source / get-class-members include:["provenance"] round-trips diagnostics (alias of includeProvenance)
+0	ok	get-class-source invalid string target returns resolve-target suggestedCall
+0	ok	get-class-source/get-class-members schemas default includeProvenance to false and accept true
+0	ok	get-class-source/get-class-members targets use the unified kind shape and reject the legacy type:artifact shape
+0	ok	get-runtime-metrics ignores compact:true (passthrough schema + allowlist)
+0	ok	getArtifactFile applies maxBytes truncation
+0	ok	getArtifactFile maxBytes === contentBytes returns full content without truncation
+0	ok	getArtifactFile maxBytes greater than contentBytes returns full content untruncated
+0	ok	getClassMembers and getClassSource pass input.mapping (raw, possibly undefined) to resolveArtifact symmetrically
+0	ok	getClassMembers answers from the nested jar with redirect provenance
+0	ok	getClassMembers raises nested-jar candidates for a class present in two nested jars
+0	ok	getClassSource CLASS_NOT_FOUND preserves representative context details
+0	ok	getClassSource defaults to mode='metadata' when mode is omitted
+0	ok	getClassSource full mode returns all lines with truncated=false
+0	ok	getClassSource maxChars hard-truncates and exposes charsTruncated=true
+0	ok	getClassSource omits charsTruncated key when maxChars is not hit
+0	ok	getClassSource outputFile (absolute) writes sourceText and returns placeholder
+0	ok	getClassSource outputFile (relative) is resolved to absolute path before write
+0	ok	getClassSource redirects into the nested jar that contains the class
+0	ok	getClassSource rejects startLine=0 with INVALID_INPUT
+0	ok	getClassSource rejects startLine>endLine with INVALID_LINE_RANGE
+0	ok	getClassSource snippet mode applies default maxLines=200 when no range or maxLines given
+0	ok	getClassSource snippet mode default 200 is disabled when startLine alone is provided
+0	ok	getModClassMembers reports a class missing from the mod jar as CLASS_NOT_FOUND
+0	ok	getModClassSource normalizes jarPath before class lookup
+0	ok	getModClassSource rejects an empty className with INVALID_INPUT
+0	ok	getModClassSource throws CLASS_NOT_FOUND when the class is absent from decompiled output
+0	ok	getRequestContext returns undefined outside a request context
+0	ok	getSignature opens the jar once for the whole inheritance hierarchy
+0	ok	getSignature throw is captured into status, not propagated
+0	ok	groupToPath collapses empty segments in groupId (a..b → a/b)
+0	ok	hasExistingJar returns true only for existing regular files
+0	ok	headerless garbage exceeding the frame limit is rejected and the reader recovers
+0	ok	ignores blank and whitespace-only keys instead of creating map entries
+0	ok	index-artifact accepts a flat artifactId (unchanged)
+0	ok	index-artifact accepts a target instead of artifactId
+0	ok	index-artifact declares write annotations (readOnlyHint:false, idempotentHint:true)
+0	ok	index-artifact rejects artifactId and target together
+0	ok	index-artifact rejects neither artifactId nor target
+0	ok	index.ts serializes heavy analysis tools to protect MCP transport stability
+0	ok	index.ts wires check-symbol-exists into inspect-minecraft partial-source fallbacks
+0	ok	indexed Java sources keep being served from the index without opening the jar
+0	ok	ingestIfNeeded shares an in-flight rebuild for the same artifact
+0	ok	initial initialization error terminalizes retained initialization exactly once
+0	ok	input validation keeps ERR_INVALID_INPUT when SQLite cannot open
+0	ok	inspect returns entries without pagination and is normalized to preview even when apply is requested
+0	ok	inspect-minecraft class-members with version subject returns retry guidance instead of a dead-end error
+0	ok	inspect-minecraft class-members without artifact context preserves the requested task in suggestedCall
+0	ok	inspect-minecraft class-source with version subject returns concrete retry guidance
+0	ok	inspect-minecraft class-source without artifact context returns retryable suggestedCall
+0	ok	inspect-minecraft focus recovery preserves only valid workspace fields
+0	ok	inspect-minecraft preserves focus recovery examples when preflight also rejects official mapping
+0	ok	inspect-minecraft rollback mode suppresses invalid suggestedCall when focus recovery applies
+0	ok	inspect-minecraft search without artifact context returns retryable suggestedCall
+0	ok	inspect-minecraft string workspace focus returns validated class/search/file recovery examples
+0	ok	inspect-minecraft tools/list schema explains structured workspace focus dispatch
+0	ok	inspectMinecraftSchema applies defaults while keeping non-version includeSnapshots validation precise
+0	ok	invalid primary + no surviving examples returns no suggestedCall (marker present)
+0	ok	isAbsolutePath recognises POSIX and Windows drive paths
+0	ok	isAppError narrows the type so callers can read AppError fields safely
+0	ok	isAppError returns false for arbitrary Error objects with a `code` property
+0	ok	isAppError returns false for non-Error values that look error-like
+0	ok	isAppError returns true for AppError instances created via createError
+0	ok	isCompactEnabled default path: compact omitted or explicit false returns false
+0	ok	isCompactEnabled handles null/undefined/array parsedInput safely
+0	ok	isCompactEnabled respects allowlist and compact flag
+0	ok	isOptionArg only matches values starting with '-'
+0	ok	isSafeMavenVersionToken accepts boundary lengths (1, 200) and the allowed character set
+0	ok	isSafeMavenVersionToken rejects empty, oversize, traversal, and unsafe characters
+0	ok	isSecureJarEntryPath accepts safe relative entry paths
+0	ok	isSecureJarEntryPath rejects path traversal segments (POSIX and Windows separators)
+0	ok	isUnobfuscatedVersion handles pre-release and rc tags in new format
+0	ok	isUnobfuscatedVersion handles snapshots by year prefix
+0	ok	isUnobfuscatedVersion returns false for empty or unknown formats
+0	ok	isUnobfuscatedVersion returns false for legacy 1.x.y versions
+0	ok	isUnobfuscatedVersion returns true for new YY.N format (>= 26)
+0	ok	isUsableJarFile accepts real jars and rejects non-files, short files, bad magic, and missing paths
+0	ok	isValidMethodDescriptor enforces the 255-dimension array limit
+0	ok	isValidMethodDescriptor rejects an empty reference type L;
+0	ok	isValidMethodDescriptor rejects void nested inside an array element
+0	ok	issueOrigin is code_issue for genuine target-class-missing
+0	ok	issueOrigin is tool_issue for member-remap-failed
+0	ok	issueOriginForErrorCode classifies every ERROR_CODES value explicitly (no silent tool_issue default)
+0	ok	issueOriginForErrorCode separates caller input from tool capability and environment
+0	ok	iterateJavaEntriesAsUtf8 skips entries exceeding maxBytes limit
+0	ok	iterateSymbolsForArtifact yields ordered rows lazily and closing early keeps the connection usable
+0	ok	keeps malformed validator entries in the issues block while dropping entries marked valid
+0	ok	levenshteinDistance handles representative edit-distance cases
+0	ok	limitStdio keeps the tail when length exceeds MAX_STDIO_SNAPSHOT
+0	ok	limitStdio returns the original string when length <= MAX_STDIO_SNAPSHOT
+0	ok	list forwards limit and cursor to the registry and surfaces nextCursor in pagination meta
+0	ok	list omits pagination meta and reports ok for a single healthy entry
+0	ok	list-artifact-files accepts a flat artifactId (unchanged)
+0	ok	list-artifact-files accepts a target instead of artifactId
+0	ok	list-artifact-files compact:true drops artifactContents and preserves items
+0	ok	list-artifact-files points assets prefixes at the read-through path
+0	ok	list-artifact-files rejects artifactId and target together
+0	ok	list-artifact-files rejects neither artifactId nor target
+0	ok	listDistinctFilePathsByKind returns an empty array for a kind with no rows
+0	ok	listDistinctFilePathsByKind returns each matching file once in ascending path order
+0	ok	listRegisteredTools returns names in sorted order
+0	ok	listSymbolsForArtifact returns every symbol ordered by name, file path, then line
+0	ok	listSymbolsForArtifact with a kind filter returns only symbols of that kind
+0	ok	listSymbolsForFile returns an empty array for a file with no indexed symbols
+0	ok	listSymbolsForFile returns only that file's symbols ordered by line then name
+0	ok	listSymbolsForFiles applies the symbol kind filter to every requested file
+0	ok	listSymbolsForFiles deduplicates repeated input paths
+0	ok	listSymbolsForFiles groups symbols per file and omits files without symbols
+0	ok	listSymbolsForFiles returns an empty map for an empty path list
+0	ok	listVersions aborts a hung manifest fetch after the configured timeout
+0	ok	listVersions includes snapshots, clamps limit, and returns sorted unique cached versions
+0	ok	listVersions warns when limit is clamped above 200 and omits warnings otherwise
+0	ok	listVersions wraps invalid JSON manifest responses as repository fetch errors
+0	ok	loadConfig applies defaults for missing environment variables
+0	ok	loadConfig defaults are independent from cwd for cache paths
+0	ok	loadConfig falls back for malformed numeric values
+0	ok	loadConfig falls back to default repos when none are valid
+0	ok	loadConfig normalizes and expands paths
+0	ok	loadConfig parses NBT size limit environment variables
+0	ok	loadConfig parses SQLite tuning and decompiler heap environment variables
+0	ok	loadConfig parses indexed search flag values
+0	ok	loadConfig parses mapping source priority with fallback
+0	ok	loadConfig rejects malformed path values with structured error
+0	ok	loadConfig treats blank, undefined, and null path env values as unset
+0	ok	loadConfig validates source repo urls
+0	ok	loadMaxFrameBytes applies defaults, overrides, fallback, and the minimum clamp
+0	ok	loadMixinStageBudgets allows test-only override of individual stages
+0	ok	loadMixinStageBudgets honors MIXIN_STAGE_BUDGETS_OFF=1 → infinity
+0	ok	loadMixinStageBudgets returns defaults when env not set
+0	ok	loadOrDetectWorkspaceContext preserves dependency versions written during the detection window
+0	ok	localArtifactPathsFromCoordinate matches resolveLocalM2Candidate output
+0	ok	makeStageEmitter is a no-op when disabled option is true
+0	ok	makeStageEmitter is a no-op when extra is undefined
+0	ok	makeStageEmitter is a no-op when requestId is undefined (SDK fallback)
+0	ok	makeStageEmitter is a no-op when sendNotification is missing
+0	ok	makeStageEmitter keeps at most one unresolved notification and resumes after settlement
+0	ok	makeStageEmitter observes asynchronous notification rejection without rejecting
+0	ok	makeStageEmitter observes synchronous notification failure without rejecting
+0	ok	makeStageEmitter passes string requestId verbatim
+0	ok	makeStageEmitter sends $/stageUpdate notification with stage and meta
+0	ok	makeStageEmitter sends meta as null when omitted
+0	ok	manage-cache summary normalizes apply to preview at the public contract
+0	ok	mapErrorToProblem drops malformed didYouMean payloads instead of publishing them
+0	ok	mapErrorToProblem publishes an empty didYouMean array unchanged
+0	ok	mapErrorToProblem publishes details.didYouMean as a top-level typed field
+0	ok	mapWithConcurrencyLimit preserves input order while respecting the concurrency cap
+0	ok	mapWithConcurrencyLimit rejects invalid limits
+0	ok	matchesMemberPattern: case-insensitive on both sides
+0	ok	matchesMemberPattern: empty and whitespace alternatives are ignored
+0	ok	matchesMemberPattern: no usable alternative matches nothing
+0	ok	matchesMemberPattern: pipe pattern matches any alternative
+0	ok	matchesMemberPattern: single token keeps substring behavior
+0	ok	maybeRemapBinaryForMojang re-resolves the client jar when binaryJarPath is the missing remap output
+0	ok	maybeRemapBinaryForMojang removes a corrupt final directory before shared remap retry
+0	ok	mcmeta files count as text for read-through delivery
+0	ok	member annotations appear only under the opt-in projection of get-class-members
+0	ok	method existence requests inherited members (includeInherited: true)
+0	ok	mixin-validator re-exports the per-annotation validation helpers as functions
+0	ok	name-only method with MULTIPLE overloads resolves (exists), not ambiguous
+0	ok	name-only method with no match is not_found
+0	ok	nbtBase64ToTypedJson enforces max inflated bytes for gzip payloads
+0	ok	nbtBase64ToTypedJson enforces max input bytes limit
+0	ok	nbtBase64ToTypedJson enforces typedJson response bytes limit
+0	ok	nbtBase64ToTypedJson rejects an invalid compression value
+0	ok	nbtBase64ToTypedJson rejects malformed nbtBase64 input
+0	ok	nbtBase64ToTypedJson rejects oversized base64 before Buffer.from decode allocation
+0	ok	nbtBase64ToTypedJson treats truncated gzip payload as parse failure, not limit exceeded
+0	ok	nested request contexts restore the outer context
+0	ok	network-local NBT/runtime tools declare openWorldHint:false; network/cache tools do not
+0	ok	new error codes are part of the ErrorCode union
+0	ok	normal operation retries unresolved cleanup tokens and unblocks restart and queued work
+0	ok	normalizeArgs handles empty array and empty string entries safely
+0	ok	normalizeArgs leaves option args and relative paths untouched while normalizing absolute paths
+0	ok	normalizeIncludeGroups deduplicates and preserves canonical order
+0	ok	normalizeJarPath accepts a .JAR (uppercase) extension via case-insensitive comparison
+0	ok	normalizeJarPath does NOT reject a -sources.jar at this layer (delegated to caller)
+0	ok	normalizeJarPath rejects directory paths with JAR_NOT_FOUND (Expected a file path)
+0	ok	normalizeJarPath rejects malformed windows-drive path format
+0	ok	normalizeJarPath rejects missing paths with JAR_NOT_FOUND
+0	ok	normalizeJarPath rejects non-.jar extensions with INVALID_INPUT (Expected a .jar file)
+0	ok	normalizeJarPath resolves a symlink to the target's realpath
+0	ok	normalizeJarPath returns the realpath of an existing .jar file
+0	ok	normalizeOptionalGradleUserHomePath resolves relative paths against cwd and keeps absolute paths verbatim
+0	ok	normalizeOptionalGradleUserHomePath returns undefined for undefined, empty, and whitespace-only input
+0	ok	normalizePathForHost converts UNC WSL paths to Linux paths under WSL
+0	ok	normalizePathForHost converts WSL mount paths to Windows drive paths
+0	ok	normalizePathForHost converts windows drive paths to WSL mount paths
+0	ok	normalizePathForHost converts wsl.localhost UNC paths to Linux paths under WSL
+0	ok	normalizePathForHost rejects UNC WSL paths targeting a different distro
+0	ok	normalizePathForHost rejects malformed windows drive paths
+0	ok	normalizes a slash-form owner to dots in the produced method record
+0	ok	normalizes a slash-separated class input to a dotted class record
+0	ok	numeric annotation defaults render from retained constant-pool values
+0	ok	obfuscated versions keep the mapping-graph verdict without touching runtime bytecode
+0	ok	objectResource handles empty payload with result === {}
+0	ok	objectResource wraps JSON resources in a structured result envelope
+0	ok	objectResource wraps payload with mimeType application/json and meta.uri
+0	ok	objectResult content[0] is a single text block whose text JSON-parses back to structuredContent
+0	ok	objectResult marks MCP errors with isError
+0	ok	objectResult mirrors JSON envelopes into structuredContent
+0	ok	objectResult omits the isError key entirely when options.isError is falsy or absent
+0	ok	objectResult preserves Unicode/emoji round-trip through JSON.stringify
+0	ok	old stale cleanup plus failed replacement stays at two logical slots until proven cleanup
+0	ok	omits the issues block when the validator output has no entries array
+0	ok	only the initialized lifecycle notification is retained while the worker is unavailable
+0	ok	openDatabase applies WAL tuning and preserves rows written before tuning
+0	ok	openDatabase backs up and rebuilds a corrupted database file
+0	ok	openDatabase fails when cache schema_version exceeds supported version
+0	ok	openDatabase initializes cache schema without native addon prerequisites
+0	ok	openDatabase rethrows non-corruption migration errors without recreating the database
+0	ok	ordinary test files live in approved domain directories
+0	ok	ordinary test inventory keeps the approved test declaration count
+0	ok	outbound failure cannot prevent one running-timeout recovery
+0	ok	outbound failure cannot prevent queue timeout from draining later work
+0	ok	overflowing validate-project never acquires a deadline timer or barrier
+0	ok	oversized Content-Length frames are rejected before a chunked body is buffered
+0	ok	oversized Content-Length frames report the limit and preserve the next frame
+0	ok	package distribution smoke guards CLI startup when stdio pipes close immediately
+0	ok	package.json declares distribution entrypoints and include list
+0	ok	package.json version is reflected in CHANGELOG and [Unreleased] is omitted when empty
+0	ok	parent close before tree result keeps one token until success resolves it
+0	ok	parseAccessTransformer parses class, field, and method entries with final actions
+0	ok	parseAccessTransformer preserves final actions for case-insensitive declarations
+0	ok	parseAccessTransformer recognizes wildcard member targets
+0	ok	parseAccessTransformer warns on unsupported access declarations
+0	ok	parseAccessWidener parses class entry
+0	ok	parseAccessWidener parses field entry
+0	ok	parseAccessWidener parses header correctly
+0	ok	parseAccessWidener parses method entry
+0	ok	parseAccessWidener parses multiple entries
+0	ok	parseAccessWidener parses transitive entries
+0	ok	parseAccessWidener skips comments and blank lines
+0	ok	parseAccessWidener warns on incomplete method entry
+0	ok	parseAccessWidener warns on invalid access kind
+0	ok	parseAccessWidener warns on invalid target kind
+0	ok	parseAccessWidener warns on missing header
+0	ok	parseAccessWidener warns on unknown transitive kind
+0	ok	parseClientMappings strips line-info prefixes and indexes both directions
+0	ok	parseClientMappings throws MAPPING_UNAVAILABLE when no class mappings are present
+0	ok	parseCoordinate accepts SNAPSHOT and timestamped versions verbatim
+0	ok	parseCoordinate normalises empty / whitespace classifier to undefined
+0	ok	parseCoordinate rejects 5+ segment coordinates
+0	ok	parseCoordinate rejects coordinates with any empty mandatory segment
+0	ok	parseCoordinate rejects invalid coordinates with structured code
+0	ok	parseCoordinate supports 3 and 4 segment forms
+0	ok	parseCoordinate trims surrounding whitespace and echoes original input in error details
+0	ok	parseMixinSource captures class name from interface declaration
+0	ok	parseMixinSource extracts imports and ignores wildcard imports
+0	ok	parseMixinSource parses @Accessor declarations across target inference variants
+0	ok	parseMixinSource parses @Invoker declarations across explicit and inferred targets
+0	ok	parseMixinSource parses @Mixin targets across supported annotation forms
+0	ok	parseMixinSource parses @Shadow declarations across field and method forms
+0	ok	parseMixinSource parses consecutive same-line accessor declarations and following members
+0	ok	parseMixinSource parses injection annotations and method arrays
+0	ok	parseMixinSource reports parse warnings for missing required annotations
+0	ok	parseProguardMethod assembles a JVM descriptor from return and parameter types
+0	ok	parseProguardMethod preserves multi-dim array and erased-varargs parameters
+0	ok	parseProguardMethod returns undefined for a field-style line without parentheses
+0	ok	parseProguardMethod translates owner/param classes when given an obfuscation lookup
+0	ok	parses a descriptor-suffixed symbol into a method record
+0	ok	passthrough schema lets compact survive but allowlist blocks it
+0	ok	path converter detects windows, wsl mount, and unc path styles
+0	ok	pathContainsVersion matches whole version tokens, not coarse substrings
+0	ok	per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource
+0	ok	per-entry signatureMode override flows through to checkSymbolExists
+0	ok	per-entry status field from single-tool result is preserved
+0	ok	per-entry version is rejected by the schema (entries[].version unknown key)
+0	ok	placeholder primary is not emitted as an executable suggestedCall
+0	ok	placeholder primary surfaces as an exampleCalls template when supplied as an example
+0	ok	prefers the later separator when dots and slashes are mixed
+0	ok	prepareToolInput coerces every POSITIVE_INT_FIELD_NAMES entry from a numeric string to a number
+0	ok	prepareToolInput coerces only documented top-level numeric string fields
+0	ok	prepareToolInput coercion does not descend into nested objects or arrays
+0	ok	prepareToolInput leaves non-numeric values, leading-zero-only and signed numerics unchanged
+0	ok	prepareToolInput leaves valid mapping namespaces alone
+0	ok	prepareToolInput only reports removed official mapping namespace on tool fields
+0	ok	prepareToolInput passes through non-object inputs unchanged
+0	ok	prepareToolInput reports every MAPPING_FIELD_NAMES entry that holds the removed 'official' namespace
+0	ok	prepareToolInput returns suggestedReplacementInput only when at least one official mapping was found
+0	ok	prepareToolInput trims whitespace around 'official' before flagging it
+0	ok	produces both fully-dotted and fully-slashed variants for a mixed-separator symbol
+0	ok	proguardTypeToJvm encodes an erased varargs parameter as a single-dimension array
+0	ok	proguardTypeToJvm encodes multi-dimensional arrays with one prefix bracket per dimension
+0	ok	proguardTypeToJvm maps a fully-qualified class to an L-descriptor
+0	ok	proguardTypeToJvm maps primitives to single-character JVM tokens
+0	ok	proguardTypeToJvm translates class names through the obfuscation lookup
+0	ok	proguardTypeToJvm uses the raw class for an erased generic type
+0	ok	projectByDetail get-class-members: summary drops context too; standard keeps context
+0	ok	projectByDetail get-class-source: summary strips diagnostics + empties; standard strips diagnostics only; full keeps all
+0	ok	projectByDetail mapping tools: summary slims/omits candidates; standard keeps full candidates
+0	ok	projectByDetail resolve-artifact: summary omits diagnostics; include re-adds protected fields
+0	ok	projectMembersByLevel: full returns the block unchanged (equivalence)
+0	ok	projectMembersByLevel: names keeps only member name (+ block ownerFqn)
+0	ok	projectMembersByLevel: preserves per-member ownerFqn in the multi-owner case
+0	ok	projectMembersByLevel: signatures keeps javaSignature, drops jvmDescriptor
+0	ok	projection is threaded from batch input to each get-class-members call
+0	ok	projection tool name sets are pairwise disjoint
+0	ok	propagates the raw filesystem error when the path-mode file does not exist
+0	ok	prune in apply mode without a selector is rejected with ERR_INVALID_INPUT before calling the registry
+0	ok	prune preview forwards the selector, reports unchanged, and offers the apply follow-up call
+0	ok	pruneRestartTimestamps
+0	ok	publish workflow declares OIDC `id-token: write` and minimum `contents: read` permissions
+0	ok	publish workflow does not reference NPM_TOKEN (trusted publishing uses OIDC)
+0	ok	publish workflow pins Node 22, pnpm 10.30.1, and uses pnpm cache
+0	ok	publish workflow publishes scoped package with explicit public access
+0	ok	publish workflow runs install with --frozen-lockfile
+0	ok	publish workflow runs install, check, test, build, then publish in that order
+0	ok	publish workflow triggers only on `v*` tag pushes (no branch trigger)
+0	ok	publish workflow uses npm 11.x for publish (OIDC for scoped packages)
+0	ok	queue deadline returns phase queue without worker recovery
+0	ok	queued cancellation removes the validate barrier without forwarding a result
+0	ok	queued timeout preserves the worker with content-length framing
+0	ok	queued timeout preserves the worker with line framing
+0	ok	queued validate barrier counts as one FIFO slot and cancellation releases later work
+0	ok	quickSummary reports representative success and failure summaries
+0	ok	quickSummary stays concise when provenance is clean and healthReport is healthy
+0	ok	quickSummary surfaces mapping-health degradation when healthReport is unhealthy
+0	ok	quickSummary surfaces scopeFallback when provenance records a fallback
+0	ok	read-only tools do not expose file-writing fields
+0	ok	read-through content is capped at 512 KiB with the truncation flag set
+0	ok	reads path-mode input from the file and forwards its content to the access transformer validator
+0	ok	rebuild in apply mode with a selector reports changed with rebuilt counts and no preview follow-up
+0	ok	rebuild in apply mode without a selector is rejected with ERR_INVALID_INPUT before calling the registry
+0	ok	rebuild preview reports unchanged with rebuilt counts and offers the apply follow-up call
+0	ok	reconcile: a missing version is a no-op (cannot prove unobfuscated)
+0	ok	reconcile: an already-identity mojang/mojang pair is unchanged
+0	ok	reconcile: obfuscated (legacy) version is left untouched
+0	ok	reconcile: only mojang requests are reconciled, not intermediary/yarn/obfuscated
+0	ok	reconcile: unobfuscated + mojang request + obfuscated label -> mojang (identity)
+0	ok	recordCacheEntry serializes concurrent writes for different versions
+0	ok	redactToolArgs
+0	ok	refresh keeps degradedReason='stage-budget-pre-target' (regression: refresh dropping it would yield 'full')
+0	ok	refreshMixinValidationOutcome preserves targetsDeferredBudget across recompute
+0	ok	registerResources registers exactly 9 resources (2 fixed + 7 template)
+0	ok	registerToolSchema throws on duplicate registration
+0	ok	registry contains every public tool from EXPECTED_TOOLS after server import
+0	ok	registry does NOT contain removed/legacy tool names from earlier renames
+0	ok	registry tool count matches EXPECTED_TOOLS length exactly (no extra registrations leak)
+0	ok	reindexing a shell artifact without force reports it as already current
+0	ok	rejects with ERR_CONTEXT_UNRESOLVED when the runtime has no access transformer validator configured
+0	ok	rejects with ERR_INVALID_INPUT when task access-transformer receives a subject of a different kind
+0	ok	remaining resources delegate to the expected source-service methods
+0	ok	remapJar appends --threads=N for non-default threads and --rebuildSourceFilenames when true
+0	ok	remapJar forwards explicit timeoutMs / maxMemoryMb overrides
+0	ok	remapJar invokes javaRunner via mockJavaRunner helper (mock smoke)
+0	ok	remapJar omits --threads when threads defaults to 4 and omits --rebuildSourceFilenames when false
+0	ok	remapJar propagates assertJavaAvailable failures with their original code
+0	ok	remapJar propagates default timeoutMs / maxMemoryMb and normalizePathArgs to javaRunner.run
+0	ok	remapJar returns RemapResult with durationMs >= 0 on success
+0	ok	remapJar surfaces JAVA_PROCESS_FAILED / REMAP_FAILED when the tiny-remapper jar is missing (real-spawn smoke)
+0	ok	remapJar throws REMAP_FAILED when exit code is zero but no output JAR is produced
+0	ok	remapJar throws REMAP_FAILED with details when exit code is non-zero
+0	ok	remapModJar accepts mojang target and returns cached output
+0	ok	remapModJar accepts mojang target with auto-detected version and returns cached output
+0	ok	remapModJar accepts quilt loader and returns cached output for mojang target
+0	ok	remapModJar auto-detects mcVersion from tilde / range / bracket version expressions
+0	ok	remapModJar copies cache hit to an explicit outputJar destination
+0	ok	remapModJar detects mojang-mapped Fabric jars and returns a copied output for mojang target
+0	ok	remapModJar forceRemap bypasses the cache and re-resolves
+0	ok	remapModJar ignores legacy cache entries that are not scoped by mapping context
+0	ok	remapModJar re-remaps when a newer yarn build is published (cache key tracks coordinate)
+0	ok	remapModJar rejects forge loader with REMAP_FAILED (only fabric/quilt supported)
+0	ok	remapModJar rejects missing input jar
+0	ok	remapModJar rejects mojang-mapped Fabric jars when targetMapping=yarn
+0	ok	remapModJar rejects non-.jar input
+0	ok	remapModJar rejects unknown loader
+0	ok	remapModJar remaps an intermediary jar to mojang in two passes with valid namespaces
+0	ok	remapModJar serves the cache when the yarn coordinate is unchanged (no always-remap regression)
+0	ok	remapModJar throws INVALID_INPUT when mcVersion cannot be extracted from depends.minecraft
+0	ok	repeated dynamic queries reuse a single cached prepared statement
+0	ok	replaceSymbolsForArtifact discards the previously indexed symbols for the artifact
+0	ok	replacement initialization replay failure terminalizes queued work without duplicating initialize
+0	ok	reset and clear cancel oversized-frame discard state
+0	ok	resolve-artifact compact:true omits diagnostic fields from local-jar result
+0	ok	resolve-artifact invalid string target returns retryable object target suggestedCall
+0	ok	resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING
+0	ok	resolveArtifact detects a shell via the META-INF/jars scan even without a fabric.mod.json declaration
+0	ok	resolveArtifact flags representative version-approximated mismatches
+0	ok	resolveArtifact ignores jars above the shell class-count ceiling
+0	ok	resolveArtifact preserves representative suggestedCall hint variants
+0	ok	resolveArtifact still fails for a classless jar that is not a shell
+0	ok	resolveArtifact surfaces a shell jar's nested-jar inventory instead of dead-ending in decompilation
+0	ok	resolveCursorOffset starts at 0 with no cursor and flags context mismatch
+0	ok	resolveGradleUserHomePath falls back to GRADLE_USER_HOME env when no explicit argument is provided
+0	ok	resolveGradleUserHomePath falls back to ~/.gradle when both explicit and env are absent
+0	ok	resolveGradleUserHomePath prefers an explicit argument over GRADLE_USER_HOME env
+0	ok	resolveGradleUserHomePath treats whitespace-only GRADLE_USER_HOME env as absent (falls back to ~/.gradle)
+0	ok	resolveIndexRebuildReason classifies each rebuild branch
+0	ok	resolveJarPathWithSymlinkCheck preserves the original input alongside the resolved path
+0	ok	resolveLocalCoordinateCandidates avoids nested readdirSync scans of Gradle cache directories
+0	ok	resolveLocalM2Candidate builds correct source and binary jar paths without classifier
+0	ok	resolveLocalM2Candidate inserts classifier in both source and binary jar names
+0	ok	resolveLocalSourceJar prefers source jar when present and returns undefined otherwise
+0	ok	resolveMojangTinyFile builds merged tiny v2 from client+server mappings
+0	ok	resolveMojangTinyFile converts varargs and generic types in method descriptors
+0	ok	resolveMojangTinyFile dedups identical members shared between client and server
+0	ok	resolveMojangTinyFile emits Conflicting class mapping warning and keeps first side
+0	ok	resolveMojangTinyFile falls back to mappingsUrl when clientMappingsUrl is undefined
+0	ok	resolveMojangTinyFile preserves versionDetailUrl in details when no URLs are exposed
+0	ok	resolveMojangTinyFile records skip warnings for unsupported member syntax
+0	ok	resolveMojangTinyFile rejects when ProGuard input has no class entries
+0	ok	resolveMojangTinyFile reuses cached tiny output
+0	ok	resolveMojangTinyFile strips multiple line-info prefixes when parsing methods
+0	ok	resolveMojangTinyFile throws MAPPING_UNAVAILABLE when every download fails
+0	ok	resolveMojangTinyFile throws MAPPING_UNAVAILABLE when version has no Mojang mappings URLs
+0	ok	resolveMojangTinyFile warns when server URL is set but returns 404 and continues with client-only output
+0	ok	resolveMojangTinyFile works with client mappings only and emits warning
+0	ok	resolveServerJar rejects versions without a server download URL
+0	ok	resolveServerJar reuses an existing cached download without fetching the jar again
+0	ok	resolveSourceTarget(targetKind=coordinate) resolves Gradle modules cache artifacts
+0	ok	resolveSourceTarget(targetKind=coordinate) resolves local classifier source jars without invalid fallback names
+0	ok	resolveSourceTarget(targetKind=jar) adopts exact <basename>-sources.jar when present
+0	ok	resolveSourceTarget(targetKind=jar) adopts sibling binary jar when input is a sources jar
+0	ok	resolveSourceTarget(targetKind=jar) can bypass exact sibling sources when binary fallback is required
+0	ok	resolveSourceTarget(targetKind=jar) ignores unrelated adjacent *-sources.jar and keeps decompile fallback
+0	ok	resolveTinyMappingFile yarn forceRefresh bypasses the metadata TTL
+0	ok	resolveTinyMappingFile yarn re-resolves the newest build after the metadata TTL, reuses within it, and falls back on outage
+0	ok	resolveTinyRemapperJar deduplicates concurrent downloads
+0	ok	resolveTinyRemapperJar returns cached jar when it exists
+0	ok	resolveTinyRemapperJar returns override path when provided
+0	ok	resolveTinyRemapperJar throws INVALID_INPUT when the override path does not exist
+0	ok	resolveTinyRemapperJar throws REMAPPER_UNAVAILABLE on download failure
+0	ok	resolveVersionJar deduplicates concurrent calls and releases the lock when all complete
+0	ok	resolveVersionJar releases the lock when the resolution rejects
+0	ok	resolveVersionJar skips SHA-1 check when sha1 is absent
+0	ok	resolveVersionJar succeeds when SHA-1 matches
+0	ok	resolveVersionJar throws on SHA-1 mismatch and deletes file
+0	ok	resolveVersionMappings rejects invalid detail payloads
+0	ok	resolveVersionMappings returns mapping URLs and reuses cached version details
+0	ok	resolveVineflowerJar concurrent calls trigger only one download
+0	ok	resolveVineflowerJar does not share in-flight download across cache directories
+0	ok	resolveVineflowerJar downloads when not cached
+0	ok	resolveVineflowerJar returns cached jar without download
+0	ok	resolveVineflowerJar returns override path directly
+0	ok	resolveVineflowerJar throws DECOMPILER_UNAVAILABLE on download failure
+0	ok	restart backoff reserves its exact delay even when live-cap blocks the timer
+0	ok	restart backoff starts at 100 ms and caps at 30 seconds
+0	ok	retryClassForErrorCode classifies every ERROR_CODES value explicitly (no silent transient default)
+0	ok	retryClassForErrorCode classifies non-recoverable server faults as 'server'
+0	ok	retryClassForErrorCode classifies the four recovery families
+0	ok	retryClassForErrorCode keeps genuinely-transient codes transient (scope guard)
+0	ok	returns only the original symbol when it contains no separators
+0	ok	returns the trailing segment of a slash-separated symbol
+0	ok	returns undefined for a field-style line without parentheses
+0	ok	returns undefined for a method call shape with no qualified owner
+0	ok	returns undefined for an unbalanced descriptor parenthesis
+0	ok	returns undefined for an unqualified simple name
+0	ok	returns undefined for blank input or a symbol ending in a separator
+0	ok	returns undefined for empty, whitespace-only, or internally spaced input
+0	ok	returns undefined when the method signature has no return type before the name
+0	ok	returns undefined when the separator is leading or trailing
+0	ok	runBatch attaches the synthesized per-entry suggestedCall to a failed entry
+0	ok	runBatch failFast=false keeps running after a per-entry failure and preserves the underlying code
+0	ok	runBatch failFast=true aborts un-started entries with ERR_BATCH_ABORTED
+0	ok	runBatch resolves the shared artifact exactly once and runs perEntry once per entry
+0	ok	runBinaryRemapWithDeps maps final-path rename races to ERR_REMAP_FAILED and cleans temp
+0	ok	runBinaryRemapWithDeps rejects directory temp output and removes it recursively
+0	ok	runJavaProcess accepts memory flags without a spawn error (missing jar still exits non-zero)
+0	ok	runJavaProcess forwards -Xmx/-Xms memory flags ahead of -jar in the spawn args
+0	ok	runJavaProcess kills the process and rejects with JAVA_PROCESS_FAILED on timeout
+0	ok	runJavaProcess normalizes path args when normalizePathArgs is true
+0	ok	runJavaProcess rejects with JAVA_PROCESS_FAILED when java cannot be spawned
+0	ok	runJavaProcess resolves with a non-zero exitCode when the target jar is missing
+0	ok	runWithRequestContext propagates context across await boundaries
+0	ok	running cancellation followed by shutdown emits no terminal response or replacement
+0	ok	running cancellation suppresses a worker response and drains queued work
+0	ok	running cancellation suppresses timeout output but still recovers queued work
+0	ok	running timeout and overflow use exact envelopes with content-length framing
+0	ok	running timeout and overflow use exact envelopes with line framing
+0	ok	running validate barrier queues two requests, forwards notifications, and overflows the third
+0	ok	scanBraceRange ignores braces inside char literals
+0	ok	scanBraceRange ignores braces inside multi-line block comments
+0	ok	schema accepts unique outputFile per entry
+0	ok	schema gate: per-entry suggestedCall validates against get-class-source schema
+0	ok	schema rejects absolute-path aliases that resolve to the same canonical outputFile
+0	ok	schema rejects batch-mappings call with omitted top-level version
+0	ok	schema rejects duplicate entries[].outputFile (concurrent-write race guard)
+0	ok	schema rejects relative-path aliases that resolve to the same canonical outputFile
+0	ok	schema: batch-mappings rejects concurrency=9 with fieldErrors[0].path === 'concurrency'
+0	ok	schema: batch-mappings rejects entries.length=0 and entries.length=51
+0	ok	schema: batch-symbol-exists rejects target.kind=dependency
+0	ok	search-class-source accepts a flat artifactId (unchanged)
+0	ok	search-class-source accepts a target instead of artifactId
+0	ok	search-class-source compact:true preserves hits and drops empty arrays
+0	ok	search-class-source rejects artifactId and target together
+0	ok	search-class-source rejects neither artifactId nor target
+0	ok	searchModSource clamps limit to strict upper bound
+0	ok	searchModSource classifies and names field hits
+0	ok	searchModSource classifies and names method hits
+0	ok	searchModSource falls back to literal matching for invalid regex queries
+0	ok	searchModSource normalizes jarPath before decompile delegation
+0	ok	searchModSource rejects empty queries with INVALID_INPUT
+0	ok	searchModSource rejects overly long queries
+0	ok	searchModSource searches source jars directly without decompile
+0	ok	searchModSource sets truncated at limit and preserves first decompile warnings
+0	ok	searchModSource stops scheduling later decompiled files once an earlier batch satisfies the limit
+0	ok	selectManualStdioMode falls back to the bash bridge when native spawn pipes are unavailable
+0	ok	shared resolution warnings flow into summary.sharedArtifactWarnings (not lost)
+0	ok	shared resolution with no warnings omits sharedArtifactWarnings (no empty array leak)
+0	ok	shell detection adds no zip opens to source-backed jar resolution
+0	ok	shell detection costs exactly two zip opens on the decompile-path probe
+0	ok	shutdown bounds a never-settling token cleanup retry
+0	ok	shutdown retries token-only tree cleanup without scheduling restart
+0	ok	sliceMembersWithLimit: a full page short of the end reports nextOffset for continuation
+0	ok	sliceMembersWithLimit: empty member set returns empty with no continuation
+0	ok	sliceMembersWithLimit: final partial page advertises no continuation
+0	ok	sliceMembersWithLimit: offset at or past total returns empty with no self-referential continuation
+0	ok	sliceToMaxCharsSafe handles maxChars <= 0
+0	ok	sliceToMaxCharsSafe keeps a complete surrogate pair that fits
+0	ok	sliceToMaxCharsSafe never emits a lone high surrogate at the cut
+0	ok	sliceToMaxCharsSafe returns text unchanged when within the limit
+0	ok	sliceToMaxCharsSafe slices ASCII at exactly maxChars
+0	ok	source lookup tools/list schema clarifies object target inputs and loader scope semantics
+0	ok	source-resolver uses async discovery for sibling jars and Gradle cache candidates
+0	ok	sourceJarReader can continue collecting matched utf-8 entries after unreadable matches
+0	ok	sourceJarReader can detect matching entries without materializing every match
+0	ok	sourceJarReader can iterate java entries without materializing upfront
+0	ok	sourceJarReader can read all java entries in one call
+0	ok	sourceJarReader checks .java suffix without lowercasing every entry name
+0	ok	sourceJarReader lists entries and filters java sources
+0	ok	sourceJarReader reads a single entry as utf-8
+0	ok	sourceJarReader rejects jars that contain unsafe traversal entries
+0	ok	sourceJarReader rejects non-utf8 content
+0	ok	sourceJarReader throws clear error for missing entries
+0	ok	sourceJarReader: readJarEntryAsUtf8 rejects caller-supplied traversal entry names with INVALID_INPUT
+0	ok	sourceJarReader: readJarEntryAsUtf8 still resolves safe entries from the same jar
+0	ok	split-source resolution keeps a deterministic artifact identity
+0	ok	split-source workspaces index both the common and the client-only sources jars
+0	ok	splits a dot-qualified member symbol at the last dot
+0	ok	splits a slash-separated internal name at the last slash without normalizing
+0	ok	stale buffered response is ignored and the request ID can be reused on the replacement
+0	ok	startup watchdog is capped independently from validate-project workload timeout
+0	ok	startup watchdog terminalizes queued work and late ready cannot adopt the replacement
+0	ok	status=members_unavailable with suggestedCall when binary fails and no fallback
+0	ok	status=ok when binary returns 0 members and decompiled fallback also yields 0
+0	ok	status=partial when decompiled fallback rescues the call
+0	ok	statusForErrorCode buckets cover the documented groups (400 / 404 / 422 / 503 / 500)
+0	ok	statusForErrorCode returns 500 for unknown codes (default fallback)
+0	ok	stripMembersDiagnostics omits the 3 diagnostics by default but KEEPS context
+0	ok	stripSourceDiagnostics omits the 3 diagnostics by default while keeping source payload
+0	ok	stripping status leaves byte-identical primary fields for a normal members result
+0	ok	strips a method descriptor before taking the trailing simple name
+0	ok	strips a single line-info prefix from a method signature
+0	ok	strips a trailing line-info suffix and trims the result
+0	ok	strips stacked line-info prefixes by looping
+0	ok	suggestSimilar handles ranking, truncation, and empty results
+0	ok	summary aggregates entry counts and bytes across all default cache kinds and reports ok when every kind is healthy
+0	ok	summary reports partial status and exposes per-kind stats at standard detail when a cache kind is unhealthy
+0	ok	supervisor queue overflow non-tool result is a raw JSON-RPC error without data
+0	ok	supervisor queue overflow tool result has the exact public envelope
+0	ok	surfaces the issues block at summary detail only when include lists issues
+0	ok	symbolExistsButSignatureFailed does not block normal signature-resolved targets
+0	ok	symbolExistsButSignatureFailed produces tool_issue warning and skipped members
+0	ok	symbolsRepo.countScopedSymbols returns correct count
+0	ok	symbolsRepo.findScopedSymbols filters by a symbolKinds IN-list, excluding non-type kinds
+0	ok	symbolsRepo.findScopedSymbols supports contains + package prefix filtering
+0	ok	symbolsRepo.findScopedSymbols treats LIKE wildcard characters literally
+0	ok	symbolsRepo.findSymbols cursor is deterministic for same symbol names
+0	ok	synthesizeDependencyTarget carries umbrella POM adoption provenance to the coordinate target
+0	ok	synthesizeDependencyTarget reads architectury_version from gradle.properties
+0	ok	synthesizeDependencyTarget refuses to pick when modules-2 has multiple cached versions
+0	ok	synthesizeDependencyTarget rejects empty group or name with INVALID_INPUT
+0	ok	synthesizeDependencyTarget rejects path traversal characters in group/name
+0	ok	synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set
+0	ok	synthesizeDependencyTarget rejects unsafe explicit version tokens
+0	ok	synthesizeDependencyTarget rejects when versionFromProject=false and no version is given
+0	ok	synthesizeDependencyTarget resolves explicit version directly
+0	ok	synthesizeDependencyTarget reuses WorkspaceContextCache on subsequent calls
+0	ok	synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when neither source has the dependency
+0	ok	synthesizeDependencyTarget tries the de-duplicated property keys for a hyphen-less name
+0	ok	synthesizeWorkspaceTarget defaults to obfuscated mapping and vanilla scope when no loader is detected
+0	ok	synthesizeWorkspaceTarget detects MC version + compile mapping + loader from project
+0	ok	synthesizeWorkspaceTarget gives workspace.scope precedence over input.scope when both are supplied
+0	ok	synthesizeWorkspaceTarget honors top-level input.scope over the loader-derived default
+0	ok	synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set
+0	ok	synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second call
+0	ok	synthesizeWorkspaceTarget throws ERR_INVALID_INPUT when projectPath is missing
+0	ok	synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when version is undetected, regardless of strict flag
+0	ok	synthesizeWorkspaceTarget warns when caller mapping mismatches workspace compile mapping
+0	ok	target.kind=jar preserves ERR_JAR_NOT_FOUND across representative entry points
+0	ok	task=workspace execution receives the inferred version
+0	ok	textResource returns the canonical { contents: [{ uri, text }] } shape
+0	ok	the explicit runner selection matches the ordinary recursive inventory
+0	ok	the members block is emitted even at explicit summary detail
+0	ok	the members task requires a class subject
+0	ok	the primary sources jar wins on duplicate file paths
+0	ok	the same class resolves via the submodule coordinate and the shell redirect with distinct deterministic identities
+0	ok	the structured flags shrink the serialized response versus the former sentences
+0	ok	the test-layout contract stays in the contracts domain
+0	ok	the unique-workspace auto-resolve falls back to on-demand version detection
+0	ok	timeout-first cancellation does not create a second terminal response
+0	ok	tool actions observe the requestId emitted in response metadata
+0	ok	tool contract manifest keeps Japanese purpose rows localized
+0	ok	tool contract manifest reflects current top-level workflow tool purpose summaries
+0	ok	tool contract manifest renders compact two-column tables
+0	ok	tool-reference.md batch-class-members status mirrors the real enum, not available/unavailable
+0	ok	tool-reference.md documents inspect-minecraft workspace focus objects
+0	ok	tool-reference.md documents meta.restart and meta.stageBudgetExhausted
+0	ok	tool-reference.md documents the batch lookup contract and 4 batch tools
+0	ok	tool-reference.md documents the get-class-members status enum
+0	ok	tool-reference.md documents the new error codes
+0	ok	tool-reference.md documents the operational env toggles
+0	ok	tool-reference.md documents the suggestedCall schema gate and exampleCalls fallback
+0	ok	tool-reference.md documents the validate-project per-task probe keys
+0	ok	tool-reference.md documents the verify-mixin-target tool and accessorAdvice
+0	ok	tool-reference.md documents the workspace and dependency target shapes
+0	ok	tool-reference.md documents validate-mixin partial-success fields
+0	ok	tool-reference.md preserves migration guidance for removed legacy tokens
+0	ok	tool-reference.md tells callers to inspect analyze-mod metadata via detail="standard"
+0	ok	tool-reference.md uses the real compare-minecraft class-diff task name
+0	ok	tools/list exposes the expected MCP tools without legacy mc prefixes
+0	ok	tools/list schemas expose explicit defaults for public input parameters
+0	ok	top-level resolution failure surfaces as a thrown error (no results array)
+0	ok	top-level workflow tool schemas expose explicit defaults on safe public parameters
+0	ok	traversal-shaped file paths are rejected as invalid input
+0	ok	treats a bare simple name as a class record with no owner
+0	ok	tree cleanup returns failure within its deadline when the helper never settles
+0	ok	trims surrounding whitespace before locating the separator
+0	ok	truncateSuggestionText appends an ellipsis when the value exceeds maxLength
+0	ok	truncateSuggestionText returns the value unchanged at or below maxLength
+0	ok	typedJsonToNbtBase64 + nbtBase64ToTypedJson support gzip roundtrip with auto detection
+0	ok	typedJsonToNbtBase64 enforces response bytes limit
+0	ok	typedJsonToNbtBase64 rejects an invalid compression value
+0	ok	unavailable worker queue enforces the same two-request overflow bound
+0	ok	unknown tool name fails open: passes the caller payload through (registry-not-populated case)
+0	ok	unobfuscated responses carry structured flags instead of the two boilerplate sentences
+0	ok	validate-access-transformer tools/list schema exposes AT namespace and runtime-aware inputs
+0	ok	validate-mixin error envelope surfaces details.failedStage for caller recovery
+0	ok	validate-mixin invalid JSON-like input string preserves structured input in suggestedCall
+0	ok	validate-mixin invalid input returns problem details with a retryable suggestedCall
+0	ok	validate-mixin omits version requirement for project mode
+0	ok	validate-mixin removed-namespace mapping="official" carries failedStage=input-validation
+0	ok	validate-mixin removed-namespace surfaces a validated obfuscated suggestedCall via the single gate
+0	ok	validate-mixin still requires version for inline mode without project detection
+0	ok	validate-mixin suggestedCall keeps an explicit reportMode='full' and omits the default 'summary-first'
+0	ok	validate-mixin tools/list input schema does NOT introduce budget/test-only parameters
+0	ok	validate-mixin tools/list schema exposes all mode-based inputs to clients
+0	ok	validate-mixin: MIXIN_STAGE_BUDGETS_OFF=1 disables all budgets
+0	ok	validate-mixin: batch-mode preserves typed AppError code and details on per-entry errors
+0	ok	validate-mixin: budget partial does NOT trigger maven-first retry under loom-first default
+0	ok	validate-mixin: cross-stage budget independence — slow resolve does not consume mapping-health budget
+0	ok	validate-mixin: input-validation budget exhaustion raises ERR_STAGE_BUDGET_PRE_PARSE before pipeline starts
+0	ok	validate-mixin: pre-parse mapping-health budget exhaustion throws ERR_STAGE_BUDGET_PRE_PARSE
+0	ok	validate-mixin: pre-target boundary returns partial with empty targetOutcomes
+0	ok	validate-mixin: signature-load failure produces targetOutcome with status='tool-issue' (not 'ok')
+0	ok	validate-mixin: stage-total deferred-budget records ok + deferred + slowTarget
+0	ok	validate-mixin: whole member-remap failure produces tool-issue (not 'ok') target outcome
+0	ok	validate-project invalid legacy workspace payload returns a structured suggestedCall
+0	ok	validate-project mixin validation: parallel aggregation matches sequential (counts, warning order, failure isolation)
+0	ok	validate-project rejects top-level configPaths for direct access-widener validation
+0	ok	validate-project task stages: project summary emits task-report and artifact-probe stages
+0	ok	validate-project tasks A1: all probes ok when workspace, gradle, artifact, and discovery succeed
+0	ok	validate-project tasks A1b: project summary uses lightweight artifact probe before heavy resolve
+0	ok	validate-project tasks A2: workspace.detected missing causes downstream skipped, headline blocked preserved
+0	ok	validate-project tasks A3: minecraft.artifact.resolved error preserves actual validator outcomes, loom independent
+0	ok	validate-project tasks A3b: lightweight artifact probe failure returns task error
+0	ok	validate-project tasks A4: discovery 0 paths sets corresponding entry to missing
+0	ok	validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks field
+0	ok	validate-project tasks A6: detail=summary or include without workspace strips evidence/buildScripts/counts
+0	ok	validate-project tasks A7: callers ignoring tasks see byte-identical other fields
+0	ok	validate-project tasks reports explicit gradleUserHome Loom cache after schema parsing
+0	ok	validate-project timeout configuration accepts only bounded ASCII decimals
+0	ok	validate-project timeout result uses the standard envelope and exact timeout metadata
+0	ok	validate-project workspace discovery uses async glob paths
+0	ok	validateAndNormalizeJarPath rejects empty / whitespace input with INVALID_INPUT
+0	ok	validateAndNormalizeJarPath returns the realpath of an existing .jar (success forwarding)
+0	ok	validateAndNormalizeJarPath rewraps internal errors as INVALID_INPUT with the input path in details
+0	ok	validateMixinSchema accepts every documented parameter value (reportMode, warningCategoryFilter, etc.)
+0	ok	validateMixinSchema config mode accepts an array of mixin config paths
+0	ok	validateMixinSchema config mode requires a non-empty configPaths array
+0	ok	validateMixinSchema input modes are mutually exclusive (paths vs configPaths)
+0	ok	validateMixinSchema rejects unknown reportMode and unknown warningCategoryFilter values
+0	ok	validateParsedAccessTransformer reports a descriptor mismatch with candidates
+0	ok	validateParsedAccessTransformer treats wildcard targets as valid when the owner resolves
+0	ok	validateParsedAccessWidener reports missing class
+0	ok	validateParsedAccessWidener reports missing method with suggestions
+0	ok	validateParsedAccessWidener summary counts
+0	ok	validateParsedAccessWidener validates class entry
+0	ok	validateParsedAccessWidener validates field entry
+0	ok	validateParsedAccessWidener validates method entry with descriptor
+0	ok	validateParsedMixin assigns representative resolution paths
+0	ok	validateParsedMixin categorizes mapping, resolution, and validation issues
+0	ok	validateParsedMixin classifies 'missing method attribute' warning as parse category
+0	ok	validateParsedMixin distinguishes mapping-failed and missing targets
+0	ok	validateParsedMixin explain mode adds representative guidance and suggested calls
+0	ok	validateParsedMixin explain mode filters suggestedCall context by target tool schema
+0	ok	validateParsedMixin flags an @Inject whose descriptor matches no overload
+0	ok	validateParsedMixin handles descriptor-bearing and owner-prefixed method references
+0	ok	validateParsedMixin handles representative confidence and remap-failed flows
+0	ok	validateParsedMixin handles representative parse warning flows
+0	ok	validateParsedMixin handles representative provenance output
+0	ok	validateParsedMixin includes structuredWarnings classified by severity
+0	ok	validateParsedMixin omits structuredWarnings when no warnings
+0	ok	validateParsedMixin provenance includes resolutionNotes when present
+0	ok	validateParsedMixin provenance supports enriched fields
+0	ok	validateParsedMixin reports representative member-validation outcomes
+0	ok	validateParsedMixin resolves a prefix quantifier selector with no exact-name member
+0	ok	validateParsedMixin resolves an @Inject whose descriptor matches an overload
+0	ok	validateParsedMixin resolves quantifier method selectors by name and skips bare wildcards
+0	ok	validateParsedMixin result supports unfilteredSummary field
+0	ok	validateParsedMixin structuredWarnings classify representative warning categories
+0	ok	validateParsedMixin tracks representative resolvedMembers states
+0	ok	validateParsedMixin warningMode=aggregated groups warnings by category
+0	ok	validateParsedMixin warningMode=full preserves all warnings (default)
+0	ok	validateToolParams accepts a well-formed get-class-source payload (D3)
+0	ok	validateToolParams rejects the bug-report shaped payload (D4)
+0	ok	validateToolParams returns Unknown tool for an unregistered name
+0	ok	verified-absent platform prefixes like com.mojang.serialization are suppressed
+0	ok	verify reports ok for a single healthy entry and stays in preview mode even when apply is requested
+0	ok	verify reports partial with checked and unhealthy counts and passes registry warnings through
+0	ok	verify-mixin-target member schema normalizes empty/whitespace descriptor to undefined
+0	ok	version manifest fetch is cached across list operations
+0	ok	versions-list resource converts AppError failures into resource error envelopes
+0	ok	worker exit and close cleanup is idempotent and releases one logical slot
+0	ok	worker exit and deadline races each produce one terminal response
+1	ok	a mixin config JSON is malformed
+1	ok	adds contradiction note when parse fails but same annotation resolves
+1	ok	applies maxCandidates to ambiguous result sets
+1	ok	applies remap-failed downgrade per target only
+1	ok	applies resolveArtifact mapping fallback metadata for non-vanilla scope
+1	ok	applies workspace mapping and returns compile-visible method symbol
+1	ok	artifact cache hits avoid rescanning accounting tables
+1	ok	artifact ingest updates accounting incrementally
+1	ok	auto-detects mapping from project when mapping param omitted
+1	ok	buildExitTimestampGroups: distinct toolNames each get their own pruned/updated entry
+1	ok	buildExitTimestampGroups: one worker exit with N concurrent same-tool requests records exactly one death
+1	ok	buildExitTimestampGroups: prunes entries older than the restart window
+1	ok	buildExitTimestampGroups: undefined toolName collapses to 'unknown'
+1	ok	buildLegacyJsonRpcError returns -32603 envelope
+1	ok	buildSyntheticCallToolResult EMITS suggestedCall when toolName is registered AND args satisfy the schema (clean restart path)
+1	ok	buildSyntheticCallToolResult OMITS suggestedCall when redaction modified the args
+1	ok	buildSyntheticCallToolResult drops suggestedCall when toolName is missing (caller-side skip-gate)
+1	ok	buildSyntheticCallToolResult drops suggestedCall when toolName is unregistered (typo / disabled / version-skewed)
+1	ok	buildSyntheticCallToolResult hints carry the recommendation phrase for each branch
+1	ok	buildSyntheticCallToolResult hints fall back to stage-tracking-began message when lastStage is undefined
+1	ok	buildSyntheticCallToolResult omits suggestedCall when toolArgsRedacted undefined
+1	ok	buildSyntheticCallToolResult shape includes structuredContent.error.code and meta.restart
+1	ok	buildSyntheticCallToolResult: lastStageElapsedMs measures stage-entry to crash, NOT the gap from the latest per-target emit
+1	ok	buildWorkerRestartReply returns raw -32603 for non-tools/call
+1	ok	buildWorkerRestartReply returns raw -32603 when structuredRestartDisabled
+1	ok	buildWorkerRestartReply returns synthetic for tools/call
+1	ok	buildWorkerRestartReply yields a structured envelope without throwing when lastStageStartedAt is undefined
+1	ok	buildWorkerRestartReply: pruned timestamps without current restart still receive correct count for recommendation
+1	ok	can omit per-result issues while preserving summaries
+1	ok	checkSymbolExists forwards maxCandidates
+1	ok	config can disable indexed search
+1	ok	config mode reports empty mixin configs as warnings instead of invalid input
+1	ok	contains path uses indexed search
+1	ok	contains text uses indexed search
+1	ok	decideRetryRecommendation maps SIGSEGV and SIGKILL to clear-cache
+1	ok	decideRetryRecommendation prefers narrow-query over clear-cache when both apply
+1	ok	decideRetryRecommendation: SIGABRT → clear-cache
+1	ok	decideRetryRecommendation: SIGTERM does NOT map to clear-cache (default branch)
+1	ok	decideRetryRecommendation: default → same-request
+1	ok	decideRetryRecommendation: repeated restart threshold yields report-bug only at >= threshold
+1	ok	decideRetryRecommendation: target-lookup boundary at targetTotal === 5 (no narrow-query) and 6 (narrow-query)
+1	ok	default reportMode (summary-first) strips per-result resolvedMembers/toolHealth
+1	ok	distinguishes mapping-failed and not-found in same batch
+1	ok	does not adopt unrelated *-sources.jar files
+1	ok	downgrades confidence to uncertain for remap-failed members
+1	ok	escalates @Accessor parse warning to issue with parse category
+1	ok	escalates @Invoker parse warning to issue with parse category
+1	ok	escalates @Shadow parse warning to issue
+1	ok	exact path uses indexed search
+1	ok	explain=true keeps per-result resolvedMembers/toolHealth under the summary-first default
+1	ok	falls back to vanilla when merged resolution fails
+1	ok	findMapping returns lookup payload
+1	ok	getClassApiMatrix forwards maxRows
+1	ok	getClassMembers reads unobfuscated runtime names without remap fallback
+1	ok	getClassSource preserves ERR_JAR_NOT_FOUND for missing target.kind=jar paths
+1	ok	hideUncertain recomputes parseWarnings summary
+1	ok	ignores cursor when queryMode changes
+1	ok	ignores cursor when search intent changes
+1	ok	ignores version prefix collisions between Loom cache directories
+1	ok	includes ambiguityReasons and warning when multiple owners match
+1	ok	includes provenance when provided
+1	ok	includes resolvedMembers for not-found shadow
+1	ok	includes resolvedMembers for resolved injection
+1	ok	includes scope-independent artifact context and retry hints
+1	ok	includes target scope and explicit target coordinates
+1	ok	indexed text search records search db I/O metrics
+1	ok	keeps byte accounting consistent after maxCacheBytes eviction
+1	ok	keeps definite confidence for non-remap-failed members
+1	ok	keeps non-accessor/shadow parse warnings in warnings[]
+1	ok	merges workspace detection warnings ahead of exact method mapping warnings
+1	ok	mixinConfigPath auto-detect finds client source root (split source sets)
+1	ok	mixinConfigPath auto-detect finds multiple module source roots
+1	ok	mixinConfigPath finds mixins in both main and client source roots
+1	ok	normalizes WSL UNC sourcePath inputs
+1	ok	normalizes backslash separated candidate paths
+1	ok	normalizes named namespace to yarn
+1	ok	normalizes slashed class identities to dotted names in the resolved candidate
+1	ok	obfuscated keeps mapping without fallback warning
+1	ok	omits ambiguityReasons when a single candidate resolves
+1	ok	omits provenance when not provided
+1	ok	omits resolvedMembers when no members to validate
+1	ok	only adopts <basename>-sources.jar
+1	ok	path indexed search avoids file-content hydration for hit construction
+1	ok	prefers explicit mapping override over header namespace
+1	ok	prefix path uses indexed search
+1	ok	prefix-substring version mismatch still marks result as approximated
+1	ok	preserves descriptor path through tiny mappings
+1	ok	preserves scope in intermediary no-version suggestedCall
+1	ok	preserves scope in suggestedCall when mapping fails
+1	ok	project mode auto-discovers mixin configs across modules
+1	ok	project mode cannot detect a version
+1	ok	project mode finds no mixin configs
+1	ok	project mode reports empty discovered mixin configs as warnings
+1	ok	propagates mapping_unavailable from findMapping and prepends detection warnings
+1	ok	provenance reflects mapping fallback
+1	ok	pruneRestartTimestamps drops entries older than the window
+1	ok	pruneRestartTimestamps keeps timestamps equal to the cutoff and drops the value 1 ms older
+1	ok	queryMode=auto keeps separator queries on the indexed path
+1	ok	queryMode=literal forces substring scan
+1	ok	queryMode=token does not fallback when indexed search is disabled
+1	ok	queryMode=token resolves separator query through normalized indexed lookup
+1	ok	redactToolArgs caps array length at 8 entries (modified=true)
+1	ok	redactToolArgs caps object key count at 16 (modified=true)
+1	ok	redactToolArgs preserves long PRESERVED_PATH_KEYS values without truncation
+1	ok	redactToolArgs preserves primitives, paths and small objects (modified=false)
+1	ok	redactToolArgs redacts secret-like keys whose name is NOT a preserved path
+1	ok	redactToolArgs returns empty object for non-object inputs (modified=false)
+1	ok	redactToolArgs strips secret-like keys regardless of casing (modified=true)
+1	ok	redactToolArgs truncates long strings inside arrays
+1	ok	redactToolArgs truncates strings > 256 bytes (modified=true)
+1	ok	regex text falls back to scan path
+1	ok	rejects a descriptor on a field lookup
+1	ok	rejects a descriptor when kind is class
+1	ok	rejects a field lookup without an owner
+1	ok	rejects a method lookup without a descriptor
+1	ok	rejects a missing version and echoes the raw inputs in details
+1	ok	rejects a whitespace-only projectPath
+1	ok	rejects an empty name before kind-specific owner checks
+1	ok	rejects an owner when kind is class and points at name as the FQCN
+1	ok	rejects an unsupported symbol kind
+1	ok	rejects getClassSource when artifactId and target are both provided
+1	ok	rejects invalid class source line range
+1	ok	rejects non-obfuscated mapping without version
+1	ok	rejects owner for class input
+1	ok	rejects regex queries longer than guard limit
+1	ok	rejects source-only artifacts without binary jar
+1	ok	rejects symbolKind scope filters for text and path intents
+1	ok	remaps descriptor class refs before strict matching
+1	ok	reports ambiguous when multiple field candidates remain after filtering
+1	ok	reports not_found when the kind filter removes every candidate
+1	ok	reports requested loader scope separately from applied merged scope
+1	ok	reports target-mapping-failed when target is in mappingFailedTargets
+1	ok	reports target-not-found for non-mapping failures
+1	ok	resolveArtifact ignores mismatched Loom sources for unobfuscated versions
+1	ok	resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND
+1	ok	resolveMethodMappingExact forwards maxCandidates
+1	ok	resolvedMembers tracks accessors
+1	ok	resolves a field and filters out non-field candidates from findMapping
+1	ok	resolves class via class identity mapping
+1	ok	resolves through mojang client mappings
+1	ok	retries with maven-first after loom-first partial validation
+1	ok	returns ambiguous when duplicate target names exist
+1	ok	returns explicit not_found for misses
+1	ok	returns mapping_unavailable when detection resolves without an applied mapping
+1	ok	returns mapping_unavailable when workspace mapping cannot be detected
+1	ok	returns not_found when the class identity lacks the workspace mapping
+1	ok	source is empty
+1	ok	source jar version mismatch marks result as approximated
+1	ok	strictVersion=false still returns version-approximated flag
+1	ok	strictVersion=true throws on version mismatch
+1	ok	summary includes parseWarnings count
+1	ok	summary-first hoists shared provenance and incomplete reasons
+1	ok	summary-first preserves per-result provenance when batch provenance differs
+1	ok	supports disambiguation hints for ambiguous class matches
+1	ok	tracks byte accounting across multiple artifacts
+1	ok	treats the official header namespace as obfuscated, not intermediary
+1	ok	uses applied mapping namespace for merged scope bytecode lookup
+1	ok	vanilla+mojang with projectPath suggests scope=merged
+1	ok	vanilla+mojang without projectPath suggests mapping=obfuscated
+1	ok	version is empty
+1	ok	with definite confidence marks issues as definite
+1	ok	with likely confidence keeps issue definite-counted
+1	ok	with uncertain confidence marks issues as uncertain
+1	ok	without confidence arg defaults to no confidence on issues
+1	ok	yarn falls back to obfuscated with warning

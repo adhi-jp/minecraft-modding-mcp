@@ -1,0 +1,116 @@
+{
+  "description": "Pre-migration ProblemDetails envelope golden for one Zod failure kind. Captured over the wire against the untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-problemdetails.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/problemdetails.pid"
+  },
+  "zodFailureKind": "too_small.number",
+  "tool": "analyze-mod",
+  "sentParams": {
+    "task": "summary",
+    "subject": {
+      "kind": "jar",
+      "jarPath": "premigration"
+    },
+    "limit": 0
+  },
+  "offlineZodIssues": [
+    {
+      "code": "too_small",
+      "path": "limit",
+      "message": "Number must be greater than 0"
+    }
+  ],
+  "request": {
+    "id": 7,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "limit": 0,
+        "subject": {
+          "jarPath": "premigration",
+          "kind": "jar"
+        },
+        "task": "summary"
+      },
+      "name": "analyze-mod"
+    }
+  },
+  "reply": {
+    "id": 7,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "error": {
+                "code": "ERR_INVALID_INPUT",
+                "detail": "Request validation failed.",
+                "fieldErrors": [
+                  {
+                    "code": "too_small",
+                    "message": "Number must be greater than 0",
+                    "path": "limit"
+                  }
+                ],
+                "hints": [
+                  "analyze-mod.subject must be an object with subject.kind=jar|class.",
+                  "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+                  "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+                  "suggested call payload failed schema validation; using fallback examples"
+                ],
+                "instance": "<REQUEST_ID>",
+                "issueOrigin": "code_issue",
+                "retryClass": "input",
+                "status": 400,
+                "title": "Invalid input",
+                "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+              },
+              "meta": {
+                "durationMs": "<DURATION_MS>",
+                "requestId": "<REQUEST_ID>",
+                "tool": "analyze-mod"
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "error": {
+          "code": "ERR_INVALID_INPUT",
+          "detail": "Request validation failed.",
+          "fieldErrors": [
+            {
+              "code": "too_small",
+              "message": "Number must be greater than 0",
+              "path": "limit"
+            }
+          ],
+          "hints": [
+            "analyze-mod.subject must be an object with subject.kind=jar|class.",
+            "task=\"summary\" uses {\"subject\":{\"kind\":\"jar\",\"jarPath\":\"/path/to/mod.jar\"}}.",
+            "Legacy include names like metadata/entrypoints/mixins/dependencies are not accepted; use detail=\"standard\" to surface the metadata block, and canonical include groups only for warnings/files/source/samples/timings.",
+            "suggested call payload failed schema validation; using fallback examples"
+          ],
+          "instance": "<REQUEST_ID>",
+          "issueOrigin": "code_issue",
+          "retryClass": "input",
+          "status": 400,
+          "title": "Invalid input",
+          "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+        },
+        "meta": {
+          "durationMs": "<DURATION_MS>",
+          "requestId": "<REQUEST_ID>",
+          "tool": "analyze-mod"
+        }
+      }
+    }
+  }
+}

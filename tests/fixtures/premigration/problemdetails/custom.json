@@ -1,0 +1,108 @@
+{
+  "description": "Pre-migration ProblemDetails envelope golden for one Zod failure kind. Captured over the wire against the untouched SDK v1 build; legacy handshake; default flag config.",
+  "harness": "scripts/premigration/capture-problemdetails.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/problemdetails.pid"
+  },
+  "zodFailureKind": "custom",
+  "tool": "analyze-symbol",
+  "sentParams": {
+    "task": "exists",
+    "subject": {
+      "kind": "class",
+      "name": "premigration"
+    }
+  },
+  "offlineZodIssues": [
+    {
+      "code": "custom",
+      "path": "version",
+      "message": "version is required for non-lifecycle tasks (or pass projectPath so the version can be inferred from the workspace)."
+    }
+  ],
+  "request": {
+    "id": 11,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {
+        "subject": {
+          "kind": "class",
+          "name": "premigration"
+        },
+        "task": "exists"
+      },
+      "name": "analyze-symbol"
+    }
+  },
+  "reply": {
+    "id": 11,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": {
+            "__normalizedJson": {
+              "error": {
+                "code": "ERR_INVALID_INPUT",
+                "detail": "Request validation failed.",
+                "fieldErrors": [
+                  {
+                    "code": "custom",
+                    "message": "version is required for non-lifecycle tasks (or pass projectPath so the version can be inferred from the workspace).",
+                    "path": "version"
+                  }
+                ],
+                "hints": [
+                  "Check fieldErrors and submit a valid tool argument payload."
+                ],
+                "instance": "<REQUEST_ID>",
+                "issueOrigin": "code_issue",
+                "retryClass": "input",
+                "status": 400,
+                "title": "Invalid input",
+                "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+              },
+              "meta": {
+                "durationMs": "<DURATION_MS>",
+                "requestId": "<REQUEST_ID>",
+                "tool": "analyze-symbol"
+              }
+            }
+          },
+          "type": "text"
+        }
+      ],
+      "isError": true,
+      "structuredContent": {
+        "error": {
+          "code": "ERR_INVALID_INPUT",
+          "detail": "Request validation failed.",
+          "fieldErrors": [
+            {
+              "code": "custom",
+              "message": "version is required for non-lifecycle tasks (or pass projectPath so the version can be inferred from the workspace).",
+              "path": "version"
+            }
+          ],
+          "hints": [
+            "Check fieldErrors and submit a valid tool argument payload."
+          ],
+          "instance": "<REQUEST_ID>",
+          "issueOrigin": "code_issue",
+          "retryClass": "input",
+          "status": 400,
+          "title": "Invalid input",
+          "type": "https://minecraft-modding-mcp.dev/problems/invalid-input"
+        },
+        "meta": {
+          "durationMs": "<DURATION_MS>",
+          "requestId": "<REQUEST_ID>",
+          "tool": "analyze-symbol"
+        }
+      }
+    }
+  }
+}

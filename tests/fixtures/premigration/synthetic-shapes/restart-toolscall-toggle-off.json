@@ -1,0 +1,28 @@
+{
+  "description": "Pre-migration supervisor synthetic restart reply. Injection: legacy handshake, SIGSTOP worker, request in flight, SIGKILL worker (exit signal SIGKILL => retryRecommendation \"clear-cache\" on structured replies).",
+  "harness": "scripts/premigration/capture-synthetic-shapes.mjs",
+  "env": {
+    "MCP_CACHE_DIR": "<SCRATCH>/cache",
+    "MCP_SQLITE_PATH": "<SCRATCH>/cache/source-cache.db",
+    "MCP_SUPERVISOR_CHILD_PID_FILE": "<SCRATCH>/run/restart-toolscall-toggle-off.pid",
+    "SUPERVISOR_STRUCTURED_RESTART_OFF": "1"
+  },
+  "injection": "SIGSTOP worker -> send request -> SIGKILL worker (pid from MCP_SUPERVISOR_CHILD_PID_FILE)",
+  "request": {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "arguments": {},
+      "name": "get-runtime-metrics"
+    }
+  },
+  "reply": {
+    "error": {
+      "code": -32603,
+      "message": "MCP worker restarted while handling the request. Retry the request."
+    },
+    "id": 2,
+    "jsonrpc": "2.0"
+  }
+}
