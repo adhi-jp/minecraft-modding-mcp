@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 import { JsonRpcFrameReader, encodeJsonRpcMessage } from "./json-rpc-framing.js";
 
 type StdioReadable = NodeJS.ReadStream;
@@ -42,6 +42,10 @@ export class CompatStdioServerTransport {
   }
 
   async send(message: JSONRPCMessage): Promise<void> {
+    // No closed guard on purpose: a peer may half-close stdin (which flips
+    // `closed` via the end/close listeners) while stdout is still writable,
+    // and in-flight responses must still be delivered — the pre-migration
+    // transport wrote unconditionally and that behavior is preserved.
     const frame = encodeJsonRpcMessage(
       message,
       this.frameReader.currentMode === "content-length" ? "content-length" : "line"

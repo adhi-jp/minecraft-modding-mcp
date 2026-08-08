@@ -1,4 +1,4 @@
-import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/server";
 import { ERROR_CODES, type ErrorCode } from "./errors.js";
 import {
   retryClassForErrorCode,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
-import type { JSONRPCMessage, JSONRPCRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage, JSONRPCRequest } from "@modelcontextprotocol/server";
 
 import { StdioSupervisor } from "../../src/stdio-supervisor.ts";
 

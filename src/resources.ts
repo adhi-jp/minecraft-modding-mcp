@@ -1,5 +1,5 @@
-import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ResourceTemplate } from "@modelcontextprotocol/server";
+import type { McpServer } from "@modelcontextprotocol/server";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { textResource, objectResource, errorResource } from "./mcp-helpers.js";
@@ -32,7 +32,7 @@ export function registerResources(
 ): void {
   // ── Fixed resources ──────────────────────────────────────────────
 
-  server.resource("versions-list", "mc://versions/list",
+  server.registerResource("versions-list", "mc://versions/list",
     { description: "List all available Minecraft versions with their metadata.", mimeType: "application/json" },
     async (uri) => {
       try {
@@ -45,7 +45,7 @@ export function registerResources(
     }
   );
 
-  server.resource("runtime-metrics", "mc://metrics",
+  server.registerResource("runtime-metrics", "mc://metrics",
     { description: "Runtime metrics and performance counters for the MCP server.", mimeType: "application/json" },
     async (uri) => {
       try {
@@ -60,7 +60,7 @@ export function registerResources(
 
   // ── Template resources ───────────────────────────────────────────
 
-  server.resource("class-source",
+  server.registerResource("class-source",
     new ResourceTemplate("mc://source/{artifactId}/{className}", { list: undefined }),
     { description: "Java source code for a class within a resolved artifact. className may use dot or slash separators.", mimeType: "text/x-java" },
     async (uri, params) => {
@@ -80,7 +80,7 @@ export function registerResources(
     }
   );
 
-  server.resource("class-source-json",
+  server.registerResource("class-source-json",
     new ResourceTemplate("mc://source-json/{artifactId}/{className}", { list: undefined }),
     { description: "JSON envelope of a class's full source plus metadata (artifactId, mappingApplied, totalLines, returnedRange, provenance, warnings) — the structured alternative to the raw-text class-source resource, easier to cite and continue.", mimeType: "application/json" },
     async (uri, params) => {
@@ -98,7 +98,7 @@ export function registerResources(
     }
   );
 
-  server.resource("artifact-file",
+  server.registerResource("artifact-file",
     new ResourceTemplate("mc://artifact/{artifactId}/files/{filePath}", { list: undefined }),
     { description: "Raw content of a file within a resolved artifact. filePath is the archive-relative path.", mimeType: "text/plain" },
     async (uri, params) => {
@@ -115,7 +115,7 @@ export function registerResources(
     }
   );
 
-  server.resource("find-mapping",
+  server.registerResource("find-mapping",
     new ResourceTemplate("mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{name}", { list: undefined }),
     { description: "Look up a CLASS mapping between two naming namespaces. This URI carries no owner, so field/method lookups (which need an owner) must use the find-member-mapping resource or the find-mapping tool.", mimeType: "application/json" },
     async (uri, params) => {
@@ -135,7 +135,7 @@ export function registerResources(
     }
   );
 
-  server.resource("find-member-mapping",
+  server.registerResource("find-member-mapping",
     new ResourceTemplate("mc://mappings/{version}/{sourceMapping}/{targetMapping}/{kind}/{owner}/{name}", { list: undefined }),
     { description: "Look up a FIELD or METHOD mapping between two naming namespaces, including the owner class the member belongs to (required for member lookups). For exact method overload resolution, use the find-mapping tool with a descriptor.", mimeType: "application/json" },
     async (uri, params) => {
@@ -156,7 +156,7 @@ export function registerResources(
     }
   );
 
-  server.resource("class-members",
+  server.registerResource("class-members",
     new ResourceTemplate("mc://artifact/{artifactId}/members/{className}", { list: undefined }),
     { description: "List constructors, methods, and fields for a class within a resolved artifact.", mimeType: "application/json" },
     async (uri, params) => {
@@ -173,7 +173,7 @@ export function registerResources(
     }
   );
 
-  server.resource("artifact-metadata",
+  server.registerResource("artifact-metadata",
     new ResourceTemplate("mc://artifact/{artifactId}", { list: undefined }),
     { description: "Metadata for a previously resolved artifact (origin, coordinate, mapping, provenance).", mimeType: "application/json" },
     async (uri, params) => {

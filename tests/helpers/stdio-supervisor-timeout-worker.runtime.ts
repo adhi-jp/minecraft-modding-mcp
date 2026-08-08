@@ -2,7 +2,7 @@ import process from "node:process";
 import { existsSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 
 import { encodeJsonRpcMessage, JsonRpcFrameReader } from "../../src/json-rpc-framing.ts";
 import { STDIO_WORKER_MODE_ENV, StdioSupervisor } from "../../src/stdio-supervisor.ts";

@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/server";
+import type {
+  JSONRPCMessage,
+  Transport,
+  TransportSendOptions
+} from "@modelcontextprotocol/server";
 
 const execFileAsync = promisify(execFile);
 // Keep this test helper copy in sync with src/stdio-supervisor.ts.

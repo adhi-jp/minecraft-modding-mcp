@@ -43,7 +43,32 @@ export const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
 
 export const nonEmptyString = z.string().trim().min(1);
 export const optionalNonEmptyString = z.string().trim().min(1).optional();
-export const optionalPositiveInt = z.number().int().positive().optional();
+
+/**
+ * zod3-parity integer check. zod3's `.int()` accepted every `Number.isInteger`
+ * value — including unsafe integers beyond 2^53, which downstream code clamps
+ * (e.g. src/version-service.ts) — while zod4's `.int()` rejects unsafe
+ * integers with a `too_big` issue, silently narrowing the frozen public
+ * acceptance contract. This check restores the exact zod3 acceptance domain
+ * and pushes a stock-zod4-shaped `invalid_type` issue for non-integer numbers
+ * so the ProblemDetails parity layer (src/tool-guidance.ts) maps it to zod3's
+ * exact "Expected integer, received float" bytes. `continue: true` mirrors
+ * zod3's non-aborting number checks (later min/max checks still report).
+ * Public zod API only: no zod internals, no z.config globals.
+ */
+export const zod3ParityIntCheck = (payload: z.core.ParsePayload<number>): void => {
+  if (!Number.isInteger(payload.value)) {
+    payload.issues.push({
+      code: "invalid_type",
+      expected: "int",
+      input: payload.value,
+      message: "Invalid input: expected int, received number",
+      continue: true
+    });
+  }
+};
+
+export const optionalPositiveInt = z.number().check(zod3ParityIntCheck).positive().optional();
 export const gradleUserHomeSchema = optionalNonEmptyString.describe(
   "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
 );
@@ -308,7 +333,7 @@ export const batchClassSourceShape = {
   scope: artifactScopeSchema.optional(),
   preferProjectVersion: z.boolean().optional(),
   strictVersion: z.boolean().optional(),
-  concurrency: z.number().int().min(1).max(8).optional().describe("1..8, default 4"),
+  concurrency: z.number().check(zod3ParityIntCheck).min(1).max(8).optional().describe("1..8, default 4"),
   failFast: z.boolean().optional().describe("default false"),
   detail: detailParam("summary"),
   include: responseIncludeParam,
@@ -363,7 +388,7 @@ export const batchClassMembersShape = {
   scope: artifactScopeSchema.optional(),
   preferProjectVersion: z.boolean().optional(),
   strictVersion: z.boolean().optional(),
-  concurrency: z.number().int().min(1).max(8).optional(),
+  concurrency: z.number().check(zod3ParityIntCheck).min(1).max(8).optional(),
   failFast: z.boolean().optional(),
   detail: detailParam("summary"),
   projection: memberProjectionSchema.optional().describe(MEMBER_PROJECTION_DESCRIPTION),
@@ -399,7 +424,7 @@ export const batchSymbolExistsShape = {
   scope: artifactScopeSchema.optional(),
   preferProjectVersion: z.boolean().optional(),
   strictVersion: z.boolean().optional(),
-  concurrency: z.number().int().min(1).max(8).optional(),
+  concurrency: z.number().check(zod3ParityIntCheck).min(1).max(8).optional(),
   failFast: z.boolean().optional(),
   detail: detailParam("summary"),
   include: responseIncludeParam,
@@ -432,7 +457,7 @@ export const batchMappingsShape = {
   sourcePriority: mappingSourcePrioritySchema.optional(),
   projectPath: optionalNonEmptyString,
   gradleUserHome: gradleUserHomeSchema,
-  concurrency: z.number().int().min(1).max(8).optional(),
+  concurrency: z.number().check(zod3ParityIntCheck).min(1).max(8).optional(),
   failFast: z.boolean().optional(),
   detail: detailParam("summary"),
   include: responseIncludeParam,
@@ -859,13 +884,16 @@ const nbtPatchOperationSchema = z
   .passthrough();
 
 export const nbtApplyJsonPatchShape = {
-  typedJson: z.unknown(),
+  // zod4 makes bare z.unknown() members presence-required; zod3 accepted a
+  // missing key (handler saw undefined). .optional() restores that contract.
+  typedJson: z.unknown().optional(),
   patch: z.array(nbtPatchOperationSchema).describe("RFC6902 operation array (add/remove/replace/test)")
 };
 export const nbtApplyJsonPatchSchema = z.object(nbtApplyJsonPatchShape);
 
 export const jsonToNbtShape = {
-  typedJson: z.unknown(),
+  // Same zod4 presence-required restoration as nbtApplyJsonPatchShape above.
+  typedJson: z.unknown().optional(),
   compression: encodeCompressionSchema.default("none")
 };
 export const jsonToNbtSchema = z.object(jsonToNbtShape);

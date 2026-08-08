@@ -71,13 +71,13 @@ const fabricModJsonSchema = z
     name: z.string().optional(),
     version: z.string().optional(),
     description: z.string().optional(),
-    entrypoints: z.record(z.array(stringOrEntrypoint)).optional(),
+    entrypoints: z.record(z.string(), z.array(stringOrEntrypoint)).optional(),
     mixins: z.array(stringOrMixinRef).optional(),
     accessWidener: z.string().optional(),
-    depends: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-    recommends: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-    conflicts: z.record(z.union([z.string(), z.array(z.string())])).optional(),
-    suggests: z.record(z.union([z.string(), z.array(z.string())])).optional(),
+    depends: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+    recommends: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+    conflicts: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+    suggests: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
     jars: z.array(z.object({ file: z.string() }).passthrough()).optional()
   })
   .passthrough();
@@ -96,7 +96,7 @@ const quiltModJsonSchema = z
           })
           .passthrough()
           .optional(),
-        entrypoints: z.record(z.array(stringOrEntrypoint)).optional(),
+        entrypoints: z.record(z.string(), z.array(stringOrEntrypoint)).optional(),
         depends: z.array(z.unknown()).optional()
       })
       .passthrough()
@@ -121,7 +121,7 @@ const forgeModsTomlSchema = z
           .passthrough()
       )
       .optional(),
-    dependencies: z.record(z.array(z.unknown())).optional(),
+    dependencies: z.record(z.string(), z.array(z.unknown())).optional(),
     mixins: z.array(z.object({ config: z.string() }).passthrough()).optional(),
     accessTransformers: z.array(z.object({ file: z.string().optional() }).passthrough()).optional()
   })

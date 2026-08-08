@@ -76,7 +76,19 @@ test("tool actions observe the requestId emitted in response metadata", async ()
       id: 1,
       method: "tools/call",
       params: { name: "list-versions", arguments: {} }
-    }, {}) as {
+    }, {
+      // Minimal v2 ServerContext stand-in: the v2 handler wrapper reads
+      // ctx.mcpReq (requestState()/signal) unconditionally, so the v1-era `{}`
+      // extra no longer drives the SDK-internal handler.
+      mcpReq: {
+        id: 1,
+        method: "tools/call",
+        requestState: () => undefined,
+        signal: new AbortController().signal,
+        notify: async () => {},
+        log: async () => {}
+      }
+    }) as {
       structuredContent?: { meta?: { requestId?: string } };
     };
 

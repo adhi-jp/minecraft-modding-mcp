@@ -3,11 +3,19 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 178;
+const EXPECTED_ORDINARY_TEST_FILES = 181;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1647;
+// 178 -> 179 / 1647 -> 1652: tests/stdio/stdio-supervisor-response-framing.test.ts adds
+// 5 response-framing correlation tests (MCP SDK v2 migration, per-request framing).
+// 179 -> 181 / 1652 -> 1672 (repair round): tests/stdio/stdio-worker-protocol.test.ts
+// adds 2 worker-level tests (fresh-factory negotiate-down, $/stageUpdate emission),
+// tests/utils/zod3-parity.test.ts adds 13 fieldErrors byte-parity tests, and
+// tests/stdio/json-rpc-framing.test.ts gains 5 mid-stream framing-switch tests.
+// 1672 -> 1673: tests/utils/zod3-parity.test.ts gains the entry-tool
+// positiveIntSchema integer-acceptance/float-bytes parity test.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1673;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

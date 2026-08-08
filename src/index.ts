@@ -1,11 +1,17 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  type CallToolResult,
+  type JSONRPCMessage,
+  type ServerContext
+} from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { makeStageEmitter, type StageEmitterExtra } from "./stage-emitter.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError, z } from "zod";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
+import { registerAppTool, registerExpertTool } from "./registration-adapter.js";
 
 import { objectResult } from "./mcp-helpers.js";
 import { runWithRequestContext } from "./request-context.js";
@@ -80,7 +86,10 @@ import { BatchSymbolExistsService } from "./entry-tools/batch-symbol-exists-serv
 import { BatchMappingsService } from "./entry-tools/batch-mappings-service.js";
 import { createCacheRegistry } from "./cache-registry.js";
 import { buildEntryToolMeta } from "./entry-tools/response-contract.js";
-import { registerToolSchema } from "./tool-schema-registry.js";
+import {
+  getToolSchema,
+  registerToolSchema as registerToolSchemaInRegistry
+} from "./tool-schema-registry.js";
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import {
   applyErrorMetaExtensions,
@@ -217,37 +226,14 @@ function getServerVersionFromPackageJson(): string {
 
 const SERVER_VERSION = getServerVersionFromPackageJson();
 
-const server = new McpServer({
-  name: "@adhisang/minecraft-modding-mcp",
-  version: SERVER_VERSION
-});
+// The McpServer instance is constructed per serveStdio factory call inside
+// buildServer() below; module scope keeps only the shared services/config.
 
-// The SDK validates tool args before invoking handlers and returns generic InvalidParams text.
-// Bypass that layer so runTool() remains the single source of truth for validation and error envelopes.
-(
-  server as unknown as {
-    validateToolInput: (_tool: unknown, args: unknown, _toolName: string) => Promise<unknown>;
-  }
-).validateToolInput = async (_tool: unknown, args: unknown) => args;
-
-// Low-level/expert tools duplicate capability that the six entry tools expose
-// in a single resolve+fetch call. expertTool() registers them exactly like
-// server.tool() but appends a note steering agents to the entry tools first.
-// Entry tools, batch tools, and the NBT/runtime utilities (which have no entry
-// equivalent) keep their plain descriptions via server.tool().
-const EXPERT_TOOL_NOTE =
-  " Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.";
-
-const expertTool: typeof server.tool = ((
-  name: string,
-  description: string,
-  ...rest: unknown[]
-) =>
-  (server.tool as (...args: unknown[]) => unknown)(
-    name,
-    description + EXPERT_TOOL_NOTE,
-    ...rest
-  )) as typeof server.tool;
+// Tool registration goes through src/registration-adapter.ts: a
+// validation-bypassing Standard Schema adapter keeps runTool() the single
+// source of truth for validation and error envelopes, and serves the frozen
+// pre-migration inputSchema bytes (src/v1-parity-schemas.ts) in tools/list.
+// registerExpertTool() appends the expert-tool note to the description.
 
 const config = loadConfig();
 const nbtLimits = {
@@ -455,8 +441,6 @@ const batchSymbolExistsService = new BatchSymbolExistsService({
 const batchMappingsService = new BatchMappingsService({
   findMapping: (input) => sourceService.findMapping(input)
 });
-
-registerResources(server, sourceService);
 
 let processHandlersAttached = false;
 let serverStarted = false;
@@ -744,7 +728,43 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   }
 }
 
-expertTool("list-versions",
+/**
+ * Builds a fully-registered McpServer instance. serveStdio calls its factory
+ * PER INSTANCE, not per connection: a modern `server/discover` opening builds
+ * a probe instance which a following legacy `initialize` DISCARDS
+ * (`product.close()`) before calling the factory again — and the probe path
+ * MUTATES the instance (installModernOnlyHandlers adds "2026-07-28" support
+ * and a server/discover handler). Every call therefore constructs a FRESH
+ * McpServer so probe-instance mutations can never leak onto the re-pinned
+ * legacy instance (frozen negotiate-down contract). Module-scope services,
+ * config, and helpers stay shared; only the McpServer and its registrations
+ * are per-instance. Registration ORDER inside this function is the frozen
+ * tools/list order — do not reorder.
+ *
+ * NOTE: the function body below intentionally keeps the original module-scope
+ * indentation of the registration block to preserve a reviewable minimal diff.
+ */
+// eslint-disable-next-line func-style
+function buildServer(): McpServer {
+const server = new McpServer({
+  name: "@adhisang/minecraft-modding-mcp",
+  version: SERVER_VERSION
+});
+
+registerResources(server, sourceService);
+
+// The app-level schema registry (tool-schema-registry) is register-once and
+// module-scoped: the eager `buildServer()` call at the bottom of this module
+// populates it at load time; re-builds (one per serveStdio instance) skip
+// re-registration so the registry never sees a duplicate.
+const registerToolSchema = (
+  name: string,
+  schema: Parameters<typeof registerToolSchemaInRegistry>[1]
+): void => {
+  if (getToolSchema(name) === undefined) registerToolSchemaInRegistry(name, schema);
+};
+
+registerExpertTool(server, "list-versions",
   "List available Minecraft versions from Mojang manifest and locally cached version jars.",
   listVersionsShape,
   { readOnlyHint: true },
@@ -757,7 +777,7 @@ expertTool("list-versions",
 );
 registerToolSchema("list-versions", listVersionsSchema);
 
-server.tool("inspect-minecraft",
+registerAppTool(server, "inspect-minecraft",
   "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings. Workspace subject.focus is a structured class/file/search object, never a string; task=auto dispatches from subject.kind and focus.kind.",
   inspectMinecraftShape,
   { readOnlyHint: true },
@@ -767,7 +787,7 @@ server.tool("inspect-minecraft",
 );
 registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
-server.tool("analyze-symbol",
+registerAppTool(server, "analyze-symbol",
   "Top-level workflow tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview. subject.kind='symbol' auto-detects class/field/method from the selector.",
   analyzeSymbolShape,
   { readOnlyHint: true },
@@ -777,7 +797,7 @@ server.tool("analyze-symbol",
 );
 registerToolSchema("analyze-symbol", analyzeSymbolSchema);
 
-server.tool("compare-minecraft",
+registerAppTool(server, "compare-minecraft",
   "Top-level workflow tool for version comparisons, class diffs, registry diffs, and migration overviews.",
   compareMinecraftShape,
   { readOnlyHint: true },
@@ -787,7 +807,7 @@ server.tool("compare-minecraft",
 );
 registerToolSchema("compare-minecraft", compareMinecraftSchema);
 
-server.tool("analyze-mod",
+registerAppTool(server, "analyze-mod",
   "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, bytecode-only class member reads, and safe remap previews/applies.",
   analyzeModShape,
   { readOnlyHint: false },
@@ -797,19 +817,19 @@ server.tool("analyze-mod",
 );
 registerToolSchema("analyze-mod", analyzeModSchema);
 
-server.tool("validate-project",
+registerAppTool(server, "validate-project",
   "Top-level workflow tool for project summary, direct mixin validation, and access widener/access transformer validation.",
   validateProjectShape,
   { readOnlyHint: true },
-  async (args, extra) => runTool("validate-project", args, validateProjectSchema, async (input) =>
+  async (args, ctx) => runTool("validate-project", args, validateProjectSchema, async (input) =>
     validateProjectService.execute(input as z.infer<typeof validateProjectSchema>, {
-      stageEmitter: makeStageEmitter(extra as unknown as StageEmitterExtra)
+      stageEmitter: makeStageEmitter(stageEmitterExtraFromCtx(ctx))
     }) as Promise<Record<string, unknown>>
   )
 );
 registerToolSchema("validate-project", validateProjectSchema);
 
-server.tool("manage-cache",
+registerAppTool(server, "manage-cache",
   "Top-level workflow tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
   manageCacheShape,
   { readOnlyHint: false },
@@ -820,7 +840,7 @@ server.tool("manage-cache",
 registerToolSchema("manage-cache", manageCacheSchema);
 
 if (!VERIFY_MIXIN_TARGET_OFF) {
-  server.tool("verify-mixin-target",
+  registerAppTool(server, "verify-mixin-target",
     "Single-call probe: does this target owner / member exist and which @Shadow / @Accessor / @Invoker should the mixin use? Reuses target.kind workspace/version/coordinate/dependency/jar.",
     verifyMixinTargetShape,
     { readOnlyHint: true },
@@ -845,7 +865,7 @@ if (!VERIFY_MIXIN_TARGET_OFF) {
 }
 
 if (!BATCH_TOOLS_OFF) {
-  server.tool("batch-class-source",
+  registerAppTool(server, "batch-class-source",
     "Batch get-class-source for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary. Not read-only: per-entry outputFile writes to disk.",
     batchClassSourceShape,
     { readOnlyHint: false },
@@ -855,7 +875,7 @@ if (!BATCH_TOOLS_OFF) {
   );
   registerToolSchema("batch-class-source", batchClassSourceSchema);
 
-  server.tool("batch-class-members",
+  registerAppTool(server, "batch-class-members",
     "Batch get-class-members for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary.",
     batchClassMembersShape,
     { readOnlyHint: true },
@@ -865,7 +885,7 @@ if (!BATCH_TOOLS_OFF) {
   );
   registerToolSchema("batch-class-members", batchClassMembersSchema);
 
-  server.tool("batch-symbol-exists",
+  registerAppTool(server, "batch-symbol-exists",
     "Batch check-symbol-exists for many symbols against one shared Minecraft version (target.kind=version or workspace only).",
     batchSymbolExistsShape,
     { readOnlyHint: true },
@@ -875,7 +895,7 @@ if (!BATCH_TOOLS_OFF) {
   );
   registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
 
-  server.tool("batch-mappings",
+  registerAppTool(server, "batch-mappings",
     "Batch find-mapping: resolve many symbols across mapping namespaces with one shared Minecraft version.",
     batchMappingsShape,
     { readOnlyHint: true },
@@ -886,7 +906,7 @@ if (!BATCH_TOOLS_OFF) {
   registerToolSchema("batch-mappings", batchMappingsSchema);
 }
 
-expertTool("resolve-artifact",
+registerExpertTool(server, "resolve-artifact",
   "Resolve a source artifact and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted.",
   resolveArtifactShape,
   { readOnlyHint: true },
@@ -938,7 +958,7 @@ async function resolveFlatArtifactId(input: {
   return resolved.artifactId;
 }
 
-expertTool("find-class",
+registerExpertTool(server, "find-class",
   "Resolve a simple or qualified class name to fully-qualified class names within an artifact. Use this before get-class-source when you only have a simple name.",
   findClassShape,
   { readOnlyHint: true },
@@ -952,7 +972,7 @@ expertTool("find-class",
 );
 registerToolSchema("find-class", findClassSchema);
 
-expertTool("get-class-source",
+registerExpertTool(server, "get-class-source",
   "Get Java source for a class. Default mode=metadata returns a symbol outline only; pass mode=snippet or mode=full to read source text. Not read-only: outputFile writes to disk.",
   getClassSourceShape,
   { readOnlyHint: false },
@@ -983,7 +1003,7 @@ expertTool("get-class-source",
 );
 registerToolSchema("get-class-source", getClassSourceSchema);
 
-expertTool("get-class-members",
+registerExpertTool(server, "get-class-members",
   "Get fields/methods/constructors for one class from binary bytecode.",
   getClassMembersShape,
   { readOnlyHint: true },
@@ -1020,7 +1040,7 @@ expertTool("get-class-members",
 );
 registerToolSchema("get-class-members", getClassMembersSchema);
 
-expertTool("search-class-source",
+registerExpertTool(server, "search-class-source",
   "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output.",
   searchClassSourceShape,
   { readOnlyHint: true },
@@ -1057,7 +1077,7 @@ expertTool("search-class-source",
 );
 registerToolSchema("search-class-source", searchClassSourceSchema);
 
-expertTool("get-artifact-file",
+registerExpertTool(server, "get-artifact-file",
   "Get full source file content by artifactId and file path.",
   getArtifactFileShape,
   { readOnlyHint: true },
@@ -1071,7 +1091,7 @@ expertTool("get-artifact-file",
 );
 registerToolSchema("get-artifact-file", getArtifactFileSchema);
 
-expertTool("list-artifact-files",
+registerExpertTool(server, "list-artifact-files",
   "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
   listArtifactFilesShape,
   { readOnlyHint: true },
@@ -1086,7 +1106,7 @@ expertTool("list-artifact-files",
 );
 registerToolSchema("list-artifact-files", listArtifactFilesSchema);
 
-expertTool("trace-symbol-lifecycle",
+registerExpertTool(server, "trace-symbol-lifecycle",
   "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
   traceSymbolLifecycleShape,
   { readOnlyHint: true },
@@ -1107,7 +1127,7 @@ expertTool("trace-symbol-lifecycle",
 );
 registerToolSchema("trace-symbol-lifecycle", traceSymbolLifecycleSchema);
 
-expertTool("diff-class-signatures",
+registerExpertTool(server, "diff-class-signatures",
   "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
   diffClassSignaturesShape,
   { readOnlyHint: true },
@@ -1125,7 +1145,7 @@ expertTool("diff-class-signatures",
 );
 registerToolSchema("diff-class-signatures", diffClassSignaturesSchema);
 
-expertTool("find-mapping",
+registerExpertTool(server, "find-mapping",
   "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
   findMappingShape,
   { readOnlyHint: true },
@@ -1149,7 +1169,7 @@ expertTool("find-mapping",
 );
 registerToolSchema("find-mapping", findMappingSchema);
 
-expertTool("resolve-method-mapping-exact",
+registerExpertTool(server, "resolve-method-mapping-exact",
   "Strict variant of find-mapping(kind=method, signatureMode=exact): requires a COMPLETE descriptor projection and returns mapping_unavailable when any descriptor class reference cannot be projected. Prefer find-mapping unless you need that guarantee.",
   resolveMethodMappingExactShape,
   { readOnlyHint: true },
@@ -1169,7 +1189,7 @@ expertTool("resolve-method-mapping-exact",
 );
 registerToolSchema("resolve-method-mapping-exact", resolveMethodMappingExactSchema);
 
-expertTool("get-class-api-matrix",
+registerExpertTool(server, "get-class-api-matrix",
   "List class/member API rows across obfuscated/mojang/intermediary/yarn mappings for one class and Minecraft version.",
   getClassApiMatrixShape,
   { readOnlyHint: true },
@@ -1188,7 +1208,7 @@ expertTool("get-class-api-matrix",
 );
 registerToolSchema("get-class-api-matrix", getClassApiMatrixSchema);
 
-expertTool("resolve-workspace-symbol",
+registerExpertTool(server, "resolve-workspace-symbol",
   "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
   resolveWorkspaceSymbolShape,
   { readOnlyHint: true },
@@ -1209,7 +1229,7 @@ expertTool("resolve-workspace-symbol",
 );
 registerToolSchema("resolve-workspace-symbol", resolveWorkspaceSymbolSchema);
 
-expertTool("check-symbol-exists",
+registerExpertTool(server, "check-symbol-exists",
   "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
   checkSymbolExistsShape,
   { readOnlyHint: true },
@@ -1231,7 +1251,7 @@ expertTool("check-symbol-exists",
 );
 registerToolSchema("check-symbol-exists", checkSymbolExistsSchema);
 
-server.tool("nbt-to-json",
+registerAppTool(server, "nbt-to-json",
   "Decode Java Edition NBT binary payload (base64) into typed JSON.",
   nbtToJsonShape,
   { readOnlyHint: true, openWorldHint: false },
@@ -1246,7 +1266,7 @@ server.tool("nbt-to-json",
 );
 registerToolSchema("nbt-to-json", nbtToJsonSchema);
 
-server.tool("nbt-apply-json-patch",
+registerAppTool(server, "nbt-apply-json-patch",
   "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
   nbtApplyJsonPatchShape,
   { readOnlyHint: true, openWorldHint: false },
@@ -1261,7 +1281,7 @@ server.tool("nbt-apply-json-patch",
 );
 registerToolSchema("nbt-apply-json-patch", nbtApplyJsonPatchSchema);
 
-server.tool("json-to-nbt",
+registerAppTool(server, "json-to-nbt",
   "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
   jsonToNbtShape,
   { readOnlyHint: true, openWorldHint: false },
@@ -1276,7 +1296,7 @@ server.tool("json-to-nbt",
 );
 registerToolSchema("json-to-nbt", jsonToNbtSchema);
 
-expertTool("index-artifact",
+registerExpertTool(server, "index-artifact",
   "Rebuild indexed files/symbols metadata for an artifact addressed by artifactId or target. A new target is resolved and ingested first; force rebuilds an existing index.",
   indexArtifactShape,
   { readOnlyHint: false, idempotentHint: true },
@@ -1289,8 +1309,9 @@ expertTool("index-artifact",
 );
 registerToolSchema("index-artifact", indexArtifactSchema);
 
-server.tool("get-runtime-metrics",
+registerAppTool(server, "get-runtime-metrics",
   "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
+  {},
   { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("get-runtime-metrics", args, emptySchema, async () =>
     Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
@@ -1298,11 +1319,11 @@ server.tool("get-runtime-metrics",
 );
 registerToolSchema("get-runtime-metrics", emptySchema);
 
-expertTool("validate-mixin",
+registerExpertTool(server, "validate-mixin",
   "Validate Mixin source against Minecraft bytecode signatures for a given version.",
   validateMixinShape,
   { readOnlyHint: true },
-  async (args, extra) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
+  async (args, ctx) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
     sourceService.validateMixin({
       input: input.input,
       sourceRoots: input.sourceRoots,
@@ -1323,13 +1344,13 @@ expertTool("validate-mixin",
       treatInfoAsWarning: input.treatInfoAsWarning,
       includeIssues: input.includeIssues
     }, {
-      stageEmitter: makeStageEmitter(extra as unknown as StageEmitterExtra)
+      stageEmitter: makeStageEmitter(stageEmitterExtraFromCtx(ctx))
     }) as Promise<Record<string, unknown>>
   )
 );
 registerToolSchema("validate-mixin", validateMixinSchema);
 
-expertTool("validate-access-widener",
+registerExpertTool(server, "validate-access-widener",
   "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
   validateAccessWidenerShape,
   { readOnlyHint: true },
@@ -1348,7 +1369,7 @@ expertTool("validate-access-widener",
 );
 registerToolSchema("validate-access-widener", validateAccessWidenerSchema);
 
-expertTool("validate-access-transformer",
+registerExpertTool(server, "validate-access-transformer",
   "Validate Access Transformer file entries against Minecraft bytecode signatures for a given version.",
   validateAccessTransformerShape,
   { readOnlyHint: true },
@@ -1367,7 +1388,7 @@ expertTool("validate-access-transformer",
 );
 registerToolSchema("validate-access-transformer", validateAccessTransformerSchema);
 
-expertTool("analyze-mod-jar",
+registerExpertTool(server, "analyze-mod-jar",
   "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
   analyzeModJarShape,
   { readOnlyHint: true },
@@ -1380,7 +1401,7 @@ expertTool("analyze-mod-jar",
 );
 registerToolSchema("analyze-mod-jar", analyzeModJarSchema);
 
-server.tool("get-registry-data",
+registerAppTool(server, "get-registry-data",
   "Get Minecraft registry data (blocks, items, biomes, etc.) for a specific version by running the server data generator.",
   getRegistryDataShape,
   { readOnlyHint: true },
@@ -1395,7 +1416,7 @@ server.tool("get-registry-data",
 );
 registerToolSchema("get-registry-data", getRegistryDataSchema);
 
-expertTool("compare-versions",
+registerExpertTool(server, "compare-versions",
   "Compare two Minecraft versions to find added/removed classes and registry entry changes.",
   compareVersionsShape,
   { readOnlyHint: true },
@@ -1411,7 +1432,7 @@ expertTool("compare-versions",
 );
 registerToolSchema("compare-versions", compareVersionsSchema);
 
-expertTool("decompile-mod-jar",
+registerExpertTool(server, "decompile-mod-jar",
   "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar.",
   decompileModJarShape,
   { readOnlyHint: true },
@@ -1426,7 +1447,7 @@ expertTool("decompile-mod-jar",
 );
 registerToolSchema("decompile-mod-jar", decompileModJarSchema);
 
-expertTool("get-mod-class-source",
+registerExpertTool(server, "get-mod-class-source",
   "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached. Not read-only: outputFile writes the source to disk.",
   getModClassSourceShape,
   { readOnlyHint: false },
@@ -1442,7 +1463,7 @@ expertTool("get-mod-class-source",
 );
 registerToolSchema("get-mod-class-source", getModClassSourceSchema);
 
-expertTool("search-mod-source",
+registerExpertTool(server, "search-mod-source",
   "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
   searchModSourceShape,
   { readOnlyHint: true },
@@ -1457,7 +1478,7 @@ expertTool("search-mod-source",
 );
 registerToolSchema("search-mod-source", searchModSourceSchema);
 
-expertTool("remap-mod-jar",
+registerExpertTool(server, "remap-mod-jar",
   "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
   remapModJarShape,
   { readOnlyHint: false },
@@ -1477,6 +1498,49 @@ expertTool("remap-mod-jar",
 );
 registerToolSchema("remap-mod-jar", remapModJarSchema);
 
+return server;
+}
+
+/**
+ * Module-scope singleton: populates the register-once tool-schema registry at
+ * load time and serves in-process consumers (tests drive its request handlers
+ * directly). The stdio wire path does NOT serve this instance — serveStdio's
+ * factory builds a fresh one per pinned/probe instance (see buildServer).
+ */
+const server = buildServer();
+
+/**
+ * The worker's wire transport, kept module-scoped so per-request stage
+ * emitters can write `$/stageUpdate` notifications directly onto the wire
+ * (the v2 ServerContext exposes no raw sendNotification). Set once by
+ * startServer(); undefined outside stdio worker mode, in which case
+ * makeStageEmitter() NOOPs exactly as before.
+ */
+let workerTransport: CompatStdioServerTransport | undefined;
+
+/**
+ * Builds the makeStageEmitter() argument from a v2 ServerContext: the
+ * JSON-RPC request id comes from ctx.mcpReq.id and delivery goes through the
+ * module-scoped worker transport. Returns undefined (NOOP emitter) when the
+ * transport is not up or the id is not a wire-correlatable string/number.
+ */
+function stageEmitterExtraFromCtx(ctx: ServerContext): StageEmitterExtra | undefined {
+  const transport = workerTransport;
+  const requestId = ctx.mcpReq?.id;
+  if (!transport || (typeof requestId !== "string" && typeof requestId !== "number")) {
+    return undefined;
+  }
+  return {
+    requestId,
+    sendNotification: (notification) =>
+      transport.send({
+        jsonrpc: "2.0",
+        method: notification.method,
+        ...(notification.params !== undefined ? { params: notification.params } : {})
+      } as JSONRPCMessage)
+  };
+}
+
 export async function startServer(): Promise<void> {
   if (serverStarted) {
     return;
@@ -1489,7 +1553,18 @@ export async function startServer(): Promise<void> {
     sourceRepos: config.sourceRepos.length
   });
   const transport = new CompatStdioServerTransport();
-  await server.connect(transport);
+  workerTransport = transport;
+  // serveStdio owns the connection and calls the factory PER INSTANCE: a
+  // modern server/discover opening builds a probe instance that a following
+  // legacy initialize discards and replaces via a second factory call. The
+  // probe path mutates its instance (modern-only handlers + protocol
+  // versions), so the factory MUST build a fresh McpServer each time — never
+  // the module-scope singleton — or probe mutations would leak onto the
+  // re-pinned legacy instance and break the negotiate-down contract. The
+  // transport is started synchronously inside serveStdio, so resolving here
+  // keeps the READY marker contract: the worker is listening once
+  // startServer() returns.
+  serveStdio(buildServer, { maxSubscriptions: 0, transport });
   // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
   process.stdin.resume();
   serverStarted = true;

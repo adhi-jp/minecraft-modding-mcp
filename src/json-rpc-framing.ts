@@ -1,4 +1,4 @@
-import { JSONRPCMessageSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { parseJSONRPCMessage, type JSONRPCMessage } from "@modelcontextprotocol/server";
 
 const DEFAULT_MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const MIN_MAX_FRAME_BYTES = 1024 * 1024;
@@ -32,7 +32,7 @@ function findHeaderBoundary(buffer: Buffer): HeaderBoundary | undefined {
 }
 
 function parseJsonRpcMessage(json: string): JSONRPCMessage {
-  return JSONRPCMessageSchema.parse(JSON.parse(json));
+  return parseJSONRPCMessage(JSON.parse(json));
 }
 
 function asError(value: unknown): Error {
@@ -299,8 +299,12 @@ export class JsonRpcFrameReader {
       }
 
       if (/^\s*content-length\s*:/i.test(line)) {
-        const separator = this.buffer.length > 0 && this.buffer[0] === 0x0d ? "\r\n" : "\n";
-        this.buffer = Buffer.concat([Buffer.from(`${line}${separator}`, "utf8"), this.buffer]);
+        // Always re-inject with CRLF: choosing the separator from the next
+        // buffered byte raced byte-granular chunking (the peer's \r may not
+        // have arrived yet, yielding a "\n\r\n" boundary findHeaderBoundary
+        // cannot see). With CRLF both peer styles stay recognizable:
+        // "...\r\n" + "\r\n…" → "\r\n\r\n", "...\r\n" + "\n…" → "\n\n".
+        this.buffer = Buffer.concat([Buffer.from(`${line}\r\n`, "utf8"), this.buffer]);
         this.mode = "content-length";
         return undefined;
       }
@@ -311,6 +315,43 @@ export class JsonRpcFrameReader {
 
   private readContentLengthMessage(): JSONRPCMessage | undefined {
     this.awaitedFrameEnd = -1;
+
+    // Skip blank separator lines between frames so the mid-stream mode check
+    // below sees the first byte of the next frame.
+    while (this.buffer.length > 0) {
+      if (this.buffer[0] === 0x0a) {
+        this.buffer = this.buffer.subarray(1);
+        continue;
+      }
+      if (this.buffer.length >= 2 && this.buffer[0] === 0x0d && this.buffer[1] === 0x0a) {
+        this.buffer = this.buffer.subarray(2);
+        continue;
+      }
+      break;
+    }
+
+    // Mirror of the line→content-length switch in readLineDelimitedMessage:
+    // a JSON object opener can never begin a Content-Length header block, so
+    // this is a line-delimited frame arriving after a Content-Length frame.
+    // Peek past leading whitespace (pure line mode tolerates it: blank lines
+    // are skipped and JSON.parse accepts a whitespace-prefixed line) without
+    // consuming it, then switch modes and let processChunk re-dispatch the
+    // buffered bytes, so every frame is delivered with its own true mode.
+    let probeIndex = 0;
+    while (
+      probeIndex < this.buffer.length &&
+      (this.buffer[probeIndex] === 0x20 ||
+        this.buffer[probeIndex] === 0x09 ||
+        this.buffer[probeIndex] === 0x0d ||
+        this.buffer[probeIndex] === 0x0a)
+    ) {
+      probeIndex += 1;
+    }
+    if (probeIndex < this.buffer.length && this.buffer[probeIndex] === 0x7b /* '{' */) {
+      this.mode = "line";
+      return undefined;
+    }
+
     const headerBoundary = findHeaderBoundary(this.buffer);
     if (!headerBoundary) {
       return undefined;

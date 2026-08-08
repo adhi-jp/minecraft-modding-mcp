@@ -6,7 +6,7 @@ import type {
   JSONRPCNotification,
   JSONRPCRequest,
   JSONRPCResponse
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "./json-rpc-framing.js";
 import { log } from "./logger.js";
@@ -187,6 +187,15 @@ export type PendingRequestSnapshot = {
   /** `true` when toolArgsRedacted contains sentinel placeholders (truncate/redact/overflow). */
   toolArgsRedactedModified?: boolean;
   startedAt: number;
+  /**
+   * Framing mode of the inbound frame that carried this request, captured at
+   * admission. Every terminal client-bound write for this request (forwarded
+   * worker response, timeout/queue-limit/restart synthesis) uses THIS mode —
+   * never the connection's latest inbound mode. Retained for the pending
+   * entry's whole lifetime (including client-cancelled tombstones) until the
+   * entry is discarded.
+   */
+  mode?: ConcreteFramingMode;
   lastStage?: string;
   lastStageStartedAt?: number;
   lastStageMeta?: unknown;
@@ -734,7 +743,22 @@ export class StdioSupervisor {
   private currentRetryReservation: RestartReservation | undefined;
   private retryPaused = false;
   private workerStderrBuffer = "";
-  private clientMode: ConcreteFramingMode = DEFAULT_CLIENT_MODE;
+  /**
+   * Framing mode of the most recently detected inbound client frame. NOT used
+   * for request-correlated writes (those use the originating request's
+   * captured mode); this is only the documented fallback for client-bound
+   * writes that correlate to no request id (worker-originated notifications
+   * and server->client requests forwarded at handleWorkerMessage, and late
+   * responses whose pending entry was already discarded).
+   */
+  private lastInboundClientMode: ConcreteFramingMode = DEFAULT_CLIENT_MODE;
+  /**
+   * Per-frame framing mode of every inbound client message, keyed by message
+   * object identity. Lets admission (createPendingRequest), queued-message
+   * flushes, and initialize replay recover the ORIGINATING frame's mode long
+   * after the frame was parsed.
+   */
+  private readonly inboundFrameModes = new WeakMap<object, ConcreteFramingMode>();
   private initializeRequest: JSONRPCRequest | undefined;
   private initializedNotification: JSONRPCNotification | undefined;
   private clientInitialized = false;
@@ -787,7 +811,8 @@ export class StdioSupervisor {
   private readonly handleClientData = (chunk: Buffer): void => {
     this.clientReader.processChunk(chunk, {
       onFrame: ({ message, mode }) => {
-        this.clientMode = mode;
+        this.inboundFrameModes.set(message as object, mode);
+        this.lastInboundClientMode = mode;
         this.handleClientMessage(message);
       },
       onError: (error) => {
@@ -795,6 +820,11 @@ export class StdioSupervisor {
       }
     });
   };
+
+  /** The captured per-frame mode of an inbound client message, if known. */
+  private modeForMessage(message: JSONRPCMessage | undefined): ConcreteFramingMode | undefined {
+    return message === undefined ? undefined : this.inboundFrameModes.get(message as object);
+  }
 
   private readonly handleClientError = (error: Error): void => {
     log("warn", "supervisor.client_stream_error", { message: error.message });
@@ -849,7 +879,7 @@ export class StdioSupervisor {
     if (message.method === "initialize") {
       if (!this.child && this.liveCapOccupancy() >= 2) {
         this.clearInitialInitializationState();
-        this.writeToClient(buildLegacyJsonRpcError(message.id as RequestId));
+        this.writeToClient(buildLegacyJsonRpcError(message.id as RequestId), this.modeForMessage(message));
         return;
       }
       if (this.childReady) {
@@ -873,13 +903,16 @@ export class StdioSupervisor {
         [],
         { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
       );
-      this.writeToClient(reply);
+      this.writeToClient(reply, pending.mode);
       return;
     }
     const isValidate = pending.toolName === "validate-project";
     const dispatchImmediately = this.canDispatchImmediately(pending);
     if (!dispatchImmediately && this.queuedRequests.length >= MAX_SUPERVISOR_QUEUE) {
-      this.writeToClient(buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method));
+      this.writeToClient(
+        buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method),
+        pending.mode
+      );
       this.drainQueue();
       return;
     }
@@ -908,7 +941,8 @@ export class StdioSupervisor {
     const pending: PendingRequest = {
       id: message.id as RequestId,
       method: message.method,
-      startedAt: this.monotonicNow()
+      startedAt: this.monotonicNow(),
+      mode: this.modeForMessage(message)
     };
     if (message.method === "tools/call") {
       const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
@@ -941,7 +975,10 @@ export class StdioSupervisor {
         this.queuedRequests.push({ message, pending });
       } else {
         if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
-        this.writeToClient(buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method));
+        this.writeToClient(
+          buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method),
+          pending.mode
+        );
       }
       this.scheduleRestart();
       return;
@@ -1010,7 +1047,7 @@ export class StdioSupervisor {
           deadlineMs: this.validateProjectTimeoutMs,
           now: this.monotonicNow(),
           workerRestartInitiated: false
-        }));
+        }), pending.mode);
       }
       this.drainQueue();
       return;
@@ -1029,7 +1066,7 @@ export class StdioSupervisor {
         deadlineMs: this.validateProjectTimeoutMs,
         now: this.monotonicNow(),
         workerRestartInitiated: true
-      }));
+      }), pending.mode);
     }
     this.recoverTimedOutWorker();
   }
@@ -1242,13 +1279,17 @@ export class StdioSupervisor {
 
     if (this.isInitializationResponse(message)) {
       const id = getTrackedRequestId(message);
+      let initializeMode: ConcreteFramingMode | undefined;
       if (id !== undefined) {
-        this.pendingRequests.delete(requestKey(id));
+        const key = requestKey(id);
+        initializeMode = this.pendingRequests.get(key)?.mode;
+        this.pendingRequests.delete(key);
       }
+      initializeMode ??= this.modeForMessage(this.initializeRequest);
 
       if ("error" in message) {
         if (!this.replayingInitialization && id !== undefined) {
-          this.writeToClient(buildLegacyJsonRpcError(id));
+          this.writeToClient(buildLegacyJsonRpcError(id), initializeMode);
           const retainedIndex = this.queuedNotifications.findIndex(
             (entry) => isRequest(entry) && requestKey(entry.id as RequestId) === requestKey(id)
           );
@@ -1275,16 +1316,21 @@ export class StdioSupervisor {
 
       this.clientInitialized = true;
       this.adoptActiveChild();
-      this.writeToClient(message);
+      this.writeToClient(message, initializeMode);
       this.flushQueue();
       return;
     }
 
+    // Worker messages that correlate to no tracked request (server-originated
+    // notifications/requests, late responses whose pending entry was already
+    // discarded) fall back to the last-detected inbound mode in writeToClient.
+    let responseMode: ConcreteFramingMode | undefined;
     if (isResponse(message)) {
       const id = getTrackedRequestId(message);
       if (id !== undefined) {
         const key = requestKey(id);
         const pending = this.pendingRequests.get(key);
+        responseMode = pending?.mode;
         this.pendingRequests.delete(key);
         if (pending?.deadlineTimer) this.timerClearer(pending.deadlineTimer);
         if (pending?.toolName === "validate-project") {
@@ -1298,7 +1344,7 @@ export class StdioSupervisor {
       }
     }
 
-    this.writeToClient(message);
+    this.writeToClient(message, responseMode);
     this.drainQueue();
   }
 
@@ -1430,23 +1476,29 @@ export class StdioSupervisor {
         pruned,
         { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
       );
-      this.writeToClient(reply);
+      this.writeToClient(reply, pending.mode);
     }
   }
 
-  private writeToClient(message: JSONRPCMessage): void {
+  /**
+   * Writes one client-bound message. `mode` is the ORIGINATING REQUEST's
+   * captured framing; callers omit it only for writes that correlate to no
+   * request id, which fall back to the last-detected inbound mode.
+   */
+  private writeToClient(message: JSONRPCMessage, mode?: ConcreteFramingMode): void {
+    const effectiveMode = mode ?? this.lastInboundClientMode;
     debugSupervisor("write_to_client", {
       hasMethod: "method" in message,
       method: "method" in message ? message.method : undefined,
       id: "id" in message ? message.id : undefined,
-      clientMode: this.clientMode
+      clientMode: effectiveMode
     });
     try {
       if (this.clientWriter) {
         this.clientWriter(message);
         return;
       }
-      const frame = encodeJsonRpcMessage(message, this.clientMode);
+      const frame = encodeJsonRpcMessage(message, effectiveMode);
       process.stdout.write(frame);
     } catch (error) {
       this.eventWriter("warn", "supervisor.client_write_error", {
@@ -1736,14 +1788,17 @@ export class StdioSupervisor {
       const { reply } = buildWorkerRestartReply(pending, exit, now, [], {
         structuredRestartDisabled: STRUCTURED_RESTART_DISABLED
       });
-      this.writeToClient(reply);
+      this.writeToClient(reply, pending.mode);
     }
     const retainedInitialize = this.queuedNotifications.find(
       (message) => isRequest(message) && message.method === "initialize"
     );
     this.queuedNotifications.splice(0, this.queuedNotifications.length);
     if (retainedInitialize && isRequest(retainedInitialize)) {
-      this.writeToClient(buildLegacyJsonRpcError(retainedInitialize.id as RequestId));
+      this.writeToClient(
+        buildLegacyJsonRpcError(retainedInitialize.id as RequestId),
+        this.modeForMessage(retainedInitialize)
+      );
     }
     this.clearInitialInitializationState();
     this.validateBarrierKey = undefined;

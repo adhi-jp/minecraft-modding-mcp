@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 
 import { CompatStdioServerTransport } from "../../src/compat-stdio-transport.ts";
 

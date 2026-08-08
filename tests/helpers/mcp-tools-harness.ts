@@ -21,6 +21,28 @@ export type RequestHandler = (
   extra: Record<string, unknown>
 ) => Promise<unknown>;
 
+/**
+ * Minimal v2-compatible ServerContext stand-in for driving the SDK-internal
+ * request handlers directly. The v2 handler wrapper unconditionally reads
+ * `ctx.mcpReq` (requestState()/signal/id/method), which the v1-era `{}` extra
+ * no longer satisfies.
+ */
+export function buildTestContext(method: string, id = 1): Record<string, unknown> {
+  return {
+    mcpReq: {
+      id,
+      method,
+      requestState: () => undefined,
+      signal: new AbortController().signal,
+      send: async () => {
+        throw new Error("test harness context does not support server->client requests");
+      },
+      notify: async () => {},
+      log: async () => {}
+    }
+  };
+}
+
 export type ToolSchema = {
   name: string;
   inputSchema: Record<string, unknown>;
@@ -38,7 +60,7 @@ export async function listTools(): Promise<ToolSchema[]> {
   const handler = await getRequestHandler("tools/list");
   const response = await handler(
     { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    {}
+    buildTestContext("tools/list")
   ) as { tools: ToolSchema[] };
 
   return response.tools;
@@ -56,6 +78,6 @@ export async function callTool(name: string, args: Record<string, unknown>): Pro
         arguments: args
       }
     },
-    {}
+    buildTestContext("tools/call")
   );
 }

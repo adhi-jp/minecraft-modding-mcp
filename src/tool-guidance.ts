@@ -71,12 +71,274 @@ export const VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES = ["detectedConfig", "mi
 export const VALIDATION_FALLBACK_HINT =
   "suggested call payload failed schema validation; using fallback examples";
 
-export function toFieldErrorsFromZod(error: ZodError): ProblemFieldError[] {
-  return error.issues.map((issue) => ({
-    path: issue.path.join(".") || "$",
-    message: issue.message,
-    code: issue.code
-  }));
+// ---------------------------------------------------------------------------
+// zod3-parity ProblemDetails formatting layer
+//
+// The public `fieldErrors` bytes are a frozen contract pinned by
+// tests/fixtures/premigration/problemdetails/*.json, captured under zod 3.
+// zod 4 renamed codes (invalid_enum_value -> invalid_value, discriminated
+// invalid_union_discriminator -> invalid_union) and rewrote every default
+// message. This layer reconstructs the zod3 code names and default message
+// texts from zod4's STRUCTURED issue fields, as a pure function of the issue
+// objects plus the (explicitly passed) original parse input. Custom messages
+// (anything not matching a zod4 default pattern) pass through unchanged, the
+// same way zod3 surfaced them.
+// ---------------------------------------------------------------------------
+
+type Zod4Issue = {
+  code?: string;
+  message: string;
+  path: PropertyKey[];
+  expected?: string;
+  values?: unknown[];
+  keys?: string[];
+  origin?: string;
+  minimum?: number | bigint;
+  maximum?: number | bigint;
+  inclusive?: boolean;
+  exact?: boolean;
+  note?: string;
+  options?: unknown[];
+  divisor?: number;
+  format?: string;
+  prefix?: string;
+  suffix?: string;
+  includes?: string;
+  input?: unknown;
+};
+
+/** zod3's getParsedType vocabulary for `received` words. */
+function zod3ParsedType(data: unknown): string {
+  switch (typeof data) {
+    case "undefined":
+      return "undefined";
+    case "string":
+      return "string";
+    case "number":
+      return Number.isNaN(data) ? "nan" : "number";
+    case "boolean":
+      return "boolean";
+    case "function":
+      return "function";
+    case "bigint":
+      return "bigint";
+    case "symbol":
+      return "symbol";
+    case "object":
+      if (data === null) return "null";
+      if (Array.isArray(data)) return "array";
+      if (typeof (data as { then?: unknown }).then === "function") return "promise";
+      if (data instanceof Map) return "map";
+      if (data instanceof Set) return "set";
+      if (data instanceof Date) return "date";
+      return "object";
+    default:
+      return "unknown";
+  }
+}
+
+/** zod3's util.joinValues: single-quote strings, stringify the rest. */
+function zod3JoinValues(values: unknown[], separator = " | "): string {
+  return values
+    .map((value) => (typeof value === "string" ? `'${value}'` : String(value)))
+    .join(separator);
+}
+
+function valueAtPath(root: unknown, path: PropertyKey[]): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<PropertyKey, unknown>)[segment];
+  }
+  return current;
+}
+
+function zod3SizeMessage(issue: Zod4Issue, kind: "small" | "big"): string | undefined {
+  const origin = issue.origin === "int" ? "number" : issue.origin;
+  const limit = kind === "small" ? issue.minimum : issue.maximum;
+  if (limit === undefined) return undefined;
+  const inclusive = issue.inclusive !== false;
+  const exact = issue.exact === true;
+  switch (origin) {
+    case "array":
+    case "set":
+      return kind === "small"
+        ? `Array must contain ${exact ? "exactly" : inclusive ? "at least" : "more than"} ${limit} element(s)`
+        : `Array must contain ${exact ? "exactly" : inclusive ? "at most" : "less than"} ${limit} element(s)`;
+    case "string":
+      return kind === "small"
+        ? `String must contain ${exact ? "exactly" : inclusive ? "at least" : "over"} ${limit} character(s)`
+        : `String must contain ${exact ? "exactly" : inclusive ? "at most" : "under"} ${limit} character(s)`;
+    case "number":
+      return kind === "small"
+        ? `Number must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${limit}`
+        : `Number must be ${exact ? "exactly" : inclusive ? "less than or equal to" : "less than"} ${limit}`;
+    case "bigint":
+      return kind === "small"
+        ? `BigInt must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${limit}`
+        : `BigInt must be ${exact ? "exactly" : inclusive ? "less than or equal to" : "less than"} ${limit}`;
+    case "date":
+      return kind === "small"
+        ? `Date must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${new Date(Number(limit))}`
+        : `Date must be ${exact ? "exactly" : inclusive ? "smaller than or equal to" : "smaller than"} ${new Date(Number(limit))}`;
+    default:
+      return undefined;
+  }
+}
+
+const ZOD4_INVALID_TYPE_RE = /^Invalid input: expected (\S+), received (.+)$/;
+const ZOD4_ENUM_RE = /^Invalid option: expected one of /;
+const ZOD4_LITERAL_RE = /^Invalid input: expected \S+$/;
+const ZOD4_TOO_SMALL_RE = /^Too small: /;
+const ZOD4_TOO_BIG_RE = /^Too big: /;
+const ZOD4_UNRECOGNIZED_RE = /^Unrecognized keys?: /;
+
+/**
+ * Maps one zod4 issue to its zod3-era {code, message}. Issues whose message
+ * does not match the zod4 default pattern carry app-supplied custom text and
+ * pass through unchanged (zod3 surfaced custom messages verbatim too).
+ * `hasInput`/`rawInput` supply the original parse input for the `received`
+ * clauses zod4 no longer records on the issue.
+ */
+function toZod3ParityIssue(
+  issue: Zod4Issue,
+  rawInput: unknown,
+  hasInput: boolean
+): { code: string; message: string } {
+  const code = issue.code ?? "custom";
+  const receivedValue = (): { known: boolean; value: unknown } => {
+    if ("input" in issue) return { known: true, value: issue.input };
+    if (hasInput) return { known: true, value: valueAtPath(rawInput, issue.path) };
+    return { known: false, value: undefined };
+  };
+
+  switch (code) {
+    case "invalid_type": {
+      const match = ZOD4_INVALID_TYPE_RE.exec(issue.message);
+      if (!match) return { code, message: issue.message };
+      const received = receivedValue();
+      const receivedWord = received.known
+        ? zod3ParsedType(received.value)
+        : match[2] === "NaN"
+          ? "nan"
+          : match[2];
+      if (receivedWord === "undefined") {
+        return { code, message: "Required" };
+      }
+      // zod3's .int() check emitted the hardcoded pair "integer"/"float"
+      // (ZodNumber._parse), not the parsed-type vocabulary. zod4 reports
+      // expected "int" and a plain "number" received.
+      if ((issue.expected ?? match[1]) === "int") {
+        const isNonIntegerNumber =
+          received.known && typeof received.value === "number" && !Number.isInteger(received.value);
+        if (isNonIntegerNumber || (!received.known && match[2] === "number")) {
+          return { code, message: "Expected integer, received float" };
+        }
+        return { code, message: `Expected integer, received ${receivedWord}` };
+      }
+      return { code, message: `Expected ${issue.expected ?? match[1]}, received ${receivedWord}` };
+    }
+    case "invalid_value": {
+      const values = issue.values ?? [];
+      // zod3 reported a MISSING enum/literal field as invalid_type/"Required"
+      // (the type check on `undefined` fired before value matching); zod4
+      // folds it into invalid_value. Restore the zod3 classification.
+      const missing = receivedValue();
+      if (missing.known && missing.value === undefined) {
+        return { code: "invalid_type", message: "Required" };
+      }
+      // zod3's ZodEnum type-checked BEFORE value matching: a non-string
+      // received value produced invalid_type with the joined options as the
+      // "expected" word and the parsed type as "received".
+      if (values.length > 1 && missing.known && typeof missing.value !== "string") {
+        return {
+          code: "invalid_type",
+          message: `Expected ${zod3JoinValues(values)}, received ${zod3ParsedType(missing.value)}`
+        };
+      }
+      if (values.length > 1 && ZOD4_ENUM_RE.test(issue.message)) {
+        const received = receivedValue();
+        return {
+          code: "invalid_enum_value",
+          message: `Invalid enum value. Expected ${zod3JoinValues(values)}, received '${String(received.value)}'`
+        };
+      }
+      if (values.length === 1 && ZOD4_LITERAL_RE.test(issue.message)) {
+        return {
+          code: "invalid_literal",
+          message: `Invalid literal value, expected ${JSON.stringify(values[0])}`
+        };
+      }
+      return { code: values.length > 1 ? "invalid_enum_value" : "invalid_literal", message: issue.message };
+    }
+    case "invalid_union": {
+      if (issue.note === "No matching discriminator") {
+        return {
+          code: "invalid_union_discriminator",
+          message: Array.isArray(issue.options)
+            ? `Invalid discriminator value. Expected ${zod3JoinValues(issue.options)}`
+            : issue.message
+        };
+      }
+      return { code, message: issue.message === "Invalid input" ? "Invalid input" : issue.message };
+    }
+    case "too_small": {
+      if (!ZOD4_TOO_SMALL_RE.test(issue.message)) return { code, message: issue.message };
+      return { code, message: zod3SizeMessage(issue, "small") ?? issue.message };
+    }
+    case "too_big": {
+      if (!ZOD4_TOO_BIG_RE.test(issue.message)) return { code, message: issue.message };
+      return { code, message: zod3SizeMessage(issue, "big") ?? issue.message };
+    }
+    case "unrecognized_keys": {
+      if (!ZOD4_UNRECOGNIZED_RE.test(issue.message)) return { code, message: issue.message };
+      const keys = issue.keys ?? [];
+      return {
+        code,
+        message: `Unrecognized key(s) in object: ${zod3JoinValues(keys, ", ")}`
+      };
+    }
+    case "not_multiple_of": {
+      return {
+        code,
+        message: issue.divisor === undefined
+          ? issue.message
+          : `Number must be a multiple of ${issue.divisor}`
+      };
+    }
+    case "invalid_format": {
+      if (!issue.message.startsWith("Invalid ")) return { code: "invalid_string", message: issue.message };
+      switch (issue.format) {
+        case "regex":
+          return { code: "invalid_string", message: "Invalid" };
+        case "starts_with":
+          return { code: "invalid_string", message: `Invalid input: must start with "${issue.prefix ?? ""}"` };
+        case "ends_with":
+          return { code: "invalid_string", message: `Invalid input: must end with "${issue.suffix ?? ""}"` };
+        case "includes":
+          return { code: "invalid_string", message: `Invalid input: must include "${issue.includes ?? ""}"` };
+        default:
+          return { code: "invalid_string", message: `Invalid ${issue.format ?? "string"}` };
+      }
+    }
+    case "custom":
+      return { code, message: issue.message };
+    default:
+      return { code, message: issue.message };
+  }
+}
+
+export function toFieldErrorsFromZod(error: ZodError, ...rawInput: [unknown?]): ProblemFieldError[] {
+  const hasInput = rawInput.length > 0;
+  const input = rawInput[0];
+  return error.issues.map((issue) => {
+    const parity = toZod3ParityIssue(issue as unknown as Zod4Issue, input, hasInput);
+    return {
+      path: issue.path.join(".") || "$",
+      message: parity.message,
+      code: parity.code
+    };
+  });
 }
 
 export function toHints(details: unknown): string[] | undefined {
@@ -1019,7 +1281,7 @@ export function mapErrorToProblem(
       instance: requestId,
       retryClass: retryClassForErrorCode(ERROR_CODES.INVALID_INPUT),
       issueOrigin: issueOriginForErrorCode(ERROR_CODES.INVALID_INPUT),
-      fieldErrors: toFieldErrorsFromZod(caughtError),
+      fieldErrors: toFieldErrorsFromZod(caughtError, context?.normalizedInput),
       hints: hintsWithFallback,
       ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
       ...(guidance?.exampleCalls ? { exampleCalls: guidance.exampleCalls } : {}),

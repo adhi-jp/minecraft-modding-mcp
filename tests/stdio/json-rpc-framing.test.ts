@@ -110,6 +110,123 @@ test("loadMaxFrameBytes applies defaults, overrides, fallback, and the minimum c
   assert.equal(loadMaxFrameBytes("1024"), 1_048_576);
 });
 
+function createModeHarness(): {
+  reader: JsonRpcFrameReader;
+  frames: Array<{ id: unknown; mode: string }>;
+  errors: Error[];
+  process: (chunk: Buffer) => void;
+} {
+  const reader = new JsonRpcFrameReader();
+  const frames: Array<{ id: unknown; mode: string }> = [];
+  const errors: Error[] = [];
+  return {
+    reader,
+    frames,
+    errors,
+    process(chunk) {
+      reader.processChunk(chunk, {
+        onFrame: ({ message, mode }) => frames.push({ id: (message as { id?: unknown }).id, mode }),
+        onError: (error) => errors.push(error)
+      });
+    }
+  };
+}
+
+function pingFrame(id: number, mode: "line" | "content-length"): Buffer {
+  return encodeJsonRpcMessage({ jsonrpc: "2.0", id, method: "ping" } as never, mode);
+}
+
+test("reader switches from line to Content-Length mid-stream and reports each frame's mode", () => {
+  const harness = createModeHarness();
+  harness.process(pingFrame(1, "line"));
+  harness.process(pingFrame(2, "content-length"));
+  harness.process(pingFrame(3, "content-length"));
+
+  assert.deepEqual(harness.errors, []);
+  assert.deepEqual(harness.frames, [
+    { id: 1, mode: "line" },
+    { id: 2, mode: "content-length" },
+    { id: 3, mode: "content-length" }
+  ]);
+});
+
+test("reader switches from Content-Length back to line mid-stream and reports each frame's mode", () => {
+  const harness = createModeHarness();
+  harness.process(pingFrame(1, "content-length"));
+  harness.process(pingFrame(2, "line"));
+  harness.process(pingFrame(3, "content-length"));
+  harness.process(pingFrame(4, "line"));
+
+  assert.deepEqual(harness.errors, []);
+  assert.deepEqual(harness.frames, [
+    { id: 1, mode: "content-length" },
+    { id: 2, mode: "line" },
+    { id: 3, mode: "content-length" },
+    { id: 4, mode: "line" }
+  ]);
+});
+
+test("reader switches from Content-Length to a whitespace-prefixed line frame", () => {
+  const harness = createModeHarness();
+  harness.process(pingFrame(1, "content-length"));
+  // Blank separator lines plus leading spaces/tab before the JSON opener:
+  // pure line mode tolerates both (blank lines are skipped; JSON.parse accepts
+  // a whitespace-prefixed line), so the mid-stream switch must too.
+  harness.process(Buffer.from(`\r\n\n  \t${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })}\n`, "utf8"));
+
+  assert.deepEqual(harness.errors, []);
+  assert.deepEqual(harness.frames, [
+    { id: 1, mode: "content-length" },
+    { id: 2, mode: "line" }
+  ]);
+});
+
+test("an under-declared Content-Length surfaces a parse error and the reader recovers", () => {
+  // Documents CURRENT behavior: a Content-Length smaller than the actual body
+  // slices the body at the declared length (JSON parse error), resets the mode
+  // to unknown, and leaves the body tail buffered — the tail corrupts the NEXT
+  // line-delimited frame (second parse error), after which parsing recovers.
+  const harness = createModeHarness();
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" });
+  harness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(body, "utf8") - 10}\r\n\r\n${body}`, "utf8"));
+
+  assert.equal(harness.frames.length, 0);
+  assert.equal(harness.errors.length, 1);
+  assert.equal(harness.reader.currentMode, "unknown");
+
+  harness.process(pingFrame(8, "line"));
+  assert.equal(harness.frames.length, 0);
+  assert.equal(harness.errors.length, 2);
+
+  harness.process(pingFrame(9, "line"));
+  assert.deepEqual(harness.frames, [{ id: 9, mode: "line" }]);
+  assert.equal(harness.errors.length, 2);
+});
+
+test("frames split across chunk boundaries survive a framing switch", () => {
+  const harness = createModeHarness();
+  const stream = Buffer.concat([
+    pingFrame(1, "content-length"),
+    pingFrame(2, "line"),
+    pingFrame(3, "content-length"),
+    pingFrame(4, "line")
+  ]);
+  for (const chunkSize of [1, 3, 7]) {
+    harness.frames.length = 0;
+    harness.reader.clear();
+    for (let offset = 0; offset < stream.length; offset += chunkSize) {
+      harness.process(stream.subarray(offset, Math.min(offset + chunkSize, stream.length)));
+    }
+    assert.deepEqual(harness.errors, [], `chunkSize=${chunkSize}`);
+    assert.deepEqual(harness.frames, [
+      { id: 1, mode: "content-length" },
+      { id: 2, mode: "line" },
+      { id: 3, mode: "content-length" },
+      { id: 4, mode: "line" }
+    ], `chunkSize=${chunkSize}`);
+  }
+});
+
 test("reset and clear cancel oversized-frame discard state", () => {
   for (const resetReader of [
     (reader: JsonRpcFrameReader) => reader.reset(),

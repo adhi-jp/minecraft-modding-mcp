@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 
 import { createError, ERROR_CODES } from "../../src/errors.js";
 import { errorResource, objectResource } from "../../src/mcp-helpers.js";
@@ -23,7 +23,7 @@ function createStubSourceService(overrides: Record<string, unknown> = {}): Recor
 function captureResources(sourceServiceOverrides: Record<string, unknown> = {}) {
   const registrations = new Map<string, { handler: (...args: any[]) => Promise<any> }>();
   const server = {
-    resource(
+    registerResource(
       name: string,
       _target: unknown,
       _metadata: unknown,
@@ -47,12 +47,14 @@ test("registerResources registers exactly 9 resources (2 fixed + 7 template)", (
   const stub = createStubSourceService();
 
   let resourceCount = 0;
-  const origResource = server.resource.bind(server);
+  const origRegisterResource = server.registerResource.bind(server) as (
+    ...args: unknown[]
+  ) => unknown;
 
-  server.resource = (...args: Parameters<typeof server.resource>) => {
+  server.registerResource = ((...args: unknown[]) => {
     resourceCount++;
-    return origResource(...args);
-  };
+    return origRegisterResource(...args);
+  }) as typeof server.registerResource;
 
   registerResources(server, stub as never);
 
