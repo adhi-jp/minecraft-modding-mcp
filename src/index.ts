@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 
 import {
@@ -38,6 +37,7 @@ import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
 import { ToolExecutionGate } from "./tool-execution-gate.js";
+import { SERVER_IDENTITY, SERVER_VERSION } from "./server-identity.js";
 import { STDIO_WORKER_MODE_ENV } from "./stdio-supervisor.js";
 import { capWarningDetailsForSummary, classifyWarnings } from "./warning-details.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
@@ -211,20 +211,11 @@ const BATCH_DETAIL_TOOL_NAMES = new Set([
 const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });
 
 
-function getServerVersionFromPackageJson(): string {
-  try {
-    const packageJsonUrl = new URL("../package.json", import.meta.url);
-    const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as { version?: unknown };
-    if (typeof packageJson.version === "string" && packageJson.version.trim()) {
-      return packageJson.version.trim();
-    }
-  } catch {
-    // ignore and fallback
-  }
-  return "0.3.0";
-}
-
-const SERVER_VERSION = getServerVersionFromPackageJson();
+// Server identity ({name, version}) comes from the canonical module shared
+// with the supervisor's synthetic decorator (src/server-identity.ts): the SDK
+// stamps the Implementation passed to McpServer verbatim as
+// `_meta[SERVER_INFO_META_KEY]` on every modern result, so identity equality
+// with supervisor-synthesized results holds by construction.
 
 // The McpServer instance is constructed per serveStdio factory call inside
 // buildServer() below; module scope keeps only the shared services/config.
@@ -747,8 +738,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
 // eslint-disable-next-line func-style
 function buildServer(): McpServer {
 const server = new McpServer({
-  name: "@adhisang/minecraft-modding-mcp",
-  version: SERVER_VERSION
+  name: SERVER_IDENTITY.name,
+  version: SERVER_IDENTITY.version
 });
 
 registerResources(server, sourceService);

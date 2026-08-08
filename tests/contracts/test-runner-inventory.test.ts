@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 186;
+const EXPECTED_ORDINARY_TEST_FILES = 191;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -35,7 +35,17 @@ const EXPECTED_ORDINARY_TEST_FILES = 186;
 // era-wire gains 1 concurrent per-request -32022 distinctness guard, and
 // tests/utils/era-classifier.test.ts gains 3 extractModernRequestContext
 // unit tests.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1729;
+// 186 -> 191 / 1729 -> 1757 (synthetic finality + modern decoration):
+// tests/stdio/stdio-supervisor-synthetic-inventory.test.ts adds 17 era ×
+// failure-type inventory tests (legacy fixture byte-compat, modern
+// decoration, exactly-one-response finality, tombstone lifecycle),
+// tests/stdio/stdio-supervisor-synthetic-toggle-off.test.ts adds 2
+// SUPERVISOR_STRUCTURED_RESTART_OFF variants,
+// tests/stdio/stdio-supervisor-synthetic-drift.test.ts adds 1 live-SDK
+// structural drift guard, tests/utils/synthetic-decorator.test.ts adds 5
+// decorator unit tests, and tests/utils/server-identity.test.ts adds 3
+// canonical-identity unit tests.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1757;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

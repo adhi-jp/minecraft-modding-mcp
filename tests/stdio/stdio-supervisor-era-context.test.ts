@@ -10,14 +10,17 @@ import { StdioSupervisor } from "../../src/stdio-supervisor.ts";
  * Per-request protocol-context carriage — the supervisor captures
  * {era, protocolVersion, clientCapabilities, clientInfo?} into pending/queued
  * request snapshots at admission and carries them across worker restarts.
- * Capture-and-carry only: the supervisor itself never reads the captured
- * context — no reply, synthesis, or forwarded frame may depend on it (the
- * no-leak tests pin that invariant for downstream consumers).
+ * Capture-and-carry with one carve-out: synthetic decoration reads the
+ * snapshot's `era` (and only `era`) to gate modern-era result decoration; the
+ * three captured context fields stay unread — no reply, synthesis,
+ * decoration, or forwarded frame may depend on them (the no-leak tests pin
+ * that invariant for downstream consumers).
  */
 
 const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 const CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo";
+const SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo";
 
 type CapturedSnapshot = {
   id: string | number;
@@ -233,8 +236,30 @@ function assertNoContextLeak(reply: JSONRPCMessage, label: string): void {
     assert.equal(keys.has(forbidden), false, `${label}: reply must not carry a "${forbidden}" key`);
   }
   const serialized = JSON.stringify(reply);
-  assert.equal(serialized.includes("io.modelcontextprotocol"), false, `${label}: reply must not embed reserved _meta keys`);
+  // EVERY reserved-namespace occurrence in the reply must be exactly the
+  // SERVER-side identity key — the era carve-out is bounded both ways: the
+  // serverInfo stamp is legitimate on decorated modern-era synthetic results
+  // (canonical server identity, not captured request context), while any
+  // OTHER io.modelcontextprotocol/* occurrence (the request-context keys
+  // included) is a leak.
+  const reservedOccurrences = serialized.match(/io\.modelcontextprotocol\/[^"\\]*/g) ?? [];
+  for (const occurrence of reservedOccurrences) {
+    assert.equal(
+      occurrence,
+      SERVER_INFO_KEY,
+      `${label}: unexpected reserved-namespace occurrence "${occurrence}"`
+    );
+  }
   assert.equal(serialized.includes("sentinel-noleak"), false, `${label}: reply must not embed the captured clientInfo sentinel`);
+}
+
+/** The decorated modern synthetic reply must positively CARRY the identity stamp. */
+function assertServerIdentityStamped(reply: JSONRPCMessage, label: string): void {
+  const meta = (reply as { result?: { _meta?: Record<string, unknown> } }).result?._meta;
+  assert.ok(
+    meta && meta[SERVER_INFO_KEY],
+    `${label}: the decorated modern synthetic result must carry _meta["${SERVER_INFO_KEY}"]`
+  );
 }
 
 test("admission captures era and the verbatim modern protocol context into the pending snapshot", () => {
@@ -434,6 +459,7 @@ test("captured context never leaks into worker-exit synthesis or queue-limit rep
   }).result?.structuredContent;
   assert.equal(structured?.error?.code, "ERR_WORKER_RESTART", "precondition: the structured restart envelope must be used");
   assertNoContextLeak(restartReply, "worker-restart synthesis");
+  assertServerIdentityStamped(restartReply, "worker-restart synthesis");
 
   // Queue-limit reply: worker down, fill the queue, then overflow with a
   // context-carrying modern call.
@@ -448,4 +474,5 @@ test("captured context never leaks into worker-exit synthesis or queue-limit rep
   }).result?.structuredContent;
   assert.equal(limitStructured?.error?.code, "ERR_LIMIT_EXCEEDED", "precondition: the queue-limit envelope must be used");
   assertNoContextLeak(limitReply, "queue-limit reply");
+  assertServerIdentityStamped(limitReply, "queue-limit reply");
 });

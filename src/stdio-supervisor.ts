@@ -21,6 +21,7 @@ import {
   type Era,
   type EraSignal
 } from "./era-classifier.js";
+import { decorateSyntheticReply } from "./synthetic-decorator.js";
 
 const DEFAULT_CLIENT_MODE: ConcreteFramingMode = "line";
 const WORKER_MODE_ENV = "MCP_STDIO_WORKER_MODE";
@@ -210,7 +211,10 @@ export type PendingRequestSnapshot = {
    * only for era-neutral server/discover admitted before any lock). Always
    * set at runtime by createPendingRequest, the sole constructor; optional at
    * the type level for tolerant synthetic-builder inputs and exported-type
-   * compatibility — no reply builder may read it.
+   * compatibility — no reply BUILDER may read it. Carve-out: the terminal
+   * synthetic-decoration step (writeSyntheticReply → decorateSyntheticReply)
+   * reads `era` — and ONLY `era` — to gate modern-era decoration; the three
+   * captured context fields below remain unread everywhere.
    */
   era?: Era;
   /**
@@ -219,9 +223,11 @@ export type PendingRequestSnapshot = {
    * after admission, or captured snapshots would change retroactively) for
    * shallow-valid modern-signal requests only; undefined for claim-less
    * legacy traffic and for every initialize (initialize envelopes are
-   * ignored). Captured for downstream synthetic-result decoration; the
-   * supervisor itself must never read these — no reply, synthesis, or
+   * ignored). Captured for downstream consumers; the supervisor itself must
+   * never read these three fields — no reply, synthesis, decoration, or
    * forwarded frame may depend on them (the no-leak tests pin that).
+   * Synthetic decoration reads the snapshot's `era` alone, and the identity
+   * it stamps comes from src/server-identity.ts, never from request context.
    */
   protocolVersion?: string;
   clientCapabilities?: Record<string, unknown>;
@@ -756,6 +762,42 @@ export class StdioSupervisor {
   private readonly unresolvedTreeTokens = new Set<number>();
   private readonly restartBackoff = new RestartBackoffState();
   private readonly terminalChildren = new WeakSet<ChildProcessWithoutNullStreams>();
+  /**
+   * Monotonic worker-generation counter (incremented per successful spawn).
+   * Recorded into finality tombstones so retention can be bounded per
+   * generation; hand-injected children in tests that bypass spawnWorker run
+   * as generation 0.
+   */
+  private workerGeneration = 0;
+  /**
+   * Response-finality tombstones: request key → {originating worker
+   * generation, originating framing mode}, recorded by writeSyntheticReply
+   * the moment a synthetic response is written. While a tombstone exists, any
+   * worker RESPONSE for that id is discarded (with a logged
+   * `supervisor.late_response_discarded` event) instead of being forwarded —
+   * the synthesized response was terminal, and exactly one response per id
+   * must reach the client. A tombstone is cleared when its id is re-forwarded
+   * to a worker (forwardRequest), because a client may legally retry with the
+   * same id; finality is per request INSTANCE, not per id forever.
+   *
+   * `mode` is retained deliberately even though discard writes nothing today:
+   * a tombstoned id keeps its originating framing mode until discard, so any
+   * future terminal write for that id — should the discard policy ever gain
+   * one — answers in the originating framing.
+   *
+   * Retention bound: entries with generation ≤ G are dropped when the
+   * generation-G child emits "close" (process ended AND its stdio streams
+   * closed — Node's guarantee for that event). This is safe: worker frames
+   * only enter handleWorkerMessage from the CURRENT child, the supervisor
+   * only forwards ids with live pending entries, and forwarding clears the
+   * id's tombstone — so once every generation that could have seen a
+   * tombstoned id is gone with streams closed, no current child can ever
+   * deliver a frame for it. Also cleared wholesale on shutdown.
+   */
+  private readonly syntheticTombstones = new Map<
+    string,
+    { generation: number; mode?: ConcreteFramingMode }
+  >();
 
   private child: ChildProcessWithoutNullStreams | undefined;
   private childReady = false;
@@ -778,8 +820,9 @@ export class StdioSupervisor {
    * for request-correlated writes (those use the originating request's
    * captured mode); this is only the documented fallback for client-bound
    * writes that correlate to no request id (worker-originated notifications
-   * and server->client requests forwarded at handleWorkerMessage, and late
-   * responses whose pending entry was already discarded).
+   * and server->client requests forwarded at handleWorkerMessage, and
+   * untracked-id responses with no finality tombstone — tombstoned ids are
+   * discarded, never forwarded).
    */
   private lastInboundClientMode: ConcreteFramingMode = DEFAULT_CLIENT_MODE;
   /**
@@ -911,7 +954,10 @@ export class StdioSupervisor {
         // replay cache. clearInitialInitializationState() still discards any
         // NOT-yet-completed earlier handshake, exactly as before.
         this.clearInitialInitializationState();
-        this.writeToClient(buildLegacyJsonRpcError(message.id as RequestId), this.modeForMessage(message));
+        this.writeSyntheticReply(
+          { id: message.id as RequestId, era: this.era, mode: this.modeForMessage(message) },
+          buildLegacyJsonRpcError(message.id as RequestId)
+        );
         return;
       }
       this.initializeRequest = message;
@@ -942,15 +988,15 @@ export class StdioSupervisor {
         [],
         { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
       );
-      this.writeToClient(reply, pending.mode);
+      this.writeSyntheticReply(pending, reply);
       return;
     }
     const isValidate = pending.toolName === "validate-project";
     const dispatchImmediately = this.canDispatchImmediately(pending);
     if (!dispatchImmediately && this.queuedRequests.length >= MAX_SUPERVISOR_QUEUE) {
-      this.writeToClient(
-        buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method),
-        pending.mode
+      this.writeSyntheticReply(
+        pending,
+        buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
       );
       this.drainQueue();
       return;
@@ -1202,15 +1248,19 @@ export class StdioSupervisor {
         this.queuedRequests.push({ message, pending });
       } else {
         if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
-        this.writeToClient(
-          buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method),
-          pending.mode
+        this.writeSyntheticReply(
+          pending,
+          buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
         );
       }
       this.scheduleRestart();
       return;
     }
 
+    // The id goes live on a worker: a finality tombstone from an EARLIER
+    // request instance that reused this id no longer applies (a client may
+    // legally retry with the same id after a synthetic terminal reply).
+    this.syntheticTombstones.delete(requestKey(pending.id));
     this.pendingRequests.set(requestKey(pending.id), pending);
     if (pending.toolName === "validate-project") {
       pending.timeoutPhase = "running";
@@ -1286,13 +1336,13 @@ export class StdioSupervisor {
       pending.deadlineTimer = undefined;
       if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
       if (!pending.clientCancelled) {
-        this.writeToClient(buildValidateProjectTimeoutReply({
+        this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
           request: pending,
           phase: "queue",
           deadlineMs: this.validateProjectTimeoutMs,
           now: this.monotonicNow(),
           workerRestartInitiated: false
-        }), pending.mode);
+        }));
       }
       this.drainQueue();
       return;
@@ -1300,18 +1350,21 @@ export class StdioSupervisor {
 
     const pending = this.pendingRequests.get(key);
     if (!pending || pending.toolName !== "validate-project") return;
-    this.pendingRequests.delete(key);
     pending.deadlineTimer = undefined;
     this.runningValidateKey = undefined;
     this.validateBarrierKey = undefined;
-    if (!pending.clientCancelled) {
-      this.writeToClient(buildValidateProjectTimeoutReply({
+    // The entry stays in pendingRequests until writeSyntheticReply settles it:
+    // the FORWARDED pending is what entitles the id to a finality tombstone.
+    if (pending.clientCancelled) {
+      this.pendingRequests.delete(key);
+    } else {
+      this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
         request: pending,
         phase: "running",
         deadlineMs: this.validateProjectTimeoutMs,
         now: this.monotonicNow(),
         workerRestartInitiated: true
-      }), pending.mode);
+      }));
     }
     this.recoverTimedOutWorker();
   }
@@ -1370,6 +1423,10 @@ export class StdioSupervisor {
     this.child = child;
     this.liveChildren.add(child);
     this.workerReaders.set(child, new JsonRpcFrameReader());
+    const generation = ++this.workerGeneration;
+    // "close" fires only once the process has ended AND its stdio streams are
+    // closed — the tombstone retention bound (see syntheticTombstones).
+    child.once("close", () => this.purgeTombstonesThroughGeneration(generation));
     this.childReady = false;
     this.initializeSentToWorker = false;
     this.workerStderrBuffer = "";
@@ -1534,7 +1591,10 @@ export class StdioSupervisor {
 
       if ("error" in message) {
         if (!this.replayingInitialization && id !== undefined) {
-          this.writeToClient(buildLegacyJsonRpcError(id), initializeMode);
+          this.writeSyntheticReply(
+            { id, era: this.era, mode: initializeMode },
+            buildLegacyJsonRpcError(id)
+          );
           const retainedIndex = this.queuedNotifications.findIndex(
             (entry) => isRequest(entry) && requestKey(entry.id as RequestId) === requestKey(id)
           );
@@ -1567,13 +1627,25 @@ export class StdioSupervisor {
     }
 
     // Worker messages that correlate to no tracked request (server-originated
-    // notifications/requests, late responses whose pending entry was already
-    // discarded) fall back to the last-detected inbound mode in writeToClient.
+    // notifications/requests, untracked-id responses with no tombstone) fall
+    // back to the last-detected inbound mode in writeToClient. A response for
+    // a TOMBSTONED id is different: the supervisor already synthesized the
+    // terminal response for that request instance, so the late answer is
+    // discarded — exactly one response per id.
     let responseMode: ConcreteFramingMode | undefined;
     if (isResponse(message)) {
       const id = getTrackedRequestId(message);
       if (id !== undefined) {
         const key = requestKey(id);
+        const tombstone = this.syntheticTombstones.get(key);
+        if (tombstone) {
+          this.eventWriter("warn", "supervisor.late_response_discarded", {
+            id,
+            tombstoneGeneration: tombstone.generation,
+            currentGeneration: this.workerGeneration
+          });
+          return;
+        }
         const pending = this.pendingRequests.get(key);
         responseMode = pending?.mode;
         this.pendingRequests.delete(key);
@@ -1710,11 +1782,16 @@ export class StdioSupervisor {
 
     for (const [key, pending] of [...this.pendingRequests.entries()]) {
       if (key === preservedInitializeKey) continue;
-      this.pendingRequests.delete(key);
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       if (this.runningValidateKey === key) this.runningValidateKey = undefined;
       if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
-      if (pending.clientCancelled) continue;
+      // Cancelled entries are settled without synthesis; forwarded entries
+      // stay in pendingRequests until writeSyntheticReply settles them (the
+      // FORWARDED pending is what entitles the id to a finality tombstone).
+      if (pending.clientCancelled) {
+        this.pendingRequests.delete(key);
+        continue;
+      }
       const toolName = pending.toolName ?? "unknown";
       const pruned = prunedByTool.get(toolName) ?? [];
       const { reply } = buildWorkerRestartReply(
@@ -1724,7 +1801,65 @@ export class StdioSupervisor {
         pruned,
         { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
       );
-      this.writeToClient(reply, pending.mode);
+      this.writeSyntheticReply(pending, reply);
+    }
+  }
+
+  /**
+   * The single terminal-synthesis writer: EVERY supervisor-synthesized
+   * response (queue-limit, validate-project timeout, worker-restart in all
+   * variants incl. the structured-restart toggle, startup-failure
+   * terminalization, initialize-failure -32603) routes through here.
+   * Responsibilities, in order:
+   *  1. settle the pending entry,
+   *  2. record the finality tombstone (id + originating worker generation +
+   *     framing mode) so a late worker response for the id is discarded —
+   *     ONLY when the id was actually FORWARDED to a worker (i.e. the pending
+   *     entry was live in pendingRequests at synthesis). Never-forwarded
+   *     rejections (queue-limit at admission and at the forward fallback,
+   *     queue-phase validate timeout, cap-blocked replies, startup-failure
+   *     terminalization of queued work, the retained-initialize error) record
+   *     NO tombstone: no worker ever saw those ids, so no worker can answer
+   *     them, and tombstoning them would let a client grow the map without
+   *     bound inside a healthy generation,
+   *  3. apply modern-era decoration — `snapshot.era` is the ONLY
+   *     captured-context field read; raw error envelopes and non-modern eras
+   *     pass through byte-identical — and
+   *  4. write in the ORIGINATING request's framing.
+   * Admission-time era rejections (era_conflict/missing_meta/-32601) do NOT
+   * route through here: they reject before any forwarding could happen, so
+   * no worker can ever answer those ids. The initialize-error synthesis also
+   * records no tombstone: isInitializationResponse settles its pending entry
+   * before synthesizing, the answering generation is terminated, and the
+   * replay cache is cleared — no late-response channel remains.
+   */
+  private writeSyntheticReply(
+    snapshot: Pick<PendingRequestSnapshot, "id" | "era" | "mode">,
+    reply: JSONRPCResponse
+  ): void {
+    const key = requestKey(snapshot.id);
+    const pending = this.pendingRequests.get(key);
+    if (pending) {
+      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+      this.pendingRequests.delete(key);
+      this.syntheticTombstones.set(key, {
+        generation: this.workerGeneration,
+        mode: snapshot.mode
+      });
+    }
+    this.writeToClient(decorateSyntheticReply(reply, snapshot.era), snapshot.mode);
+  }
+
+  /**
+   * Retention bound for finality tombstones: generation `generation` is gone
+   * with streams closed, so every tombstone recorded at or before it is
+   * unreachable (see syntheticTombstones doc) and may be dropped.
+   */
+  private purgeTombstonesThroughGeneration(generation: number): void {
+    for (const [key, tombstone] of this.syntheticTombstones) {
+      if (tombstone.generation <= generation) {
+        this.syntheticTombstones.delete(key);
+      }
     }
   }
 
@@ -2036,16 +2171,20 @@ export class StdioSupervisor {
       const { reply } = buildWorkerRestartReply(pending, exit, now, [], {
         structuredRestartDisabled: STRUCTURED_RESTART_DISABLED
       });
-      this.writeToClient(reply, pending.mode);
+      this.writeSyntheticReply(pending, reply);
     }
     const retainedInitialize = this.queuedNotifications.find(
       (message) => isRequest(message) && message.method === "initialize"
     );
     this.queuedNotifications.splice(0, this.queuedNotifications.length);
     if (retainedInitialize && isRequest(retainedInitialize)) {
-      this.writeToClient(
-        buildLegacyJsonRpcError(retainedInitialize.id as RequestId),
-        this.modeForMessage(retainedInitialize)
+      this.writeSyntheticReply(
+        {
+          id: retainedInitialize.id as RequestId,
+          era: this.era,
+          mode: this.modeForMessage(retainedInitialize)
+        },
+        buildLegacyJsonRpcError(retainedInitialize.id as RequestId)
       );
     }
     this.clearInitialInitializationState();
@@ -2139,6 +2278,7 @@ export class StdioSupervisor {
     }
     this.pendingRequests.clear();
     this.queuedRequests.splice(0, this.queuedRequests.length);
+    this.syntheticTombstones.clear();
 
     process.stdin.off("data", this.handleClientData);
     process.stdin.off("error", this.handleClientError);
