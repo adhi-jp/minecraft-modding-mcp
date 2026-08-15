@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after, before } from "node:test";
 
 import { SourceService } from "../../src/source-service.ts";
 import {
@@ -7,17 +7,27 @@ import {
   runWithRequestContext,
   type RequestContext
 } from "../../src/request-context.ts";
-import { server } from "../../src/index.ts";
+import {
+  legacyHandshake,
+  startInProcessSession,
+  type InProcessSession
+} from "../stdio/inprocess-era-serve.ts";
 
-type RequestHandler = (
-  request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
-  extra: Record<string, unknown>
-) => Promise<unknown>;
+// The in-process session serves buildServer() from ../../src/index.ts over
+// the public transport; sourceService is a module singleton shared by every
+// server instance, so the SourceService.prototype monkey-patch below is
+// observed identically over the wire.
+let session: InProcessSession;
 
-const callToolHandler = (
-  server.server as { _requestHandlers: Map<string, RequestHandler> }
-)._requestHandlers.get("tools/call");
-assert.ok(callToolHandler);
+before(async () => {
+  session = await startInProcessSession();
+  const handshake = await legacyHandshake(session, undefined, "request-context-init");
+  assert.equal(handshake.error, undefined);
+});
+
+after(async () => {
+  await session?.close();
+});
 
 test("getRequestContext returns undefined outside a request context", () => {
   assert.equal(getRequestContext(), undefined);
@@ -71,24 +81,14 @@ test("tool actions observe the requestId emitted in response metadata", async ()
   };
 
   try {
-    const response = await callToolHandler({
+    const frame = await session.request({
       jsonrpc: "2.0",
-      id: 1,
+      id: "request-context-call",
       method: "tools/call",
       params: { name: "list-versions", arguments: {} }
-    }, {
-      // Minimal v2 ServerContext stand-in: the v2 handler wrapper reads
-      // ctx.mcpReq (requestState()/signal) unconditionally, so the v1-era `{}`
-      // extra no longer drives the SDK-internal handler.
-      mcpReq: {
-        id: 1,
-        method: "tools/call",
-        requestState: () => undefined,
-        signal: new AbortController().signal,
-        notify: async () => {},
-        log: async () => {}
-      }
-    }) as {
+    });
+    assert.equal(frame.error, undefined, "tools/call must answer a result frame, not a JSON-RPC error frame");
+    const response = frame.result as {
       structuredContent?: { meta?: { requestId?: string } };
     };
 

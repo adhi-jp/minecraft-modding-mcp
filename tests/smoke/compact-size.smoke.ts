@@ -9,23 +9,73 @@
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
+
+import {
+  legacyHandshake,
+  startInProcessSession,
+  type InProcessSession
+} from "../stdio/inprocess-era-serve.ts";
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-smoke-cache");
 
-type RequestHandler = (
-  request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
-  extra: Record<string, unknown>
-) => Promise<unknown>;
+/**
+ * Live artifact resolution can legitimately take minutes on a cold cache, so
+ * tool replies are polled from the session frame log directly with a generous
+ * deadline instead of going through session.request()'s 30s deadline.
+ */
+const LIVE_REPLY_DEADLINE_MS = 600_000;
+
+let sessionPromise: Promise<InProcessSession> | undefined;
+let nextRequestId = 0;
+
+async function smokeSession(): Promise<InProcessSession> {
+  sessionPromise ??= (async () => {
+    const session = await startInProcessSession();
+    const handshake = await legacyHandshake(session, undefined, "smoke-init");
+    if (handshake.error !== undefined || handshake.result === undefined) {
+      // Surface the root cause here instead of deferring it to a later
+      // tool-call error or timeout on the cached session.
+      throw new Error(`compact-size smoke: legacy handshake failed: ${JSON.stringify(handshake)}`);
+    }
+    return session;
+  })();
+  return sessionPromise;
+}
+
+after(async () => {
+  if (sessionPromise !== undefined) {
+    await (await sessionPromise).close();
+  }
+});
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-  const { server } = await import("../../src/index.ts");
-  const handler = (server.server as { _requestHandlers: Map<string, RequestHandler> })
-    ._requestHandlers.get("tools/call")!;
-  return handler(
-    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
-    {}
-  );
+  const session = await smokeSession();
+  nextRequestId += 1;
+  const id = `smoke-${nextRequestId}`;
+  await session.send({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name, arguments: args }
+  });
+  const deadline = Date.now() + LIVE_REPLY_DEADLINE_MS;
+  for (;;) {
+    const frame = session.frames.find((candidate) => candidate.id === id);
+    if (frame !== undefined) {
+      if (frame.error !== undefined) {
+        throw new Error(
+          `unexpected JSON-RPC error frame for tools/call ${name}: ` +
+            `code ${String(frame.error.code)}: ${String(frame.error.message)}`
+        );
+      }
+      return frame.result;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for live tools/call reply id ${id}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 type ToolResult = {

@@ -154,6 +154,42 @@ test("CompatStdioServerTransport emits Content-Length responses after Content-Le
   await transport.close();
 });
 
+test("CompatStdioServerTransport parses a bare-LF Content-Length frame and responds in Content-Length framing", async () => {
+  // Pins the bare-LF header-boundary path end to end at the transport level:
+  // a Content-Length frame terminated by \n\n (no CR anywhere) must decode,
+  // and the response must still be emitted in (canonical CRLF) Content-Length
+  // framing — mirroring the CRLF test's response-framing assertion.
+  const harness = createTransport();
+  const { transport, stdin } = harness;
+  const messages: JSONRPCMessage[] = [];
+
+  transport.onmessage = (message) => {
+    messages.push(message);
+  };
+
+  await transport.start();
+
+  const request = buildInitializeRequest(7);
+  const body = JSON.stringify(request);
+  stdin.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\n\n${body}`);
+  await flush();
+
+  assert.equal(messages.length, 1);
+  assert.deepEqual(messages[0], request);
+
+  const response = buildInitializeResult(7);
+  const responseBody = JSON.stringify(response);
+  await transport.send(response);
+  await flush();
+
+  assert.equal(
+    harness.output,
+    `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n\r\n${responseBody}`
+  );
+
+  await transport.close();
+});
+
 test("CompatStdioServerTransport waits until full Content-Length body is available", async () => {
   const { transport, stdin } = createTransport();
   const messages: JSONRPCMessage[] = [];

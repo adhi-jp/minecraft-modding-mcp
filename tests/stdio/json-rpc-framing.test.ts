@@ -181,6 +181,26 @@ test("reader switches from Content-Length to a whitespace-prefixed line frame", 
   ]);
 });
 
+test("a Content-Length frame terminated by bare LF (no CR anywhere) decodes in content-length mode", () => {
+  // Pins the \n\n header-boundary acceptance (findHeaderBoundary's
+  // delimiterBytes-2 branch): some peers frame Content-Length with bare LF
+  // line endings, and no other test sends one.
+  const modeHarness = createModeHarness();
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 21, method: "ping" });
+  modeHarness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(body, "utf8")}\n\n${body}`, "utf8"));
+
+  assert.deepEqual(modeHarness.errors, []);
+  assert.deepEqual(modeHarness.frames, [{ id: 21, mode: "content-length" }]);
+  assert.equal(modeHarness.reader.currentMode, "content-length");
+
+  // Full-message decode check on the message-capturing harness.
+  const harness = createHarness(1_048_576);
+  const normalBody = JSON.stringify(NORMAL_MESSAGE);
+  harness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(normalBody, "utf8")}\n\n${normalBody}`, "utf8"));
+  assert.deepEqual(harness.errors, []);
+  assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
+});
+
 test("an under-declared Content-Length surfaces a parse error and the reader recovers", () => {
   // Documents CURRENT behavior: a Content-Length smaller than the actual body
   // slices the body at the declared length (JSON parse error), resets the mode

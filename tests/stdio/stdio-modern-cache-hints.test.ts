@@ -207,6 +207,39 @@ test("legacy-era results never carry cache fields (lists, success reads, and Pro
   assertNoCacheFields(problem.result, "legacy ProblemDetails read");
 });
 
+test("legacy-era mc://versions/list and mc://metrics reads never carry cache fields", async () => {
+  // The two PER-RESOURCE hint constants (VERSIONS_LIST_READ_CACHE_HINT
+  // 300000, METRICS_READ_CACHE_HINT 0) had no legacy-absence drive: their
+  // modern twins above prove the hints EXIST on these very reads, so this
+  // helper demonstrably fails on a decorated result.
+  assert.throws(
+    () => assertNoCacheFields({ ttlMs: 300_000, cacheScope: "private" }, "helper self-check"),
+    "assertNoCacheFields must flag a cache-decorated result (falsifiability self-check)"
+  );
+
+  const versions = await legacy.request({
+    jsonrpc: "2.0",
+    id: id(),
+    method: "resources/read",
+    params: { uri: "mc://versions/list" }
+  });
+  assert.equal(versions.error, undefined);
+  const versionsPayload = parseResourceEnvelope(versions);
+  assert.equal("error" in versionsPayload, false, "the legacy versions-list read must SUCCEED (local manifest server)");
+  assertNoCacheFields(versions.result, "legacy mc://versions/list read");
+
+  const metrics = await legacy.request({
+    jsonrpc: "2.0",
+    id: id(),
+    method: "resources/read",
+    params: { uri: "mc://metrics" }
+  });
+  assert.equal(metrics.error, undefined);
+  const metricsPayload = parseResourceEnvelope(metrics);
+  assert.equal("error" in metricsPayload, false, "the legacy metrics read must SUCCEED");
+  assertNoCacheFields(metrics.result, "legacy mc://metrics read");
+});
+
 test("a legacy-era claim-shaped-invalid ProblemDetails read (protocolVersion without clientCapabilities) never gains cache fields", async () => {
   // A request carrying ONLY the protocol-version reserved key is
   // claim-shaped-INVALID: legacy-permissive admission forwards it on a

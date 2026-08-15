@@ -137,6 +137,19 @@ test("disabled tool (BATCH_TOOLS_OFF): legacy answers the restored premigration 
     baseline.reply,
     "the supervisor's synthesized legacy reply must deep-equal the frozen premigration baseline row"
   );
+  // Strengthening (mirrors the wire intercept suite): the restored legacy
+  // envelope carries NO structuredContent key — the presence of that key is
+  // the discriminator separating a genuine worker tool reply from the frozen
+  // premigration miss envelope.
+  const synthesizedResult = (
+    buildUnknownToolNotFoundReply(2, "batch-class-source") as { result?: Record<string, unknown> }
+  ).result;
+  assert.ok(synthesizedResult, "the synthesized legacy reply must carry a result");
+  assert.equal(
+    "structuredContent" in synthesizedResult,
+    false,
+    "the frozen legacy disabled-tool envelope carries no structuredContent key"
+  );
 
   // Worker-level (and modern-era) shape: the raw -32602 the SDK emits —
   // what the supervisor intercepts on legacy and passes through on modern.

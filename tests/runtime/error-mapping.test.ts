@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { ERROR_CODES, createError } from "../../src/errors.ts";
 import {
@@ -13,21 +13,25 @@ import {
   type IssueOrigin,
   type RetryClass
 } from "../../src/error-mapping.ts";
-
-type RequestHandler = (
-  request: { jsonrpc: string; id: number; method: string; params: Record<string, unknown> },
-  extra: Record<string, unknown>
-) => Promise<unknown>;
+import { legacyHandshake, startInProcessSession } from "../stdio/inprocess-era-serve.ts";
 
 const dbDownRoot = await mkdtemp(join(tmpdir(), "mcp-tool-envelope-db-down-"));
 const blockingParent = join(dbDownRoot, "regular-file");
 await writeFile(blockingParent, "not a directory", "utf8");
 
 const originalSqlitePath = process.env.MCP_SQLITE_PATH;
-const dbDownServer = await (async () => {
+const dbDownSession = await (async () => {
   process.env.MCP_SQLITE_PATH = join(blockingParent, "source-cache.db");
   try {
-    return (await import("../../src/index.ts")).server;
+    // startInProcessSession dynamically imports ../../src/index.ts, so the
+    // module singleton captures the poisoned SQLite path at import time —
+    // the same poison-import pattern as before, now over the public
+    // in-process transport instead of the SDK-private handler map.
+    const session = await startInProcessSession();
+    const handshake = await legacyHandshake(session, undefined, "db-down-init");
+    assert.equal(handshake.error, undefined);
+    assert.ok(handshake.result);
+    return session;
   } finally {
     if (originalSqlitePath === undefined) {
       delete process.env.MCP_SQLITE_PATH;
@@ -37,33 +41,24 @@ const dbDownServer = await (async () => {
   }
 })();
 
-const dbDownHandler = (
-  dbDownServer.server as { _requestHandlers: Map<string, RequestHandler> }
-)._requestHandlers.get("tools/call");
-assert.ok(dbDownHandler);
+after(() => dbDownSession.close());
+
+let dbDownRequestId = 0;
 
 async function callToolWithDatabaseDown(
   name: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  return dbDownHandler({
+  dbDownRequestId += 1;
+  const frame = await dbDownSession.request({
     jsonrpc: "2.0",
-    id: 1,
+    id: `db-down-${dbDownRequestId}`,
     method: "tools/call",
     params: { name, arguments: args }
-  }, {
-    // Minimal v2 ServerContext stand-in: the v2 handler wrapper reads
-    // ctx.mcpReq (requestState()/signal) unconditionally, so the v1-era `{}`
-    // extra no longer drives the SDK-internal handler.
-    mcpReq: {
-      id: 1,
-      method: "tools/call",
-      requestState: () => undefined,
-      signal: new AbortController().signal,
-      notify: async () => {},
-      log: async () => {}
-    }
   });
+  assert.equal(frame.error, undefined, "tools/call must answer a result frame, not a JSON-RPC error frame");
+  assert.ok(frame.result, "tools/call reply frame must carry a result");
+  return frame.result;
 }
 
 test("input validation keeps ERR_INVALID_INPUT when SQLite cannot open", async () => {

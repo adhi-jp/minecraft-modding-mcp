@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 203;
+const EXPECTED_ORDINARY_TEST_FILES = 208;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -68,7 +68,33 @@ const EXPECTED_ORDINARY_TEST_FILES = 203;
 // stdio-modern-cache-hints.test.ts gains 1 legacy claim-shaped-invalid
 // errorResource guard; stdio-supervisor-unknown-tool-intercept.test.ts
 // gains 2 degraded-state (cap-blocked restart / queue-overflow) rows.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1797;
+// 203 -> 204 / 1797 -> 1798 (public-transport boundary): tests/contracts/
+// no-sdk-private-request-handler-access.test.ts adds 1 residual-scan test
+// pinning that no src/test/script file reaches the SDK-private
+// request-handler map — every protocol-level suite drives the server through
+// the public in-process transport (tests/stdio/inprocess-era-serve.ts).
+// 204 -> 206 / 1798 -> 1810 (dual-era acceptance-matrix backfill):
+// tests/stdio/stdio-client-notification-hygiene.test.ts adds 4
+// client-notification hygiene tests ($/stageUpdate suppression both eras +
+// emission control + logLevel-key tolerance / notifications/message absence),
+// tests/stdio/stdio-legacy-resource-matrix.test.ts adds 3 legacy resource
+// matrix tests (exact fixed/template lists + nine undecorated reads);
+// stdio-supervisor-era-wire.test.ts gains 1 pinned-path deep-invalid
+// clientInfo -32602 test, stdio-supervisor-unknown-tool-intercept.test.ts
+// gains 1 registry-HIT wire test, json-rpc-framing.test.ts and
+// compat-stdio-transport.test.ts gain 1 bare-LF Content-Length pin each,
+// and stdio-modern-cache-hints.test.ts gains 1 legacy per-resource
+// cache-absence test.
+// 206 -> 208 / 1810 -> 1820 (premigration golden promotion into the suite):
+// tests/stdio/stdio-tool-contract-snapshots.test.ts adds 4 tool-contract
+// snapshot tests (41-fixture set equality in both eras, legacy field
+// identity with the recorded v1-only execution-key exception, modern
+// inputSchema byte parity, mutation self-check), and
+// tests/stdio/stdio-problemdetails-envelope-goldens.test.ts adds 6
+// ProblemDetails golden tests (13-fixture replay inventory, ten ordinary
+// Zod goldens + runtime-metrics deep-equal after normalization, the two
+// approved omitted-arguments outcome classes, mutation self-check).
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1820;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

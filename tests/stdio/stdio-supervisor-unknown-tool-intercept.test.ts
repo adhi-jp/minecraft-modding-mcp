@@ -77,6 +77,7 @@ function startWireSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
   frames: Frame[];
   workerReady: () => boolean;
+  stderr: () => string;
   send: (message: object) => void;
 } {
   const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
@@ -117,6 +118,7 @@ function startWireSupervisor(root: string): {
     child,
     frames,
     workerReady: () => stderrBuffer.includes("supervisor.debug.worker_ready"),
+    stderr: () => stderrBuffer,
     send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
   };
 }
@@ -213,6 +215,92 @@ test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -3260
   const reply = await wireReply(session, 1, "modern registry-miss reply");
   assert.equal(reply.result, undefined, "the modern era must NOT synthesize the legacy envelope");
   assert.deepEqual(reply.error, { code: -32602, message: "Tool batch-class-source not found" });
+});
+
+test("wire legacy registry HIT: tools/call get-runtime-metrics is answered by the worker, never the frozen miss envelope", { timeout: 150_000 }, async (t) => {
+  if (!(await canUseNativeStdioPipes())) {
+    t.skip("native child-process stdio pipes close immediately in this runtime");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "unknown-tool-hit-"));
+  const session = startWireSupervisor(root);
+  t.after(async () => {
+    // Graceful, orphan-free shutdown (inlined here because the shared
+    // startWireSupervisor helper also serves the pre-existing tests):
+    // ending stdin drives the supervisor's client-closed shutdown path
+    // (src/stdio-supervisor.ts handleClientClosed -> shutdown), which
+    // terminates the detached worker process group before exiting. A bare
+    // SIGKILL races worker startup and can orphan a worker holding the
+    // src/cli.ts keep-alive timer, so SIGKILL only remains as the
+    // last-resort fallback when the exit poll times out.
+    const exited = (): boolean =>
+      session.child.exitCode !== null || session.child.signalCode !== null;
+    if (!exited()) {
+      session.child.stdin.end();
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline && !exited()) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!exited()) {
+        session.child.kill("SIGKILL");
+      }
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");
+
+  session.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "unknown-tool-hit-test", version: "1.0.0" }
+    }
+  });
+  await wireReply(session, 1, "initialize reply");
+  session.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+
+  // Registry HIT: get-runtime-metrics is a registered, schema-less,
+  // side-effect-free tool that succeeds on empty arguments, so the intercept
+  // condition (getToolSchema(name) === undefined) must NOT fire and the call
+  // forwards to the worker.
+  session.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get-runtime-metrics", arguments: {} } });
+  const hit = await wireReply(session, 2, "get-runtime-metrics reply");
+  assert.equal(hit.error, undefined, "a registered tool must answer a result, not a JSON-RPC error");
+  const hitResult = hit.result as Record<string, unknown>;
+  assert.ok(hitResult, "the registry HIT must carry a result envelope");
+  assert.ok("structuredContent" in hitResult, "a genuine worker reply carries structuredContent");
+  assert.notEqual(hitResult.isError, true, "the genuine get-runtime-metrics reply must not be isError");
+
+  // Discriminator self-check: the frozen miss envelope fails BOTH of the
+  // discriminators asserted above — no structuredContent key, isError true —
+  // so this test cannot pass if the HIT were answered by the intercept.
+  const frozen = frozenNotFoundResult("get-runtime-metrics");
+  assert.equal("structuredContent" in frozen, false, "the frozen miss envelope carries no structuredContent");
+  assert.equal(frozen.isError, true, "the frozen miss envelope is isError");
+
+  // The intercept never fired for the HIT: no intercept event has been
+  // logged at this point (asserted BEFORE the miss below deliberately makes
+  // the event appear, proving this stderr scan channel can fail).
+  assert.equal(
+    session.stderr().includes("supervisor.unknown_tool_intercepted"),
+    false,
+    "no supervisor.unknown_tool_intercepted event may be logged for a registry HIT"
+  );
+
+  // Positive control for the stderr scan: a genuine registry MISS on the
+  // same session DOES log the intercept event (and answers the frozen
+  // envelope), so the absence assertion above is falsifiable.
+  session.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "no-such-tool-hit-guard", arguments: {} } });
+  const miss = await wireReply(session, 3, "registry-miss control reply");
+  assert.deepEqual(miss.result, frozenNotFoundResult("no-such-tool-hit-guard"));
+  await waitFor(
+    () => session.stderr().includes("supervisor.unknown_tool_intercepted"),
+    15_000,
+    "intercept event for the registry-miss control"
+  );
 });
 
 // ── White-box half (in-process supervisor, fake worker) ────────────

@@ -155,7 +155,13 @@ test("wire dependency-method inventory: legacy era (ping pong, setLevel/tasks/pr
     // Legacy subscriptions/listen reaches the REAL worker (the supervisor
     // only intercepts the modern era), whose 2025 registry has no such
     // method → -32601 from the live SDK instance.
-    [7, "subscriptions/listen", {}]
+    [7, "subscriptions/listen", {}],
+    // CLAIM-LESS server/discover on a legacy-locked process: claim-less
+    // traffic forwards to the worker unchanged, whose legacy registry has no
+    // server/discover → -32601 from the live SDK instance. (The MODERN-
+    // enveloped discover on a legacy lock gets the supervisor's era-consistent
+    // rejection instead — covered by the era-state/era-wire suites.)
+    [8, "server/discover", {}]
   ];
   for (const [id, method, params] of notFoundRows) {
     session.send({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) });

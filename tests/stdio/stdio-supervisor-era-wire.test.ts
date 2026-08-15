@@ -376,6 +376,92 @@ test("wire: worker-down modern discover queues, releases to a DiscoverResult, an
   assert.equal(conflict.error?.data?.selectedEra, "legacy");
 });
 
+test("wire: after a modern lock, a deep-invalid clientInfo _meta value forwards to the worker and answers the SDK's bare -32602", { timeout: 90_000 }, async (t) => {
+  if (!(await canUseNativeStdioPipes())) {
+    t.skip("native child-process stdio pipes close immediately in this runtime");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    // Graceful, orphan-free shutdown (inlined here because the shared
+    // startSupervisor helper also serves the pre-existing tests): ending
+    // stdin drives the supervisor's client-closed shutdown path
+    // (src/stdio-supervisor.ts handleClientClosed -> shutdown), which
+    // terminates the detached worker process group before exiting. A bare
+    // SIGKILL races worker startup and can orphan a worker holding the
+    // src/cli.ts keep-alive timer, so SIGKILL only remains as the
+    // last-resort fallback when the exit poll times out.
+    const exited = (): boolean =>
+      session.child.exitCode !== null || session.child.signalCode !== null;
+    if (!exited()) {
+      session.child.stdin.end();
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline && !exited()) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!exited()) {
+        session.child.kill("SIGKILL");
+      }
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+
+  // Modern lock via a fully VALID modern request (tools/list is served and
+  // pins the worker's SDK connection to the modern era).
+  session.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: { _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} } }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 30_000, "valid modern tools/list reply");
+  const locked = session.frames.find((frame) => frame.id === 1) as { result?: unknown; error?: unknown };
+  assert.equal(locked.error, undefined, "the locking request must be VALID and served");
+  assert.ok(locked.result, "the locking tools/list must answer a result");
+
+  // Deep value violation behind a shallow-VALID claim: the supervisor
+  // admission gate checks only protocolVersion (string) + clientCapabilities
+  // (object) — "io.modelcontextprotocol/clientInfo" is not part of the
+  // shallow check, so `clientInfo: 42` FORWARDS to the worker, whose SDK
+  // validates the full envelope and rejects it -32602.
+  session.send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {
+      _meta: {
+        [PROTOCOL_VERSION_KEY]: "2026-07-28",
+        [CLIENT_CAPABILITIES_KEY]: {},
+        "io.modelcontextprotocol/clientInfo": 42
+      }
+    }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 2), 30_000, "-32602 reply for id 2");
+  const rejected = session.frames.find((frame) => frame.id === 2) as {
+    result?: unknown;
+    error?: Record<string, unknown>;
+  };
+
+  // PINS the previously-extrapolated SDK pinned-path envelope shape the
+  // integrator docs describe: a bare JSON-RPC -32602 with the SDK's
+  // "Invalid _meta envelope …" message and NO `data` field — observed live
+  // here, discriminating it from every supervisor-built rejection (those
+  // always carry `data.kind`, e.g. missing_meta / era_conflict).
+  assert.equal(rejected.result, undefined, "the deep violation must answer an error, not a result");
+  assert.deepEqual(rejected.error, {
+    code: -32602,
+    message:
+      "Invalid _meta envelope for protocol revision 2026-07-28: Invalid input: expected object, received number"
+  });
+  assert.equal(
+    "data" in (rejected.error ?? {}),
+    false,
+    "the SDK pinned-path rejection carries NO data field (a supervisor data.kind rejection would)"
+  );
+});
+
 test("wire: a Content-Length-framed claim-less request is rejected -32602 in Content-Length framing", { timeout: 30_000 }, async (t) => {
   if (!(await canUseNativeStdioPipes())) {
     t.skip("native child-process stdio pipes close immediately in this runtime");
