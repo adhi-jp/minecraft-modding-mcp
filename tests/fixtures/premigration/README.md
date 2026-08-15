@@ -141,6 +141,13 @@ selection as `npm test` run with node's TAP reporter; one line per test point
 `<subtest-depth>\t<ok|not ok>\t<name>`; indices and timings stripped; lines
 sorted (set semantics — file interleaving is not deterministic).
 
+**Rename normalization** — eleven captured names carry a legacy `F-nn: ` ID
+prefix (four `listFiles`/`searchFiles` cursor tests, five `getModClassSource`
+truncation tests, one `resolveArtifact` strictVersion test, one
+`search-class-source` queryMode test). The live suite has since dropped these
+prefixes with the name bodies unchanged; before set-differencing this
+inventory against a current run, strip `/^F-[0-9]{2}: /` from captured names.
+
 ### `error-code-inventory.json`
 
 Observed wire error codes per exercised error path:

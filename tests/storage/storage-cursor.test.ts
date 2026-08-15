@@ -714,9 +714,9 @@ test("symbolsRepo.countScopedSymbols returns correct count", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// F-02: Invalid cursor rejection
+// Invalid cursor rejection
 // ---------------------------------------------------------------------------
-test("F-02: listFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
+test("listFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
   const { artifacts, files } = await createRepos();
   seedArtifact(artifacts, "artifact-cursor-invalid");
   files.replaceFilesForArtifact("artifact-cursor-invalid", [
@@ -729,7 +729,7 @@ test("F-02: listFiles with invalid cursor throws ERR_INVALID_INPUT", async () =>
   );
 });
 
-test("F-02: listFiles with valid base64 but wrong schema throws ERR_INVALID_INPUT", async () => {
+test("listFiles with valid base64 but wrong schema throws ERR_INVALID_INPUT", async () => {
   const { artifacts, files } = await createRepos();
   seedArtifact(artifacts, "artifact-cursor-schema");
   files.replaceFilesForArtifact("artifact-cursor-schema", [
@@ -744,7 +744,7 @@ test("F-02: listFiles with valid base64 but wrong schema throws ERR_INVALID_INPU
   );
 });
 
-test("F-02: searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
+test("searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
   const { artifacts, files } = await createRepos();
   seedArtifact(artifacts, "artifact-search-cursor-invalid");
   files.replaceFilesForArtifact("artifact-search-cursor-invalid", [
@@ -757,7 +757,7 @@ test("F-02: searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () 
   );
 });
 
-test("F-02: listFiles with undefined/empty cursor returns first page (unchanged)", async () => {
+test("listFiles with undefined/empty cursor returns first page (unchanged)", async () => {
   const { artifacts, files } = await createRepos();
   seedArtifact(artifacts, "artifact-cursor-empty");
   files.replaceFilesForArtifact("artifact-cursor-empty", [

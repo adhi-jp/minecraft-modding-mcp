@@ -139,7 +139,7 @@ test("SourceService searchClassSource with ** glob pattern does not crash", asyn
   }
 });
 
-test("F-03: search-class-source handles representative queryMode behavior for separator queries", async (t) => {
+test("search-class-source handles representative queryMode behavior for separator queries", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");
 
   type SearchQueryModeFixture = {

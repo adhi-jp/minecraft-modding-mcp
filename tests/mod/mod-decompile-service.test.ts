@@ -225,7 +225,7 @@ test("decompileModJar supports maxFiles for compact class listings", async () =>
 });
 
 // ---------------------------------------------------------------------------
-// F-04: getModClassSource truncation params
+// getModClassSource truncation params
 // ---------------------------------------------------------------------------
 function buildMockService(
   root: string,
@@ -257,7 +257,7 @@ function buildMockService(
   return service;
 }
 
-test("F-04: getModClassSource maxLines truncates output", async () => {
+test("getModClassSource maxLines truncates output", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-maxlines-"));
   const jarPath = join(root, "demo.jar");
   await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
@@ -279,7 +279,7 @@ test("F-04: getModClassSource maxLines truncates output", async () => {
   assert.equal(result.truncated, true);
 });
 
-test("F-04: getModClassSource maxChars truncates output", async () => {
+test("getModClassSource maxChars truncates output", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-maxchars-"));
   const jarPath = join(root, "demo.jar");
   await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
@@ -301,7 +301,7 @@ test("F-04: getModClassSource maxChars truncates output", async () => {
   assert.equal(result.truncated, true);
 });
 
-test("F-04: getModClassSource outputFile writes to file and returns placeholder", async () => {
+test("getModClassSource outputFile writes to file and returns placeholder", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-outfile-"));
   const jarPath = join(root, "demo.jar");
   await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
@@ -325,7 +325,7 @@ test("F-04: getModClassSource outputFile writes to file and returns placeholder"
   assert.ok(written.includes("class Demo"));
 });
 
-test("F-04: getModClassSource outputFile honors maxLines truncation", async () => {
+test("getModClassSource outputFile honors maxLines truncation", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-outfile-maxlines-"));
   const jarPath = join(root, "demo.jar");
   await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
@@ -350,7 +350,7 @@ test("F-04: getModClassSource outputFile honors maxLines truncation", async () =
   assert.equal(result.truncated, true);
 });
 
-test("F-04: getModClassSource with no truncation params returns full content", async () => {
+test("getModClassSource with no truncation params returns full content", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-full-"));
   const jarPath = join(root, "demo.jar");
   await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });

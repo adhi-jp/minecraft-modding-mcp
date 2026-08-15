@@ -319,7 +319,7 @@ test("resolveArtifact flags representative version-approximated mismatches", { c
   }
 });
 
-test("F-01: resolveArtifact handles strictVersion for approximated version results", { concurrency: false }, async (t) => {
+test("resolveArtifact handles strictVersion for approximated version results", { concurrency: false }, async (t) => {
   const cases: Array<{
     name: string;
     rootPrefix: string;
