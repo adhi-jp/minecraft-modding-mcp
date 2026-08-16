@@ -514,3 +514,53 @@ test("wire: a Content-Length-framed claim-less request is rejected -32602 in Con
   assert.equal(body.error?.code, -32602);
   assert.equal(body.error?.data?.kind, "missing_meta");
 });
+
+test("wire: initialize carrying a valid modern _meta envelope still completes the LEGACY handshake", { timeout: 90_000 }, async (t) => {
+  if (!(await canUseNativeStdioPipes())) {
+    t.skip("native child-process stdio pipes close immediately in this runtime");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // A hybrid client attaches a VALID modern era claim to a legacy initialize.
+  // The supervisor's admission rule is "initialize is the legacy era signal;
+  // the envelope is ignored" — and the SDK's opening classifier would treat
+  // the claim-bearing initialize as MODERN, so the supervisor must strip the
+  // era-claim keys before the frame reaches the worker. The observable
+  // contract: the handshake COMPLETES as legacy (v1 ignored unknown _meta).
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+  session.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} },
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "era-wire-hybrid", version: "1.0.0" }
+    }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 60_000, "initialize reply for id 1");
+  const reply = session.frames.find((frame) => frame.id === 1) as {
+    result?: { protocolVersion?: unknown };
+    error?: unknown;
+  };
+  assert.equal(reply.error, undefined, "the enveloped initialize must negotiate, not error");
+  assert.equal(reply.result?.protocolVersion, "2025-06-18", "the legacy body version must be echoed");
+
+  // The process is legacy-locked and SERVES: initialized + tools/list work.
+  session.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+  session.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+  await waitFor(() => session.frames.some((frame) => frame.id === 2), 30_000, "tools/list reply for id 2");
+  const list = session.frames.find((frame) => frame.id === 2) as {
+    result?: { tools?: unknown };
+    error?: unknown;
+  };
+  assert.equal(list.error, undefined, "tools/list must be served on the legacy-locked process");
+  assert.ok(Array.isArray(list.result?.tools), "tools/list must carry a tools array");
+});

@@ -147,6 +147,30 @@ export function extractModernRequestContext(params: unknown): ModernRequestConte
   return context;
 }
 
+/**
+ * Strips the modern era-claim keys from a request's `params._meta` IN PLACE,
+ * deleting `_meta` entirely when nothing else remains. Used by the supervisor
+ * for accepted legacy `initialize` frames: the admission rule classifies every
+ * initialize as the legacy era signal regardless of its envelope, but the
+ * SDK's opening classifier treats an initialize carrying a valid modern claim
+ * as MODERN — the strip keeps the worker's classification aligned with the
+ * admission decision. Mutation is in place deliberately: the framing-mode
+ * registry is keyed by the exact inbound frame object, and no
+ * {@link ModernRequestContext} ever aliases an initialize's `_meta` (an
+ * initialize never classifies as a modern signal at admission).
+ */
+export function stripModernEraClaimInPlace(params: unknown): void {
+  if (!isPlainObject(params)) return;
+  const meta = (params as { _meta?: unknown })._meta;
+  if (!isPlainObject(meta)) return;
+  delete meta[PROTOCOL_VERSION_META_KEY];
+  delete meta[CLIENT_CAPABILITIES_META_KEY];
+  delete meta[CLIENT_INFO_META_KEY];
+  if (Object.keys(meta).length === 0) {
+    delete (params as Record<string, unknown>)._meta;
+  }
+}
+
 const SUPPORTED_VERSIONS_SENTENCE =
   `Supported protocol versions: ${LEGACY_PROTOCOL_VERSIONS.join(", ")} (legacy initialize handshake) ` +
   `and ${MODERN_PROTOCOL_VERSION} (modern per-request _meta).`;

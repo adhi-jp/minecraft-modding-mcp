@@ -463,13 +463,31 @@ test("initialize carrying a shallow-valid modern _meta envelope still locks lega
     id: 1,
     method: "initialize",
     params: {
-      _meta: modernMeta(),
+      _meta: {
+        ...modernMeta(),
+        "io.modelcontextprotocol/clientInfo": { name: "hybrid", version: "0" },
+        progressToken: "keep-me"
+      },
       protocolVersion: "2025-06-18",
       capabilities: {},
       clientInfo: { name: "era-state-test", version: "1.0.0" }
     }
   } as JSONRPCRequest);
   assert.equal(hasFrame(workerWrites, '"method":"initialize"'), true);
+  // The forwarded frame must not carry the modern era-claim keys: the SDK's
+  // opening classifier treats an initialize WITH a valid modern claim as
+  // MODERN, which would diverge from this admission rule and fail the
+  // handshake on a real worker. Non-era _meta keys pass through untouched.
+  assert.equal(
+    hasFrame(workerWrites, "io.modelcontextprotocol/"),
+    false,
+    "the era-claim _meta keys must be stripped before the initialize reaches the worker"
+  );
+  assert.equal(
+    hasFrame(workerWrites, "keep-me"),
+    true,
+    "non-era _meta keys must survive the strip"
+  );
   supervisor.handleWorkerMessage(child, initializeResult(1));
   assert.equal((outbound.at(-1) as { id?: number; error?: unknown }).id, 1);
   assert.equal((outbound.at(-1) as { error?: unknown }).error, undefined);

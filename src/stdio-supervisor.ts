@@ -18,6 +18,7 @@ import {
   buildMissingMetaRejection,
   classifyEraSignal,
   extractModernRequestContext,
+  stripModernEraClaimInPlace,
   type Era,
   type EraSignal
 } from "./era-classifier.js";
@@ -971,6 +972,13 @@ export class StdioSupervisor {
         return;
       }
       this.era = "legacy";
+      // The SDK's opening classifier treats an initialize that carries a
+      // valid modern era claim as MODERN, diverging from this admission rule
+      // ("initialize is the legacy era signal; the envelope is ignored") and
+      // failing the handshake on the worker. Strip the era-claim keys before
+      // the frame is cached, queued, or forwarded (in place: the framing-mode
+      // registry is keyed by this exact frame object).
+      stripModernEraClaimInPlace(message.params);
       if (!this.child && this.liveCapOccupancy() >= 2) {
         // Capture-ordering fix: the cap-blocked rejection happens BEFORE
         // capture, so a rejected initialize can never enter (or corrupt) the
@@ -1869,8 +1877,10 @@ export class StdioSupervisor {
    *  1. settle the pending entry,
    *  2. record the finality tombstone (id + originating worker generation +
    *     framing mode) so a late worker response for the id is discarded —
-   *     ONLY when the id was actually FORWARDED to a worker (i.e. the pending
-   *     entry was live in pendingRequests at synthesis). Never-forwarded
+   *     ONLY when the id was actually FORWARDED to a worker (i.e. the entry
+   *     in pendingRequests at the id IS the snapshot instance being
+   *     answered; an id-colliding DIFFERENT live entry is left untouched).
+   *     Never-forwarded
    *     rejections (queue-limit at admission and at the forward fallback,
    *     queue-phase validate timeout, cap-blocked replies, startup-failure
    *     terminalization of queued work, the retained-initialize error) record
@@ -1894,7 +1904,14 @@ export class StdioSupervisor {
   ): void {
     const key = requestKey(snapshot.id);
     const pending = this.pendingRequests.get(key);
-    if (pending) {
+    // Settle ONLY the exact forwarded instance this synthesis answers. A
+    // never-forwarded snapshot (queue-limit, cap-blocked, intercept, queued
+    // terminalization, ad-hoc literals) whose id collides with a DIFFERENT
+    // live forwarded request must not delete or tombstone that live entry:
+    // the tombstone would discard the worker's real answer and strand the
+    // validate barrier (id reuse is a client-side JSON-RPC violation, but
+    // the live request keeps its exactly-one-response guarantee).
+    if (pending && pending === snapshot) {
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       this.pendingRequests.delete(key);
       this.syntheticTombstones.set(key, {
@@ -1947,6 +1964,20 @@ export class StdioSupervisor {
 
   private clearInitialInitializationState(): void {
     if (this.clientInitialized) return;
+    if (this.initializeRequest) {
+      // A preserved not-yet-answered initialize map entry (kept across worker
+      // exit for replay correlation) is orphaned once the cached handshake is
+      // discarded: no replay can ever answer it, and leaving it would block
+      // validate-project dispatch forever and resurface at the next worker
+      // exit as a duplicate reply. Drop it without a tombstone — its
+      // generation is gone, so no late answer can arrive.
+      const staleKey = requestKey(this.initializeRequest.id);
+      const stale = this.pendingRequests.get(staleKey);
+      if (stale?.method === "initialize") {
+        if (stale.deadlineTimer) this.timerClearer(stale.deadlineTimer);
+        this.pendingRequests.delete(staleKey);
+      }
+    }
     this.initializeRequest = undefined;
     this.initializedNotification = undefined;
     this.replayingInitialization = false;

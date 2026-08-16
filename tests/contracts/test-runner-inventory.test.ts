@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 208;
+const EXPECTED_ORDINARY_TEST_FILES = 209;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -94,7 +94,14 @@ const EXPECTED_ORDINARY_TEST_FILES = 208;
 // ProblemDetails golden tests (13-fixture replay inventory, ten ordinary
 // Zod goldens + runtime-metrics deep-equal after normalization, the two
 // approved omitted-arguments outcome classes, mutation self-check).
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1820;
+// 208 -> 209 / 1820 -> 1823 (supervisor finality and era-claim review fixes):
+// tests/stdio/stdio-supervisor-finality-id-reuse.test.ts adds 2
+// finality-entitlement tests (queue-limit synthesis for a reused live id must
+// not settle the live validate-project entry; a cap-blocked re-initialize
+// drops the orphaned preserved same-id initialize entry), and
+// tests/stdio/stdio-supervisor-era-wire.test.ts gains 1 enveloped-initialize
+// legacy-handshake wire test (era-claim strip before the worker).
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1823;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
