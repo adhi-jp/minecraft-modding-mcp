@@ -27,6 +27,16 @@ It runs over stdio and works with Claude Desktop, Claude Code, VS Code, Codex CL
 - **NBT, registry, cache, and diagnostics**: patch NBT payloads, inspect generated registry data, and manage cache/runtime state
 - **MCP resources**: expose versions, class source, artifact metadata, and mappings through URI-based resources
 
+## Protocol Support
+
+The server implements MCP protocol revision `2026-07-28` and keeps the legacy initialize-based protocol (`2025-11-25` back through `2024-10-07`) fully supported in the same binary — no configuration needed:
+
+- **Legacy clients** initialize as before and see the same tool names, input contracts, and response envelopes — byte-compatible except for a short list of recorded deviations (see the legacy-exceptions list in [docs/tool-reference.md → MCP Protocol Support](docs/tool-reference.md#mcp-protocol-support)).
+- **Modern clients** (2026-07-28) skip `initialize`, probe with `server/discover`, and send per-request `io.modelcontextprotocol/*` `_meta`. Modern results carry `resultType`, cache metadata (`ttlMs` / `cacheScope`), and the server identity echo.
+- One stdio process serves one era, selected by the client's first signal; the selection persists across the server's internal worker restarts.
+
+Wire-level details — era selection, the rejection and version-negotiation tables, cache values, and framing — are in [docs/tool-reference.md → MCP Protocol Support](docs/tool-reference.md#mcp-protocol-support).
+
 ## Quick Start
 
 ### Package Users

@@ -305,7 +305,7 @@ Every per-entry `suggestedCall` is validated through the same `tool-schema-regis
 
 If the **shared resolution itself** fails (e.g. `target.kind="version"` with an unknown version), the batch returns a top-level error envelope (no `results[]`). `failFast` does not apply because no entries ran.
 
-Rollback: `BATCH_TOOLS_OFF=1` removes all four batch tools from `tools/list`. Direct `tools/call` for any of them returns the SDK-level "Method not found" tool-result envelope (`{ content: [{ type: "text", text: "MCP error -32602: Tool <name> not found" }], isError: true }`) — no `ProblemDetails` is produced, so callers cannot rely on `error.code === "ERR_*"` for disabled tools.
+Rollback: `BATCH_TOOLS_OFF=1` removes all four batch tools from `tools/list`. Direct `tools/call` for any of them is answered per era: legacy clients receive a SUCCESSFUL tool-result envelope (`{ content: [{ type: "text", text: "MCP error -32602: Tool <name> not found" }], isError: true }`, no `structuredContent` key), while modern clients receive a raw JSON-RPC `-32602` error (see `## MCP Protocol Support` → Rejection and error table). Neither shape carries `ProblemDetails`, so callers cannot rely on `error.code === "ERR_*"` for disabled tools.
 
 ### batch-class-source
 
@@ -367,7 +367,7 @@ These environment variables are read once at worker startup and provide rollback
 | `MEMBERS_STATUS_LEGACY=1` | Omits the additive `status` / `unavailableReason` / `suggestedCall` fields from `get-class-members` results. Restores the pre-status response shape for callers that pre-date the new enum. | `tests/source-service-get-class-members-status.test.ts` (`B7: MEMBERS_STATUS_LEGACY=1 strips the new fields`) |
 | `VERIFY_MIXIN_TARGET_OFF=1` | Removes `verify-mixin-target` from `tools/list` and rejects direct invocations with `ERR_INVALID_INPUT`. Use as a rollback path while the accessor-inference rules stabilize. | `tests/entry-tools-verify-mixin-target.test.ts` (`C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls`) |
 | `SUGGESTED_CALL_VALIDATE_OFF=1` | Bypasses the `ProblemDetails.suggestedCall` schema validation gate. Raw caller-supplied payloads are emitted unchanged (matching the pre-gate behaviour); `error.hints` does not gain the fallback line. Use only as an emergency rollback if the gate causes unexpected drops in production. | `tests/build-suggested-call.test.ts` (`D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation`) |
-| `BATCH_TOOLS_OFF=1` | Removes the 4 batch lookup tools (`batch-class-source`, `batch-class-members`, `batch-symbol-exists`, `batch-mappings`) from `tools/list`. Direct calls return the SDK "Tool not found" tool-result envelope (`isError: true`, no `ProblemDetails`). Use as an emergency rollback while the batch contract stabilizes. | `tests/manual/stdio-client-smoke.manual.ts` (`runBatchToolsOffProbe`) |
+| `BATCH_TOOLS_OFF=1` | Removes the 4 batch lookup tools (`batch-class-source`, `batch-class-members`, `batch-symbol-exists`, `batch-mappings`) from `tools/list`. Direct calls answer per era: legacy gets the successful `isError: true` "Tool not found" envelope, modern gets a raw JSON-RPC `-32602` (no `ProblemDetails` in either shape; see `## MCP Protocol Support`). Use as an emergency rollback while the batch contract stabilizes. | `tests/manual/stdio-client-smoke.manual.ts` (`runBatchToolsOffProbe`); `tests/stdio/stdio-error-code-inventory.test.ts` |
 
 
 ## Migration Notes
@@ -444,6 +444,132 @@ Tools may publish execution counters on `meta` alongside the fields above. The N
 JSON resources follow the same `result/error/meta` pattern. Text resources return plain text on success.
 
 The same JSON envelope is mirrored in MCP `structuredContent` for SDK-aware clients, and failures also set `isError=true`.
+
+The application-level `meta` field above is distinct from protocol-level `_meta`. Modern-era protocol fields (`resultType`, `ttlMs`, `cacheScope`, and the `io.modelcontextprotocol/serverInfo` identity echo in result `_meta`) sit at the MCP protocol result level, outside the application envelope, and appear only for modern-era clients (see `## MCP Protocol Support`).
+
+## MCP Protocol Support
+
+The stdio server implements MCP protocol revision `2026-07-28` and keeps the legacy initialize-based protocol fully supported in the same process. One process serves exactly one era; the first valid era signal selects it.
+
+### Era selection
+
+- A process starts with no era selected.
+- `initialize` selects the LEGACY era. Any `io.modelcontextprotocol/*` era-claim keys inside `initialize` `params._meta` are ignored for classification and stripped before the frame reaches the worker (other `_meta` keys pass through), so a hybrid client that attaches a modern claim to `initialize` still completes the legacy handshake.
+- A request whose `params._meta` carries BOTH `io.modelcontextprotocol/protocolVersion` (string) and `io.modelcontextprotocol/clientCapabilities` (object) selects the MODERN era. Selection is shallow: values are validated by the worker after selection, so an unsupported version string still locks modern and then answers `-32022`.
+- The lock is one-way and survives internal worker restarts. There is no era-switch method; switching eras requires a fresh process (see the recovery sequence below).
+- `server/discover` is era-neutral: it never selects an era. Per-state outcomes are in the rejection table.
+- An ordinary request received before any era signal is rejected with `-32602` `data.kind: "missing_meta"`. A notification received before any era signal is consumed without a response and without forwarding.
+
+### Legacy era (initialize handshake)
+
+Supported protocol versions: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, `2024-10-07`. Each is echoed verbatim by `initialize`. Any other requested version negotiates down to `2025-11-25`.
+
+The supervisor caches the completed `initialize` / `notifications/initialized` pair and replays it into a replacement worker before queued requests are released; replay failure is a startup failure (see `ERR_WORKER_RESTART` in `## Errors`).
+
+The legacy wire contract is byte-compatible with the pre-migration (SDK v1) server, with these recorded exceptions:
+
+- `tools/call` with `arguments` omitted reaches the application validator as `{}`. Three outcome arms: (a) input-free tools succeed (`get-runtime-metrics`); (b) required-field schemas answer per-field `ERR_INVALID_INPUT` (`analyze-mod`); (c) a `{}`-accepting schema whose handler requires input answers that tool's own handler-level ProblemDetails — `json-to-nbt` answers `ERR_NBT_INVALID_TYPED_JSON` (status 400, `isError: true`) instead of the pre-migration validation-layer `ERR_INVALID_INPUT`.
+- Legacy `tools/list` entries omit the v1-only `execution: {"taskSupport":"forbidden"}` field (SDK v2 does not emit it); every other advertised field, including the `inputSchema` bytes, is identical to the pre-migration snapshots.
+- An unknown or disabled tool is answered immediately at the supervisor, before queueing: the reply bytes are identical to v1, but the reply consumes no queue slot and no worker round-trip, so reply ordering and queue-overflow outcomes can differ from v1 under concurrent load.
+- The unmatched-resource-URI error keeps the raw JSON-RPC `-32602` code, but its message changed from the pre-migration `MCP error -32602: Resource <uri> not found` to `Resource not found: <uri>`, and the error carries a `data.uri` field (SDK v2 wording).
+
+### Modern era (2026-07-28, stateless)
+
+Modern clients never send `initialize`. Every request carries `params._meta`:
+
+| `_meta` key | Requirement | Value |
+| --- | --- | --- |
+| `io.modelcontextprotocol/protocolVersion` | required | `"2026-07-28"` |
+| `io.modelcontextprotocol/clientCapabilities` | required | object (for example `{}`) |
+| `io.modelcontextprotocol/clientInfo` | optional | `{ name, version }` |
+
+Recommended bootstrap probe (era-neutral — it never locks an era; per-state outcomes are under the rejection table):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "server/discover",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+The discover result carries `supportedVersions: ["2026-07-28"]` (the modern per-request set — the legacy matrix is advertised through `initialize` negotiation, not through discover), `capabilities`, the server identity in `result._meta["io.modelcontextprotocol/serverInfo"]`, `resultType`, and the cache fields. `capabilities` advertises `tools: { listChanged: true }` and `resources: { listChanged: true }`; the SDK derives these from the registration surface, and the server never emits `notifications/tools/list_changed` or `notifications/resources/list_changed` — the tool and resource surface is fixed at process start by environment flags.
+
+Probe fallback rule for clients: fall back to the legacy `initialize` handshake on ANY unrecognized probe error or on a probe timeout — never key the fallback to one specific error code. Back-to-back pipelining is safe: a modern-claim `server/discover` immediately followed by `initialize` in one stdin chunk is admitted atomically in stdin order — the discover is answered with a DiscoverResult, the initialize negotiates, and the process ends legacy-locked. One narrow exception: when the worker is down (restarting) as that pair arrives, the replayed `initialize` pins the replacement worker first and the queued discover is answered `-32601`; the any-error fallback rule covers this case.
+
+Every modern result — tool calls, resource reads, list methods, `server/discover`, and supervisor-synthesized results — carries `resultType: "complete"` and echoes the same server identity as discover in `result._meta["io.modelcontextprotocol/serverInfo"]`. `input_required` is never emitted. Raw JSON-RPC error responses never carry result-only fields.
+
+Absent modern surfaces: `prompts/list` is not advertised and answers `-32601`. `ping`, `logging/setLevel`, `tasks/list`, and `tasks/get` answer `-32601` in the modern era; legacy `ping` keeps its automatic `{}` pong. `subscriptions/listen` is intentionally absent in BOTH eras: no capability is advertised, the worker runs with `maxSubscriptions: 0`, the rejection is `-32601`, and it is non-retryable — there is no live update stream to wait for. The server never sends `notifications/message`; logging goes to stderr.
+
+### Cache metadata (modern era only)
+
+Both `ttlMs` and `cacheScope` are returned by exactly these cacheable methods: `tools/list`, `resources/list`, `resources/read`, `resources/templates/list`, `server/discover`, and `prompts/list` were it exposed (it is not). This is the protocol's five-method cacheable list plus `server/discover` (SDK/schema default row). Values:
+
+| Surface | `cacheScope` | `ttlMs` |
+| --- | --- | ---: |
+| `tools/list` | `private` | `0` |
+| `server/discover` | `private` | `0` |
+| `resources/list`, `resources/templates/list` | `private` | `3600000` |
+| `mc://versions/list` read | `private` | `300000` |
+| `mc://metrics` read | `private` | `0` |
+| class source, artifact, mapping, member, and artifact-metadata reads | `private` | `60000` |
+| any successful read whose content is a ProblemDetails failure envelope | `private` | `0` |
+
+The ProblemDetails row takes precedence over the resource-class rows; otherwise an exact-URI row beats a class row. Legacy responses carry no cache fields, no `resultType`, and no protocol `_meta` identity echo.
+
+### Version negotiation
+
+| Client sends | Outcome |
+| --- | --- |
+| `initialize` with `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`, or `2024-10-07` | verbatim echo; legacy era |
+| `initialize` with any other version string | negotiates down to `2025-11-25`; legacy era |
+| modern `_meta` with `protocolVersion: "2026-07-28"` | served; modern era |
+| modern `_meta` with any other version string | LOCKS modern, then answers `-32022` with `data: { supported: ["2026-07-28"], requested }` — retry with a version from `data.supported`; do NOT fall back to `initialize` (the process is already modern-locked and would answer `-32601` `era_conflict`) |
+
+### Rejection and error table
+
+`-32602` reaches clients in distinct shapes. Branch on `error.data.kind` when present; the remaining shapes are distinguished by message family (most are data-less; the resource-miss row carries `data.uri`):
+
+| Producer | State / trigger | Method scope | Code | Discriminator |
+| --- | --- | --- | --- | --- |
+| supervisor | no era selected; request without a valid era signal | any non-`server/discover` request | `-32602` | `data.kind: "missing_meta"` with `data.missing[]` (plus `data.invalid[]` for wrong-typed keys); the message names both recovery paths |
+| supervisor | modern-locked; claim-less request | any request, including `server/discover` | `-32602` | `data.kind: "missing_meta"`; the message names the required keys |
+| worker (SDK) | modern-locked; shallow-valid claim with a deep-invalid `_meta` value | forwarded requests | `-32602` | data-less; message starts `Invalid _meta envelope for protocol revision 2026-07-28:` (pinned example: `Invalid _meta envelope for protocol revision 2026-07-28: Invalid input: expected object, received number`) |
+| worker (SDK) | params-schema violation, for example non-object `tools/call` `arguments` | both eras | `-32602` | data-less; message starts `Invalid tools/call request:`; the request never reaches the application validator |
+| worker (SDK) | unmatched resource URI | `resources/read`, both eras | `-32602` | message `Resource not found: <uri>` with `data.uri` (the pre-migration server answered `MCP error -32602: Resource <uri> not found` without `data` — code unchanged, message family changed) |
+| worker (SDK) | unknown or disabled tool, MODERN era | `tools/call` | `-32602` | raw JSON-RPC error (sanctioned modern contract; the modern era never had a v1 contract here) |
+| supervisor | unknown or disabled tool, LEGACY era | `tools/call` | none | SUCCESSFUL `CallToolResult` with `isError: true`, text `MCP error -32602: Tool <name> not found`, and NO `structuredContent` key — the missing `structuredContent` is the discriminator against a genuine tool failure |
+| supervisor | modern-locked; `initialize` arrives | `initialize` | `-32601` | `data.kind: "era_conflict"`, `selectedEra: "modern"`, `requestedEra: "legacy"`, `supported[]` = all six versions |
+| supervisor | legacy-locked; modern-claim request arrives | any modern-claim request | `-32600` | `data.kind: "era_conflict"`, `selectedEra: "legacy"`, `requestedEra: "modern"` |
+| supervisor / worker | `subscriptions/listen` | both eras | `-32601` | plain `Method not found` (no data). Non-legacy states reject at supervisor admission; a modern-signal listen still era-locks first, and a claim-less listen in non-legacy states fails the envelope check with `-32602` before the method rejection |
+| worker (SDK) | modern request with an unsupported `protocolVersion` value | forwarded requests | `-32022` | `data.supported: ["2026-07-28"]`, `data.requested` |
+| supervisor | queue overflow, non-`tools/call` request | requests | `-32000` | message `MCP supervisor request queue is full.` (`tools/call` overflow receives the `ERR_LIMIT_EXCEEDED` `isError` result instead — see `## Meta fields`) |
+
+`server/discover` per state: a valid modern-claim discover never selects or changes the era. It receives a DiscoverResult in the unselected and modern-locked states; in the legacy-locked state it is forwarded to the legacy-pinned worker, which answers `-32601` (the probe's any-error fallback rule covers this). A claim-less discover: unselected → `-32602` `missing_meta`; modern-locked → `-32602` `missing_meta`; legacy-locked → forwarded → `-32601`.
+
+Era-conflict messages embed a launcher-neutral recovery sequence: close this transport, terminate and respawn the configured server command as a fresh stdio process, discard or re-issue any pending request ids, then perform the wanted era's opening (`initialize` + `notifications/initialized`, or a request carrying the required `io.modelcontextprotocol/*` `_meta` envelope).
+
+Notification variants: a modern-era notification without a valid claim (for example a claim-less `notifications/cancelled`) is never forwarded to the worker; it is dropped with a logged `supervisor.notification_dropped` warning and, like every notification, receives no response. Supervisor-side bookkeeping still applies: a claim-less cancellation for a running `validate-project` still cancels it, and the eventual response is suppressed per MCP cancellation semantics.
+
+### Synthetic terminal responses and retry semantics
+
+Supervisor-synthesized replies (queue overflow, worker restart, `validate-project` timeout, startup failure — shapes in `## Errors` and `## Meta fields`) are FINAL for that request instance: a late worker answer for the same id is discarded, so a client sees exactly one response per id. Retrying with the SAME id after a synthetic terminal reply is legal — the retry re-forwards and clears the finality bookkeeping. Era rejections synthesize no such finality (they answer without forwarding), and dropped notifications receive no response at all. Modern-era synthetic results are decorated like ordinary modern results (`resultType: "complete"` plus the identity `_meta` echo); legacy synthetic results remain byte-compatible with the pre-migration shapes.
+
+### Framing
+
+Standard framing is newline-delimited JSON-RPC (the MCP stdio standard). `Content-Length` header framing is a LOCAL, NONSTANDARD compatibility extension — it is not part of MCP. The reader auto-detects both and may switch mid-stream; every response, including synthetic replies and replies released after a worker restart, uses the framing of the request it answers. `MCP_MAX_FRAME_BYTES` bounds accepted frames (see `## Environment Variables`).
+
+### Adopted-policy note
+
+The 2026-07-28 revision does not mandate specific mixed-era conflict rules or unselected-state behavior for one stdio process. The era-conflict codes, `missing_meta` rejections, one-way lock, and discover neutrality documented here are this server's adopted policy, pinned by the committed wire suites (`tests/stdio/stdio-supervisor-era-state.test.ts`, `tests/stdio/stdio-supervisor-era-wire.test.ts`, `tests/stdio/stdio-supervisor-era-lifecycle.test.ts`). If a future protocol revision defines normative rules for these cases, those rules supersede this policy.
+
+Tooling note: `pnpm test:manual:stdio-smoke` runs against the production supervisor by default; its direct-worker bridge fallback mode bypasses the supervisor and therefore observes the worker-level raw `-32602` for disabled tools instead of the restored legacy `isError` envelope.
 
 ## Mapping Policy
 
@@ -575,7 +701,7 @@ Internal worker-mode environment variables are reserved for the transport implem
 | Component | Technology |
 | --- | --- |
 | Runtime | Node.js 22+ |
-| Transport | stdio with newline and `Content-Length` framing support |
+| Transport | stdio, MCP protocol revision `2026-07-28` plus the legacy initialize protocol (dual-era, see `## MCP Protocol Support`); newline framing standard, `Content-Length` as a local extension |
 | Storage | SQLite for artifact metadata, source indexing, and cache bookkeeping |
 | Decompilation | [Vineflower](https://github.com/Vineflower/vineflower) |
 | Remapping | [tiny-remapper](https://github.com/FabricMC/tiny-remapper) |

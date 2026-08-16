@@ -64,6 +64,8 @@ codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
 
 stdio トランスポートは、改行区切り形式と `Content-Length` フレーミングの両方を自動判別します。そのため、Codex と標準的な MCP クライアントで同じサーバー起動コマンドを利用できます。
 
+サーバーは MCP プロトコルリビジョン `2026-07-28`(`server/discover` とリクエスト単位 `_meta` によるステートレス動作)と、従来の `initialize` ベースのレガシープロトコル(`2025-11-25`〜`2024-10-07`)の両方を同一バイナリでサポートします。1 プロセスはクライアントの最初のシグナルで選択された era を提供します。ワイヤレベルの詳細は [docs/tool-reference.md → MCP Protocol Support](tool-reference.md#mcp-protocol-support) を参照してください。
+
 #### Claude Desktop
 
 `claude_desktop_config.json` に次を追加します:
