@@ -140,6 +140,15 @@ export type InspectMinecraftTask = typeof TASKS[number];
 export type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
 export type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
 
+/**
+ * Read at call time, never at module load: tests flip WORKSPACE_TARGET_OFF per
+ * case, and resolve-artifact itself rejects target.kind="workspace" while it is
+ * set (src/source/workspace-target.ts).
+ */
+function workspaceTargetDisabled(): boolean {
+  return process.env.WORKSPACE_TARGET_OFF === "1";
+}
+
 export function hasPartialVanillaCoverage(artifact: ResolveArtifactOutput | undefined): boolean {
   return artifact?.qualityFlags.includes("partial-source-no-net-minecraft") === true
     || artifact?.artifactContents.sourceCoverage === "partial";
@@ -174,7 +183,14 @@ export function hitTargetsVanillaNamespace(hit: SearchClassSourceOutput["hits"][
 export type InspectMinecraftDeps = {
   listVersions: (input: { includeSnapshots?: boolean; limit?: number }) => Promise<ListVersionsOutput>;
   resolveArtifact: (input: {
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    // `workspace` is not a schema-visible inspect-minecraft target: it is how
+    // this tool asks resolve-artifact to derive version, compile mapping and
+    // loader scope from a project directory, exactly as resolve-artifact does
+    // for the same directory. Re-deriving a {kind:"version"} target here would
+    // drop the workspace mapping and resolve a different artifactId.
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader"; strict?: boolean };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -566,16 +582,22 @@ export async function resolveArtifactReference(
           unique.minecraftVersion ??
           (await deps.detectProjectMinecraftVersion(unique.projectPath));
         if (version) {
-          const artifact = await deps.resolveArtifact({
-            target: { kind: "version", value: version },
-            projectPath: unique.projectPath
-          });
+          // Same routing as the workspace subject: a bare {kind:"version"}
+          // target here would resolve a different artifact than resolve-artifact
+          // does for the same directory. The pre-detected version stays only as
+          // the guard that a workspace is usable at all, so an undetectable one
+          // still falls through to the actionable artifact-context error below.
+          const artifact = await deps.resolveArtifact(
+            workspaceTargetDisabled()
+              ? { target: { kind: "version", value: version }, projectPath: unique.projectPath }
+              : { target: { kind: "workspace" }, projectPath: unique.projectPath }
+          );
           return {
             artifactId: artifact.artifactId,
             artifact,
-            version,
+            version: artifact.version ?? version,
             warnings: [
-              `subject.artifact was omitted; auto-resolved through the unique known workspace ${unique.projectPath} (Minecraft ${version}). Pass subject.artifact to target a different artifact.`,
+              `subject.artifact was omitted; auto-resolved through the unique known workspace ${unique.projectPath} (Minecraft ${artifact.version ?? version}). Pass subject.artifact to target a different artifact.`,
               ...artifact.warnings
             ]
           };
@@ -618,16 +640,42 @@ export async function resolveArtifactReference(
       warnings: [...artifact.warnings]
     };
   }
-  const version = await deps.detectProjectMinecraftVersion(subject.projectPath);
-  if (!version) {
+  if (workspaceTargetDisabled()) {
+    // Kill switch parity: resolve-artifact rejects target.kind="workspace" under
+    // WORKSPACE_TARGET_OFF=1, so fall back to the pre-workspace-target routing
+    // instead of turning the toggle into a hard failure here.
+    const version = await deps.detectProjectMinecraftVersion(subject.projectPath);
+    if (!version) {
+      return {
+        artifactId: "",
+        version: undefined,
+        warnings: [`Could not infer Minecraft version from ${subject.projectPath}.`]
+      };
+    }
+    const legacyArtifact = await deps.resolveArtifact({
+      target: { kind: "version", value: version },
+      mapping: subject.mapping,
+      scope: subject.scope,
+      projectPath: subject.projectPath,
+      ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
+      preferProjectVersion: subject.preferProjectVersion ?? true,
+      strictVersion: subject.strictVersion
+    });
     return {
-      artifactId: "",
-      version: undefined,
-      warnings: [`Could not infer Minecraft version from ${subject.projectPath}.`]
+      artifactId: legacyArtifact.artifactId,
+      artifact: legacyArtifact,
+      version,
+      warnings: [...legacyArtifact.warnings]
     };
   }
+
+  // Hand the directory to resolve-artifact as a workspace target so both tools
+  // agree on the artifact. A failed version detection now surfaces as
+  // ERR_WORKSPACE_VERSION_UNRESOLVED (which carries nextAction + suggestedCall)
+  // instead of degrading to an empty artifactId and a misleading
+  // "Either artifactId or target must be provided." further down the call chain.
   const artifact = await deps.resolveArtifact({
-    target: { kind: "version", value: version },
+    target: { kind: "workspace" },
     mapping: subject.mapping,
     scope: subject.scope,
     projectPath: subject.projectPath,
@@ -638,7 +686,7 @@ export async function resolveArtifactReference(
   return {
     artifactId: artifact.artifactId,
     artifact,
-    version,
+    version: artifact.version,
     warnings: [...artifact.warnings]
   };
 }

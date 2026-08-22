@@ -144,6 +144,128 @@ test("SourceService getClassSource remaps partial-source binary fallback lookups
   assert.ok(mappingCalls.some((call) => call.name === "net.minecraft.world.item.Item"));
 });
 
+test("SourceService getClassSource keeps the requested artifact in CLASS_NOT_FOUND after a successful binary fallback", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-fallback-identity-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        content: [
+          "package net.neoforged.neoforge.items;",
+          "public class Item {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.neoforged.neoforge.items.Item",
+        line: 2
+      }
+    ]
+  });
+
+  seedIndexedArtifact(service, {
+    artifactId: "binary-fallback",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["decompiled", "binary-fallback"],
+    version: "1.21.10",
+    binaryJarPath,
+    provenance,
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "net/minecraft/world/level/block/Blocks.java",
+        content: [
+          "package net.minecraft.world.level.block;",
+          "public class Blocks {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/world/level/block/Blocks.java",
+        symbolKind: "class",
+        symbolName: "Blocks",
+        qualifiedName: "net.minecraft.world.level.block.Blocks",
+        line: 2
+      }
+    ]
+  });
+
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact = async () => ({
+    artifactId: "binary-fallback",
+    artifactSignature: "binary-fallback-sig",
+    origin: "decompiled" as const,
+    binaryJarPath,
+    version: "1.21.10",
+    requestedMapping: "mojang" as const,
+    mappingApplied: "mojang" as const,
+    provenance,
+    qualityFlags: ["decompiled", "binary-fallback"],
+    isDecompiled: true,
+    resolvedAt: new Date().toISOString()
+  });
+
+  await assert.rejects(
+    service.getClassSource({
+      artifactId: "partial-source",
+      className: "net.minecraft.world.item.Item"
+    }),
+    (error: unknown) => {
+      assert.equal(
+        error !== null && typeof error === "object" && "code" in error
+          ? (error as { code: string }).code
+          : undefined,
+        ERROR_CODES.CLASS_NOT_FOUND
+      );
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      // The caller asked about "partial-source"; the internal binary fallback must
+      // not rewrite the identity the error reports back.
+      assert.equal(details.artifactId, "partial-source");
+      assert.equal(details.fallbackArtifactId, "binary-fallback");
+      assert.equal(
+        (details.suggestedCall as { params?: { artifactId?: string } } | undefined)?.params?.artifactId,
+        "partial-source"
+      );
+      // didYouMean must be computed against the requested artifact's symbol index.
+      assert.deepEqual(details.didYouMean, [
+        { className: "net.neoforged.neoforge.items.Item", matchReason: "exact-simple-name" }
+      ]);
+      return true;
+    }
+  );
+});
+
 test("SourceService getClassSource reports partial-source fallback failures without redirecting to find-class", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-class-source-partial-failure-"));

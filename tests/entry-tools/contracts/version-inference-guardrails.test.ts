@@ -135,8 +135,12 @@ function makeInspectDeps(overrides: Partial<MinimalDeps>): MinimalDeps {
 test("a direct class subject auto-resolves through the unique known workspace with a provenance warning", async () => {
   const deps = makeInspectDeps({
     listWorkspaceContexts: () => [{ projectPath: "/workspace/demo-mod", minecraftVersion: "26.2" }],
-    resolveArtifact: (async (input: { target: { kind: string; value: string } }) => {
-      assert.deepEqual(input.target, { kind: "version", value: "26.2" });
+    resolveArtifact: (async (input: { target: { kind: string; value?: string }; projectPath?: string }) => {
+      // The workspace target keeps this in step with resolve-artifact on the
+      // same directory; a bare {kind:"version"} target would drop the project's
+      // compile mapping and resolve a different artifact.
+      assert.deepEqual(input.target, { kind: "workspace" });
+      assert.equal(input.projectPath, "/workspace/demo-mod");
       return { artifactId: "resolved-artifact", warnings: [] };
     }) as never
   });
@@ -242,8 +246,11 @@ test("the unique-workspace auto-resolve falls back to on-demand version detectio
       assert.equal(projectPath, "/workspace/demo-mod");
       return "1.21.10";
     },
-    resolveArtifact: (async (input: { target: { kind: string; value: string } }) => {
-      assert.deepEqual(input.target, { kind: "version", value: "1.21.10" });
+    resolveArtifact: (async (input: { target: { kind: string; value?: string }; projectPath?: string }) => {
+      // On-demand detection still gates whether the workspace is usable at all;
+      // the resolution itself goes through the workspace target.
+      assert.deepEqual(input.target, { kind: "workspace" });
+      assert.equal(input.projectPath, "/workspace/demo-mod");
       return { artifactId: "detected-artifact", warnings: [] };
     }) as never
   });

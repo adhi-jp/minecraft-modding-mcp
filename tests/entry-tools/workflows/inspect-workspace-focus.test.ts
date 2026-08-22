@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createError, ERROR_CODES } from "../../../src/errors.ts";
 import {
   InspectMinecraftService,
   inspectMinecraftSchema
@@ -9,7 +10,9 @@ import { buildInspectDeps } from "../../helpers/inspect-deps.ts";
 
 test("InspectMinecraftService preserves workspace context for file focus without explicit artifact input", async () => {
   const resolveArtifactCalls: Array<{
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -25,7 +28,7 @@ test("InspectMinecraftService preserves workspace context for file focus without
         isDecompiled: false,
         requestedMapping: input.mapping,
         mappingApplied: input.mapping ?? "obfuscated",
-        version: input.target.value,
+        version: input.target.kind === "workspace" ? "1.21.11" : input.target.value,
         provenance: { requestedTarget: input.target },
         qualityFlags: [],
         artifactContents: {
@@ -75,7 +78,7 @@ test("InspectMinecraftService preserves workspace context for file focus without
   assert.equal(result.summary.status, "ok");
   assert.deepEqual(resolveArtifactCalls, [
     {
-      target: { kind: "version", value: "1.21.11" },
+      target: { kind: "workspace" },
       mapping: "mojang",
       scope: "merged",
       projectPath: "/workspace/demo-mod",
@@ -87,7 +90,9 @@ test("InspectMinecraftService preserves workspace context for file focus without
 
 test("InspectMinecraftService preserves workspace context for class overview without explicit artifact input", async () => {
   const resolveArtifactCalls: Array<{
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -103,7 +108,7 @@ test("InspectMinecraftService preserves workspace context for class overview wit
         isDecompiled: false,
         requestedMapping: input.mapping,
         mappingApplied: input.mapping ?? "obfuscated",
-        version: input.target.value,
+        version: input.target.kind === "workspace" ? "1.21.10" : input.target.value,
         provenance: { requestedTarget: input.target },
         qualityFlags: [],
         artifactContents: {
@@ -166,7 +171,7 @@ test("InspectMinecraftService preserves workspace context for class overview wit
   assert.equal(result.summary.status, "ok");
   assert.deepEqual(resolveArtifactCalls, [
     {
-      target: { kind: "version", value: "1.21.10" },
+      target: { kind: "workspace" },
       mapping: "mojang",
       scope: "merged",
       projectPath: "/workspace/demo-mod",
@@ -178,7 +183,9 @@ test("InspectMinecraftService preserves workspace context for class overview wit
 
 test("InspectMinecraftService preserves workspace context for class source without explicit artifact input", async () => {
   const resolveArtifactCalls: Array<{
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -194,7 +201,7 @@ test("InspectMinecraftService preserves workspace context for class source witho
         isDecompiled: false,
         requestedMapping: input.mapping,
         mappingApplied: input.mapping ?? "obfuscated",
-        version: input.target.value,
+        version: input.target.kind === "workspace" ? "1.21.10" : input.target.value,
         provenance: { requestedTarget: input.target },
         qualityFlags: [],
         artifactContents: {
@@ -261,7 +268,7 @@ test("InspectMinecraftService preserves workspace context for class source witho
   });
   assert.deepEqual(resolveArtifactCalls, [
     {
-      target: { kind: "version", value: "1.21.10" },
+      target: { kind: "workspace" },
       mapping: "mojang",
       scope: "merged",
       projectPath: "/workspace/demo-mod",
@@ -273,7 +280,9 @@ test("InspectMinecraftService preserves workspace context for class source witho
 
 test("InspectMinecraftService accepts workspace class focus for class-members", async () => {
   const resolveArtifactCalls: Array<{
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -289,7 +298,7 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
         isDecompiled: false,
         requestedMapping: input.mapping,
         mappingApplied: input.mapping ?? "obfuscated",
-        version: input.target.value,
+        version: input.target.kind === "workspace" ? "1.21.10" : input.target.value,
         provenance: { requestedTarget: input.target },
         qualityFlags: [],
         artifactContents: {
@@ -347,7 +356,7 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
   assert.equal(result.summary.status, "ok");
   assert.deepEqual(resolveArtifactCalls, [
     {
-      target: { kind: "version", value: "1.21.10" },
+      target: { kind: "workspace" },
       mapping: "mojang",
       scope: "merged",
       projectPath: "/workspace/demo-mod",
@@ -355,4 +364,185 @@ test("InspectMinecraftService accepts workspace class focus for class-members", 
       strictVersion: undefined
     }
   ]);
+});
+
+test("InspectMinecraftService forwards a workspace target when subject mapping and scope are omitted", async () => {
+  const resolveArtifactCalls: Array<{
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
+    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    scope?: "vanilla" | "merged" | "loader";
+    projectPath?: string;
+    preferProjectVersion?: boolean;
+    strictVersion?: boolean;
+  }> = [];
+  const service = new InspectMinecraftService(buildInspectDeps({
+    resolveArtifact: async (input) => {
+      resolveArtifactCalls.push(input);
+      return {
+        artifactId: "artifact-workspace-target",
+        origin: "local-jar",
+        isDecompiled: false,
+        requestedMapping: "mojang",
+        mappingApplied: "mojang",
+        version: "1.21.10",
+        provenance: { requestedTarget: input.target },
+        qualityFlags: [],
+        artifactContents: {
+          sourceKind: "source-jar",
+          indexedContentKinds: ["sources"],
+          resourcesIncluded: false,
+          sourceCoverage: "full"
+        },
+        warnings: []
+      };
+    },
+    getClassMembers: async (input) => {
+      assert.equal(input.artifactId, "artifact-workspace-target");
+      return {
+        className: input.className,
+        artifactId: input.artifactId ?? "artifact-workspace-target",
+        counts: { total: 1, constructors: 0, methods: 1, fields: 0 },
+        truncated: false,
+        members: [{ kind: "method", signature: "tickServer()V", display: "void tickServer()" }],
+        returnedNamespace: "mojang",
+        warnings: []
+      };
+    }
+  }));
+
+  const result = await service.execute({
+    task: "class-members",
+    detail: "summary",
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/demo-mod",
+      focus: {
+        kind: "class",
+        className: "net.minecraft.server.MinecraftServer"
+      }
+    }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  // resolve-artifact resolves the same directory through target.kind="workspace",
+  // which reads the workspace compile mapping and loader scope. Re-deriving a
+  // {kind:"version"} target here would silently resolve a different artifact.
+  assert.deepEqual(resolveArtifactCalls, [
+    {
+      target: { kind: "workspace" },
+      mapping: undefined,
+      scope: undefined,
+      projectPath: "/workspace/demo-mod",
+      preferProjectVersion: true,
+      strictVersion: undefined
+    }
+  ]);
+});
+
+test("InspectMinecraftService propagates ERR_WORKSPACE_VERSION_UNRESOLVED for workspace class focus", async () => {
+  const service = new InspectMinecraftService(buildInspectDeps({
+    resolveArtifact: async () => {
+      throw createError({
+        code: ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED,
+        message: 'Could not detect a Minecraft version for projectPath "/workspace/demo-mod".',
+        details: {
+          projectPath: "/workspace/demo-mod",
+          nextAction: "Set minecraft_version in gradle.properties or pass target.kind=\"version\"."
+        }
+      });
+    },
+    detectProjectMinecraftVersion: async () => undefined
+  }));
+
+  await assert.rejects(
+    service.execute({
+      task: "class-members",
+      detail: "summary",
+      subject: {
+        kind: "workspace",
+        projectPath: "/workspace/demo-mod",
+        focus: {
+          kind: "class",
+          className: "net.minecraft.server.MinecraftServer"
+        }
+      }
+    }),
+    (error: unknown) => {
+      // Degrading to artifactId:"" produced a misleading
+      // ERR_INVALID_INPUT ("Either artifactId or target must be provided.").
+      assert.equal(
+        error !== null && typeof error === "object" && "code" in error
+          ? (error as { code: string }).code
+          : undefined,
+        ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED
+      );
+      return true;
+    }
+  );
+});
+
+test("InspectMinecraftService keeps the pre-workspace-target routing under WORKSPACE_TARGET_OFF", async () => {
+  process.env.WORKSPACE_TARGET_OFF = "1";
+  try {
+    const resolveArtifactCalls: Array<{
+      target:
+        | { kind: "version" | "jar" | "coordinate"; value: string }
+        | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
+      projectPath?: string;
+    }> = [];
+    const service = new InspectMinecraftService(buildInspectDeps({
+      resolveArtifact: async (input) => {
+        resolveArtifactCalls.push(input);
+        return {
+          artifactId: "artifact-kill-switch",
+          origin: "local-jar",
+          isDecompiled: false,
+          requestedMapping: "obfuscated",
+          mappingApplied: "obfuscated",
+          version: "1.21.10",
+          provenance: { requestedTarget: input.target },
+          qualityFlags: [],
+          artifactContents: {
+            sourceKind: "source-jar",
+            indexedContentKinds: ["sources"],
+            resourcesIncluded: false,
+            sourceCoverage: "full"
+          },
+          warnings: []
+        };
+      },
+      getClassMembers: async (input) => ({
+        className: input.className,
+        artifactId: input.artifactId ?? "artifact-kill-switch",
+        counts: { total: 0, constructors: 0, methods: 0, fields: 0 },
+        truncated: false,
+        members: [],
+        returnedNamespace: "obfuscated",
+        warnings: []
+      }),
+      detectProjectMinecraftVersion: async () => "1.21.10"
+    }));
+
+    const result = await service.execute({
+      task: "class-members",
+      detail: "summary",
+      subject: {
+        kind: "workspace",
+        projectPath: "/workspace/demo-mod",
+        focus: {
+          kind: "class",
+          className: "net.minecraft.server.MinecraftServer"
+        }
+      }
+    });
+
+    assert.equal(result.summary.status, "ok");
+    // resolve-artifact rejects target.kind="workspace" while the toggle is set,
+    // so the tool must fall back rather than turn the switch into a hard failure.
+    assert.deepEqual(resolveArtifactCalls[0]?.target, { kind: "version", value: "1.21.10" });
+  } finally {
+    delete process.env.WORKSPACE_TARGET_OFF;
+  }
 });

@@ -177,7 +177,15 @@ const EXPECTED_ORDINARY_TEST_FILES = 218;
 // stdio-supervisor-process-tree +1 (parent-liveness backstop on a never-EOF stdin) and
 // stdio-supervisor-timeout +2 (SIGHUP shutdown, and an uncaught supervisor exception
 // that still reaps the worker).
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1910;
+// 218 -> 218 / 1910 -> 1913 (wrong-artifact answers round): no new files. Three existing
+// files grow: tests/source-service/partial-source-fallback.test.ts +1 (ERR_CLASS_NOT_FOUND
+// keeps the caller's artifactId, didYouMean and suggestedCall when the internal binary
+// fallback succeeded but still missed the class) and
+// tests/entry-tools/workflows/inspect-workspace-focus.test.ts +3 (inspect-minecraft
+// forwards target.kind="workspace" when subject mapping/scope are omitted, lets
+// ERR_WORKSPACE_VERSION_UNRESOLVED propagate instead of degrading to ERR_INVALID_INPUT,
+// and keeps the WORKSPACE_TARGET_OFF=1 kill switch on the previous routing).
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1914;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

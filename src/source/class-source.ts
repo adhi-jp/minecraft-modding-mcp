@@ -271,7 +271,15 @@ export function buildFallbackProvenance(svc: SourceService, input: {
 export function buildClassSourceNotFoundError(svc: SourceService, input: {
   className: string;
   lookupClassName: string;
+  /** Artifact the lookup ended on: the internal binary fallback when one fired. */
   artifactId: string;
+  /**
+   * Artifact the caller actually asked about. The binary fallback swaps the
+   * active artifact mid-lookup, but the error must keep answering about the
+   * requested one: reporting the fallback id sends the caller to an artifact
+   * they never named. Defaults to `artifactId` for paths with no fallback.
+   */
+  requestedArtifactId?: string;
   mappingApplied: SourceMapping;
   requestedMapping: SourceMapping;
   qualityFlags: string[];
@@ -285,8 +293,10 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
   nestedJars?: string[];
 }): AppError {
   const simpleName = input.className.split(/[.$]/).at(-1) ?? input.className;
+  const requestedArtifactId = input.requestedArtifactId ?? input.artifactId;
   const details: Record<string, unknown> = {
-    artifactId: input.artifactId,
+    artifactId: requestedArtifactId,
+    ...(input.artifactId !== requestedArtifactId ? { fallbackArtifactId: input.artifactId } : {}),
     className: input.className,
     mapping: input.mappingApplied,
     qualityFlags: input.qualityFlags,
@@ -299,13 +309,13 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
     ...(input.nestedJars && input.nestedJars.length > 0 ? { nestedJars: input.nestedJars } : {}),
     // Candidates are hints from the symbol index, never assertions that the
     // class exists at the suggested location; empty when nothing usable.
-    didYouMean: collectDidYouMeanCandidates(svc, input.artifactId, input.className)
+    didYouMean: collectDidYouMeanCandidates(svc, requestedArtifactId, input.className)
   };
 
   let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
   let suggestionSpec: { tool: string; params: Record<string, unknown> } = {
     tool: "find-class",
-    params: { className: simpleName, artifactId: input.artifactId }
+    params: { className: simpleName, artifactId: requestedArtifactId }
   };
 
   if (input.targetKind === "version" && input.scope && input.scope !== "merged" && !input.projectPath) {
@@ -334,7 +344,7 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
     } else {
       suggestionSpec = {
         tool: "find-class",
-        params: { className: simpleName, artifactId: input.artifactId }
+        params: { className: simpleName, artifactId: requestedArtifactId }
       };
     }
   }
@@ -809,7 +819,11 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       requestedMapping,
       mappingApplied,
       provenance: activeProvenance,
-      qualityFlags: activeQualityFlags
+      qualityFlags: activeQualityFlags,
+      // A caller who declined decompilation must not pay for one here: the
+      // fallback used to hardcode allowDecompile:true and silently ran a full
+      // Vineflower pass on the binary jar.
+      allowDecompile: input.allowDecompile
     });
     if (!fallbackResolved || fallbackResolved.artifactId === activeArtifactId) {
       return false;
@@ -912,6 +926,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
   if (!filePath) {
     throw buildClassSourceNotFoundError(svc, {
       artifactId: activeArtifactId,
+      requestedArtifactId: artifactId,
       className,
       lookupClassName: activeLookupClassName,
       mappingApplied: activeMappingApplied,
@@ -953,6 +968,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
   if (!row) {
     throw buildClassSourceNotFoundError(svc, {
       artifactId: activeArtifactId,
+      requestedArtifactId: artifactId,
       className,
       lookupClassName: activeLookupClassName,
       mappingApplied: activeMappingApplied,

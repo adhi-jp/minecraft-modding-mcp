@@ -9,7 +9,9 @@ import { buildInspectDeps } from "../../helpers/inspect-deps.ts";
 
 test("InspectMinecraftService auto routes workspace search focus through project-aware artifact resolution", async () => {
   const resolveArtifactCalls: Array<{
-    target: { kind: "version" | "jar" | "coordinate"; value: string };
+    target:
+      | { kind: "version" | "jar" | "coordinate"; value: string }
+      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader" };
     mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
     scope?: "vanilla" | "merged" | "loader";
     projectPath?: string;
@@ -26,7 +28,7 @@ test("InspectMinecraftService auto routes workspace search focus through project
         isDecompiled: false,
         requestedMapping: input.mapping,
         mappingApplied: input.mapping ?? "obfuscated",
-        version: input.target.value,
+        version: input.target.kind === "workspace" ? "1.21.10" : input.target.value,
         provenance: { requestedTarget: input.target },
         qualityFlags: [],
         artifactContents: {
@@ -108,7 +110,7 @@ test("InspectMinecraftService auto routes workspace search focus through project
   });
   assert.deepEqual(resolveArtifactCalls, [
     {
-      target: { kind: "version", value: "1.21.10" },
+      target: { kind: "workspace" },
       mapping: "mojang",
       scope: "merged",
       projectPath: "/workspace/demo-mod",

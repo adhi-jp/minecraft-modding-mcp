@@ -1073,6 +1073,7 @@ export class SourceService {
     mappingApplied: SourceMapping;
     provenance?: ArtifactProvenance;
     qualityFlags: string[];
+    allowDecompile?: boolean;
   }): Promise<ResolvedSourceArtifact | undefined> {
     return artifactResolver.resolveBinaryFallbackArtifact(this, input);
   }

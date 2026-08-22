@@ -1244,6 +1244,8 @@ export async function resolveBinaryFallbackArtifact(svc: SourceService, input: {
   mappingApplied: SourceMapping;
   provenance?: ArtifactProvenance;
   qualityFlags: string[];
+  /** Forwarded from the caller; unset keeps the historical decompile-on-demand behaviour. */
+  allowDecompile?: boolean;
 }): Promise<ResolvedSourceArtifact | undefined> {
   const binaryJarPath = normalizeOptionalString(input.binaryJarPath);
   if (!binaryJarPath) {
@@ -1253,7 +1255,7 @@ export async function resolveBinaryFallbackArtifact(svc: SourceService, input: {
   try {
     const fallbackResolved = await resolveSourceTargetInternal(
       { kind: "jar", value: binaryJarPath },
-      { allowDecompile: true, preferBinaryOnly: true },
+      { allowDecompile: input.allowDecompile ?? true, preferBinaryOnly: true },
       svc.config
     );
     fallbackResolved.version = fallbackResolved.version ?? input.version;
