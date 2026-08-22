@@ -17,8 +17,17 @@ import { MODERN_META, startInProcessSession, type InProcessSession } from "./inp
  *    matrix is intentionally NOT advertised here — it surfaces via
  *    initialize negotiation, see stdio-legacy-negotiation-matrix.test.ts);
  *  - capabilities reflect the advertised server capabilities: tools and
- *    resources (both listChanged) and NOTHING else — no prompts capability
- *    while none are registered, no subscriptions, no logging;
+ *    resources — both with `listChanged: false` — and NOTHING else: no prompts
+ *    capability while none are registered, no subscriptions, no logging. The
+ *    `false` is a deliberate suppression, not an SDK default (the SDK defaults
+ *    both flags to `true` on first registration; buildServer() passes an
+ *    explicit `capabilities` option to override it). The server never emits
+ *    `notifications/tools/list_changed` or
+ *    `notifications/resources/list_changed`, and `subscriptions/listen`
+ *    answers -32601, so a `true` would advertise an unreachable stream. The
+ *    suppression is not era-gated — the legacy `initialize` payload is pinned
+ *    to the same value in
+ *    tests/stdio/stdio-dependency-method-inventory.test.ts;
  *  - identity in result._meta[SERVER_INFO_META_KEY], never a body field;
  *  - resultType "complete";
  *  - adopted cache row: ttlMs 0, cacheScope "private".
@@ -52,8 +61,13 @@ test("server/discover advertises the complete approved contents (versions, capab
   assert.deepEqual(result.supportedVersions, ["2026-07-28"], "discover advertises EXACTLY the modern revision");
   assert.deepEqual(
     result.capabilities,
-    { resources: { listChanged: true }, tools: { listChanged: true } },
-    "capabilities must be exactly tools+resources (no prompts while none registered, no subscriptions, no logging)"
+    { resources: { listChanged: false }, tools: { listChanged: false } },
+    "capabilities must be exactly tools+resources with listChanged suppressed (no prompts while none registered, no subscriptions, no logging)"
+  );
+  assert.deepEqual(
+    Object.keys(result.capabilities as Record<string, unknown>),
+    ["resources", "tools"],
+    "the discover capability key order is frozen wire: resources before tools"
   );
 
   const meta = result._meta as Record<string, unknown> | undefined;

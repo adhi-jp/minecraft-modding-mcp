@@ -27,6 +27,17 @@ import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
  * era-state suite drives a fake worker, so the live wire outcome is proven
  * here), and the no-prompts-capability assertions on the initialize result AND
  * the server/discover capabilities.
+ *
+ * The legacy row also pins the COMPLETE `initialize` capability payload over
+ * the real wire. `listChanged` is advertised as `false` in BOTH eras: the
+ * server never emits `notifications/tools/list_changed` or
+ * `notifications/resources/list_changed`, and `subscriptions/listen` is
+ * rejected `-32601`, so a `true` there would advertise a stream no client can
+ * ever receive. The suppression is deliberate — `buildServer()` passes an
+ * explicit `capabilities` option, because the SDK otherwise defaults both
+ * flags to `true` on first registration — and it is NOT era-gated, so the
+ * modern pin in tests/stdio/stdio-modern-discover-contents.test.ts and this
+ * legacy pin must agree. Key order is `resources` then `tools` on the wire.
  */
 
 const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
@@ -126,6 +137,16 @@ test("wire dependency-method inventory: legacy era (ping pong, setLevel/tasks/pr
     "prompts" in initResult.capabilities,
     false,
     "no prompts capability may be advertised while no prompts are registered"
+  );
+  assert.deepEqual(
+    initResult.capabilities,
+    { resources: { listChanged: false }, tools: { listChanged: false } },
+    "legacy initialize advertises exactly tools+resources with listChanged suppressed: the server never emits the list_changed notifications and subscriptions/listen is -32601, so the flags must not promise a stream"
+  );
+  assert.deepEqual(
+    Object.keys(initResult.capabilities),
+    ["resources", "tools"],
+    "the legacy capability key order is frozen wire: resources before tools"
   );
   session.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
 

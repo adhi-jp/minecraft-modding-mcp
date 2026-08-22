@@ -761,6 +761,26 @@ const server = new McpServer({
   name: SERVER_IDENTITY.name,
   version: SERVER_IDENTITY.version
 }, {
+  // Advertised capabilities (adopted policy). The SDK defaults BOTH
+  // listChanged flags to `true` the first time a tool/resource is registered
+  // (`... ?? true`), so an explicit `false` passed here is the only public way
+  // to suppress them — the key cannot be omitted through any public API, and
+  // per the revision an explicit `false` and an absent flag are equivalent.
+  // The suppression is deliberate and is NOT era-gated: this server never
+  // emits `notifications/tools/list_changed` or
+  // `notifications/resources/list_changed` (the tool and resource surface is
+  // fixed at process start by environment flags), and `subscriptions/listen`
+  // answers -32601 in both eras, so advertising `true` would promise a stream
+  // no client can subscribe to or ever receive.
+  // KEY ORDER IS LOAD-BEARING: `resources` before `tools` reproduces the
+  // frozen wire order of the legacy `initialize` and modern `server/discover`
+  // capability payloads. Pinned by
+  // tests/stdio/stdio-dependency-method-inventory.test.ts (legacy) and
+  // tests/stdio/stdio-modern-discover-contents.test.ts (modern).
+  capabilities: {
+    resources: { listChanged: false },
+    tools: { listChanged: false }
+  },
   cacheHints: {
     "resources/list": RESOURCE_LISTS_CACHE_HINT,
     "resources/templates/list": RESOURCE_LISTS_CACHE_HINT
