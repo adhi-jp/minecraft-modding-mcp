@@ -13,6 +13,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # The frozen named-test set gate is fail-closed on purpose: it proves that every
+      # inherited test still runs. Its escape hatch exists for capability-limited
+      # developer machines only. If it were ever exported here, a release could ship
+      # with quietly skipped tests, so its presence — at any value — stops the run.
+      - name: Reject a bypass of the frozen named-test set gate
+        run: |
+          if [ -n "${MCP_ALLOW_UNPROVEN_NAMED_TESTS+set}" ]; then
+            echo "MCP_ALLOW_UNPROVEN_NAMED_TESTS is set in this run; it must never be set for a release build" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
@@ -30,7 +41,25 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+      - name: Verify the pushed tag matches the package version
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Resolve the npm dist-tag
+        id: disttag
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          case "$PKG_VERSION" in
+            *-*) echo "tag=rc" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "tag=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       # Node 22 bundles npm 10.x which lacks OIDC support for scoped packages.
       # Use npm 11.x for publish only. Remove once the runner bundles npm 11+.
       - name: Publish to npm
-        run: npm exec --yes --package=npm@~11.5.1 -- npm publish --no-git-checks --access public
+        run: npm exec --yes --package=npm@~11.5.1 -- npm publish --no-git-checks --access public --tag ${{ steps.disttag.outputs.tag }}
