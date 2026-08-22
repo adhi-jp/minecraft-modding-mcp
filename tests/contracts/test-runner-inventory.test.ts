@@ -101,7 +101,11 @@ const EXPECTED_ORDINARY_TEST_FILES = 209;
 // drops the orphaned preserved same-id initialize entry), and
 // tests/stdio/stdio-supervisor-era-wire.test.ts gains 1 enveloped-initialize
 // legacy-handshake wire test (era-claim strip before the worker).
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1823;
+// 209 -> 209 / 1823 -> 1824 (mixed-framing recovery): tests/stdio/json-rpc-
+// framing.test.ts gains 1 test pinning that a line-delimited JSON array
+// arriving after a Content-Length frame surfaces one parse error and resumes
+// line framing, instead of leaving that frame and every later one buffered.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1824;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

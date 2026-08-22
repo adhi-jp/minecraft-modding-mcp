@@ -181,6 +181,28 @@ test("reader switches from Content-Length to a whitespace-prefixed line frame", 
   ]);
 });
 
+test("reader rejects a line-delimited JSON array after Content-Length and recovers", () => {
+  const harness = createModeHarness();
+  const arrayFrame = Buffer.from(
+    `${JSON.stringify([{ jsonrpc: "2.0", id: 2, method: "ping" }])}\n`,
+    "utf8"
+  );
+
+  harness.process(Buffer.concat([
+    pingFrame(1, "content-length"),
+    arrayFrame,
+    pingFrame(3, "line")
+  ]));
+
+  assert.equal(harness.errors.length, 1);
+  assert.match(harness.errors[0]?.message ?? "", /json-rpc|object|array/i);
+  assert.deepEqual(harness.frames, [
+    { id: 1, mode: "content-length" },
+    { id: 3, mode: "line" }
+  ]);
+  assert.equal(harness.reader.currentMode, "line");
+});
+
 test("a Content-Length frame terminated by bare LF (no CR anywhere) decodes in content-length mode", () => {
   // Pins the \n\n header-boundary acceptance (findHeaderBoundary's
   // delimiterBytes-2 branch): some peers frame Content-Length with bare LF

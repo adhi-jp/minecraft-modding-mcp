@@ -331,12 +331,14 @@ export class JsonRpcFrameReader {
     }
 
     // Mirror of the line→content-length switch in readLineDelimitedMessage:
-    // a JSON object opener can never begin a Content-Length header block, so
-    // this is a line-delimited frame arriving after a Content-Length frame.
-    // Peek past leading whitespace (pure line mode tolerates it: blank lines
-    // are skipped and JSON.parse accepts a whitespace-prefixed line) without
-    // consuming it, then switch modes and let processChunk re-dispatch the
-    // buffered bytes, so every frame is delivered with its own true mode.
+    // a JSON object or array opener can never begin a Content-Length header block,
+    // so this is a line-delimited frame arriving after a Content-Length frame.
+    // Arrays are re-dispatched only to surface their JSON-RPC schema error, not
+    // accepted as batch messages. Peek past leading whitespace (pure line mode
+    // tolerates it: blank lines are skipped and JSON.parse accepts a
+    // whitespace-prefixed line) without consuming it, then switch modes and let
+    // processChunk re-dispatch the buffered bytes, so every frame is delivered
+    // with its own true mode.
     let probeIndex = 0;
     while (
       probeIndex < this.buffer.length &&
@@ -347,7 +349,11 @@ export class JsonRpcFrameReader {
     ) {
       probeIndex += 1;
     }
-    if (probeIndex < this.buffer.length && this.buffer[probeIndex] === 0x7b /* '{' */) {
+    if (
+      probeIndex < this.buffer.length &&
+      (this.buffer[probeIndex] === 0x7b /* '{' */ ||
+        this.buffer[probeIndex] === 0x5b /* '[' */)
+    ) {
       this.mode = "line";
       return undefined;
     }
