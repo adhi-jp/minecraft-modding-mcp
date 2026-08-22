@@ -111,7 +111,12 @@ const EXPECTED_ORDINARY_TEST_FILES = 209;
 // is forwarded first once the worker is ready, while the queue suffix stays
 // gated until the initialize response). The round's other repairs extend
 // existing tests and add no declaration.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1825;
+// 209 -> 209 / 1825 -> 1829 (frozen envelope replay): tests/stdio/stdio-tool-
+// contract-snapshots.test.ts gains 4 tests that consume the per-tool
+// envelopeSample fixtures the file previously ignored — sample inventory, the
+// 40 invalid-input replays over the legacy transport, the get-runtime-metrics
+// success replay, and an in-memory mutation self-check.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1829;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
