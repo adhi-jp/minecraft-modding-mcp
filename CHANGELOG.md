@@ -7,6 +7,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [7.0.0-rc.0] - 2026-08-22
+
 ### Added
 
 - MCP protocol revision `2026-07-28` (modern stateless era), served alongside the legacy initialize protocol in one process: `server/discover` returns `supportedVersions: ["2026-07-28"]`, capabilities, and the server identity; modern requests carry per-request `io.modelcontextprotocol/*` `_meta` (protocol version, client capabilities, optional client info) that survives the supervisor/worker boundary, queueing, and worker restarts; every modern result — including supervisor-synthesized overflow/restart/timeout replies — carries `resultType: "complete"` and the server-identity `_meta` echo; the cacheable methods (`tools/list`, `resources/list`, `resources/read`, `resources/templates/list`, `server/discover`) return `ttlMs`/`cacheScope` per the adopted private-cache policy; unsupported modern protocol versions answer `-32022` with `data.supported`/`data.requested`. Era selection is a supervisor-owned one-way lock with machine-readable rejections (`data.kind: "era_conflict"` / `"missing_meta"`); modern worker restarts never replay `initialize`. Contract details: `docs/tool-reference.md` → MCP Protocol Support. Verification: dual-era wire suites (`tests/stdio/stdio-supervisor-era-state.test.ts`, `stdio-supervisor-era-wire.test.ts`, `stdio-supervisor-era-lifecycle.test.ts`, `stdio-supervisor-era-context.test.ts`) plus modern-surface suites (`stdio-modern-*.test.ts`) in the full green suite.
