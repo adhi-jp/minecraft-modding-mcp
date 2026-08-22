@@ -185,7 +185,16 @@ const EXPECTED_ORDINARY_TEST_FILES = 218;
 // forwards target.kind="workspace" when subject mapping/scope are omitted, lets
 // ERR_WORKSPACE_VERSION_UNRESOLVED propagate instead of degrading to ERR_INVALID_INPUT,
 // and keeps the WORKSPACE_TARGET_OFF=1 kill switch on the previous routing).
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1914;
+// 218 -> 218 / 1914 -> 1918 (responses that misdescribe themselves round): no new files.
+// Two existing files grow: tests/nbt/nbt-typed-json.test.ts +2 (the typed-document
+// rejection carries fieldErrors keyed by the offending JSON pointer, and names the
+// typedJson argument when the whole document is wrong) and
+// tests/nbt/nbt-pipeline.test.ts +2 (json-to-nbt and nbt-apply-json-patch attach an
+// nbt-to-json recovery example without setting the primary-drop marker). The
+// resolve-method-mapping-exact truthfulness case is a t.test subtest inside
+// tests/mapping/mapping-service-method-exact-api-matrix.test.ts, which this counter
+// does not include.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1918;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

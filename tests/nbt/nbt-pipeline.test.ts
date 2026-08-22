@@ -230,3 +230,42 @@ test("nbtBase64ToTypedJson rejects malformed nbtBase64 input", () => {
     );
   }
 });
+
+test("typedJsonToNbtBase64 attaches a recovery example when the typed document is invalid", () => {
+  // `typedJson` is advertised as an empty JSON Schema, so the rejection is the only
+  // place the caller can be pointed at a way to obtain a well-formed document.
+  let caught: unknown;
+  try {
+    typedJsonToNbtBase64({ typedJson: { rootName: "Bad", root: 5 } });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.NBT_INVALID_TYPED_JSON);
+  const details = (caught as { details?: Record<string, unknown> } | undefined)?.details;
+  assert.ok(details, "the rejection must carry details");
+  assert.equal(details._suggestedCallPrimaryDropped, undefined);
+
+  const exampleCalls = details.exampleCalls as Array<{ tool?: unknown; params?: Record<string, unknown>; reason?: unknown }>;
+  assert.ok(Array.isArray(exampleCalls) && exampleCalls.length > 0, "an example recovery call must be attached");
+  assert.equal(exampleCalls[0]?.tool, "nbt-to-json");
+  assert.equal(typeof exampleCalls[0]?.params?.nbtBase64, "string");
+  assert.match(String(exampleCalls[0]?.reason), /json-to-nbt/);
+});
+
+test("applyNbtJsonPatch attaches a recovery example when the typed document is invalid", () => {
+  let caught: unknown;
+  try {
+    applyNbtJsonPatch({ typedJson: { rootName: "Bad" }, patch: [] });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.NBT_INVALID_TYPED_JSON);
+  const details = (caught as { details?: Record<string, unknown> } | undefined)?.details;
+  assert.ok(details, "the rejection must carry details");
+  const exampleCalls = details.exampleCalls as Array<{ tool?: unknown; reason?: unknown }>;
+  assert.ok(Array.isArray(exampleCalls) && exampleCalls.length > 0);
+  assert.equal(exampleCalls[0]?.tool, "nbt-to-json");
+  assert.match(String(exampleCalls[0]?.reason), /nbt-apply-json-patch/);
+});

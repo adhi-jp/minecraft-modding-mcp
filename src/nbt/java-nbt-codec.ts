@@ -23,11 +23,24 @@ const TAG_NAME_BY_ID: Record<number, NbtTagName> = Object.fromEntries(
   Object.entries(TAG_ID_BY_NAME).map(([name, id]) => [id, name as NbtTagName])
 ) as Record<number, NbtTagName>;
 
+// Default repair guidance, mirroring the per-stage `nextAction` the size-limit path
+// already sets. `toHints()` reads only `details.nextAction`, so without one these
+// rejections reach the client with nothing actionable at all. A caller-supplied
+// `nextAction` still wins: the spread comes last.
+const PARSE_NEXT_ACTION =
+  "The payload is not a well-formed Java NBT stream at the reported offset. Check that " +
+  "nbtBase64 holds the whole file and that compression matches how it was written " +
+  '(use compression "auto" to detect gzip).';
+const ENCODE_NEXT_ACTION =
+  "The typed document could not be written as Java NBT. Correct the node named by " +
+  "jsonPointer, then retry; round-tripping a real payload through nbt-to-json yields a " +
+  "document this encoder accepts.";
+
 function parseError(message: string, details?: Record<string, unknown>) {
   return createError({
     code: ERROR_CODES.NBT_PARSE_FAILED,
     message,
-    details
+    details: { nextAction: PARSE_NEXT_ACTION, ...details }
   });
 }
 
@@ -35,7 +48,7 @@ function encodeError(message: string, details?: Record<string, unknown>) {
   return createError({
     code: ERROR_CODES.NBT_ENCODE_FAILED,
     message,
-    details
+    details: { nextAction: ENCODE_NEXT_ACTION, ...details }
   });
 }
 

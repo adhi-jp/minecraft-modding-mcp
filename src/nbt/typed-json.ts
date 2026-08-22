@@ -277,13 +277,41 @@ export function validateTypedNbtDocument(value: unknown): ValidationResult {
   return validateNode(value.root, "/root");
 }
 
+/**
+ * Prose form of the document contract. The `typedJson` argument is advertised on the
+ * wire as an empty JSON Schema (`{}`) and those bytes are frozen for legacy parity, so
+ * the rejection is the only place a caller can be told what the document must look
+ * like. Kept in sync with `docs/tool-reference.md` -> "Typed NBT document shape".
+ */
+const TYPED_NBT_DOCUMENT_SHAPE =
+  'A typed NBT document is {"rootName": <string>, "root": <node>}, where every node is ' +
+  '{"type": "byte|short|int|long|float|double|byteArray|string|list|compound|intArray|longArray", "value": ...}; ' +
+  'a "list" node also carries "elementType", and "long"/"longArray" values are decimal strings.';
+
 export function assertValidTypedNbtDocument(value: unknown): asserts value is TypedNbtDocument {
   const validation = validateTypedNbtDocument(value);
   if (!validation.ok) {
+    const { jsonPointer, expectedType, actualType } = validation.issue;
+    // A root-level failure has an empty JSON pointer, which is useless as a field path;
+    // fall back to the argument name so the caller has something to act on.
+    const fieldPath = jsonPointer || "typedJson";
     throw createError({
       code: ERROR_CODES.NBT_INVALID_TYPED_JSON,
       message: "Invalid typed NBT JSON document.",
-      details: { ...validation.issue }
+      details: {
+        // The raw issue triple stays in place: existing readers index it directly.
+        ...validation.issue,
+        fieldErrors: [
+          {
+            path: fieldPath,
+            message: `expected ${expectedType}, received ${actualType}`,
+            code: "nbt_invalid_node"
+          }
+        ],
+        nextAction:
+          `Correct ${fieldPath}: expected ${expectedType}, received ${actualType}. ` +
+          TYPED_NBT_DOCUMENT_SHAPE
+      }
     });
   }
 }

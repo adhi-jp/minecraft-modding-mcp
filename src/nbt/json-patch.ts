@@ -19,11 +19,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   );
 }
 
+// Default repair guidance, mirroring the per-stage `nextAction` the NBT size-limit path
+// already sets. `toHints()` reads only `details.nextAction`, so without one these
+// rejections reach the client with nothing actionable. A caller-supplied `nextAction`
+// still wins: the spread comes last.
+const INVALID_PATCH_NEXT_ACTION =
+  'The patch must be an RFC6902 array of {"op": "add"|"remove"|"replace"|"test", "path": ' +
+  '"/json/pointer", "value": <typed-nbt-node>} objects. Paths address the typed document ' +
+  '(for example "/root/value/<key>"), and an added or replaced value is a typed node, not a bare scalar.';
+const UNSUPPORTED_FEATURE_NEXT_ACTION =
+  "This operation is not expressible in Java NBT. Rewrite it in terms the format supports " +
+  "(homogeneous lists, typed compound entries, decimal-string longs) and retry.";
+const PATCH_CONFLICT_NEXT_ACTION =
+  "The document did not hold what the patch expected at that path. Re-read the current " +
+  "document with nbt-to-json and rebuild the patch against it.";
+
 function invalidPatch(message: string, details?: Record<string, unknown>): never {
   throw createError({
     code: ERROR_CODES.JSON_PATCH_INVALID,
     message,
-    details
+    details: { nextAction: INVALID_PATCH_NEXT_ACTION, ...details }
   });
 }
 
@@ -31,7 +46,7 @@ function unsupportedFeature(message: string, details?: Record<string, unknown>):
   throw createError({
     code: ERROR_CODES.NBT_UNSUPPORTED_FEATURE,
     message,
-    details
+    details: { nextAction: UNSUPPORTED_FEATURE_NEXT_ACTION, ...details }
   });
 }
 
@@ -39,7 +54,7 @@ function patchConflict(message: string, details?: Record<string, unknown>): neve
   throw createError({
     code: ERROR_CODES.JSON_PATCH_CONFLICT,
     message,
-    details
+    details: { nextAction: PATCH_CONFLICT_NEXT_ACTION, ...details }
   });
 }
 

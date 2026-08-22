@@ -85,6 +85,20 @@ export const TEST_AMBIGUOUS_METHOD_TINY = [
   "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod"
 ].join("\n");
 
+// Same ambiguous pair as TEST_AMBIGUOUS_METHOD_TINY, plus an unrelated class whose
+// method shares the obfuscated simple name `e` under a DIFFERENT descriptor. The
+// simple-name index picks that third record up as a low-confidence candidate, so the
+// raw candidate list is strictly larger than the descriptor-strict set the exact
+// resolver actually judges.
+export const TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
+  "\tm\t(I)V\te\tinterMethod\tnamedMethod",
+  "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod",
+  "c\ta/b/D\tinter/pkg/OtherClass\tyarn/pkg/OtherNamedClass",
+  "\tm\t(Ljava/lang/String;)V\te\tinterForeignMethod\tforeignNamedMethod"
+].join("\n");
+
 export const TEST_AMBIGUOUS_CLASS_TINY = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tinter/one/C\tyarn/one/C",

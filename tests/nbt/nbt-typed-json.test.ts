@@ -212,3 +212,53 @@ test("assertValidTypedNbtDocument escapes compound key tokens in the JSON pointe
     expectAppErrorCode(ERROR_CODES.NBT_INVALID_TYPED_JSON, { jsonPointer: "/root/value/a~0b/value" })
   );
 });
+
+test("assertValidTypedNbtDocument reports the offending node as an actionable fieldError", () => {
+  // The typed-NBT tools advertise `typedJson` as an empty JSON Schema (`{}`), so a
+  // rejection is the only place a caller can learn what the document must look like.
+  // The raw issue triple is kept for existing readers; `fieldErrors` + `nextAction` are
+  // the fields the public envelope actually publishes.
+  let caught: unknown;
+  try {
+    assertValidTypedNbtDocument({ rootName: "BadRoot", root: 5 });
+  } catch (error) {
+    caught = error;
+  }
+
+  const details = (caught as { details?: Record<string, unknown> } | undefined)?.details;
+  assert.ok(details, "the rejection must carry details");
+  assert.equal(details.jsonPointer, "/root");
+  assert.equal(details.expectedType, "nbt-node");
+  assert.equal(details.actualType, "number");
+
+  const fieldErrors = details.fieldErrors as Array<{ path?: unknown; message?: unknown; code?: unknown }>;
+  assert.ok(Array.isArray(fieldErrors), "details.fieldErrors must be an array");
+  assert.equal(fieldErrors.length, 1);
+  assert.equal(fieldErrors[0]?.path, "/root");
+  assert.equal(fieldErrors[0]?.code, "nbt_invalid_node");
+  assert.match(String(fieldErrors[0]?.message), /nbt-node/);
+  assert.match(String(fieldErrors[0]?.message), /number/);
+
+  assert.equal(typeof details.nextAction, "string");
+  assert.match(String(details.nextAction), /\/root/);
+  assert.match(String(details.nextAction), /rootName/);
+});
+
+test("assertValidTypedNbtDocument names the typedJson argument when the whole document is invalid", () => {
+  // A root-level failure has an empty JSON pointer, which is useless as a field path.
+  // The argument name takes its place so the caller can act on it.
+  let caught: unknown;
+  try {
+    assertValidTypedNbtDocument("not-a-document");
+  } catch (error) {
+    caught = error;
+  }
+
+  const details = (caught as { details?: Record<string, unknown> } | undefined)?.details;
+  assert.ok(details, "the rejection must carry details");
+  assert.equal(details.jsonPointer, "");
+  const fieldErrors = details.fieldErrors as Array<{ path?: unknown }>;
+  assert.ok(Array.isArray(fieldErrors));
+  assert.equal(fieldErrors[0]?.path, "typedJson");
+  assert.equal(typeof details.nextAction, "string");
+});

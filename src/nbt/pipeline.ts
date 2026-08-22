@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { createError, ERROR_CODES } from "../errors.js";
+import { buildSuggestedCall } from "../build-suggested-call.js";
+import { AppError, createError, ERROR_CODES } from "../errors.js";
 
 import { decodeJavaNbt, encodeJavaNbt } from "./java-nbt-codec.js";
 import { applyJsonPatch } from "./json-patch.js";
@@ -96,6 +97,46 @@ function limitExceeded(
       nextAction
     }
   });
+}
+
+/**
+ * `assertValidTypedNbtDocument` has six call sites and knows nothing about tools, so the
+ * recovery suggestion is attached here — the only layer that knows which tool the caller
+ * invoked. The suggestion is a TEMPLATE (it needs the caller's own base64 payload), so it
+ * travels as `exampleCalls`; `params: undefined` means the primary-drop marker is never
+ * set and no "payload failed schema validation" hint is appended.
+ */
+function assertValidTypedNbtDocumentForTool(
+  value: unknown,
+  tool: "json-to-nbt" | "nbt-apply-json-patch"
+): asserts value is TypedNbtDocument {
+  try {
+    assertValidTypedNbtDocument(value);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== ERROR_CODES.NBT_INVALID_TYPED_JSON) {
+      throw error;
+    }
+    throw createError({
+      code: error.code,
+      // Frozen: an approved-deviation ProblemDetails golden asserts this text verbatim.
+      message: error.message,
+      details: {
+        ...error.details,
+        ...buildSuggestedCall({
+          tool: "nbt-to-json",
+          params: undefined,
+          examples: [
+            {
+              params: { nbtBase64: "<base64-encoded-nbt-payload>" },
+              reason:
+                `Decode a real NBT payload with nbt-to-json to obtain a well-formed typedJson ` +
+                `document, edit that, then retry ${tool} with it.`
+            }
+          ]
+        })
+      }
+    });
+  }
 }
 
 function assertByteLimit(stage: NbtLimitStage, field: NbtLimitField, actual: number, limit: number): void {
@@ -222,7 +263,7 @@ export function typedJsonToNbtBase64(
   limits: NbtLimits = DEFAULT_NBT_LIMITS
 ): JsonToNbtOutput {
   const compression = parseEncodeCompression(input.compression);
-  assertValidTypedNbtDocument(input.typedJson);
+  assertValidTypedNbtDocumentForTool(input.typedJson, "json-to-nbt");
 
   let output = encodeJavaNbt(input.typedJson);
   if (compression === "gzip") {
@@ -250,7 +291,7 @@ export function applyNbtJsonPatch(
   input: ApplyPatchInput,
   limits: NbtLimits = DEFAULT_NBT_LIMITS
 ): ApplyJsonPatchResult {
-  assertValidTypedNbtDocument(input.typedJson);
+  assertValidTypedNbtDocumentForTool(input.typedJson, "nbt-apply-json-patch");
   const patched = applyJsonPatch(input.typedJson, input.patch);
   assertByteLimit("patch-output", "typedJson", jsonUtf8Bytes(patched.typedJson), limits.maxResponseBytes);
   return patched;

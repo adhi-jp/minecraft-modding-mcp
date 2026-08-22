@@ -14,6 +14,7 @@ import {
   createLoomService,
   TEST_TINY,
   TEST_AMBIGUOUS_METHOD_TINY,
+  TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY,
   TEST_DESCRIPTOR_REMAP_TINY,
   TEST_MOJANG_CLIENT_MAPPINGS
 } from "../helpers/mapping-service-fixtures.ts";
@@ -247,6 +248,53 @@ test("MappingService resolveMethodMappingExact reports representative unresolved
       assert.equal(result.resolved, false);
       assert.equal(result.status, "ambiguous");
       assert.equal(result.candidates.length, 2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("reports only the candidates the ambiguous verdict was computed from", async () => {
+    // The verdict is computed from the descriptor-strict subset, but the response used to
+    // carry the RAW name-matched list. A caller then saw a candidate that never
+    // participated in the decision and could not tell it apart from one that did.
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-ambiguous-foreign-",
+      TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        } as never)
+      );
+
+      assert.equal(result.status, "ambiguous");
+      assert.equal(result.candidates.length, 2);
+      assert.equal(result.candidateCount, 2);
+      for (const candidate of result.candidates) {
+        assert.equal(
+          candidate.descriptor,
+          "(I)V",
+          `reported candidate ${candidate.symbol} did not match the queried descriptor`
+        );
+      }
+      assert.ok(
+        !result.candidates.some((candidate) => candidate.name === "interForeignMethod"),
+        "a name-only match that the strict filter rejected must not be reported as a candidate"
+      );
+      assert.ok(
+        Array.isArray(result.ambiguityReasons) && result.ambiguityReasons.length > 0,
+        "an ambiguous verdict must explain why"
+      );
+      assert.ok(
+        result.warnings.some((warning) => warning.includes("rejected by descriptor")),
+        "the rejected name-only matches must be accounted for in warnings"
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

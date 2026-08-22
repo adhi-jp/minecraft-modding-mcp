@@ -641,10 +641,26 @@ export class MappingService {
     }
 
     if (strictCandidates.length > 1) {
+      // The verdict is computed from `strictCandidates`, so that is the set reported.
+      // Returning the raw name-matched list here put candidates the strict filter had
+      // already rejected — including full-confidence exact matches on other owners —
+      // next to `status: "ambiguous"`, with nothing to tell them apart from the two the
+      // tool actually could not choose between.
+      const strictResolutionCandidates = strictCandidates.map(toResolutionCandidate);
+      const limitedStrictCandidates = limitResolutionCandidates(
+        strictResolutionCandidates,
+        input.maxCandidates
+      );
       warnings.push("Exact method mapping is ambiguous for owner+method+descriptor.");
-      if (limitedCandidates.candidatesTruncated) {
+      if (limitedStrictCandidates.candidatesTruncated) {
         warnings.push(
           "Raise maxCandidates up to 200 to inspect the full candidate list, or narrow the lookup via find-mapping disambiguation hints."
+        );
+      }
+      const rejectedByDescriptor = rawCandidates.length - strictCandidates.length;
+      if (rejectedByDescriptor > 0) {
+        warnings.push(
+          `${rejectedByDescriptor} further name-matched candidate(s) were rejected by descriptor and are not reported; use find-mapping for the unfiltered list.`
         );
       }
       return {
@@ -652,11 +668,15 @@ export class MappingService {
         mappingContext,
         resolved: false,
         status: "ambiguous",
-        candidates: limitedCandidates.candidates,
-        candidateCount: limitedCandidates.candidateCount,
-        candidatesTruncated: limitedCandidates.candidatesTruncated,
+        candidates: limitedStrictCandidates.candidates,
+        candidateCount: limitedStrictCandidates.candidateCount,
+        candidatesTruncated: limitedStrictCandidates.candidatesTruncated,
         warnings,
-        provenance: this.provenanceForPath(graph, path)
+        provenance: this.provenanceForPath(graph, path),
+        ambiguityReasons: inferAmbiguityReasons(
+          strictResolutionCandidates,
+          pathUsesSource(graph.pairs, path, "mojang-client-mappings")
+        )
       };
     }
 
