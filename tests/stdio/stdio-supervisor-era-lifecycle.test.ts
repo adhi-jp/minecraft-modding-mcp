@@ -353,6 +353,43 @@ test("unselected modern-signal discover forwards without locking and a pipelined
   assert.equal(conflict.error?.data?.selectedEra, "legacy");
 });
 
+test("worker-not-ready preserves discover before initialize and gates later requests until initialization responds", () => {
+  const outbound: JSONRPCMessage[] = [];
+  const supervisor = new StdioSupervisor({
+    entryFile: "fixture.ts",
+    clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+    eventWriter: () => {}
+  } as never) as unknown as Harness;
+  supervisor.scheduleRestart = () => {};
+
+  supervisor.handleClientMessage(modernDiscover(1));
+  supervisor.handleClientMessage(legacyInitialize(2));
+  supervisor.handleClientMessage({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { name: "list-versions", arguments: {} }
+  } as JSONRPCRequest);
+  assert.equal(supervisor.queuedRequests.length, 2, "discover and the later tool call queue while the worker is unavailable");
+
+  const workerWrites: string[] = [];
+  const child = createWorker(99_100_049, workerWrites);
+  supervisor.child = child;
+  supervisor.liveChildren.add(child);
+  supervisor.handleWorkerReady(child);
+
+  assert.equal(workerWrites.length, 2, "only the pre-initialize discover and initialize may release on readiness");
+  assert.equal(workerWrites[0]?.includes('"method":"server/discover"'), true, "client arrival order puts discover first");
+  assert.equal(workerWrites[1]?.includes('"method":"initialize"'), true, "initialize follows the queued discover");
+  assert.equal(countFrames(workerWrites, '"method":"tools/call"'), 0, "later requests stay gated before initialize responds");
+
+  supervisor.handleWorkerMessage(child, initializeResult(2));
+  assert.equal((outbound.at(-1) as { id?: number }).id, 2);
+  assert.equal(workerWrites.length, 3, "initialize success releases the later request");
+  assert.equal(workerWrites[2]?.includes('"method":"tools/call"'), true);
+  assert.equal(workerWrites[2]?.includes('"id":3'), true);
+});
+
 test("worker-down modern discover queues, releases on readiness, and does not lock the era", () => {
   const outbound: JSONRPCMessage[] = [];
   const supervisor = new StdioSupervisor({
@@ -553,20 +590,18 @@ test("a cap-rejected initialize locks legacy without capture and a stray initial
   assert.equal(countFrames(workerWrites, '"method":"notifications/initialized"'), 1);
 });
 
-test("unselected cancellation targeting an in-flight discover stays supervisor-side and the discover still answers", () => {
+test("known active cancellation for an in-flight unselected discover forwards and suppresses its late response", () => {
   const { supervisor, child, outbound, workerWrites } = createEraHarness();
   supervisor.handleClientMessage(modernDiscover(1));
   assert.equal(workerWrites.length, 1);
 
-  // Accepted limitation: the cancellation cannot be delivered without
-  // legacy-pinning the worker connection, so an in-flight era-neutral
-  // discover is not cancellable server-side; supervisor bookkeeping only.
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/cancelled",
     params: { requestId: 1 }
   } as JSONRPCMessage);
-  assert.equal(workerWrites.length, 1, "the unselected-state cancellation must not be forwarded");
+  assert.equal(workerWrites.length, 2, "the pending discover proves this worker is already modern-pinned");
+  assert.equal(workerWrites[1]?.includes('"method":"notifications/cancelled"'), true);
   assert.equal(outbound.length, 0);
 
   supervisor.handleWorkerMessage(child, {
@@ -574,9 +609,6 @@ test("unselected cancellation targeting an in-flight discover stays supervisor-s
     id: 1,
     result: { supportedVersions: ["2026-07-28"] }
   } as JSONRPCMessage);
-  assert.deepEqual(outbound.at(-1), {
-    jsonrpc: "2.0",
-    id: 1,
-    result: { supportedVersions: ["2026-07-28"] }
-  });
+  assert.equal(outbound.some((message) => "id" in message && message.id === 1), false);
+  assert.equal(supervisor.pendingRequests.has("number:1"), false);
 });

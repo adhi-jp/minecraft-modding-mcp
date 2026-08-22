@@ -345,53 +345,43 @@ test("modern-locked claim-shaped-invalid request is rejected -32602 with the inv
   });
 });
 
-test("modern-locked subscriptions/listen is rejected -32601 Method not found at admission without a worker forward", () => {
+test("modern-locked subscriptions/listen forwards to the worker and stays pending for SDK-owned lifecycle", () => {
   const { supervisor, child, outbound, workerWrites } = createEraHarness();
   supervisor.handleClientMessage(modernCall(1, "list-versions"));
   supervisor.handleWorkerMessage(child, { jsonrpc: "2.0", id: 1, result: { ok: true } } as JSONRPCMessage);
+  const outboundBeforeListen = outbound.length;
 
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     id: 2,
     method: "subscriptions/listen",
-    params: { _meta: modernMeta() }
+    params: { _meta: modernMeta(), notifications: { toolsListChanged: true } }
   } as JSONRPCRequest);
 
-  // Defense-in-depth note (not a test dependency): if admission were ever
-  // bypassed, the worker (maxSubscriptions: 0) would answer -32603
-  // "Subscription limit reached"; the plain -32601 below proves the
-  // supervisor intercepted BEFORE any forward.
-  assert.equal(workerWrites.length, 1, "subscriptions/listen must never reach the worker in the modern era");
-  assert.deepEqual(outbound.at(-1), {
-    jsonrpc: "2.0",
-    id: 2,
-    error: { code: -32601, message: "Method not found" }
-  });
+  assert.equal(workerWrites.length, 2, "valid modern subscriptions/listen must reach the worker");
+  assert.equal(hasFrame(workerWrites, '"method":"subscriptions/listen"'), true);
+  assert.equal(outbound.length, outboundBeforeListen, "the supervisor must not synthesize a terminal listen response");
+  assert.equal(supervisor.pendingRequests.has("number:2"), true, "the SDK owns the active subscription lifecycle");
 });
 
-test("unselected modern-signal subscriptions/listen locks modern first, then rejects", () => {
+test("unselected modern-signal subscriptions/listen locks modern and forwards", () => {
   const { supervisor, outbound, workerWrites } = createEraHarness();
-  // The modern-signal on subscriptions/listen counts as the era-locking
-  // signal even though the method itself is rejected: lock modern first,
-  // then reject -32601.
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     id: 1,
     method: "subscriptions/listen",
-    params: { _meta: modernMeta() }
+    params: { _meta: modernMeta(), notifications: { toolsListChanged: true } }
   } as JSONRPCRequest);
-  assert.deepEqual(outbound.at(-1), {
-    jsonrpc: "2.0",
-    id: 1,
-    error: { code: -32601, message: "Method not found" }
-  });
+  assert.equal(workerWrites.length, 1, "the modern-signal listen must forward after locking the era");
+  assert.equal(hasFrame(workerWrites, '"method":"subscriptions/listen"'), true);
+  assert.equal(outbound.length, 0, "the supervisor must not answer an SDK-owned listen request");
 
   supervisor.handleClientMessage(legacyInitialize(2));
   const conflict = outbound.at(-1) as { error?: { code?: number; data?: { kind?: string; selectedEra?: string } } };
   assert.equal(conflict.error?.code, -32601);
   assert.equal(conflict.error?.data?.kind, "era_conflict");
-  assert.equal(conflict.error?.data?.selectedEra, "modern", "subscriptions/listen must have locked modern before its rejection");
-  assert.equal(workerWrites.length, 0);
+  assert.equal(conflict.error?.data?.selectedEra, "modern", "subscriptions/listen must lock modern before forwarding");
+  assert.equal(workerWrites.length, 1, "the conflicting initialize must not reach the worker");
 });
 
 test("modern-locked claim-less subscriptions/listen is rejected -32602 missing_meta before the method rejection", () => {
@@ -439,19 +429,16 @@ test("modern-locked claim-less subscriptions/listen is rejected -32602 missing_m
     }
   });
 
-  // Shallow-valid listen still gets the plain method rejection.
+  // Shallow-valid listen is ordinary modern traffic and reaches the worker.
+  const outboundBeforeValid = outbound.length;
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     id: 4,
     method: "subscriptions/listen",
-    params: { _meta: modernMeta() }
+    params: { _meta: modernMeta(), notifications: { toolsListChanged: true } }
   } as JSONRPCRequest);
-  assert.deepEqual(outbound.at(-1), {
-    jsonrpc: "2.0",
-    id: 4,
-    error: { code: -32601, message: "Method not found" }
-  });
-  assert.equal(workerWrites.length, 1, "no listen variant may reach the worker in the modern era");
+  assert.equal(outbound.length, outboundBeforeValid, "valid listen must not receive an admission rejection");
+  assert.equal(workerWrites.length, 2, "only the shallow-valid listen variant reaches the worker");
 });
 
 test("initialize carrying a shallow-valid modern _meta envelope still locks legacy", () => {
@@ -498,14 +485,9 @@ test("initialize carrying a shallow-valid modern _meta envelope still locks lega
   assert.equal(conflict.error?.data?.selectedEra, "legacy");
 });
 
-test("modern-locked claim-less notifications/cancelled is dropped but its bookkeeping still suppresses the late response", (t) => {
+test("modern claim-less cancellation for an active ordinary request forwards, marks cancelled, and suppresses a late response", () => {
   const { supervisor, child, outbound, workerWrites, events } = createEraHarness();
-  t.after(() => {
-    for (const pending of (supervisor as unknown as { pendingRequests: Map<string, { deadlineTimer?: NodeJS.Timeout }> }).pendingRequests.values()) {
-      if (pending.deadlineTimer) clearTimeout(pending.deadlineTimer);
-    }
-  });
-  supervisor.handleClientMessage(modernCall(1, "validate-project"));
+  supervisor.handleClientMessage(modernCall(1, "list-versions"));
   assert.equal(workerWrites.length, 1);
 
   supervisor.handleClientMessage({
@@ -513,22 +495,27 @@ test("modern-locked claim-less notifications/cancelled is dropped but its bookke
     method: "notifications/cancelled",
     params: { requestId: 1 }
   } as JSONRPCMessage);
-  assert.equal(workerWrites.length, 1, "a claim-less cancellation must not reach a modern-locked worker connection");
-  assert.equal(outbound.length, 0);
-  assert.deepEqual(events.at(-1), {
-    level: "warn",
-    event: "supervisor.notification_dropped",
-    details: { method: "notifications/cancelled", reason: "missing-meta" }
-  });
+  assert.equal(workerWrites.length, 2, "an active pending request proves the worker is modern-pinned, so claim-less cancellation must forward");
+  assert.equal(hasFrame(workerWrites, '"method":"notifications/cancelled"'), true);
+  assert.equal(
+    (supervisor.pendingRequests.get("number:1") as { clientCancelled?: boolean } | undefined)?.clientCancelled,
+    true,
+    "all pending request kinds must be marked client-cancelled"
+  );
+  assert.equal(outbound.length, 0, "cancellation notifications emit no response");
+  assert.equal(
+    events.some((event) => event.event === "supervisor.notification_dropped"),
+    false,
+    "an active claim-less cancellation must not be logged as dropped"
+  );
 
-  // Supervisor-side bookkeeping still marked the request cancelled: the
-  // worker's late response must be suppressed.
   supervisor.handleWorkerMessage(child, {
     jsonrpc: "2.0",
     id: 1,
     result: { content: [{ type: "text", text: "late" }] }
   } as JSONRPCMessage);
   assert.equal(outbound.some((message) => "id" in message && message.id === 1), false);
+  assert.equal(supervisor.pendingRequests.has("number:1"), false, "the suppressed late response settles the pending entry");
 });
 
 test("modern-locked shallow-valid notifications/cancelled forwards to the worker", () => {

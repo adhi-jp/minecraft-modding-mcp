@@ -1611,7 +1611,7 @@ export async function startServer(): Promise<void> {
   // transport is started synchronously inside serveStdio, so resolving here
   // keeps the READY marker contract: the worker is listening once
   // startServer() returns.
-  serveStdio(buildServer, { maxSubscriptions: 0, transport });
+  serveStdio(buildServer, { transport });
   // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
   process.stdin.resume();
   serverStarted = true;

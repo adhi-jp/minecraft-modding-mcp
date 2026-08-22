@@ -1,3 +1,4 @@
+import { ResourceNotFoundError } from "@modelcontextprotocol/server";
 import type { CallToolResult, ReadResourceResult, ServerContext } from "@modelcontextprotocol/server";
 import { PROBLEM_DETAILS_READ_CACHE_FIELDS } from "./cache-policy.js";
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY } from "./era-classifier.js";
@@ -47,17 +48,21 @@ export function objectResource(uri: string, data: Record<string, unknown>): Read
   };
 }
 
-function statusForResourceErrorCode(code: ErrorCode): number {
-  if (code === ERROR_CODES.INVALID_INPUT) {
-    return 400;
-  }
-  if (
+function isResourceNotFoundErrorCode(code: ErrorCode): boolean {
+  return (
     code === ERROR_CODES.FILE_NOT_FOUND ||
     code === ERROR_CODES.SOURCE_NOT_FOUND ||
     code === ERROR_CODES.CLASS_NOT_FOUND ||
     code === ERROR_CODES.VERSION_NOT_FOUND ||
     code === ERROR_CODES.JAR_NOT_FOUND
-  ) {
+  );
+}
+
+function statusForResourceErrorCode(code: ErrorCode): number {
+  if (code === ERROR_CODES.INVALID_INPUT) {
+    return 400;
+  }
+  if (isResourceNotFoundErrorCode(code)) {
     return 404;
   }
   if (
@@ -107,6 +112,9 @@ export function errorResource(
   const isStr = typeof error === "string";
   const detail = isStr ? error : error.message;
   const code = isStr ? ERROR_CODES.INVALID_INPUT : error.code ?? ERROR_CODES.INTERNAL;
+  if (!isStr && isModernEraRequest(ctx) && isResourceNotFoundErrorCode(code)) {
+    throw new ResourceNotFoundError(uri, detail);
+  }
   // Resource reads carry the same AppError as the equivalent tool call, so they
   // get the same recovery metadata. Classifiers are always present; the rest is
   // extracted from the AppError details (reusing the tool-error helpers as-is so

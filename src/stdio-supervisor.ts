@@ -14,7 +14,6 @@ import { buildSuggestedCall } from "./build-suggested-call.js";
 import { getToolSchema, registeredToolCount } from "./tool-schema-registry.js";
 import {
   buildEraConflictRejection,
-  buildMethodNotFoundRejection,
   buildMissingMetaRejection,
   classifyEraSignal,
   extractModernRequestContext,
@@ -267,6 +266,10 @@ function isResponse(message: JSONRPCMessage): message is JSONRPCResponse {
   return !("method" in message) && "id" in message;
 }
 
+function isToolArgumentsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getTrackedRequestId(message: { id?: unknown }): RequestId | undefined {
   return typeof message.id === "string" || typeof message.id === "number"
     ? message.id
@@ -297,6 +300,31 @@ export function buildUnknownToolNotFoundReply(id: RequestId, toolName: string): 
       content: [{ type: "text", text: `MCP error -32602: Tool ${toolName} not found` }],
       isError: true
     }
+  } as JSONRPCResponse;
+}
+
+function buildLegacyMalformedToolArgumentsReply(
+  id: RequestId,
+  argumentsValue: unknown
+): JSONRPCResponse {
+  const received = argumentsValue === null
+    ? "null"
+    : Array.isArray(argumentsValue)
+      ? "array"
+      : typeof argumentsValue;
+  const message = JSON.stringify([
+    {
+      code: "invalid_type",
+      expected: "object",
+      received,
+      path: ["params", "arguments"],
+      message: `Expected object, received ${received}`
+    }
+  ], null, 2);
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32603, message }
   } as JSONRPCResponse;
 }
 
@@ -858,6 +886,13 @@ export class StdioSupervisor {
   private readonly inboundFrameModes = new WeakMap<object, ConcreteFramingMode>();
   private initializeRequest: JSONRPCRequest | undefined;
   private initializedNotification: JSONRPCNotification | undefined;
+  /**
+   * Number of queued requests that arrived before an initial initialize while
+   * the worker was unavailable. Only era-neutral modern discovers can occupy
+   * this prefix; readiness forwards it before initialize, then keeps the queue
+   * suffix gated until the initialization response.
+   */
+  private initializePredecessorCount = 0;
   private clientInitialized = false;
   private replayingInitialization = false;
   private initializeSentToWorker = false;
@@ -994,8 +1029,10 @@ export class StdioSupervisor {
       this.initializeRequest = message;
       this.clientInitialized = false;
       if (this.childReady) {
+        this.initializePredecessorCount = 0;
         this.forwardRequest(message, this.createPendingRequest(message));
       } else {
+        this.initializePredecessorCount = this.queuedRequests.length;
         const existing = this.queuedNotifications.findIndex(
           (entry) => isRequest(entry) && entry.method === "initialize"
         );
@@ -1031,6 +1068,22 @@ export class StdioSupervisor {
       );
       this.drainQueue();
       return;
+    }
+
+    if (
+      this.era === "legacy" &&
+      message.method === "tools/call" &&
+      isToolArgumentsRecord(message.params) &&
+      Object.prototype.hasOwnProperty.call(message.params, "arguments")
+    ) {
+      const argumentsValue = message.params.arguments;
+      if (argumentsValue !== undefined && !isToolArgumentsRecord(argumentsValue)) {
+        this.writeSyntheticReply(
+          pending,
+          buildLegacyMalformedToolArgumentsReply(pending.id, argumentsValue)
+        );
+        return;
+      }
     }
 
     if (
@@ -1182,26 +1235,6 @@ export class StdioSupervisor {
     const mode = this.modeForMessage(message);
     const id = message.id as RequestId;
 
-    if (message.method === "subscriptions/listen" && this.era !== "legacy") {
-      if (signal.classification !== "modern-signal") {
-        // The shallow envelope check applies to EVERY request at admission:
-        // a non-signal listen fails -32602 before the method-level -32601.
-        this.writeToClient(
-          buildMissingMetaRejection(id, signal, this.era === "modern" ? "modern" : "unselected"),
-          mode
-        );
-        return undefined;
-      }
-      if (this.era === "unselected") {
-        // The modern-signal on subscriptions/listen counts as the
-        // era-locking signal even though the method itself is rejected:
-        // lock modern first, then reject.
-        this.lockModernEra();
-      }
-      this.writeToClient(buildMethodNotFoundRejection(id), mode);
-      return undefined;
-    }
-
     if (message.method === "server/discover") {
       // server/discover is ERA-NEUTRAL: it forwards under the legacy lock
       // (the legacy-pinned worker answers -32601) and a modern-signal
@@ -1249,6 +1282,7 @@ export class StdioSupervisor {
     this.era = "modern";
     this.initializeRequest = undefined;
     this.initializedNotification = undefined;
+    this.initializePredecessorCount = 0;
     this.clientInitialized = false;
     this.replayingInitialization = false;
     this.initializeSentToWorker = false;
@@ -1354,6 +1388,9 @@ export class StdioSupervisor {
       (entry) => requestKey(entry.pending.id) === key
     );
     if (queuedIndex >= 0) {
+      if (queuedIndex < this.initializePredecessorCount) {
+        this.initializePredecessorCount -= 1;
+      }
       const [{ pending }] = this.queuedRequests.splice(queuedIndex, 1);
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
@@ -1362,26 +1399,33 @@ export class StdioSupervisor {
     }
 
     const pending = this.pendingRequests.get(key);
-    if (pending?.toolName === "validate-project") {
+    if (pending) {
       pending.clientCancelled = true;
     }
+    const cancellationSignal = classifyEraSignal(message.params).classification;
     if (this.era === "unselected") {
-      // Never forward: the cancellation could be a worker connection's first
-      // frame and would legacy-pin it. Supervisor-side bookkeeping above
-      // still applies — which means an in-flight era-neutral discover cannot
-      // be cancelled server-side (accepted limitation).
-      return;
+      if (pending === undefined || cancellationSignal === "claim-shaped-invalid") {
+        // Unknown cancellations could be the worker connection's first frame;
+        // claim-shaped-invalid notifications are not protocol-valid. Drop both.
+        // A known active claim-less target is different: that pending request
+        // proves this current worker already received a modern discover.
+        return;
+      }
     }
-    if (this.era === "modern" && classifyEraSignal(message.params).classification !== "modern-signal") {
-      // A claim-less/invalid cancellation must never reach a modern-locked
-      // worker connection: after a restart it could be the fresh
-      // generation's FIRST frame and the SDK would classify the opening
-      // frame legacy. Bookkeeping above still cancels supervisor-side.
-      this.eventWriter("warn", "supervisor.notification_dropped", {
-        method: message.method,
-        reason: "missing-meta"
-      });
-      return;
+    if (this.era === "modern") {
+      const activeClaimlessCancellation =
+        cancellationSignal === "claim-less" && pending !== undefined;
+      if (cancellationSignal !== "modern-signal" && !activeClaimlessCancellation) {
+        // A claim-less cancellation is safe only while its target is pending:
+        // that proves this current worker already received a modern request.
+        // Unknown claim-less and claim-shaped-invalid cancellations remain
+        // dropped so they can never legacy-pin a fresh worker generation.
+        this.eventWriter("warn", "supervisor.notification_dropped", {
+          method: message.method,
+          reason: "missing-meta"
+        });
+        return;
+      }
     }
     const child = this.child;
     if (child && !child.stdin.destroyed) {
@@ -1716,10 +1760,10 @@ export class StdioSupervisor {
         if (pending?.toolName === "validate-project") {
           this.runningValidateKey = undefined;
           if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
-          if (pending.clientCancelled) {
-            this.drainQueue();
-            return;
-          }
+        }
+        if (pending?.clientCancelled) {
+          this.drainQueue();
+          return;
         }
       }
     }
@@ -1774,6 +1818,12 @@ export class StdioSupervisor {
       return;
     }
 
+    while (this.initializePredecessorCount > 0 && this.queuedRequests.length > 0) {
+      const predecessor = this.queuedRequests.shift()!;
+      this.initializePredecessorCount -= 1;
+      this.forwardRequest(predecessor.message, predecessor.pending);
+    }
+    this.initializePredecessorCount = 0;
     this.replayingInitialization = this.clientInitialized;
     this.forwardRequest(this.initializeRequest, this.createPendingRequest(this.initializeRequest));
   }
@@ -1980,6 +2030,7 @@ export class StdioSupervisor {
     }
     this.initializeRequest = undefined;
     this.initializedNotification = undefined;
+    this.initializePredecessorCount = 0;
     this.replayingInitialization = false;
     this.initializeSentToWorker = false;
   }

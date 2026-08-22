@@ -124,11 +124,10 @@ test("modern class-source read answers ttlMs 60000 on success", async () => {
   assertCache(frame, 60_000, "class-source read");
 });
 
-test("a ProblemDetails resource read answers ttlMs 0 even though its resource's class row says 60000", async () => {
+test("modern matched-template resource misses answer -32602 with data.uri and no result/cache fields", async () => {
   // Same registered resource (artifact-metadata) drives BOTH halves: the
-  // success read must carry the 60000 class row, the errorResource read of a
-  // NONEXISTENT artifact must be pinned to 0 (unconditional ProblemDetails
-  // precedence) — a registration-hint-only implementation fails this pair.
+  // seeded artifact proves the template still resolves normally, while the
+  // nonexistent artifact must use the SDK's protocol-level not-found path.
   const success = await modern.request({
     jsonrpc: "2.0",
     id: id(),
@@ -140,20 +139,18 @@ test("a ProblemDetails resource read answers ttlMs 0 even though its resource's 
   assert.equal("error" in successPayload, false, "the seeded artifact-metadata read must SUCCEED");
   assertCache(success, 60_000, "artifact-metadata success read");
 
-  const problem = await modern.request({
+  const uri = "mc://artifact/p3-no-such-artifact";
+  const missing = await modern.request({
     jsonrpc: "2.0",
     id: id(),
     method: "resources/read",
-    params: { _meta: MODERN_META, uri: "mc://artifact/p3-no-such-artifact" }
+    params: { _meta: MODERN_META, uri }
   });
-  assert.equal(problem.error, undefined, "the errorResource path is a SUCCESSFUL read result");
-  const problemPayload = parseResourceEnvelope(problem) as { error?: { type?: string } };
-  assert.equal(
-    problemPayload.error?.type,
-    "https://minecraft-modding-mcp.dev/problems/resource",
-    "the read content must be the ProblemDetails envelope"
-  );
-  assertCache(problem, 0, "ProblemDetails read");
+  assert.equal(missing.error?.code, -32602);
+  assert.deepEqual(missing.error?.data, { uri });
+  assert.equal("result" in missing, false, "a resource-not-found protocol error must carry no result");
+  assert.equal(missing.result?.ttlMs, undefined, "a resource-not-found protocol error must carry no ttlMs");
+  assert.equal(missing.result?.cacheScope, undefined, "a resource-not-found protocol error must carry no cacheScope");
 });
 
 test("modern mc://metrics read, tools/list, and server/discover keep ttlMs 0 cacheScope private", async () => {

@@ -105,7 +105,13 @@ const EXPECTED_ORDINARY_TEST_FILES = 209;
 // framing.test.ts gains 1 test pinning that a line-delimited JSON array
 // arriving after a Content-Length frame surfaces one parse error and resumes
 // line framing, instead of leaving that frame and every later one buffered.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1824;
+// 209 -> 209 / 1824 -> 1825 (2026-07-28 conformance and legacy parity):
+// tests/stdio/stdio-supervisor-era-lifecycle.test.ts gains 1 worker-not-ready
+// arrival-order test (a server/discover queued before the initial initialize
+// is forwarded first once the worker is ready, while the queue suffix stays
+// gated until the initialize response). The round's other repairs extend
+// existing tests and add no declaration.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1825;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

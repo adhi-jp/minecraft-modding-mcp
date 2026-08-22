@@ -214,4 +214,53 @@ test("wire dependency-method inventory: modern era (ping/setLevel/tasks/prompts 
       `modern ${method} must answer -32601 (absent from the modern registry / never registered)`
     );
   }
+
+  const subscriptionRequestId = 7;
+  session.send({
+    jsonrpc: "2.0",
+    id: subscriptionRequestId,
+    method: "subscriptions/listen",
+    params: {
+      _meta: MODERN_META,
+      notifications: { toolsListChanged: true }
+    }
+  });
+  const findAcknowledgment = (): Frame | undefined =>
+    session.frames.find((frame) => frame.method === "notifications/subscriptions/acknowledged");
+  await waitFor(
+    () => findAcknowledgment() !== undefined || session.frames.some((frame) => frame.id === subscriptionRequestId),
+    30_000,
+    "modern subscription acknowledgment or terminal rejection"
+  );
+  const acknowledgment = findAcknowledgment();
+  assert.ok(acknowledgment, "valid modern subscriptions/listen must emit an acknowledgment notification");
+  const acknowledgmentParams = acknowledgment.params as {
+    notifications?: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  };
+  assert.deepEqual(acknowledgmentParams.notifications, { toolsListChanged: true });
+  assert.equal(
+    acknowledgmentParams._meta?.["io.modelcontextprotocol/subscriptionId"],
+    subscriptionRequestId,
+    "the SDK acknowledgment correlates the subscription to the listen request id"
+  );
+  assert.equal(
+    session.frames.some((frame) => frame.id === subscriptionRequestId),
+    false,
+    "an active subscription must not emit an application result before cancellation"
+  );
+
+  session.send({
+    jsonrpc: "2.0",
+    method: "notifications/cancelled",
+    params: { requestId: subscriptionRequestId }
+  });
+  session.send({ jsonrpc: "2.0", id: 8, method: "tools/list", params: { _meta: MODERN_META } });
+  const barrier = await reply(session, 8, "post-cancellation tools/list barrier");
+  assert.equal(barrier.error, undefined, "the worker must remain usable after subscription cancellation");
+  assert.equal(
+    session.frames.some((frame) => frame.id === subscriptionRequestId),
+    false,
+    "claim-less cancellation ends the subscription without a duplicate application result"
+  );
 });

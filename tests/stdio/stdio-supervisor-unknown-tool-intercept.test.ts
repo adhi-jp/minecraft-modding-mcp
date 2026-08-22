@@ -54,6 +54,20 @@ function frozenNotFoundResult(name: string): Record<string, unknown> {
   };
 }
 
+function legacyArgumentsZodMessage(received: "null" | "array" | "string" | "number"): string {
+  return JSON.stringify([
+    {
+      code: "invalid_type",
+      expected: "object",
+      received,
+      path: ["params", "arguments"],
+      message: `Expected object, received ${received}`
+    }
+  ], null, 2);
+}
+
+const LEGACY_NULL_ARGUMENTS_ZOD_MESSAGE = legacyArgumentsZodMessage("null");
+
 // ── Wire half (real supervisor + real worker) ──────────────────────
 
 const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
@@ -163,6 +177,38 @@ test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both an
   await wireReply(session, 1, "initialize reply");
   session.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
 
+  for (const [id, name] of [
+    [4, "get-runtime-metrics"],
+    [5, "no-such-tool-null-arguments"]
+  ] as const) {
+    session.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: null } });
+    const malformed = await wireReply(session, id, `${name} null arguments reply`);
+    assert.deepEqual(malformed, {
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32603, message: LEGACY_NULL_ARGUMENTS_ZOD_MESSAGE }
+    }, `${name}: legacy method-shape validation must run before tool lookup`);
+  }
+
+  for (const [id, argumentsValue, received] of [
+    [6, [], "array"],
+    [7, "not-an-object", "string"],
+    [8, 42, "number"]
+  ] as const) {
+    session.send({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: "get-runtime-metrics", arguments: argumentsValue }
+    });
+    const malformed = await wireReply(session, id, `registered tool ${received} arguments reply`);
+    assert.deepEqual(malformed, {
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32603, message: legacyArgumentsZodMessage(received) }
+    });
+  }
+
   // id 2 matches the frozen baseline row's request id, so the WHOLE reply
   // object must deep-equal the frozen premigration fixture reply verbatim.
   session.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "batch-class-source", arguments: {} } });
@@ -215,6 +261,25 @@ test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -3260
   const reply = await wireReply(session, 1, "modern registry-miss reply");
   assert.equal(reply.result, undefined, "the modern era must NOT synthesize the legacy envelope");
   assert.deepEqual(reply.error, { code: -32602, message: "Tool batch-class-source not found" });
+
+  for (const [id, name] of [
+    [2, "get-runtime-metrics"],
+    [3, "no-such-tool-null-arguments"]
+  ] as const) {
+    session.send({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: {
+        _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} },
+        name,
+        arguments: null
+      }
+    });
+    const malformed = await wireReply(session, id, `${name} modern null arguments reply`);
+    assert.equal((malformed.error as { code?: number } | undefined)?.code, -32602, `${name}: modern SDK validation stays -32602`);
+    assert.equal(malformed.result, undefined);
+  }
 });
 
 test("wire legacy registry HIT: tools/call get-runtime-metrics is answered by the worker, never the frozen miss envelope", { timeout: 150_000 }, async (t) => {

@@ -51,7 +51,7 @@ export async function startInProcessSession(): Promise<InProcessSession> {
     frames.push(message as Frame);
   };
   const { buildServer } = await import("../../src/index.ts");
-  const handle = serveStdio(buildServer, { transport: serverEnd, maxSubscriptions: 0 });
+  const handle = serveStdio(buildServer, { transport: serverEnd });
   await clientEnd.start();
 
   const send = (message: object): Promise<void> => clientEnd.send(message as JSONRPCMessage);
