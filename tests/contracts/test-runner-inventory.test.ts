@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 218;
+const EXPECTED_ORDINARY_TEST_FILES = 220;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -177,7 +177,7 @@ const EXPECTED_ORDINARY_TEST_FILES = 218;
 // stdio-supervisor-process-tree +1 (parent-liveness backstop on a never-EOF stdin) and
 // stdio-supervisor-timeout +2 (SIGHUP shutdown, and an uncaught supervisor exception
 // that still reaps the worker).
-// 218 -> 218 / 1910 -> 1913 (wrong-artifact answers round): no new files. Three existing
+// 218 -> 218 / 1910 -> 1914 (wrong-artifact answers round): no new files. Two existing
 // files grow: tests/source-service/partial-source-fallback.test.ts +1 (ERR_CLASS_NOT_FOUND
 // keeps the caller's artifactId, didYouMean and suggestedCall when the internal binary
 // fallback succeeded but still missed the class) and
@@ -194,7 +194,20 @@ const EXPECTED_ORDINARY_TEST_FILES = 218;
 // resolve-method-mapping-exact truthfulness case is a t.test subtest inside
 // tests/mapping/mapping-service-method-exact-api-matrix.test.ts, which this counter
 // does not include.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1918;
+// 218 -> 220 / 1918 -> 1924 (supervisor and worker lifecycle repair round): two new
+// files. tests/stdio/stdio-supervisor-ready-exit-storm.test.ts adds 2 tests for the
+// restart backoff after a worker that signals ready and then stands down cleanly in the
+// same breath — the shape a host that closes a spawned child's stdin immediately
+// produces, which adoption's backoff reset otherwise answered with an unbounded 100 ms
+// respawn loop. tests/stdio/stdio-child-lifecycle-ladder.test.ts adds 3 tests driving the
+// shared teardown helper's SIGTERM and force-kill rungs, which every real call site
+// (all supervisors, all exiting on stdin EOF) had left unexecuted. One existing file
+// grows: stdio-supervisor-timeout.test.ts +1 (a fatal supervisor error ends the process
+// even while a referenced handle holds the event loop, since registering fatal handlers
+// suppresses node's default abort). The strengthened parent-liveness positive control
+// and the worker-descendant reaping assertions extend existing tests and add no
+// declaration.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1924;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

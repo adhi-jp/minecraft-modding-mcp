@@ -26,6 +26,9 @@ async function main(): Promise<void> {
     // outlived every supervisor that did not shut down cooperatively.
     const keepAliveTimer = setInterval(() => undefined, 60_000);
 
+    // Declared ahead of both stand-down routes below, which each read it.
+    let stdinEnded = false;
+
     // Defence in depth for hosts where stdin is not a pipe the parent solely
     // owns, so EOF never arrives. `process.ppid` is a static data property in
     // node — re-reading it can never reveal reparenting — so the parent pid is
@@ -42,6 +45,14 @@ async function main(): Promise<void> {
         }
         clearInterval(parentLivenessTimer);
         clearInterval(keepAliveTimer);
+        // Named on stderr because this stand-down has no other visible cause:
+        // the supervisor is already gone, nothing arrived on stdin, and the
+        // worker simply stops. `stdinEnded` records which of the two
+        // stand-down routes actually fired.
+        log("warn", "worker.parent_liveness_lost", {
+          parentPid,
+          stdinEnded: stdinEnded || process.stdin.readableEnded
+        });
         // This arm is reached precisely BECAUSE stdin never ended, so the
         // still-flowing stdin handle would keep the event loop referenced on
         // its own. Nothing more can ever arrive on it — the writer is gone —
@@ -66,7 +77,6 @@ async function main(): Promise<void> {
     };
 
     let workerReady = false;
-    let stdinEnded = false;
     const handleStdinEnd = (): void => {
       stdinEnded = true;
       if (workerReady) {

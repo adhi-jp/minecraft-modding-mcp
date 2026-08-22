@@ -73,6 +73,15 @@ const MAX_SYNTHETIC_TOMBSTONES = 1024;
  */
 const MODERN_UNSUPPORTED_METHODS = new Set(["subscriptions/listen"]);
 const DEFAULT_TREE_CLEANUP_TIMEOUT_MS = 5_000;
+/**
+ * How long a fatal-error teardown may run before the process is ended anyway.
+ *
+ * Registering `uncaughtException`/`unhandledRejection` handlers suppresses
+ * node's default abort, so the non-zero exit has to be performed explicitly.
+ * Cleanup gets this long to reap the worker's process group first; a teardown
+ * that stalls past it must not be allowed to keep a crashed supervisor alive.
+ */
+const FATAL_SHUTDOWN_WATCHDOG_MS = 10_000;
 const DEFAULT_CLEANUP_TOKEN_RETRY_BASE_MS = 1_000;
 const DEFAULT_CLEANUP_TOKEN_RETRY_CAP_MS = 30_000;
 
@@ -101,6 +110,23 @@ export function computeRestartBackoffMs(retryIndex: number): number {
   }
   return Math.min(100 * (2 ** Math.floor(retryIndex)), MAX_WORKER_STARTUP_WATCHDOG_MS);
 }
+
+/**
+ * How long an adopted worker must stay ready before a CLEAN voluntary
+ * stand-down counts as the end of a generation that actually served.
+ *
+ * A worker stands down on stdin EOF. On a host that hands every spawned child
+ * a stdin which closes immediately, that EOF arrives while the worker is still
+ * starting: it writes its ready marker, is adopted (which clears the restart
+ * backoff), and exits 0 in the same breath. Answering that with the 100 ms
+ * restart floor respawns a ~125 MB process ten times a second forever, so a
+ * stand-down inside this window escalates the backoff instead.
+ *
+ * A CRASH is deliberately not covered: it may be transient and keeps the
+ * prompt replacement the restart suites pin, whereas a clean stand-down means
+ * the host closed the pipe and will close the replacement's stdin the same way.
+ */
+export const MIN_HEALTHY_WORKER_READY_MS = 1_000;
 
 export function terminatePosixProcessGroup(
   pid: number,
@@ -147,6 +173,20 @@ export class RestartBackoffState {
 
   reset(): void {
     this.retryIndex = 0;
+  }
+
+  /**
+   * Raise the escalation level without reserving a restart.
+   *
+   * Adoption resets the index, so a generation that was adopted and then died
+   * without ever serving arrives here with the level already cleared. This
+   * restores the level that the repeated failure has earned, which is what
+   * stops a self-cancelling adopt/reset cycle from pinning every restart to
+   * the 100 ms floor.
+   */
+  escalateTo(level: number): void {
+    if (!Number.isFinite(level) || level <= 0) return;
+    this.retryIndex = Math.max(this.retryIndex, Math.floor(level));
   }
 }
 
@@ -883,6 +923,18 @@ export class StdioSupervisor {
 
   private child: ChildProcessWithoutNullStreams | undefined;
   private childReady = false;
+  /**
+   * Monotonic timestamp of the current generation's adoption, or undefined
+   * while no generation is adopted. Read once at exit to tell a generation
+   * that served from one that stood down the moment it came up.
+   */
+  private childReadyAt: number | undefined;
+  /**
+   * Consecutive adopted generations that stood down CLEANLY before they had
+   * been ready for MIN_HEALTHY_WORKER_READY_MS. Any other outcome — a crash, a
+   * signal, a generation that served — clears it.
+   */
+  private consecutiveImmediateStandDowns = 0;
   private shuttingDown = false;
   private restartTimer: NodeJS.Timeout | undefined;
   private cleanupRetryTimer: NodeJS.Timeout | undefined;
@@ -941,6 +993,14 @@ export class StdioSupervisor {
    * must never have their own runner's exit status rewritten.
    */
   private ownsProcessStdio = false;
+  /**
+   * Whether a fatal fault has already armed the explicit process exit. A
+   * second fault must not stack another watchdog or cut the first teardown
+   * short.
+   */
+  private fatalExitScheduled = false;
+  /** Memoized teardown; see shutdown(). */
+  private shutdownRun: Promise<void> | undefined;
 
   constructor(options: SupervisorOptions) {
     this.entryFile = options.entryFile;
@@ -1054,12 +1114,31 @@ export class StdioSupervisor {
       message: error.message,
       stack: error.stack
     });
-    if (this.ownsProcessStdio) {
-      // Set the code rather than exiting: shutdown() still has to terminate
-      // the worker group, and an immediate exit would abandon it.
-      process.exitCode = 1;
+    // Always the SAME teardown promise, so a second fault arriving mid-shutdown
+    // waits for the worker group to be reaped instead of racing it to the exit.
+    const teardown = this.shutdown();
+    if (!this.ownsProcessStdio) {
+      // Embedded or white-box supervisor: the host owns this process's fate.
+      void teardown.catch(() => undefined);
+      return;
     }
-    void this.shutdown();
+    process.exitCode = 1;
+    if (this.fatalExitScheduled) return;
+    this.fatalExitScheduled = true;
+    // Registering fatal handlers suppressed node's default abort, so the exit
+    // is no longer implied by the crash — it has to be performed. Cleanup
+    // first, bounded, then leave with the non-zero status regardless of what
+    // is still holding the event loop.
+    const watchdog = setTimeout(() => {
+      this.eventWriter("error", "supervisor.fatal_exit_forced", {
+        timeoutMs: FATAL_SHUTDOWN_WATCHDOG_MS
+      });
+      process.exit(1);
+    }, FATAL_SHUTDOWN_WATCHDOG_MS);
+    void teardown.catch(() => undefined).then(() => {
+      clearTimeout(watchdog);
+      process.exit(1);
+    });
   };
 
   private handleClientMessage(message: JSONRPCMessage): void {
@@ -1776,6 +1855,7 @@ export class StdioSupervisor {
     // closed — the tombstone retention bound (see syntheticTombstones).
     child.once("close", () => this.purgeTombstonesThroughGeneration(generation));
     this.childReady = false;
+    this.childReadyAt = undefined;
     this.initializeSentToWorker = false;
     this.workerStderrBuffer = "";
     this.clearStartupWatchdog();
@@ -1860,6 +1940,9 @@ export class StdioSupervisor {
     if (!wasReady) {
       this.handleStartupFailure(this.attemptToken, { code: null, signal: null });
     } else {
+      // A stream/process fault is never a clean stand-down, so it breaks any
+      // run of them.
+      this.consecutiveImmediateStandDowns = 0;
       this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
       this.scheduleRestart(true);
     }
@@ -1901,6 +1984,7 @@ export class StdioSupervisor {
 
     const childPid = this.child?.pid;
     const wasReady = this.childReady;
+    const readyAt = this.childReadyAt;
     this.detachCurrentChild();
 
     if (this.shuttingDown) {
@@ -1918,8 +2002,46 @@ export class StdioSupervisor {
       this.handleStartupFailure(this.attemptToken, { code, signal });
       return;
     }
+    this.accountForReadyGenerationExit(childPid, readyAt, code, signal);
     this.failPendingRequestsOnWorkerExit({ code, signal });
     this.scheduleRestart(true);
+  }
+
+  /**
+   * Decide whether the generation that just ended counts as a start that
+   * succeeded.
+   *
+   * A worker stands down on stdin EOF, and it replays an EOF that arrived
+   * while it was still starting. On a host that closes a spawned child's stdin
+   * immediately, every generation therefore signals ready, is adopted — which
+   * clears the restart backoff — and exits 0 in the same breath. Left at the
+   * 100 ms floor that is an unbounded hot respawn loop, so a clean stand-down
+   * inside the healthy window re-escalates the backoff the adoption cleared.
+   *
+   * Only a CLEAN exit qualifies: a non-zero code or a signal is a crash, which
+   * may be transient and keeps its prompt replacement.
+   */
+  private accountForReadyGenerationExit(
+    pid: number | undefined,
+    readyAt: number | undefined,
+    code: number | null,
+    signal: NodeJS.Signals | null
+  ): void {
+    const readyMs = readyAt === undefined ? 0 : this.monotonicNow() - readyAt;
+    const stoodDownImmediately =
+      code === 0 && signal === null && readyMs < MIN_HEALTHY_WORKER_READY_MS;
+    if (!stoodDownImmediately) {
+      this.consecutiveImmediateStandDowns = 0;
+      return;
+    }
+    this.consecutiveImmediateStandDowns += 1;
+    this.restartBackoff.escalateTo(this.consecutiveImmediateStandDowns);
+    this.eventWriter("warn", "supervisor.worker_stood_down_immediately", {
+      pid,
+      readyMs,
+      consecutive: this.consecutiveImmediateStandDowns,
+      healthyReadyMs: MIN_HEALTHY_WORKER_READY_MS
+    });
   }
 
   private handleWorkerMessage(child: ChildProcessWithoutNullStreams, message: JSONRPCMessage): void {
@@ -2315,6 +2437,7 @@ export class StdioSupervisor {
   private adoptActiveChild(): void {
     this.clearStartupWatchdog();
     this.childReady = true;
+    this.childReadyAt ??= this.monotonicNow();
     this.restartBackoff.reset();
     this.currentRetryEpoch = undefined;
     this.currentRetryReservation = undefined;
@@ -2326,6 +2449,7 @@ export class StdioSupervisor {
     this.clearStartupWatchdog();
     this.child = undefined;
     this.childReady = false;
+    this.childReadyAt = undefined;
     this.replayingInitialization = false;
     this.initializeSentToWorker = false;
     this.staleChildren.add(child);
@@ -2340,6 +2464,7 @@ export class StdioSupervisor {
     this.clearStartupWatchdog();
     this.child = undefined;
     this.childReady = false;
+    this.childReadyAt = undefined;
     this.replayingInitialization = false;
     this.initializeSentToWorker = false;
     if (child) {
@@ -2650,7 +2775,18 @@ export class StdioSupervisor {
     this.armRestartReservation(reservation);
   }
 
-  private async shutdown(): Promise<void> {
+  /**
+   * Idempotent teardown. Every caller receives the SAME promise, so a caller
+   * that needs to know when cleanup is really finished — the fatal handler,
+   * which then ends the process — cannot be handed an already-resolved promise
+   * while another teardown is still collecting the worker's process group.
+   */
+  private shutdown(): Promise<void> {
+    this.shutdownRun ??= this.runShutdown();
+    return this.shutdownRun;
+  }
+
+  private async runShutdown(): Promise<void> {
     if (this.shuttingDown) {
       return;
     }
@@ -2697,16 +2833,24 @@ export class StdioSupervisor {
     process.off("SIGINT", this.handleTerminateSignal);
     process.off("SIGTERM", this.handleTerminateSignal);
     process.off("SIGHUP", this.handleTerminateSignal);
-    process.off("uncaughtException", this.handleFatalError);
-    process.off("unhandledRejection", this.handleFatalError);
 
     this.detachCurrentChild();
     for (const child of this.liveChildren) {
       this.beginTreeTermination(child);
     }
-    await Promise.all(
-      [...this.unresolvedTreeTokens].map((pid) => this.retryUnresolvedTreeToken(pid))
-    );
+    try {
+      await Promise.all(
+        [...this.unresolvedTreeTokens].map((pid) => this.retryUnresolvedTreeToken(pid))
+      );
+    } finally {
+      // Deregistered only once the teardown TAIL is done. Dropping them before
+      // the await left a rejection raised while the worker group was still
+      // being collected with nowhere to go: node's default handler is
+      // suppressed for the lifetime of a registration, and this one had
+      // already been withdrawn.
+      process.off("uncaughtException", this.handleFatalError);
+      process.off("unhandledRejection", this.handleFatalError);
+    }
   }
 }
 

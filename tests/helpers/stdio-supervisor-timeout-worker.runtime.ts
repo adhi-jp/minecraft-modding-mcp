@@ -1,4 +1,5 @@
 import process from "node:process";
+import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,14 @@ import { STDIO_WORKER_MODE_ENV, StdioSupervisor } from "../../src/stdio-supervis
 if (process.env[STDIO_WORKER_MODE_ENV] !== "1") {
   const supervisor = new StdioSupervisor({ entryFile: fileURLToPath(import.meta.url) });
   await supervisor.start();
+  // Fault injection for the fatal-handler EXIT contract. Registering
+  // uncaughtException/unhandledRejection suppresses node's default abort, so a
+  // crashed supervisor only leaves if something ends it: with a referenced
+  // handle like this interval, setting `process.exitCode` alone never takes
+  // effect and the crashed process lives on holding the worker's group open.
+  if (process.env.MCP_TEST_SUPERVISOR_HOLD_EVENT_LOOP === "1") {
+    setInterval(() => undefined, 1_000);
+  }
   // Fault injection for the supervisor-side fatal-handler contract: a real
   // uncaught exception raised AFTER the worker has been spawned, so the test
   // can observe whether the crash still reaps the worker process group.
@@ -49,6 +58,18 @@ if (process.env[STDIO_WORKER_MODE_ENV] !== "1") {
   process.stderr.write("__MCP_STDIO_WORKER_READY__\n");
 } else {
   const reader = new JsonRpcFrameReader();
+  // A DESCENDANT of the worker, in the worker's process group and holding no
+  // stdin of its own. Ending the supervisor's stdin cannot reach it, and
+  // neither can the worker's own stand-down: only the supervisor's shutdown
+  // path, which terminates the worker's whole process group, collects it.
+  const descendantPidFile = process.env.MCP_TEST_WORKER_DESCENDANT_PID_FILE;
+  if (descendantPidFile) {
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000);"], {
+      stdio: "ignore"
+    });
+    descendant.unref();
+    writeFileSync(descendantPidFile, `${descendant.pid ?? 0}\n`, "utf8");
+  }
   const keepAlive = setInterval(() => undefined, 1_000);
   process.stdin.once("end", () => clearInterval(keepAlive));
   process.stdin.on("data", (chunk: Buffer) => {

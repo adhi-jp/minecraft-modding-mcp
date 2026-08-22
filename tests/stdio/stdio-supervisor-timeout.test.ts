@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -303,6 +303,25 @@ function processAlive(pid: number): boolean {
   }
 }
 
+/**
+ * The pid of the DESCENDANT the fixture worker spawned into its own process
+ * group. Nothing but process-group termination can reach it: ending the
+ * supervisor's stdin reaches the supervisor, and the worker's own stdin-EOF
+ * stand-down reaches the worker — neither touches a grandchild.
+ */
+async function waitForWorkerDescendantPid(pidFile: string): Promise<number> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const pid = await readFile(pidFile, "utf8").then(
+      (value) => Number(value.trim()) || undefined,
+      () => undefined
+    );
+    if (pid !== undefined) return pid;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("the fixture worker never reported a descendant pid");
+}
+
 /** Handshakes the fixture and returns the pid of the worker it spawned. */
 async function handshakeForWorkerPid(
   child: ChildProcessWithoutNullStreams,
@@ -327,15 +346,23 @@ test("SIGHUP shuts the supervisor down through its own path instead of orphaning
   // or session goes away. Left to the OS default it kills the supervisor
   // outright, and the detached worker process group survives with nobody to
   // reap it — the same leak a bare SIGKILL produces.
-  const child = startFixture();
+  const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-sighup-"));
+  const descendantPidFile = join(root, "worker-descendant.pid");
+  const child = startFixture({ MCP_TEST_WORKER_DESCENDANT_PID_FILE: descendantPidFile });
   t.after(async () => {
     await stopSupervisor(child);
+    await rm(root, { recursive: true, force: true });
   });
   const replies = collectResponses(child);
   const workerPid = await handshakeForWorkerPid(child, replies, 50);
+  const descendantPid = await waitForWorkerDescendantPid(descendantPidFile);
   t.after(() => {
     try { process.kill(workerPid, "SIGTERM"); } catch { /* already reaped */ }
+    try { process.kill(descendantPid, "SIGTERM"); } catch { /* already reaped */ }
   });
+  // Non-vacuity: an assertion that the descendant is gone proves nothing if it
+  // was never running.
+  assert.equal(processAlive(descendantPid), true, "the fixture worker's descendant must be running");
 
   child.kill("SIGHUP");
 
@@ -348,6 +375,15 @@ test("SIGHUP shuts the supervisor down through its own path instead of orphaning
     child.signalCode,
     null,
     "SIGHUP must run the supervisor's own shutdown, not the OS default that terminates it where it stands"
+  );
+  // The worker alone proves little: it stands down on stdin EOF whether or not
+  // the supervisor's shutdown path ran at all. Its DESCENDANT is the load-
+  // bearing one — only the process-group termination inside shutdown() reaches
+  // a grandchild, so this is what a dropped group-kill would break.
+  await waitFor(
+    () => !processAlive(descendantPid),
+    "the worker's descendant to be reaped by the SIGHUP shutdown",
+    5_000
   );
   await waitFor(
     () => !processAlive(workerPid),
@@ -363,16 +399,27 @@ test("an uncaught supervisor exception is reported, exits non-zero, and still re
   // Nothing owned the supervisor process's fatal handlers: a crash in the
   // supervisor left node's default handler to print a stack and exit, with no
   // route to shutdown() and therefore no reaping of the detached worker.
-  const child = startFixture({ MCP_TEST_FATAL_SUPERVISOR_AFTER_MS: "4000" });
+  const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-fatal-reap-"));
+  const descendantPidFile = join(root, "worker-descendant.pid");
+  const child = startFixture({
+    MCP_TEST_FATAL_SUPERVISOR_AFTER_MS: "4000",
+    MCP_TEST_WORKER_DESCENDANT_PID_FILE: descendantPidFile
+  });
   t.after(async () => {
     await stopSupervisor(child);
+    await rm(root, { recursive: true, force: true });
   });
   const replies = collectResponses(child);
   const events = collectLogEvents(child);
   const workerPid = await handshakeForWorkerPid(child, replies, 60);
+  const descendantPid = await waitForWorkerDescendantPid(descendantPidFile);
   t.after(() => {
     try { process.kill(workerPid, "SIGTERM"); } catch { /* already reaped */ }
+    try { process.kill(descendantPid, "SIGTERM"); } catch { /* already reaped */ }
   });
+  // Non-vacuity: an assertion that the descendant is gone proves nothing if it
+  // was never running.
+  assert.equal(processAlive(descendantPid), true, "the fixture worker's descendant must be running");
 
   await waitFor(
     () => child.exitCode !== null || child.signalCode !== null,
@@ -385,9 +432,52 @@ test("an uncaught supervisor exception is reported, exits non-zero, and still re
     true,
     `the supervisor must name its own fatal error on stderr; saw events: ${events.map(({ event }) => String(event)).join(", ")}`
   );
+  // As above: the worker's own stdin-EOF stand-down would satisfy a
+  // worker-only assertion even if shutdown() never ran, so the descendant —
+  // reachable only by the process-group termination — carries the claim.
+  await waitFor(
+    () => !processAlive(descendantPid),
+    "the worker's descendant to be reaped by the fatal-error shutdown",
+    10_000
+  );
   await waitFor(
     () => !processAlive(workerPid),
     "the worker to be reaped by the fatal-error shutdown",
+    10_000
+  );
+});
+
+test("a fatal supervisor error ends the process even while a referenced handle holds the event loop", { timeout: 40_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  // Registering uncaughtException/unhandledRejection handlers SUPPRESSES node's
+  // default abort, so the promised non-zero exit stops being a guarantee and
+  // becomes a bet on the event loop draining. The fixture holds a referenced
+  // interval that is never cleared, so nothing but an explicit exit can end it.
+  const child = startFixture({
+    MCP_TEST_FATAL_SUPERVISOR_AFTER_MS: "2000",
+    MCP_TEST_SUPERVISOR_HOLD_EVENT_LOOP: "1"
+  });
+  t.after(async () => {
+    await stopSupervisor(child);
+  });
+  const replies = collectResponses(child);
+  const workerPid = await handshakeForWorkerPid(child, replies, 70);
+  t.after(() => {
+    try { process.kill(workerPid, "SIGTERM"); } catch { /* already reaped */ }
+  });
+
+  await waitFor(
+    () => child.exitCode !== null || child.signalCode !== null,
+    "the supervisor to end itself after its injected fatal error",
+    20_000
+  );
+  assert.equal(child.signalCode, null, "the supervisor must end itself rather than wait to be signalled");
+  assert.equal(child.exitCode, 1, "a fatal supervisor error must exit non-zero");
+  await waitFor(
+    () => !processAlive(workerPid),
+    "the worker to be reaped before the forced exit",
     10_000
   );
 });

@@ -70,6 +70,15 @@ test("POSIX process-group termination removes a worker and its descendant", { ti
  * healthy stdin and no parent. `process.ppid` is a static data property in
  * node, so the worker cannot observe reparenting by re-reading it — only by
  * probing whether the pid it snapshotted at startup is still alive.
+ *
+ * The rig's own positive control is the worker's stand-down DIAGNOSTIC, not
+ * the fact that it died: an ordinary pipe would EOF the moment the launcher
+ * was killed and the worker would stand down through the stdin route that
+ * stdio-worker-protocol.test.ts already covers, leaving the liveness poll
+ * unproven while every liveness-shaped assertion still passed. Capturing the
+ * worker's stderr and requiring the parent-liveness event — reporting that
+ * stdin had NOT ended — is what fails if the FIFO ever degenerates into a
+ * plain pipe.
  */
 test("worker on a never-EOF stdin still stands down once its parent process dies", { timeout: 90_000 }, async (t) => {
   if (await skipWithoutCapability(t, "posix-shell-bridge")) {
@@ -78,6 +87,7 @@ test("worker on a never-EOF stdin still stands down once its parent process dies
   const root = await mkdtemp(join(tmpdir(), "worker-parent-liveness-"));
   const fifoPath = join(root, "worker-stdin.fifo");
   const pidFile = join(root, "worker.pid");
+  const workerLogPath = join(root, "worker.stderr.log");
   t.after(() => rm(root, { recursive: true, force: true }));
   await new Promise<void>((resolve, reject) => {
     const mkfifo = spawn("mkfifo", [fifoPath], { stdio: "ignore" });
@@ -91,10 +101,12 @@ test("worker on a never-EOF stdin still stands down once its parent process dies
       "-e",
       "const fs=require('node:fs');const{spawn}=require('node:child_process');" +
         "const fd=fs.openSync(process.argv[1],fs.constants.O_RDWR);" +
+        "const errFd=fs.openSync(process.argv[2],'a');" +
         "const c=spawn(process.execPath,['--import','tsx','src/cli.ts']," +
-        "{cwd:process.cwd(),env:process.env,stdio:[fd,'ignore','ignore'],detached:true});" +
+        "{cwd:process.cwd(),env:process.env,stdio:[fd,'ignore',errFd],detached:true});" +
         "c.unref();setInterval(()=>{},1000);",
-      fifoPath
+      fifoPath,
+      workerLogPath
     ],
     {
       cwd: process.cwd(),
@@ -120,9 +132,10 @@ test("worker on a never-EOF stdin still stands down once its parent process dies
     try { process.kill(workerPid ?? 0, "SIGTERM"); } catch { /* already gone */ }
   });
 
-  // Rig self-check: with the parent still alive the worker must survive. If
-  // this ever fails, the FIFO stopped being a never-EOF stdin and the test
-  // below would be proving the stdin-EOF path instead of this one.
+  // With the parent still alive the worker must survive. This half is NOT a
+  // rig self-check: while the launcher holds the descriptor open no stdin
+  // configuration can EOF, so a plain pipe would pass it identically. The
+  // discriminating assertion is on the stand-down diagnostic, after the kill.
   await new Promise((resolve) => setTimeout(resolve, 2_000));
   assert.equal(await processExists(workerPid ?? 0), true, "the worker must survive while its parent lives");
 
@@ -142,5 +155,32 @@ test("worker on a never-EOF stdin still stands down once its parent process dies
     await processExists(workerPid ?? 0),
     false,
     "the worker must stand down after its parent died, even on a stdin that never reaches EOF"
+  );
+
+  // The positive control. Only the parent-liveness poll writes this event, and
+  // only a stdin that never reached EOF can leave `stdinEnded: false` on it.
+  // A rig degraded to `stdio: ['pipe', ...]` stands the worker down through
+  // stdin EOF within milliseconds of the kill and never reaches this arm, so
+  // both assertions below fail rather than silently proving the wrong path.
+  const workerLog = await readFile(workerLogPath, "utf8").catch(() => "");
+  const standDown = workerLog
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return undefined;
+      }
+    })
+    .find((entry) => entry?.event === "worker.parent_liveness_lost");
+  assert.ok(
+    standDown,
+    `the worker must stand down through the parent-liveness poll, not stdin EOF; worker stderr was:\n${workerLog}`
+  );
+  assert.equal(
+    standDown.stdinEnded,
+    false,
+    "the rig's stdin must never have reached EOF, or this test is proving the stdin-EOF path"
   );
 });
