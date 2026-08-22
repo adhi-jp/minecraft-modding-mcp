@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Framing-violation behavior over the REAL wire (production supervisor +
@@ -114,7 +115,7 @@ test("wire: a Content-Length header whose declared body never arrives terminates
   const root = await mkdtemp(join(tmpdir(), "framing-fatal-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
@@ -161,7 +162,7 @@ test("wire: a Content-Length header carrying no usable length is recoverable and
   const root = await mkdtemp(join(tmpdir(), "framing-recover-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");

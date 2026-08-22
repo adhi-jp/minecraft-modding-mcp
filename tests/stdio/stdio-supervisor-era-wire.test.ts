@@ -8,6 +8,7 @@ import test from "node:test";
 import { encodeJsonRpcMessage } from "../../src/json-rpc-framing.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Wire-level era test against the REAL supervisor + REAL worker:
@@ -111,7 +112,7 @@ test("wire: unsupported modern protocol version locks modern and -32022 reaches 
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -174,7 +175,7 @@ test("wire: two concurrent modern requests with different unsupported versions e
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -230,7 +231,7 @@ test("wire: ready-first pipelined modern discover and legacy initialize on one p
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -306,7 +307,7 @@ test("wire: worker-down modern discover queues, releases to a DiscoverResult, an
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -371,26 +372,7 @@ test("wire: after a modern lock, a deep-invalid clientInfo _meta value forwards 
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    // Graceful, orphan-free shutdown (inlined here because the shared
-    // startSupervisor helper also serves the pre-existing tests): ending
-    // stdin drives the supervisor's client-closed shutdown path
-    // (src/stdio-supervisor.ts handleClientClosed -> shutdown), which
-    // terminates the detached worker process group before exiting. A bare
-    // SIGKILL races worker startup and can orphan a worker holding the
-    // src/cli.ts keep-alive timer, so SIGKILL only remains as the
-    // last-resort fallback when the exit poll times out.
-    const exited = (): boolean =>
-      session.child.exitCode !== null || session.child.signalCode !== null;
-    if (!exited()) {
-      session.child.stdin.end();
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline && !exited()) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      if (!exited()) {
-        session.child.kill("SIGKILL");
-      }
-    }
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
@@ -461,7 +443,7 @@ test("wire: a Content-Length-framed claim-less request is rejected -32602 in Con
     ["--import", "tsx", "tests/helpers/stdio-supervisor-timeout-worker.runtime.ts"],
     { cwd: process.cwd(), env: { ...process.env }, stdio: ["pipe", "pipe", "pipe"] }
   );
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   let buffer = Buffer.alloc(0);
   child.stdout.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -508,7 +490,7 @@ test("wire: initialize carrying a valid modern _meta envelope still completes th
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -557,7 +539,7 @@ test("wire: a malformed initialize is rejected -32602 WITHOUT burning the one-wa
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
@@ -607,7 +589,7 @@ test("wire: after a malformed initialize the legacy handshake still succeeds on 
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
@@ -655,7 +637,7 @@ test("wire: an unsupported modern protocolVersion is rejected -32022 on EVERY re
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
@@ -712,7 +694,7 @@ test("wire: the -32022 contract does not depend on which method the client happe
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");

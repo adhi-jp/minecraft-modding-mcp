@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Dependency-method inventory (per-method × per-era), over the REAL wire
@@ -102,7 +103,7 @@ test("wire dependency-method inventory: legacy era (ping pong, setLevel/tasks/pr
   const root = await mkdtemp(join(tmpdir(), "dep-methods-legacy-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");
@@ -167,7 +168,7 @@ test("wire dependency-method inventory: modern era (ping/setLevel/tasks/prompts 
   const root = await mkdtemp(join(tmpdir(), "dep-methods-modern-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");

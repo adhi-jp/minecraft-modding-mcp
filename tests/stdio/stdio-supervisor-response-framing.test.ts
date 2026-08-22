@@ -5,6 +5,7 @@ import test from "node:test";
 import { encodeJsonRpcMessage, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Era-neutral response-framing correlation tests.
@@ -171,7 +172,7 @@ test("response framing correlation: newline then Content-Length pipeline answers
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectFramedResponses(child);
 
   const init = await handshake(child, replies, 100, "line");
@@ -204,7 +205,7 @@ test("response framing correlation: Content-Length then newline pipeline answers
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectFramedResponses(child);
 
   const init = await handshake(child, replies, 110, "content-length");
@@ -235,7 +236,7 @@ test("response framing correlation: mid-stream switch keeps in-flight and post-s
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectFramedResponses(child);
 
   await handshake(child, replies, 120, "line");
@@ -276,12 +277,13 @@ test("response framing correlation: request queued across a worker restart is an
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectFramedResponses(child);
 
   await handshake(child, replies, 130, "line");
   const pid = await workerPid(child, replies, 131, "line");
 
+  // allow-direct-sigkill: force-killing the WORKER is the restart contract this test drives
   process.kill(pid, "SIGKILL");
   await waitForProcessExit(pid);
 
@@ -321,7 +323,7 @@ test("response framing correlation: worker-restart synthesis uses the originatin
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectFramedResponses(child);
 
   await handshake(child, replies, 140, "line");
@@ -339,6 +341,7 @@ test("response framing correlation: worker-restart synthesis uses the originatin
   const probe = await replies.next(143);
   assert.equal(probe.mode, "content-length");
 
+  // allow-direct-sigkill: force-killing the WORKER is the restart contract this test drives
   process.kill(pid, "SIGKILL");
 
   const synthetic = await replies.next(142, 15_000);

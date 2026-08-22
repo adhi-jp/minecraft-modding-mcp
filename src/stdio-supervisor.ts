@@ -982,6 +982,15 @@ export class StdioSupervisor {
 
     process.on("SIGINT", this.handleTerminateSignal);
     process.on("SIGTERM", this.handleTerminateSignal);
+    // SIGHUP is what a terminating launcher or a vanishing session sends.
+    // Left to the OS default it kills this process where it stands, and the
+    // detached worker process group survives with nobody left to reap it.
+    process.on("SIGHUP", this.handleTerminateSignal);
+    // The supervisor OWNS this process's fatal handlers: it is the only party
+    // that can reach shutdown() and terminate the worker's process group.
+    // Node's default handler prints a stack and leaves the worker orphaned.
+    process.on("uncaughtException", this.handleFatalError);
+    process.on("unhandledRejection", this.handleFatalError);
 
     this.spawnWorker();
   }
@@ -1031,6 +1040,25 @@ export class StdioSupervisor {
   };
 
   private readonly handleTerminateSignal = (): void => {
+    void this.shutdown();
+  };
+
+  /**
+   * Terminal fault in the supervisor process. Reported through the injected
+   * event writer, then routed into the ordinary shutdown so the detached
+   * worker group is reaped rather than orphaned by a crash.
+   */
+  private readonly handleFatalError = (reason: unknown): void => {
+    const error = reason instanceof Error ? reason : new Error(String(reason));
+    this.eventWriter("error", "supervisor.fatal", {
+      message: error.message,
+      stack: error.stack
+    });
+    if (this.ownsProcessStdio) {
+      // Set the code rather than exiting: shutdown() still has to terminate
+      // the worker group, and an immediate exit would abandon it.
+      process.exitCode = 1;
+    }
     void this.shutdown();
   };
 
@@ -2668,6 +2696,9 @@ export class StdioSupervisor {
     }
     process.off("SIGINT", this.handleTerminateSignal);
     process.off("SIGTERM", this.handleTerminateSignal);
+    process.off("SIGHUP", this.handleTerminateSignal);
+    process.off("uncaughtException", this.handleFatalError);
+    process.off("unhandledRejection", this.handleFatalError);
 
     this.detachCurrentChild();
     for (const child of this.liveChildren) {

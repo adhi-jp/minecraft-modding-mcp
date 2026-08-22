@@ -10,6 +10,15 @@ import { STDIO_WORKER_MODE_ENV, StdioSupervisor } from "../../src/stdio-supervis
 if (process.env[STDIO_WORKER_MODE_ENV] !== "1") {
   const supervisor = new StdioSupervisor({ entryFile: fileURLToPath(import.meta.url) });
   await supervisor.start();
+  // Fault injection for the supervisor-side fatal-handler contract: a real
+  // uncaught exception raised AFTER the worker has been spawned, so the test
+  // can observe whether the crash still reaps the worker process group.
+  const fatalAfterMs = Number(process.env.MCP_TEST_FATAL_SUPERVISOR_AFTER_MS ?? "");
+  if (Number.isFinite(fatalAfterMs) && fatalAfterMs > 0) {
+    setTimeout(() => {
+      throw new Error("fatal supervisor fixture");
+    }, fatalAfterMs).unref();
+  }
 } else if (process.env.MCP_TEST_FATAL_WORKER_MARKER) {
   const markerPath = process.env.MCP_TEST_FATAL_WORKER_MARKER;
   if (!existsSync(markerPath)) {
@@ -30,7 +39,11 @@ if (process.env[STDIO_WORKER_MODE_ENV] !== "1") {
     });
   }
   const keepAlive = setInterval(() => undefined, 1_000);
-  process.once("exit", () => clearInterval(keepAlive));
+  // Released on stdin EOF, matching the plain-worker branch below and
+  // src/cli.ts: clearing it from a process "exit" listener runs only once the
+  // process is already leaving, so the event loop never drained and this
+  // fixture worker outlived the supervisor that spawned it.
+  process.stdin.once("end", () => clearInterval(keepAlive));
   const { startServer } = await import("../../src/index.ts");
   await startServer();
   process.stderr.write("__MCP_STDIO_WORKER_READY__\n");

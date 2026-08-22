@@ -12,6 +12,7 @@ import { decorateSyntheticReply } from "../../src/synthetic-decorator.ts";
 import { SERVER_IDENTITY } from "../../src/server-identity.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Live-SDK structural drift guard.
@@ -95,7 +96,7 @@ test("wire drift guard: a live modern SDK result and the synthetic decorator sha
   const root = await mkdtemp(join(tmpdir(), "synthetic-drift-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 

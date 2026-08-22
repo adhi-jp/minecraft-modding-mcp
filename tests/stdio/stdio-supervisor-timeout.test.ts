@@ -8,6 +8,7 @@ import test from "node:test";
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 type RpcResponse = {
   id: string | number;
@@ -57,21 +58,6 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(message);
-}
-
-async function stopFixture(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.stdin.end();
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, 1_000);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
-  }
 }
 
 function send(child: ChildProcessWithoutNullStreams, message: object, mode: ConcreteFramingMode): void {
@@ -128,9 +114,7 @@ for (const framing of ["line", "content-length"] as const) test(`running timeout
     return;
   }
   const child = startFixture();
-  t.after(() => {
-    child.kill("SIGKILL");
-  });
+  t.after(() => stopSupervisor(child));
   const replies = collectResponses(child);
 
   send(child, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, framing);
@@ -192,7 +176,7 @@ for (const framing of ["line", "content-length"] as const) test(`queued timeout 
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectResponses(child);
 
   send(child, { jsonrpc: "2.0", id: 10, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, framing);
@@ -235,7 +219,7 @@ test("queued cancellation removes the validate barrier without forwarding a resu
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectResponses(child);
   send(child, { jsonrpc: "2.0", id: 20, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, "line");
   await replies.next(20);
@@ -255,7 +239,7 @@ test("running cancellation suppresses timeout output but still recovers queued w
     return;
   }
   const child = startFixture();
-  t.after(() => child.kill("SIGKILL"));
+  t.after(() => stopSupervisor(child));
   const replies = collectResponses(child);
   send(child, { jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, "line");
   await replies.next(30);
@@ -275,7 +259,7 @@ test("fatal worker exception exits, restarts, replays initialization, and serves
   const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-fatal-"));
   const child = startFixture({ MCP_TEST_FATAL_WORKER_MARKER: join(root, "first-worker-faulted") });
   t.after(async () => {
-    await stopFixture(child);
+    await stopSupervisor(child);
     await rm(root, { recursive: true, force: true });
   });
   const replies = collectResponses(child);
@@ -308,4 +292,102 @@ test("fatal worker exception exits, restarts, replays initialization, and serves
   const recovered = await replies.next(41, 5_000);
   assert.ok(recovered.result);
   assert.equal(recovered.error, undefined);
+});
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Handshakes the fixture and returns the pid of the worker it spawned. */
+async function handshakeForWorkerPid(
+  child: ChildProcessWithoutNullStreams,
+  replies: ReturnType<typeof collectResponses>,
+  baseId: number
+): Promise<number> {
+  send(child, { jsonrpc: "2.0", id: baseId, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-lifecycle-test", version: "1.0.0" } } }, "line");
+  await replies.next(baseId);
+  send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, "line");
+  send(child, { jsonrpc: "2.0", id: baseId + 1, method: "tools/call", params: { name: "list-versions", arguments: {} } }, "line");
+  const reply = await replies.next(baseId + 1);
+  const pid = (reply.result as { structuredContent?: { result?: { pid?: number } } }).structuredContent?.result?.pid;
+  assert.equal(typeof pid, "number", "the fixture worker must report its pid");
+  return pid as number;
+}
+
+test("SIGHUP shuts the supervisor down through its own path instead of orphaning the worker", { timeout: 20_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  // SIGHUP is what a terminating launcher sends when its controlling terminal
+  // or session goes away. Left to the OS default it kills the supervisor
+  // outright, and the detached worker process group survives with nobody to
+  // reap it — the same leak a bare SIGKILL produces.
+  const child = startFixture();
+  t.after(async () => {
+    await stopSupervisor(child);
+  });
+  const replies = collectResponses(child);
+  const workerPid = await handshakeForWorkerPid(child, replies, 50);
+  t.after(() => {
+    try { process.kill(workerPid, "SIGTERM"); } catch { /* already reaped */ }
+  });
+
+  child.kill("SIGHUP");
+
+  await waitFor(
+    () => child.exitCode !== null || child.signalCode !== null,
+    "the supervisor to exit after SIGHUP",
+    10_000
+  );
+  assert.equal(
+    child.signalCode,
+    null,
+    "SIGHUP must run the supervisor's own shutdown, not the OS default that terminates it where it stands"
+  );
+  await waitFor(
+    () => !processAlive(workerPid),
+    "the worker to be reaped by the SIGHUP shutdown",
+    5_000
+  );
+});
+
+test("an uncaught supervisor exception is reported, exits non-zero, and still reaps the worker", { timeout: 40_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  // Nothing owned the supervisor process's fatal handlers: a crash in the
+  // supervisor left node's default handler to print a stack and exit, with no
+  // route to shutdown() and therefore no reaping of the detached worker.
+  const child = startFixture({ MCP_TEST_FATAL_SUPERVISOR_AFTER_MS: "4000" });
+  t.after(async () => {
+    await stopSupervisor(child);
+  });
+  const replies = collectResponses(child);
+  const events = collectLogEvents(child);
+  const workerPid = await handshakeForWorkerPid(child, replies, 60);
+  t.after(() => {
+    try { process.kill(workerPid, "SIGTERM"); } catch { /* already reaped */ }
+  });
+
+  await waitFor(
+    () => child.exitCode !== null || child.signalCode !== null,
+    "the supervisor to exit after its injected fatal error",
+    25_000
+  );
+  assert.equal(child.exitCode, 1, "a fatal supervisor error must exit non-zero");
+  assert.equal(
+    events.some(({ event }) => event === "supervisor.fatal"),
+    true,
+    `the supervisor must name its own fatal error on stderr; saw events: ${events.map(({ event }) => String(event)).join(", ")}`
+  );
+  await waitFor(
+    () => !processAlive(workerPid),
+    "the worker to be reaped by the fatal-error shutdown",
+    10_000
+  );
 });

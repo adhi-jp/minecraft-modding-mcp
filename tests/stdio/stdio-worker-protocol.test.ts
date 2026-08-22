@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Worker-level protocol tests: spawn the REAL worker directly
@@ -101,7 +102,7 @@ test("worker builds a fresh server per serveStdio instance: legacy initialize af
   const root = await mkdtemp(join(tmpdir(), "worker-protocol-r5-"));
   const worker = startWorker(root);
   t.after(async () => {
-    worker.child.kill("SIGKILL");
+    await stopSupervisor(worker.child, { leafProcess: true });
     await rm(root, { recursive: true, force: true });
   });
 
@@ -154,7 +155,7 @@ test("worker emits $/stageUpdate notifications carrying the originating JSON-RPC
   const root = await mkdtemp(join(tmpdir(), "worker-protocol-r8-"));
   const worker = startWorker(root);
   t.after(async () => {
-    worker.child.kill("SIGKILL");
+    await stopSupervisor(worker.child, { leafProcess: true });
     await rm(root, { recursive: true, force: true });
   });
 
@@ -207,4 +208,57 @@ test("worker emits $/stageUpdate notifications carrying the originating JSON-RPC
     11,
     "$/stageUpdate params.requestId must be the originating request's JSON-RPC id"
   );
+});
+
+test("worker exits on stdin EOF instead of outliving the supervisor that closed it", { timeout: 60_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  // The supervisor holds the SOLE write end of the worker's stdin, so its own
+  // death EOFs this stream. The worker used to hold an unconditional
+  // keep-alive interval whose only clearInterval ran on "exit", so the event
+  // loop never drained and the worker survived its supervisor forever: one
+  // full `npm test` run left 20 such ~125 MB orphans on the reference machine.
+  const root = await mkdtemp(join(tmpdir(), "worker-protocol-stdin-eof-"));
+  const worker = startWorker(root);
+  t.after(async () => {
+    await stopSupervisor(worker.child, { leafProcess: true });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await waitFor(worker.ready, 30_000, "worker READY marker");
+  worker.child.stdin.end();
+
+  await waitFor(
+    () => worker.child.exitCode !== null || worker.child.signalCode !== null,
+    20_000,
+    "the worker to exit after its stdin reached EOF"
+  );
+  assert.equal(worker.child.signalCode, null, "the worker must exit on its own, not because a signal reached it");
+  assert.equal(worker.child.exitCode, 0, "an ordinary stdin close is a clean exit, not a fault");
+});
+
+test("worker whose stdin is already closed at startup still exits once it finishes coming up", { timeout: 60_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  // Race guard: on a fast-closing-pipe host the EOF can be delivered before
+  // the server has finished starting. The worker must remember that EOF and
+  // act on it at readiness, not miss it and idle forever.
+  const root = await mkdtemp(join(tmpdir(), "worker-protocol-early-eof-"));
+  const worker = startWorker(root);
+  t.after(async () => {
+    await stopSupervisor(worker.child, { leafProcess: true });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  worker.child.stdin.end();
+
+  await waitFor(
+    () => worker.child.exitCode !== null || worker.child.signalCode !== null,
+    45_000,
+    "the worker to exit after an EOF that arrived during startup"
+  );
+  assert.equal(worker.child.signalCode, null, "the worker must exit on its own, not because a signal reached it");
+  assert.equal(worker.child.exitCode, 0, "an ordinary stdin close is a clean exit, not a fault");
 });

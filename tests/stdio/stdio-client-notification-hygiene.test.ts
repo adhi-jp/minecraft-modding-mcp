@@ -41,6 +41,7 @@ import {
 } from "./inprocess-era-serve.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 // inprocess-era-serve.ts exports no logLevel key, so this literal stays local.
 const LOG_LEVEL_KEY = "io.modelcontextprotocol/logLevel";
@@ -160,43 +161,6 @@ async function waitFor(predicate: () => boolean, timeoutMs: number, label: strin
   throw new Error(`timed out waiting for ${label}`);
 }
 
-/**
- * Graceful child cleanup (orphan-free): ending stdin makes the supervisor
- * run its client-closed shutdown path (src/stdio-supervisor.ts
- * handleClientClosed -> shutdown), which terminates the detached worker
- * process group before exiting. A bare SIGKILL to a supervisor instead
- * orphans its fully-started worker (the worker holds a keep-alive timer and
- * does NOT exit on stdin EOF — observed empirically), so for supervisors
- * SIGKILL is only the last-resort fallback when the exit poll times out.
- *
- * A DIRECT worker (leafProcess: true) is the opposite case: it never exits
- * on stdin EOF, but it is a leaf with no descendants, so an immediate
- * SIGKILL reaps it cleanly without the pointless 10s poll.
- */
-async function shutdownChildGracefully(
-  child: ChildProcessWithoutNullStreams,
-  options: { leafProcess?: boolean } = {}
-): Promise<void> {
-  const exited = (): boolean => child.exitCode !== null || child.signalCode !== null;
-  if (exited()) return;
-  if (options.leafProcess === true) {
-    child.kill("SIGKILL");
-    return;
-  }
-  try {
-    child.stdin.end();
-  } catch {
-    // A torn-down stdin stream must not skip the exit poll + SIGKILL fallback.
-  }
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline && !exited()) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  if (!exited()) {
-    child.kill("SIGKILL");
-  }
-}
-
 test("direct worker emits $/stageUpdate for the inline validate-mixin recipe (emission control for the suppression guards below)", { timeout: 90_000 }, async (t) => {
   if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
@@ -204,7 +168,7 @@ test("direct worker emits $/stageUpdate for the inline validate-mixin recipe (em
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-worker-"));
   const worker = startDirectWorker(root);
   t.after(async () => {
-    await shutdownChildGracefully(worker.child, { leafProcess: true });
+    await stopSupervisor(worker.child, { leafProcess: true });
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(() => worker.stderr().includes("__MCP_STDIO_WORKER_READY__"), 30_000, "worker READY marker");
@@ -250,7 +214,7 @@ test("legacy wire: $/stageUpdate never reaches the supervisor's client stream an
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-legacy-"));
   const session = startWireSupervisor(root);
   t.after(async () => {
-    await shutdownChildGracefully(session.child);
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(() => session.stderr().includes("supervisor.debug.worker_ready"), 90_000, "supervisor worker_ready adoption");
@@ -313,7 +277,7 @@ test("modern wire: $/stageUpdate never reaches the supervisor's client stream an
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-modern-"));
   const session = startWireSupervisor(root);
   t.after(async () => {
-    await shutdownChildGracefully(session.child);
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(() => session.stderr().includes("supervisor.debug.worker_ready"), 90_000, "supervisor worker_ready adoption");

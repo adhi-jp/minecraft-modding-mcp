@@ -16,6 +16,7 @@ import {
 } from "../../src/tool-schema-registry.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Legacy-era unknown-tool intercept: the premigration contract returned a
@@ -148,7 +149,7 @@ test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both an
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-wire-"));
   const session = startWireSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");
@@ -231,7 +232,7 @@ test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -3260
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-modern-"));
   const session = startWireSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");
@@ -277,26 +278,7 @@ test("wire legacy registry HIT: tools/call get-runtime-metrics is answered by th
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-hit-"));
   const session = startWireSupervisor(root);
   t.after(async () => {
-    // Graceful, orphan-free shutdown (inlined here because the shared
-    // startWireSupervisor helper also serves the pre-existing tests):
-    // ending stdin drives the supervisor's client-closed shutdown path
-    // (src/stdio-supervisor.ts handleClientClosed -> shutdown), which
-    // terminates the detached worker process group before exiting. A bare
-    // SIGKILL races worker startup and can orphan a worker holding the
-    // src/cli.ts keep-alive timer, so SIGKILL only remains as the
-    // last-resort fallback when the exit poll times out.
-    const exited = (): boolean =>
-      session.child.exitCode !== null || session.child.signalCode !== null;
-    if (!exited()) {
-      session.child.stdin.end();
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline && !exited()) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      if (!exited()) {
-        session.child.kill("SIGKILL");
-      }
-    }
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
   await waitFor(session.workerReady, 90_000, "supervisor worker_ready adoption");

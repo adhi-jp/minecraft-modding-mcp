@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 217;
+const EXPECTED_ORDINARY_TEST_FILES = 218;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -166,7 +166,18 @@ const EXPECTED_ORDINARY_TEST_FILES = 217;
 // jar entries), version-diff-service +4 (class diff namespace and packageFilter
 // agreement) and classsource-findclass +2 (nested-type FQN/ranking, partial-coverage
 // recovery call).
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1903;
+// 217 -> 218 / 1903 -> 1910 (stdio worker process-leak round): the worker held an
+// unconditional keep-alive interval whose only clearInterval ran on process "exit", so a
+// worker whose supervisor died never drained its event loop — one full `npm test` run
+// ended with 20 resident orphans. tests/contracts/no-direct-sigkill.test.ts is a new
+// 2-test guard (the tests/stdio force-kill scan with its non-vacuity floor, plus the
+// detector's own positives/hatch/look-alike cases) keeping teardowns on the shared
+// stopSupervisor() ladder. Three existing files grow: stdio-worker-protocol +2 (the
+// worker exits on stdin EOF, and on an EOF that arrived during startup),
+// stdio-supervisor-process-tree +1 (parent-liveness backstop on a never-EOF stdin) and
+// stdio-supervisor-timeout +2 (SIGHUP shutdown, and an uncaught supervisor exception
+// that still reaps the worker).
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1910;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

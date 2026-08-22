@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
 /**
  * Five-version legacy negotiation matrix, driven over the REAL wire
@@ -85,7 +86,7 @@ async function negotiate(
   const root = await mkdtemp(join(tmpdir(), "negotiation-matrix-"));
   const session = startSupervisor(root);
   t.after(async () => {
-    session.child.kill("SIGKILL");
+    await stopSupervisor(session.child);
     await rm(root, { recursive: true, force: true });
   });
 
