@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 209;
+const EXPECTED_ORDINARY_TEST_FILES = 210;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -116,7 +116,12 @@ const EXPECTED_ORDINARY_TEST_FILES = 209;
 // envelopeSample fixtures the file previously ignored — sample inventory, the
 // 40 invalid-input replays over the legacy transport, the get-runtime-metrics
 // success replay, and an in-memory mutation self-check.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1829;
+// 209 -> 210 / 1829 -> 1833 (SDK-private patching scan becomes a test):
+// tests/contracts/no-sdk-private-patching.test.ts is a new 4-test file — the
+// synthetic positive/negative matcher contract for the AST rules, and a
+// real-source gate over src/. The scan previously existed only as a script
+// that nothing in the suite ran.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1833;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
