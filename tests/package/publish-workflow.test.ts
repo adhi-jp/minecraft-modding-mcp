@@ -154,20 +154,34 @@ test("publish workflow runs install, check, test, build, then publish in that or
     "expected order install → check → test → build → publish");
 });
 
+/**
+ * The title says "[Unreleased] is omitted when empty"; the body no longer asserts that.
+ *
+ * The title predates the changelog policy now recorded in AGENTS.md under "Changelog and
+ * Tag Safety": `## [Unreleased]` is a PERMANENT heading and is retained, empty, above each
+ * newly cut release section, rather than being renamed into it. The title cannot be
+ * corrected to match, because it belongs to the frozen named-test set
+ * (`tests/fixtures/premigration/test-list.txt`) whose post-suite gate treats a rename as a
+ * deletion and fails hard.
+ *
+ * What the body actually checks now:
+ *   1. `package.json`'s version has a matching `## [X.Y.Z]` section, so a version cannot
+ *      ship with no release notes. (Unchanged.)
+ *   2. `## [Unreleased]` is present. This replaces the old "if it exists it must be
+ *      non-empty" clause, which contradicted the adopted practice, and it catches the
+ *      opposite mistake: a release cut that renames the heading away.
+ */
 test("package.json version is reflected in CHANGELOG and [Unreleased] is omitted when empty", async () => {
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
   const changelog = await readFile("CHANGELOG.md", "utf8");
   const versionHeader = new RegExp(`^##\\s+\\[${pkg.version.replace(/\./g, "\\.")}\\]`, "m");
   assert.match(changelog, versionHeader);
 
-  const unreleased = changelog.match(/^##\s+\[Unreleased\]\s*$([\s\S]*?)(?=^##\s+\[|(?![\s\S]))/m);
-  if (unreleased) {
-    assert.match(
-      unreleased[1],
-      /^-\s+\S/m,
-      "CHANGELOG must omit an empty `## [Unreleased]` section"
-    );
-  }
+  assert.match(
+    changelog,
+    /^##\s+\[Unreleased\]\s*$/m,
+    "CHANGELOG must keep the permanent `## [Unreleased]` heading above the newest release section"
+  );
 });
 
 test("publish workflow resolves the `rc` dist-tag for a prerelease and `latest` for a stable version", async () => {
