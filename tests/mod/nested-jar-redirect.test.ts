@@ -431,3 +431,109 @@ test("declared-but-escaping nested jar paths are excluded from the shell invento
 
   assert.deepEqual(resolved.provenance.nestedJars, ["META-INF/jars/api.jar"]);
 });
+
+test("a failed lookup after a nested-jar redirect describes one artifact, not two", async () => {
+  // The redirect swaps activeArtifactId, activeMappingApplied AND activeQualityFlags for
+  // the inner jar's. The error's identity fields answer about the artifact the caller
+  // NAMED, so reporting the inner jar's namespace and quality beside the shell's id
+  // published a mixed description — and `mapping` reaches error.context through the
+  // allowlist, so a client acting on it queried the wrong namespace.
+  const { seedIndexedArtifact } = await import("../helpers/seed-artifact.ts");
+  const root = await mkdtemp(join(tmpdir(), "nested-redirect-provenance-"));
+  const inner = await buildInnerJarBytes({
+    "com/example/inner/Api.class": buildClassFile({ internalName: "com/example/inner/Api" })
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  seedIndexedArtifact(service, {
+    artifactId: "shell",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "shell-jar"],
+    version: "1.21.10",
+    binaryJarPath: shellPath,
+    provenance: {
+      target: { kind: "jar", value: shellPath },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: { origin: "local-jar", binaryJarPath: shellPath },
+      transformChain: ["mapping:mojang-source-backed"],
+      nestedJars: ["META-INF/jars/api.jar"]
+    },
+    files: [
+      { filePath: "com/example/shell/Entry.java", content: "package com.example.shell;\npublic class Entry {}" }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/shell/Entry.java",
+        symbolKind: "class",
+        symbolName: "Entry",
+        qualifiedName: "com.example.shell.Entry",
+        line: 2
+      }
+    ]
+  });
+
+  // The redirect target is indexed in a DIFFERENT namespace with DIFFERENT quality, and
+  // does not hold the class either — so the lookup fails after the swap.
+  seedIndexedArtifact(service, {
+    artifactId: "nested-inner",
+    origin: "decompiled",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: ["decompiled"],
+    version: "1.21.10",
+    isDecompiled: true,
+    files: [
+      { filePath: "com/example/other/Unrelated.java", content: "package com.example.other;\npublic class Unrelated {}" }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/other/Unrelated.java",
+        symbolKind: "class",
+        symbolName: "Unrelated",
+        qualifiedName: "com.example.other.Unrelated",
+        line: 2
+      }
+    ]
+  });
+
+  // Reaching the shell by artifactId means the redirect is the ONLY resolveArtifact call
+  // in this flow, so the stub cannot mask the path under test.
+  (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async () => ({
+    artifactId: "nested-inner",
+    artifactSignature: "nested-inner-sig",
+    origin: "decompiled" as const,
+    version: "1.21.10",
+    requestedMapping: "obfuscated" as const,
+    mappingApplied: "obfuscated" as const,
+    qualityFlags: ["decompiled"],
+    warnings: [],
+    isDecompiled: true,
+    resolvedAt: new Date().toISOString()
+  });
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact =
+    async () => undefined;
+
+  await assert.rejects(
+    service.getClassSource({ className: "com.example.inner.Api", artifactId: "shell", mode: "full" }),
+    (error: Error & { code?: string; details?: Record<string, unknown> }) => {
+      assert.equal(error.code, "ERR_CLASS_NOT_FOUND");
+      const details = error.details ?? {};
+      assert.equal(details.artifactId, "shell", "the caller named the shell jar");
+      assert.equal(details.fallbackArtifactId, "nested-inner", "the redirect target is still reported");
+      assert.equal(details.mapping, "mojang", "mapping must describe the artifact `artifactId` names");
+      assert.deepEqual(
+        details.qualityFlags,
+        ["source-backed", "shell-jar"],
+        "qualityFlags must describe the artifact `artifactId` names"
+      );
+      const suggested = details.suggestedCall as { params?: { artifactId?: string } } | undefined;
+      assert.equal(suggested?.params?.artifactId, "shell");
+      return true;
+    }
+  );
+});

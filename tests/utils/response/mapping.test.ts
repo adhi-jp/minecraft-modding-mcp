@@ -29,6 +29,28 @@ const MAPPING_OMIT_CASES = [
   {
     name: "confidence is undefined (defaults to exact)",
     overrides: { candidates: [{ ...RESOLVED_EXACT_CANDIDATE, confidence: undefined }] }
+  },
+  {
+    // resolve-method-mapping-exact is owner-strict, so a query whose owner declares the
+    // method exactly once now RESOLVES and reports the single candidate the verdict was
+    // computed from. That shape reaches this omit branch, where `candidates` is dropped
+    // as provably redundant with `resolvedSymbol` — the caller keeps the answer and
+    // `candidateCount: 1`, and loses only the duplicate.
+    name: "an owner-strict method resolution reports its single verdict candidate",
+    overrides: {
+      querySymbol: { kind: "method", owner: "a.b.C", name: "e", descriptor: "(I)V" },
+      resolvedSymbol: {
+        kind: "method", owner: "inter.pkg.InterClass", name: "interMethod", descriptor: "(I)V"
+      },
+      candidates: [
+        {
+          kind: "method", owner: "inter.pkg.InterClass", name: "interMethod",
+          symbol: "inter.pkg.InterClass.interMethod(I)V", descriptor: "(I)V",
+          matchKind: "exact", confidence: 1
+        }
+      ],
+      candidatesTruncated: undefined
+    }
   }
 ] as const;
 

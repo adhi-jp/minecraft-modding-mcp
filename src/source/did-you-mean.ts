@@ -4,6 +4,13 @@ import type { SourceService } from "../source-service.js";
 export interface DidYouMeanCandidate {
   className: string;
   matchReason: string;
+  /**
+   * Set only when the candidate was found in an artifact OTHER than the one the caller
+   * named — today, the internal binary fallback or nested-jar redirect the lookup ended
+   * on. An unattributed candidate always means "in the artifact you asked about", so the
+   * field marks the exception rather than restating the common case on every entry.
+   */
+  artifactId?: string;
 }
 
 const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
@@ -24,11 +31,16 @@ function fqnOfRow(row: { qualifiedName?: string; filePath: string }): string {
  * edit-distance suggestions. Candidates are hints, never assertions that the
  * class exists at the suggested location. Returns an empty array when the
  * index has nothing usable.
+ *
+ * `attributeTo` stamps every produced candidate with that artifact id; pass it when
+ * collecting from an artifact the caller did not name, and leave it unset for the
+ * requested artifact.
  */
 export function collectDidYouMeanCandidates(
   svc: SourceService,
   artifactId: string,
-  className: string
+  className: string,
+  attributeTo?: string
 ): DidYouMeanCandidate[] {
   try {
     const simpleName = className.split(/[.$]/).at(-1) ?? className;
@@ -42,7 +54,7 @@ export function collectDidYouMeanCandidates(
         return;
       }
       seen.add(fqn);
-      out.push({ className: fqn, matchReason });
+      out.push({ className: fqn, matchReason, ...(attributeTo ? { artifactId: attributeTo } : {}) });
     };
 
     const exact = svc.symbolsRepo.findScopedSymbols({

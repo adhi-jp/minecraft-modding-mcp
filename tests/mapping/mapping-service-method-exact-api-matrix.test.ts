@@ -15,6 +15,8 @@ import {
   TEST_TINY,
   TEST_AMBIGUOUS_METHOD_TINY,
   TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY,
+  TEST_FOREIGN_OWNER_SAME_DESCRIPTOR_TINY,
+  TEST_INHERITED_METHOD_TINY,
   TEST_DESCRIPTOR_REMAP_TINY,
   TEST_MOJANG_CLIENT_MAPPINGS
 } from "../helpers/mapping-service-fixtures.ts";
@@ -291,10 +293,121 @@ test("MappingService resolveMethodMappingExact reports representative unresolved
         Array.isArray(result.ambiguityReasons) && result.ambiguityReasons.length > 0,
         "an ambiguous verdict must explain why"
       );
+      // The rejection warning must name the REAL cause per candidate. Under the isolated
+      // GRADLE_USER_HOME harness this fixture rejects exactly one candidate, and it is
+      // rejected for its descriptor, not its owner.
+      const rejectionWarning = result.warnings.find((warning) => warning.includes("rejected before the verdict"));
       assert.ok(
-        result.warnings.some((warning) => warning.includes("rejected by descriptor")),
-        "the rejected name-only matches must be accounted for in warnings"
+        rejectionWarning,
+        `the rejected name-only matches must be accounted for in warnings, got ${JSON.stringify(result.warnings)}`
       );
+      assert.match(String(rejectionWarning), /^1 further name-matched candidate\(s\)/);
+      assert.match(String(rejectionWarning), /0 by owner, 1 by descriptor/);
+      assert.match(String(rejectionWarning), /find-mapping/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("resolves an owner-qualified query a foreign owner would otherwise make ambiguous", async () => {
+    // `resolve-method-mapping-exact` takes a REQUIRED owner and advertises itself as the
+    // strict variant of find-mapping, so the triple it is given — owner + name + descriptor
+    // — is what "strict" has to mean. The owner-less `<name><descriptor>` simple-name key
+    // reaches same-signature methods on unrelated classes, and a descriptor-only filter
+    // kept them: the caller saw `status: "ambiguous"` sitting next to the one candidate
+    // that matched at `matchKind: "exact"`, `confidence: 1`.
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-foreign-owner-",
+      TEST_FOREIGN_OWNER_SAME_DESCRIPTOR_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        } as never)
+      );
+
+      assert.equal(result.status, "resolved");
+      assert.equal(result.resolved, true);
+      assert.equal(result.resolvedSymbol?.owner, "inter.pkg.InterClass");
+      assert.equal(result.resolvedSymbol?.name, "interMethod");
+      assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
+      // The verdict set is reported, so a resolved answer names exactly the candidate it
+      // was computed from — the same rule the ambiguous branch already follows.
+      assert.equal(result.candidateCount, 1);
+      assert.equal(result.candidates.length, 1);
+      assert.equal(result.candidates[0]?.owner, "inter.pkg.InterClass");
+      assert.equal(result.ambiguityReasons, undefined);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("keeps a same-owner overload pair ambiguous under owner-strict filtering", async () => {
+    // The owner comparison must reject FOREIGN owners only. Two methods declared on the
+    // very same owner are a genuine ambiguity and must survive the filter; if this fixture
+    // starts resolving, the owner comparison is matching the wrong thing.
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-same-owner-",
+      TEST_AMBIGUOUS_METHOD_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        } as never)
+      );
+
+      assert.equal(result.status, "ambiguous");
+      assert.equal(result.candidateCount, 2);
+      const owners = new Set(result.candidates.map((candidate) => candidate.owner));
+      assert.deepEqual([...owners], ["inter.pkg.InterClass"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("explains a not_found that owner-strictness caused and points at find-mapping", async () => {
+    // The accepted cost of owner-strictness: a method the owner INHERITS rather than
+    // declares no longer resolves. That must not be silent — the caller has to learn that
+    // the owner is what emptied the set, and where the owner-agnostic lookup lives.
+    const { root, service } = await createLoomService(
+      "mapping-service-method-exact-inherited-",
+      TEST_INHERITED_METHOD_TINY
+    );
+    try {
+      const result = await withCwd(root, () =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "a.b.C",
+          name: "e",
+          descriptor: "(I)V",
+          sourceMapping: "obfuscated",
+          targetMapping: "intermediary"
+        } as never)
+      );
+
+      assert.equal(result.status, "not_found");
+      assert.equal(result.resolved, false);
+      const ownerWarning = result.warnings.find((warning) => warning.includes("owner"));
+      assert.ok(
+        ownerWarning,
+        `a not_found emptied by the owner filter must say so, got ${JSON.stringify(result.warnings)}`
+      );
+      assert.match(String(ownerWarning), /a\.b\.C/);
+      assert.match(String(ownerWarning), /find-mapping/);
+      // The declaring class is still named, so the caller can retry against it directly.
+      assert.match(String(ownerWarning), /inter\.pkg\.BaseClass/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

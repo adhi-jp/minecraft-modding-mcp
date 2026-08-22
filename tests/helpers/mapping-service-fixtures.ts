@@ -86,10 +86,21 @@ export const TEST_AMBIGUOUS_METHOD_TINY = [
 ].join("\n");
 
 // Same ambiguous pair as TEST_AMBIGUOUS_METHOD_TINY, plus an unrelated class whose
-// method shares the obfuscated simple name `e` under a DIFFERENT descriptor. The
-// simple-name index picks that third record up as a low-confidence candidate, so the
-// raw candidate list is strictly larger than the descriptor-strict set the exact
-// resolver actually judges.
+// method shares the obfuscated simple name `e` under a DIFFERENT descriptor.
+//
+// What this fixture adds, measured against the real service under the
+// installGradleUserHomeIsolation() harness every consumer of these fixtures runs:
+// TEST_AMBIGUOUS_METHOD_TINY yields 2 raw candidates and 2 strict ones (nothing is
+// rejected), while this fixture yields 3 raw against the same 2 strict. So the third
+// record is exactly what separates the raw name-matched list from the set the exact
+// resolver judges, and it is rejected for its DESCRIPTOR, not its owner.
+//
+// The isolation hook is load-bearing for those numbers, not incidental. Run the same
+// query with GRADLE_USER_HOME pointing at a developer's real ~/.gradle and a bundled
+// 1.21.10 Loom intermediary mapping contributes ~50 further `e`-named records to the
+// raw list on BOTH fixtures, which makes the two look identical apart from an
+// off-by-one. Any assertion on rejected-candidate counts therefore belongs behind the
+// isolation hook.
 export const TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
@@ -97,6 +108,32 @@ export const TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY = [
   "\tm\t(I)V\te\tinterMethodAlt\tnamedMethod",
   "c\ta/b/D\tinter/pkg/OtherClass\tyarn/pkg/OtherNamedClass",
   "\tm\t(Ljava/lang/String;)V\te\tinterForeignMethod\tforeignNamedMethod"
+].join("\n");
+
+// Two DIFFERENT owner classes, each declaring exactly one method with the SAME
+// obfuscated name `e` AND the same descriptor `(I)V`. An owner+name+descriptor query
+// against `a.b.C` therefore has one correct answer. The owner-less `e(I)V` simple-name
+// key still reaches `a/b/D`'s method, so only a filter that compares OWNERS as well as
+// descriptors can discard it; a descriptor-only filter keeps both and reports ambiguity
+// next to a confidence-1 exact match.
+export const TEST_FOREIGN_OWNER_SAME_DESCRIPTOR_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
+  "\tm\t(I)V\te\tinterMethod\tnamedMethod",
+  "c\ta/b/D\tinter/pkg/OtherClass\tyarn/pkg/OtherNamedClass",
+  "\tm\t(I)V\te\tinterForeignMethod\tforeignNamedMethod"
+].join("\n");
+
+// `a/b/C` is mapped but declares no `e(I)V` of its own; the only `e(I)V` in the file
+// belongs to `a/b/Base`. This stands in for an INHERITED method. Owner-strict exact
+// resolution cannot answer such a query — the tiny format records declarations, not the
+// class hierarchy — so the accepted outcome is not_found plus guidance toward the
+// owner-agnostic find-mapping lookup, rather than silently answering with a superclass.
+export const TEST_INHERITED_METHOD_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
+  "c\ta/b/C\tinter/pkg/InterClass\tyarn/pkg/NamedClass",
+  "c\ta/b/Base\tinter/pkg/BaseClass\tyarn/pkg/BaseNamedClass",
+  "\tm\t(I)V\te\tinterMethod\tnamedMethod"
 ].join("\n");
 
 export const TEST_AMBIGUOUS_CLASS_TINY = [

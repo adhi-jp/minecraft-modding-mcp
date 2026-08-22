@@ -33,7 +33,7 @@ import * as artifactResolver from "./artifact-resolver.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
-import { collectDidYouMeanCandidates } from "./did-you-mean.js";
+import { collectDidYouMeanCandidates, type DidYouMeanCandidate } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
 import { findNestedJarClasses, resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
@@ -268,18 +268,56 @@ export function buildFallbackProvenance(svc: SourceService, input: {
   };
 }
 
+/**
+ * Near-miss candidates from the requested artifact's index followed by any the
+ * lookup's final artifact contributes, deduplicated by FQN so a class present in
+ * both is reported once, under the requested artifact.
+ */
+function unionDidYouMeanCandidates(
+  svc: SourceService,
+  requestedArtifactId: string,
+  endedOnArtifactId: string,
+  className: string
+): DidYouMeanCandidate[] {
+  const requested = collectDidYouMeanCandidates(svc, requestedArtifactId, className);
+  if (endedOnArtifactId === requestedArtifactId) {
+    return requested;
+  }
+  const seen = new Set(requested.map((candidate) => candidate.className));
+  const fromFallback = collectDidYouMeanCandidates(
+    svc,
+    endedOnArtifactId,
+    className,
+    endedOnArtifactId
+  ).filter((candidate) => !seen.has(candidate.className));
+  return [...requested, ...fromFallback];
+}
+
 export function buildClassSourceNotFoundError(svc: SourceService, input: {
   className: string;
   lookupClassName: string;
-  /** Artifact the lookup ended on: the internal binary fallback when one fired. */
+  /**
+   * Artifact the lookup ended on. TWO internal paths move it off the requested
+   * artifact: the binary fallback, and the nested-jar redirect that follows a
+   * shell jar's bundled inner jar.
+   */
   artifactId: string;
   /**
-   * Artifact the caller actually asked about. The binary fallback swaps the
+   * Artifact the caller actually asked about. Both internal redirects swap the
    * active artifact mid-lookup, but the error must keep answering about the
-   * requested one: reporting the fallback id sends the caller to an artifact
-   * they never named. Defaults to `artifactId` for paths with no fallback.
+   * requested one: reporting the redirect target sends the caller to an artifact
+   * they never named. Defaults to `artifactId` for paths with no redirect.
    */
   requestedArtifactId?: string;
+  /**
+   * Mapping and quality flags OF THE REQUESTED ARTIFACT. `details.artifactId`
+   * names the requested artifact, so `details.mapping` (which reaches
+   * `error.context` through the allowlist) and `details.qualityFlags` have to
+   * describe that same artifact. The nested-jar redirect REPLACES the active
+   * values with the inner jar's, which would otherwise publish one artifact's
+   * identity beside another's namespace and quality — and point the
+   * `suggestedCall` at an index holding neither the class nor its siblings.
+   */
   mappingApplied: SourceMapping;
   requestedMapping: SourceMapping;
   qualityFlags: string[];
@@ -309,7 +347,13 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
     ...(input.nestedJars && input.nestedJars.length > 0 ? { nestedJars: input.nestedJars } : {}),
     // Candidates are hints from the symbol index, never assertions that the
     // class exists at the suggested location; empty when nothing usable.
-    didYouMean: collectDidYouMeanCandidates(svc, requestedArtifactId, input.className)
+    //
+    // Both indexes are consulted, requested artifact first. Collecting from the
+    // requested artifact ALONE is empty by construction in the scenario the
+    // partial-source fallback exists to serve: that artifact is the one without
+    // net.minecraft symbols, which is why the fallback fired and indexed the other
+    // jar. Candidates from the artifact the caller did not name carry its id.
+    didYouMean: unionDidYouMeanCandidates(svc, requestedArtifactId, input.artifactId, input.className)
   };
 
   let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
@@ -929,9 +973,12 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       requestedArtifactId: artifactId,
       className,
       lookupClassName: activeLookupClassName,
-      mappingApplied: activeMappingApplied,
+      // The REQUESTED artifact's namespace and quality, matching the artifactId this
+      // error reports. The nested-jar redirect replaces the active values with the
+      // inner jar's, which would otherwise describe an artifact the caller never named.
+      mappingApplied,
       requestedMapping,
-      qualityFlags: activeQualityFlags,
+      qualityFlags,
       attemptedBinaryFallback,
       targetKind: input.target?.kind,
       targetValue:
@@ -971,9 +1018,12 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       requestedArtifactId: artifactId,
       className,
       lookupClassName: activeLookupClassName,
-      mappingApplied: activeMappingApplied,
+      // The REQUESTED artifact's namespace and quality, matching the artifactId this
+      // error reports. The nested-jar redirect replaces the active values with the
+      // inner jar's, which would otherwise describe an artifact the caller never named.
+      mappingApplied,
       requestedMapping,
-      qualityFlags: activeQualityFlags,
+      qualityFlags,
       attemptedBinaryFallback,
       filePath,
       targetKind: input.target?.kind,

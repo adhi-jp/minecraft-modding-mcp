@@ -207,7 +207,22 @@ const EXPECTED_ORDINARY_TEST_FILES = 220;
 // suppresses node's default abort). The strengthened parent-liveness positive control
 // and the worker-descendant reaping assertions extend existing tests and add no
 // declaration.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1924;
+// 220 -> 220 / 1924 -> 1931 (accepted-review repair round): no new files. Four existing
+// files grow: tests/source-service/partial-source-fallback.test.ts +3 (near-miss
+// candidates unioned across the requested and fallback artifacts, the attribution field
+// that marks the fallback's entries, and the allowDecompile forwarding that was
+// previously invisible because the only test on that path stubbed the resolver without
+// inspecting its argument), tests/nbt/nbt-pipeline.test.ts +2 (the five default
+// nextAction strings, none of which any assertion reached, and a stage that supplies its
+// own nextAction keeping it), tests/contracts/no-direct-sigkill.test.ts +1 (the
+// broadened detector's positive/negative matrix for the bare call, the numeric signal,
+// a signal held in a const, a call split across lines and the shell force-kill) and
+// tests/mod/nested-jar-redirect.test.ts +1 (a failed lookup after a nested-jar redirect
+// reports one artifact's identity, namespace and quality, not two). The owner-strict
+// resolver cases are t.test subtests inside
+// tests/mapping/mapping-service-method-exact-api-matrix.test.ts and the compact-projection
+// case is a row in an existing table loop, neither of which this counter includes.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1931;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

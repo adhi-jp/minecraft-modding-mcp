@@ -394,3 +394,328 @@ test("SourceService findClass suppresses misleading non-vanilla matches for part
   assert.equal(result.total, 0);
   assert.ok(result.warnings.some((warning) => warning.includes("partial") && warning.includes("net.minecraft")));
 });
+
+test("SourceService getClassSource unions didYouMean across the requested and fallback artifacts", async () => {
+  // The partial-source fallback exists BECAUSE the requested artifact has no
+  // net.minecraft symbols. Collecting near-miss candidates from that artifact alone
+  // therefore returns [] in exactly the scenario the fallback was built for, and the
+  // caller loses its only recovery signal. The identity fields must still answer about
+  // the requested artifact, so the candidates are unioned rather than swapped.
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-didyoumean-union-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        content: [
+          "package net.neoforged.neoforge.capabilities;",
+          "public class Capabilities {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        symbolKind: "class",
+        symbolName: "Capabilities",
+        qualifiedName: "net.neoforged.neoforge.capabilities.Capabilities",
+        line: 2
+      }
+    ]
+  });
+
+  seedIndexedArtifact(service, {
+    artifactId: "binary-fallback",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["decompiled", "binary-fallback"],
+    version: "1.21.10",
+    binaryJarPath,
+    provenance,
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "net/minecraft/core/component/Item.java",
+        content: [
+          "package net.minecraft.core.component;",
+          "public class Item {}"
+        ].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/core/component/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.minecraft.core.component.Item",
+        line: 2
+      }
+    ]
+  });
+
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact = async () => ({
+    artifactId: "binary-fallback",
+    artifactSignature: "binary-fallback-sig",
+    origin: "decompiled" as const,
+    binaryJarPath,
+    version: "1.21.10",
+    requestedMapping: "mojang" as const,
+    mappingApplied: "mojang" as const,
+    provenance,
+    qualityFlags: ["decompiled", "binary-fallback"],
+    isDecompiled: true,
+    resolvedAt: new Date().toISOString()
+  });
+
+  await assert.rejects(
+    service.getClassSource({
+      artifactId: "partial-source",
+      className: "net.minecraft.world.item.Item"
+    }),
+    (error: unknown) => {
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      assert.equal(details.artifactId, "partial-source");
+      assert.equal(details.fallbackArtifactId, "binary-fallback");
+      // Partial net.minecraft coverage routes the recovery to get-class-api-matrix, which
+      // takes no artifactId; the fallback artifact must not leak into the params either way.
+      const suggested = details.suggestedCall as
+        | { tool?: string; params?: Record<string, unknown> }
+        | undefined;
+      assert.equal(suggested?.tool, "get-class-api-matrix");
+      assert.equal(
+        Object.values(suggested?.params ?? {}).includes("binary-fallback"),
+        false,
+        "an artifact the caller never named must not appear in the suggested call"
+      );
+      // The requested artifact contributes nothing here, so without the union this is [].
+      assert.deepEqual(details.didYouMean, [
+        {
+          className: "net.minecraft.core.component.Item",
+          matchReason: "exact-simple-name",
+          artifactId: "binary-fallback"
+        }
+      ]);
+      return true;
+    }
+  );
+});
+
+test("SourceService getClassSource attributes only the fallback artifact's didYouMean candidates", async () => {
+  // Requested-artifact candidates come first and carry NO artifactId — the field marks
+  // the exception (a candidate found somewhere the caller did not name), so an
+  // unattributed candidate always means "in the artifact you asked about".
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-didyoumean-order-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        content: ["package net.neoforged.neoforge.items;", "public class Item {}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/items/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.neoforged.neoforge.items.Item",
+        line: 2
+      }
+    ]
+  });
+
+  seedIndexedArtifact(service, {
+    artifactId: "binary-fallback",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["decompiled", "binary-fallback"],
+    version: "1.21.10",
+    binaryJarPath,
+    provenance,
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "net/minecraft/core/component/Item.java",
+        content: ["package net.minecraft.core.component;", "public class Item {}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/core/component/Item.java",
+        symbolKind: "class",
+        symbolName: "Item",
+        qualifiedName: "net.minecraft.core.component.Item",
+        line: 2
+      }
+    ]
+  });
+
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact = async () => ({
+    artifactId: "binary-fallback",
+    artifactSignature: "binary-fallback-sig",
+    origin: "decompiled" as const,
+    binaryJarPath,
+    version: "1.21.10",
+    requestedMapping: "mojang" as const,
+    mappingApplied: "mojang" as const,
+    provenance,
+    qualityFlags: ["decompiled", "binary-fallback"],
+    isDecompiled: true,
+    resolvedAt: new Date().toISOString()
+  });
+
+  await assert.rejects(
+    service.getClassSource({
+      artifactId: "partial-source",
+      className: "net.minecraft.world.item.Item"
+    }),
+    (error: unknown) => {
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      assert.deepEqual(details.didYouMean, [
+        { className: "net.neoforged.neoforge.items.Item", matchReason: "exact-simple-name" },
+        {
+          className: "net.minecraft.core.component.Item",
+          matchReason: "exact-simple-name",
+          artifactId: "binary-fallback"
+        }
+      ]);
+      return true;
+    }
+  );
+});
+
+test("SourceService getClassSource forwards allowDecompile to the binary fallback resolver", async () => {
+  // The fallback used to hardcode allowDecompile:true and silently run a full Vineflower
+  // pass for a caller who had declined decompilation. Only the argument the stub was
+  // CALLED with proves the forwarding: reverting the field would otherwise be invisible.
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-allow-decompile-"));
+  const service = new SourceService(buildTestConfig(root));
+  const sourceJarPath = join(root, "minecraft-merged-1.21.10-sources.jar");
+  const binaryJarPath = join(root, "minecraft-merged-1.21.10.jar");
+  const provenance = {
+    target: { kind: "version", value: "1.21.10" },
+    resolvedAt: new Date().toISOString(),
+    resolvedFrom: {
+      origin: "local-jar",
+      sourceJarPath,
+      binaryJarPath,
+      version: "1.21.10"
+    },
+    transformChain: ["mapping:mojang-source-backed"]
+  };
+
+  seedIndexedArtifact(service, {
+    artifactId: "partial-source",
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.10",
+    sourceJarPath,
+    binaryJarPath,
+    provenance,
+    files: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        content: ["package net.neoforged.neoforge.capabilities;", "public class Capabilities {}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/neoforged/neoforge/capabilities/Capabilities.java",
+        symbolKind: "class",
+        symbolName: "Capabilities",
+        qualifiedName: "net.neoforged.neoforge.capabilities.Capabilities",
+        line: 2
+      }
+    ]
+  });
+
+  const fallbackCalls: Array<Record<string, unknown>> = [];
+  (service as unknown as { resolveBinaryFallbackArtifact: unknown }).resolveBinaryFallbackArtifact =
+    async (callInput: Record<string, unknown>) => {
+      fallbackCalls.push(callInput);
+      return undefined;
+    };
+
+  for (const allowDecompile of [false, true, undefined] as const) {
+    fallbackCalls.length = 0;
+    await assert.rejects(
+      service.getClassSource({
+        artifactId: "partial-source",
+        className: "net.minecraft.world.item.Item",
+        ...(allowDecompile === undefined ? {} : { allowDecompile })
+      }),
+      (error: unknown) =>
+        (error as { code?: string }).code === ERROR_CODES.CLASS_NOT_FOUND
+    );
+    assert.equal(fallbackCalls.length, 1, `allowDecompile=${String(allowDecompile)} must reach the resolver once`);
+    assert.equal(
+      fallbackCalls[0]?.allowDecompile,
+      allowDecompile,
+      `allowDecompile=${String(allowDecompile)} must be forwarded verbatim, not replaced by a hardcoded default`
+    );
+  }
+
+  // An omitted flag must arrive as an explicitly present `undefined`, not be dropped and
+  // not be pre-resolved here. `resolveBinaryFallbackArtifact` owns the
+  // `input.allowDecompile ?? true` default that restores decompile-on-demand, so a
+  // second default applied at this layer would make the two disagree.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(fallbackCalls[0] ?? {}, "allowDecompile"),
+    true,
+    "the key must be present so the resolver's own `?? true` default is what decides"
+  );
+  assert.equal(fallbackCalls[0]?.allowDecompile, undefined);
+});

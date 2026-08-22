@@ -167,6 +167,13 @@ const SUPPORTED_MAPPINGS: ReadonlySet<SourceMapping> = new Set([
   "yarn"
 ]);
 
+/**
+ * Cap on the declaring classes named in the owner-strict not_found warning. A real
+ * mapping can hold dozens of same-signature methods, and the warning is guidance, not
+ * an inventory — find-mapping is the tool that returns the full list.
+ */
+const MAX_REPORTED_DECLARING_OWNERS = 5;
+
 type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
 
@@ -621,20 +628,38 @@ export class MappingService {
       );
       acceptedDescriptors.add(obfuscatedProjection.descriptor);
     }
-    const strictCandidates = rawCandidates.filter(
+    // "Strict" is the query's full advertised triple: owner + name + descriptor. The
+    // descriptor alone is not enough, because `lookupCandidates` also indexes methods
+    // under the OWNERLESS `<name><descriptor>` simple-name key — so a same-signature
+    // method on an unrelated class used to survive the filter and force an `ambiguous`
+    // verdict next to the one exact, confidence-1 candidate that answered the question.
+    const descriptorMatched = rawCandidates.filter(
       (candidate) => candidate.descriptor !== undefined && acceptedDescriptors.has(candidate.descriptor)
     );
+    const acceptedOwners = this.acceptedOwnersAlongPath(graph, path, owner);
+    const strictCandidates = descriptorMatched.filter(
+      (candidate) => candidate.owner !== undefined && acceptedOwners.has(candidate.owner)
+    );
+    // A candidate is attributed to the FIRST gate it failed, so the two counts partition
+    // the rejected set and never double-count a candidate that fails both.
+    const rejectedByDescriptor = rawCandidates.length - descriptorMatched.length;
+    const rejectedByOwner = descriptorMatched.length - strictCandidates.length;
     if (strictCandidates.length === 1) {
       const resolved = toResolutionCandidate(strictCandidates[0]!);
+      // The verdict is computed from `strictCandidates`, so that is the set reported —
+      // the same rule the ambiguous branch follows. Returning the raw name-matched list
+      // here would publish candidates the strict filter had already rejected alongside
+      // `status: "resolved"`, with nothing to tell them apart from the answer.
+      const limitedStrictCandidates = limitResolutionCandidates([resolved], input.maxCandidates);
       return {
         querySymbol,
         mappingContext,
         resolved: true,
         status: "resolved",
         resolvedSymbol: resolved,
-        candidates: limitedCandidates.candidates,
-        candidateCount: limitedCandidates.candidateCount,
-        candidatesTruncated: limitedCandidates.candidatesTruncated,
+        candidates: limitedStrictCandidates.candidates,
+        candidateCount: limitedStrictCandidates.candidateCount,
+        candidatesTruncated: limitedStrictCandidates.candidatesTruncated,
         warnings,
         provenance: this.provenanceForPath(graph, path)
       };
@@ -657,10 +682,14 @@ export class MappingService {
           "Raise maxCandidates up to 200 to inspect the full candidate list, or narrow the lookup via find-mapping disambiguation hints."
         );
       }
-      const rejectedByDescriptor = rawCandidates.length - strictCandidates.length;
-      if (rejectedByDescriptor > 0) {
+      // Report the counts BY REASON. Most rejections here are by owner, not by
+      // descriptor, so a warning that names descriptor as the cause would be wrong.
+      const rejectedTotal = rejectedByOwner + rejectedByDescriptor;
+      if (rejectedTotal > 0) {
         warnings.push(
-          `${rejectedByDescriptor} further name-matched candidate(s) were rejected by descriptor and are not reported; use find-mapping for the unfiltered list.`
+          `${rejectedTotal} further name-matched candidate(s) were rejected before the verdict ` +
+            `(${rejectedByOwner} by owner, ${rejectedByDescriptor} by descriptor) and are not reported; ` +
+            `use find-mapping for the unfiltered list.`
         );
       }
       return {
@@ -678,6 +707,27 @@ export class MappingService {
           pathUsesSource(graph.pairs, path, "mojang-client-mappings")
         )
       };
+    }
+
+    // Owner-strictness has an accepted cost: a method the owner INHERITS rather than
+    // declares no longer resolves, because the mapping formats record declarations and
+    // carry no class hierarchy. Make that legible instead of returning a bare not_found.
+    if (rejectedByOwner > 0 && strictCandidates.length === 0) {
+      const declaringOwners = [
+        ...new Set(descriptorMatched.map((candidate) => candidate.owner).filter(Boolean))
+      ] as string[];
+      const shownOwners = declaringOwners.slice(0, MAX_REPORTED_DECLARING_OWNERS);
+      const ownerList = shownOwners.join(", ") +
+        (declaringOwners.length > shownOwners.length
+          ? `, and ${declaringOwners.length - shownOwners.length} more`
+          : "");
+      warnings.push(
+        `Exact method resolution is owner-strict: "${owner}" does not itself declare ` +
+          `${method}${descriptor}. ${rejectedByOwner} candidate(s) with that name and descriptor ` +
+          `are declared by other classes (${targetMapping}: ${ownerList}). An inherited or relocated ` +
+          `member cannot resolve here — use find-mapping for an owner-agnostic lookup, or query the ` +
+          `declaring class directly.`
+      );
     }
 
     if (descriptorProjection.hadClassReferences && !descriptorProjection.complete) {
@@ -1343,6 +1393,39 @@ export class MappingService {
         name: item.record.name,
         descriptor: item.record.descriptor
       }));
+  }
+
+  /**
+   * The owner names that a query owner is allowed to appear under once candidates have
+   * been projected along `path`.
+   *
+   * The query owner arrives in the SOURCE namespace while `mapCandidatesAlongPath`
+   * hands back records whose `owner` is the declaring class in the TARGET namespace
+   * (both parsers build member records with `createMethodSymbolRecord(<owner in that
+   * namespace>, ...)`), so the two are only comparable after the owner itself has been
+   * carried along the same path. Projecting the owner as a class record through
+   * `mapCandidatesAlongPath` is that carriage, and it is the same mechanism
+   * `projectMethodDescriptorToTarget` already uses for class references inside a
+   * descriptor.
+   *
+   * `simple-name` class matches are excluded on purpose: they mean "some other class
+   * that happens to share this simple name", which is exactly the foreign-owner noise
+   * the strict filter exists to remove. The source-namespace name is kept as an
+   * accepted alias so an owner that the mapping does not rename still matches itself.
+   */
+  private acceptedOwnersAlongPath(
+    graph: LoadedGraph,
+    path: SourceMapping[],
+    owner: string
+  ): Set<string> {
+    const accepted = new Set<string>([normalizeMappedSymbolOutput(owner)]);
+    for (const candidate of this.mapCandidatesAlongPath(graph, path, createClassSymbolRecord(owner))) {
+      if (candidate.kind !== "class" || candidate.matchKind === "simple-name") {
+        continue;
+      }
+      accepted.add(normalizeMappedSymbolOutput(candidate.symbol));
+    }
+    return accepted;
   }
 
   private projectMethodDescriptorToTarget(

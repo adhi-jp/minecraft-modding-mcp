@@ -87,11 +87,22 @@ export function extractDidYouMean(details: unknown): DidYouMeanCandidate[] | und
     if (!entry || typeof entry !== "object") {
       return undefined;
     }
-    const { className, matchReason } = entry as { className?: unknown; matchReason?: unknown };
+    const { className, matchReason, artifactId } = entry as {
+      className?: unknown;
+      matchReason?: unknown;
+      artifactId?: unknown;
+    };
     if (typeof className !== "string" || typeof matchReason !== "string") {
       return undefined;
     }
-    cleaned.push({ className, matchReason });
+    // `artifactId` marks a candidate found in an artifact the caller did not name
+    // (the internal binary fallback or nested-jar redirect). It is optional and
+    // dropped when malformed, so a bad value cannot suppress the whole array.
+    cleaned.push({
+      className,
+      matchReason,
+      ...(typeof artifactId === "string" && artifactId ? { artifactId } : {})
+    });
   }
   return cleaned.slice(0, MAX_DID_YOU_MEAN_ENTRIES);
 }

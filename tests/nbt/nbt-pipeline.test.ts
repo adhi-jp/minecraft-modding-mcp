@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { gzipSync } from "node:zlib";
 
 import { ERROR_CODES } from "../../src/errors.ts";
 import {
@@ -268,4 +269,95 @@ test("applyNbtJsonPatch attaches a recovery example when the typed document is i
   assert.ok(Array.isArray(exampleCalls) && exampleCalls.length > 0);
   assert.equal(exampleCalls[0]?.tool, "nbt-to-json");
   assert.match(String(exampleCalls[0]?.reason), /nbt-apply-json-patch/);
+});
+
+test("every NBT rejection stage carries its own default nextAction", () => {
+  // `toHints()` reads only `details.nextAction`, so a rejection without one reaches the
+  // client with nothing actionable. Five stages each set a default; all five were
+  // unasserted, and deleting every one of them left the suite green.
+  const sample = buildSample();
+  const nextActionOf = (run: () => unknown): string => {
+    try {
+      run();
+    } catch (error) {
+      const value = (error as { details?: { nextAction?: unknown } }).details?.nextAction;
+      assert.equal(typeof value, "string", "every rejection stage must carry a nextAction");
+      return value as string;
+    }
+    throw new Error("expected the stage to reject");
+  };
+
+  const parse = nextActionOf(() =>
+    // A tag id the codec does not know, so decoding fails inside the codec itself.
+    nbtBase64ToTypedJson({ nbtBase64: Buffer.from([0x63, 0x00]).toString("base64"), compression: "none" })
+  );
+  assert.match(parse, /not a well-formed Java NBT stream/);
+  assert.match(parse, /compression "auto"/);
+
+  const encode = nextActionOf(() =>
+    // A string past the uint16 length NBT can express: valid typed JSON, unencodable NBT.
+    typedJsonToNbtBase64({
+      typedJson: {
+        rootName: "Root",
+        root: { type: "compound", value: { big: { type: "string", value: "x".repeat(70_000) } } }
+      } as TypedNbtDocument
+    })
+  );
+  assert.match(encode, /could not be written as Java NBT/);
+  assert.match(encode, /nbt-to-json/);
+
+  const invalidPatch = nextActionOf(() =>
+    applyNbtJsonPatch({ typedJson: sample, patch: "not-an-array" as unknown as [] })
+  );
+  assert.match(invalidPatch, /RFC6902/);
+  assert.match(invalidPatch, /typed node, not a bare scalar/);
+
+  const unsupported = nextActionOf(() =>
+    applyNbtJsonPatch({
+      typedJson: sample,
+      patch: [{ op: "move", path: "/root/value/counter", from: "/root/value/name" }] as unknown as []
+    })
+  );
+  assert.match(unsupported, /not expressible in Java NBT/);
+  assert.match(unsupported, /homogeneous lists/);
+
+  const conflict = nextActionOf(() =>
+    applyNbtJsonPatch({
+      typedJson: sample,
+      patch: [{ op: "replace", path: "/root/value/absent", value: { type: "int", value: 2 } }] as unknown as []
+    })
+  );
+  assert.match(conflict, /did not hold what the patch expected/);
+  assert.match(conflict, /Re-read the current document with nbt-to-json/);
+
+  // Five DISTINCT strings: a single shared default would satisfy every `match` above
+  // while telling four of the five callers the wrong thing.
+  assert.equal(new Set([parse, encode, invalidPatch, unsupported, conflict]).size, 5);
+});
+
+test("a stage that supplies its own nextAction keeps it instead of the shared default", () => {
+  // The defaults are merged as `{ nextAction: DEFAULT, ...details }`, so a site that
+  // supplies its own wins. The gzip inflate failure is a live example: it shares
+  // ERR_NBT_PARSE_FAILED with the codec's parse stage but must not tell the caller to
+  // check NBT framing when the real problem is that the bytes are not gzip.
+  const corruptGzip = Buffer.concat([
+    gzipSync(Buffer.from("hello")).subarray(0, 4),
+    Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+  ]);
+
+  let inflateNextAction = "";
+  assert.throws(
+    () => nbtBase64ToTypedJson({ nbtBase64: corruptGzip.toString("base64"), compression: "gzip" }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, ERROR_CODES.NBT_PARSE_FAILED);
+      inflateNextAction = String((error as { details?: { nextAction?: unknown } }).details?.nextAction ?? "");
+      return true;
+    }
+  );
+  assert.match(inflateNextAction, /valid gzip-compressed NBT data/);
+  assert.doesNotMatch(
+    inflateNextAction,
+    /not a well-formed Java NBT stream/,
+    "the codec's parse default must not overwrite the site's own guidance"
+  );
 });
