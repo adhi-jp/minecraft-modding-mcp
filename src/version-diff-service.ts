@@ -1,11 +1,26 @@
+import { readFile } from "node:fs/promises";
+
 import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
+import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { listJarEntries } from "./source-jar-reader.js";
 import { VersionService } from "./version-service.js";
 import { RegistryService, type RegistryData } from "./registry-service.js";
 import type { Config } from "./types.js";
 
 export type CompareVersionsCategory = "classes" | "registry" | "all";
+
+/**
+ * Namespace the compared class names live in.
+ *
+ * A vanilla client jar for an obfuscated release lists `dlp.class`, not
+ * `net/minecraft/world/item/Item.class`, so a diff taken straight off the jar
+ * entries answers in obfuscated names. Every caller-facing name — the `added`
+ * and `removed` lists AND `packageFilter` — is expressed in mojang names when
+ * the official mappings for both versions can be loaded, and the namespace is
+ * always reported so a zero result is never ambiguous.
+ */
+export type ClassDiffNamespace = "mojang" | "obfuscated";
 
 export type CompareVersionsInput = {
   fromVersion: string;
@@ -24,6 +39,15 @@ export type CompareVersionsOutput = {
     addedCount: number;
     removedCount: number;
     unchanged: number;
+    /** Namespace the class names above (and any packageFilter) are expressed in. */
+    namespace: ClassDiffNamespace;
+    /** Present only when the caller passed packageFilter; reports what it matched. */
+    packageFilter?: {
+      value: string;
+      namespace: ClassDiffNamespace;
+      matchedFrom: number;
+      matchedTo: number;
+    };
   };
   registry?: {
     added: Record<string, string[]>;
@@ -69,6 +93,52 @@ function filterByPackage(classes: string[], prefix: string): string[] {
 function filterSetByPackage(classes: Set<string>, prefix: string): Set<string> {
   return new Set(filterByPackage([...classes], prefix));
 }
+
+/**
+ * True when the jar's class names are obfuscated.
+ *
+ * Obfuscation collapses every Minecraft class into the DEFAULT package with a
+ * short generated name (`dlp`, `ije`), so a jar where a large share of the
+ * classes carry no package at all is obfuscated. Unobfuscated releases, jars
+ * remapped before listing, and ordinary library/mod jars all keep real package
+ * structure and need no mapping load.
+ */
+function looksObfuscated(classes: Set<string>): boolean {
+  if (classes.size === 0) {
+    return false;
+  }
+  let defaultPackage = 0;
+  for (const fqn of classes) {
+    if (!fqn.includes(".")) {
+      defaultPackage += 1;
+    }
+  }
+  return defaultPackage > 0 && defaultPackage * 4 >= classes.size;
+}
+
+/** Parses the `c<TAB>obf<TAB>mojang` rows of a merged mojang tiny v2 file. */
+function parseTinyClassRows(content: string): Map<string, string> {
+  const classMap = new Map<string, string>();
+  for (const line of content.split("\n")) {
+    if (line.charCodeAt(0) !== 99 /* 'c' */ || line.charCodeAt(1) !== 9 /* TAB */) {
+      continue;
+    }
+    const parts = line.split("\t");
+    if (parts.length < 3) {
+      continue;
+    }
+    const obfuscated = parts[1];
+    const mojang = parts[2];
+    if (!obfuscated || !mojang) {
+      continue;
+    }
+    classMap.set(obfuscated.replaceAll("/", "."), mojang.replaceAll("/", "."));
+  }
+  return classMap;
+}
+
+/** Bounded per-process memo so a repeated comparison re-reads nothing. */
+const MOJANG_CLASS_MAP_CACHE_LIMIT = 4;
 
 function diffSets(from: Set<string>, to: Set<string>): { added: string[]; removed: string[]; unchanged: number } {
   const added: string[] = [];
@@ -182,11 +252,79 @@ export class VersionDiffService {
   private readonly config: Config;
   private readonly versionService: VersionService;
   private readonly registryService: RegistryService;
+  private readonly mojangClassMaps = new Map<string, Map<string, string>>();
 
   constructor(config: Config, versionService: VersionService, registryService: RegistryService) {
     this.config = config;
     this.versionService = versionService;
     this.registryService = registryService;
+  }
+
+  /**
+   * obfuscated -> mojang class map for one version, or undefined when the
+   * official mappings cannot be obtained (offline, or a release that publishes
+   * none). Never throws: a missing map degrades the diff to obfuscated names
+   * with a warning rather than failing the comparison.
+   */
+  private async loadMojangClassMap(version: string): Promise<Map<string, string> | undefined> {
+    const cached = this.mojangClassMaps.get(version);
+    if (cached) {
+      return cached;
+    }
+    try {
+      const { path } = await resolveMojangTinyFile(version, this.config, {
+        versionService: this.versionService
+      });
+      const classMap = parseTinyClassRows(await readFile(path, "utf8"));
+      if (classMap.size === 0) {
+        return undefined;
+      }
+      if (this.mojangClassMaps.size >= MOJANG_CLASS_MAP_CACHE_LIMIT) {
+        const oldest = this.mojangClassMaps.keys().next().value;
+        if (oldest !== undefined) {
+          this.mojangClassMaps.delete(oldest);
+        }
+      }
+      this.mojangClassMaps.set(version, classMap);
+      return classMap;
+    } catch (error) {
+      log("warn", "version-diff.mojang_class_map_unavailable", {
+        version,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Lifts one version's jar class list into mojang names when possible.
+   * Returns the namespace the returned set is actually expressed in.
+   */
+  private async toMojangNames(
+    version: string,
+    classes: Set<string>
+  ): Promise<{ classes: Set<string>; namespace: ClassDiffNamespace; unmapped: number }> {
+    if (!looksObfuscated(classes)) {
+      return { classes, namespace: "mojang", unmapped: 0 };
+    }
+    const classMap = await this.loadMojangClassMap(version);
+    if (!classMap) {
+      return { classes, namespace: "obfuscated", unmapped: classes.size };
+    }
+    const mapped = new Set<string>();
+    let unmapped = 0;
+    for (const fqn of classes) {
+      const mojang = classMap.get(fqn);
+      if (mojang) {
+        mapped.add(mojang);
+      } else {
+        // Library classes shipped inside the jar (and anything the mappings do
+        // not cover) keep the name the jar carries; they are already readable.
+        mapped.add(fqn);
+        unmapped += 1;
+      }
+    }
+    return { classes: mapped, namespace: "mojang", unmapped };
   }
 
   async compareVersions(input: CompareVersionsInput): Promise<CompareVersionsOutput> {
@@ -238,14 +376,48 @@ export class VersionDiffService {
             listJarEntries(toJar.jarPath)
           ]);
 
-          const fromClasses = extractClassEntries(fromEntries);
-          const toClasses = extractClassEntries(toEntries);
+          // The class names must be lifted OUT of the jar's own namespace
+          // before anything is compared or filtered: a mojang packageFilter
+          // against obfuscated jar entries matched nothing and reported a
+          // silent all-zero diff that read as "no changes".
+          const [fromNames, toNames] = await Promise.all([
+            this.toMojangNames(fromVersion, extractClassEntries(fromEntries)),
+            this.toMojangNames(toVersion, extractClassEntries(toEntries))
+          ]);
+          const namespace: ClassDiffNamespace =
+            fromNames.namespace === "mojang" && toNames.namespace === "mojang"
+              ? "mojang"
+              : "obfuscated";
+          if (namespace === "obfuscated") {
+            warnings.push(
+              `Official Mojang mappings could not be loaded for ${
+                fromNames.namespace === "obfuscated" ? fromVersion : toVersion
+              }, so class names (and packageFilter) are compared in the OBFUSCATED namespace. Deobfuscated prefixes such as "net.minecraft.world.item" cannot match here.`
+            );
+          }
+
+          const fromClasses = fromNames.classes;
+          const toClasses = toNames.classes;
           const filteredFromClasses = input.packageFilter
             ? filterSetByPackage(fromClasses, input.packageFilter)
             : fromClasses;
           const filteredToClasses = input.packageFilter
             ? filterSetByPackage(toClasses, input.packageFilter)
             : toClasses;
+
+          if (input.packageFilter && filteredFromClasses.size === 0 && filteredToClasses.size === 0) {
+            // An empty diff and a non-matching filter look identical on the
+            // wire, so the filter has to say which one happened.
+            warnings.push(
+              `packageFilter "${input.packageFilter}" matched no class in either ${fromVersion} or ${toVersion}; ` +
+                `the reported zeros mean "filter matched nothing", not "nothing changed". ` +
+                `Class names are compared in the ${namespace} namespace — ` +
+                (namespace === "obfuscated"
+                  ? "an obfuscated jar has no package structure to filter on, so omit packageFilter."
+                  : "check the package prefix spelling, e.g. \"net.minecraft.world.item\".")
+            );
+          }
+
           const { added, removed, unchanged } = diffSets(filteredFromClasses, filteredToClasses);
 
           const truncatedAdded = added.slice(0, maxClassResults);
@@ -267,7 +439,18 @@ export class VersionDiffService {
             removed: truncatedRemoved,
             addedCount: added.length,
             removedCount: removed.length,
-            unchanged
+            unchanged,
+            namespace,
+            ...(input.packageFilter
+              ? {
+                  packageFilter: {
+                    value: input.packageFilter,
+                    namespace,
+                    matchedFrom: filteredFromClasses.size,
+                    matchedTo: filteredToClasses.size
+                  }
+                }
+              : {})
           };
         })()
       );

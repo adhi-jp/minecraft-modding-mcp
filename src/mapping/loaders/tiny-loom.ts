@@ -7,8 +7,8 @@ import fastGlob from "fast-glob";
 import { buildVersionSourceSearchRoots } from "../../gradle-paths.js";
 import type { DirectionIndex, PairKey } from "../internal-types.js";
 import { effectiveLoomSearchProjectPath } from "../lookup.js";
-import { mergeDirectionIndexes } from "../parsers/symbol-records.js";
-import { parseTinyMappings } from "../parsers/tiny.js";
+import { parseTinyMappingsInto } from "../parsers/tiny.js";
+import { resolveTinyIndexEntryBudget, selectTinyFiles } from "./tiny-loom-selection.js";
 import type { MappingLoaderResult } from "./types.js";
 
 const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
@@ -22,7 +22,6 @@ export async function loadTinyPairsFromLoom(
     projectPath: effectiveLoomSearchProjectPath(projectPath),
     gradleUserHome
   });
-  const merged = new Map<PairKey, DirectionIndex>();
   const discoveredPaths = new Set<string>();
 
   for (const root of searchRoots) {
@@ -43,44 +42,62 @@ export async function loadTinyPairsFromLoom(
     } catch {
       continue;
     }
-    const byVersion = discovered
-      .filter((path) => path.replaceAll("\\", "/").includes(`/${version}/`))
-      .sort((left, right) => left.localeCompare(right));
-    if (byVersion.length === 0) {
-      continue;
-    }
-
-    for (const path of byVersion) {
-      discoveredPaths.add(path);
-      try {
-        const content = await readFile(path, "utf8");
-        const parsed = parseTinyMappings(content);
-        for (const [key, index] of parsed.entries()) {
-          const existing = merged.get(key);
-          if (!existing) {
-            merged.set(key, index);
-          } else {
-            mergeDirectionIndexes(existing, index);
-          }
-        }
-      } catch {
-        // best effort: skip unreadable or invalid files
+    for (const path of discovered) {
+      if (path.replaceAll("\\", "/").includes(`/${version}/`)) {
+        discoveredPaths.add(path);
       }
     }
   }
 
   const orderedPaths = [...discoveredPaths].sort((left, right) => left.localeCompare(right));
-  if (orderedPaths.length > 0) {
+  if (orderedPaths.length === 0) {
     return {
-      pairs: merged,
-      warnings: [],
-      mappingArtifact: orderedPaths[0]!
+      pairs: new Map(),
+      warnings: [`No Loom tiny mapping files matched version "${version}".`],
+      mappingArtifact: "loom-cache:none"
     };
   }
 
+  // Read headers only, then drop byte-identical copies and descriptor-namespace
+  // conflicts before any file body is loaded. See tiny-loom-selection.ts.
+  const selection = await selectTinyFiles(orderedPaths);
+  const warnings: string[] = [];
+  const merged = new Map<PairKey, DirectionIndex>();
+  const maxIndexEntries = resolveTinyIndexEntryBudget();
+  const mergedPaths: string[] = [];
+  let truncatedAt: string | undefined;
+
+  for (const candidate of selection.selected) {
+    if (truncatedAt) {
+      break;
+    }
+    try {
+      const content = await readFile(candidate.path, "utf8");
+      const result = parseTinyMappingsInto(merged, content, { maxIndexEntries });
+      if (result.parsed) {
+        mergedPaths.push(candidate.path);
+      }
+      if (result.truncated) {
+        truncatedAt = candidate.path;
+      }
+    } catch {
+      // best effort: skip unreadable or invalid files
+    }
+  }
+
+  if (truncatedAt) {
+    const skipped = selection.selected.length - mergedPaths.length;
+    warnings.push(
+      `Loom tiny mappings for "${version}" hit the ${maxIndexEntries}-entry index budget while reading "${truncatedAt}"; ` +
+        `${skipped} of ${selection.selected.length} selected file(s) were left unread and some symbols may be missing. ` +
+        `Raise MCP_LOOM_TINY_MAX_INDEX_ENTRIES or start the server with a larger --max-old-space-size.`
+    );
+  }
+
   return {
-    pairs: new Map(),
-    warnings: [`No Loom tiny mapping files matched version "${version}".`],
-    mappingArtifact: "loom-cache:none"
+    pairs: merged,
+    warnings,
+    // The richest merged file, not merely the alphabetically first discovered one.
+    mappingArtifact: mergedPaths[0] ?? orderedPaths[0]!
   };
 }

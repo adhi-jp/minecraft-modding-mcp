@@ -55,7 +55,24 @@ const WARNING_RULES: WarningRule[] = [
     affectedFields: ["mapping", "version"]
   },
   {
-    test: /falling back to vanilla|resolution failed; falling back|sources jar\.?\s*Falling back|does not include net\.minecraft/i,
+    // compare-versions: the filter is fine but matched nothing, which used to
+    // be indistinguishable from "nothing changed".
+    test: /packageFilter ".*" matched no class/i,
+    code: "filter_matched_nothing",
+    category: "validation",
+    severity: "warning",
+    affectedFields: ["packageFilter"]
+  },
+  {
+    // compare-versions could not lift the jars out of the obfuscated namespace.
+    test: /compared in the OBFUSCATED namespace/i,
+    code: "namespace_fallback",
+    category: "mapping",
+    severity: "warning",
+    affectedFields: ["packageFilter"]
+  },
+  {
+    test: /falling back to vanilla|resolution failed; falling back|sources jar\.?\s*Falling back|(?:does not include|excludes) net\.minecraft/i,
     code: "partial_coverage",
     category: "coverage",
     severity: "warning",

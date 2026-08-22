@@ -8,16 +8,15 @@ import test from "node:test";
 import { ERROR_CODES } from "../../src/errors.ts";
 import { remapJar, type RemapOptions } from "../../src/tiny-remapper-service.ts";
 import { mockJavaRunner } from "../helpers/java-runner-mock.ts";
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 
 test("remapJar surfaces JAVA_PROCESS_FAILED / REMAP_FAILED when the tiny-remapper jar is missing (real-spawn smoke)", async (t) => {
   // This test exercises the real `spawn` path, so it requires a working Java
-  // runtime. Skip explicitly instead of silently returning when Java is
-  // unavailable, otherwise the test would appear "green" on CI without Java.
-  try {
-    const { assertJavaAvailable } = await import("../../src/java-process.ts");
-    await assertJavaAvailable();
-  } catch {
-    t.skip("java runtime not available — real-spawn smoke skipped");
+  // runtime. Skip through the declared capability instead of silently returning
+  // when Java is unavailable: the test would otherwise appear "green" without
+  // Java, and the named-test set gate needs the capability name to report WHY
+  // this frozen row went unproven.
+  if (await skipWithoutCapability(t, "java-runtime")) {
     return;
   }
 

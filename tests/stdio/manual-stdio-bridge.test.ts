@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import { selectManualStdioMode } from "../helpers/manual-stdio-bridge.ts";
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,8 +39,7 @@ test("selectManualStdioMode falls back to the bash bridge when native spawn pipe
 });
 
 test("createDirectWorkerBridgeTransport connects to the CLI worker over bash-managed stdio", async (t) => {
-  if (process.platform === "win32") {
-    t.skip("bash FIFO bridge is only exercised on POSIX runtimes.");
+  if (await skipWithoutCapability(t, "posix-shell-bridge")) {
     return;
   }
 
@@ -72,8 +72,7 @@ test("createDirectWorkerBridgeTransport connects to the CLI worker over bash-man
 });
 
 test("createDirectWorkerBridgeTransport rejects startup promptly when the bridge process exits before FIFO open", async (t) => {
-  if (process.platform === "win32") {
-    t.skip("bash FIFO bridge is only exercised on POSIX runtimes.");
+  if (await skipWithoutCapability(t, "posix-shell-bridge")) {
     return;
   }
 

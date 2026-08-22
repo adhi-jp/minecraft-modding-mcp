@@ -61,6 +61,55 @@ function isSourceMappingNamespace(
   );
 }
 
+/**
+ * Refuses a verdict that would be computed against another loader's bytecode,
+ * and marks a cross-version one as approximate.
+ *
+ * A runtime fallback could serve a NeoForge 1.21.10 AT-patched jar to a Fabric
+ * 1.21.11 workspace; validation then reported `valid: true` with a
+ * `resolvedRuntimeJavaSignature` taken from bytecode the project never runs.
+ * A different loader's access flags are simply not evidence about this one, so
+ * that case fails loudly. A same-loader version drift still yields a verdict —
+ * flagged, never silent.
+ */
+function guardRuntimeEvidence(
+  provenance: RuntimeValidationProvenance<SourceMapping | AccessTransformerNamespace> | undefined,
+  warnings: string[],
+  subject: "Access Widener" | "Access Transformer"
+): { approximate?: boolean; approximationReasons?: string[] } {
+  if (!provenance) {
+    return {};
+  }
+  if (provenance.loaderMismatch) {
+    throw createError({
+      code: ERROR_CODES.CONTEXT_UNRESOLVED,
+      message:
+        `${subject} validation resolved a ${provenance.servedLoader} runtime jar for a ` +
+        `${provenance.expectedLoader} workspace; a different loader's bytecode cannot certify these entries.`,
+      details: {
+        jarPath: provenance.jarPath,
+        servedLoader: provenance.servedLoader,
+        expectedLoader: provenance.expectedLoader,
+        version: provenance.version,
+        ...(provenance.requestedVersion ? { requestedVersion: provenance.requestedVersion } : {}),
+        requestedScope: provenance.requestedScope,
+        appliedScope: provenance.appliedScope,
+        nextAction:
+          `Point gradleUserHome at the Gradle home holding this workspace's own ${provenance.expectedLoader} runtime jars, ` +
+          "or run the Gradle task that generates them. Omitting projectPath validates against the vanilla jar instead of another loader's."
+      }
+    });
+  }
+  if (!provenance.versionApproximated) {
+    return {};
+  }
+  const reason =
+    `Runtime evidence comes from Minecraft ${provenance.version}, not the requested ` +
+    `${provenance.requestedVersion}; entries were checked against a different version's bytecode.`;
+  warnings.push(reason);
+  return { approximate: true, approximationReasons: [reason] };
+}
+
 export async function validateAccessWidener(svc: SourceService, input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {
   const version = input.version.trim();
   if (!version) {
@@ -99,6 +148,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
   let jarPath: string;
   let lookupMapping: SourceMapping = "obfuscated";
   let provenance: RuntimeValidationProvenance<SourceMapping> | undefined;
+  let approximation: { approximate?: boolean; approximationReasons?: string[] } = {};
 
   if (runtimeAware) {
     provenance = await svc.resolveAccessWidenerRuntimeArtifact({
@@ -109,6 +159,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
+    approximation = guardRuntimeEvidence(provenance, warnings, "Access Widener");
     resolvedVersion = provenance.version;
     jarPath = provenance.jarPath;
     lookupMapping = provenance.mappingApplied;
@@ -218,6 +269,10 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
   if (provenance) {
     result.provenance = provenance;
   }
+  if (approximation.approximate) {
+    result.approximate = true;
+    result.approximationReasons = approximation.approximationReasons;
+  }
   return result;
 }
 
@@ -242,6 +297,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
   let jarPath: string;
   let lookupMapping: SourceMapping | AccessTransformerNamespace = "obfuscated";
   let provenance: RuntimeValidationProvenance<AccessTransformerNamespace> | undefined;
+  let approximation: { approximate?: boolean; approximationReasons?: string[] } = {};
 
   if (runtimeAware) {
     provenance = await svc.resolveAccessTransformerRuntimeArtifact({
@@ -252,6 +308,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
       scope: input.scope,
       preferProjectVersion: input.preferProjectVersion
     });
+    approximation = guardRuntimeEvidence(provenance, warnings, "Access Transformer");
     resolvedVersion = provenance.version;
     jarPath = provenance.jarPath;
     lookupMapping = provenance.mappingApplied;
@@ -366,6 +423,10 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
   });
   if (provenance) {
     result.provenance = provenance;
+  }
+  if (approximation.approximate) {
+    result.approximate = true;
+    result.approximationReasons = approximation.approximationReasons;
   }
   return result;
 }

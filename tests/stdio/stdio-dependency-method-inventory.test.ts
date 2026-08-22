@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Dependency-method inventory (per-method × per-era), over the REAL wire
  * (production supervisor + production SDK worker).
@@ -18,15 +20,12 @@ import test from "node:test";
  *  - server/discover: modern → DiscoverResult; legacy-locked → -32601
  *    era-consistent rejection (tests/stdio/stdio-supervisor-era-state.test.ts,
  *     tests/stdio/stdio-supervisor-era-wire.test.ts).
- *  - subscriptions/listen (modern): -32601 at supervisor admission
- *    (tests/stdio/stdio-supervisor-era-state.test.ts).
- *
  * Rows driven HERE (previously uncovered): ping, logging/setLevel,
  * tasks/list, tasks/get, prompts/list — each in both eras — plus the
- * LEGACY subscriptions/listen answer from the REAL worker (the era-state
- * suite hand-injects that reply through a fake worker, so the live wire
- * outcome is proven here), and the no-prompts-capability assertions on the
- * initialize result AND the server/discover capabilities.
+ * subscriptions/listen answer from the REAL worker in BOTH eras (the
+ * era-state suite drives a fake worker, so the live wire outcome is proven
+ * here), and the no-prompts-capability assertions on the initialize result AND
+ * the server/discover capabilities.
  */
 
 const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
@@ -34,18 +33,6 @@ const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 const MODERN_META = { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} };
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -109,8 +96,7 @@ async function reply(session: { frames: Frame[] }, id: number, label: string): P
 }
 
 test("wire dependency-method inventory: legacy era (ping pong, setLevel/tasks/prompts -32601, no prompts capability)", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "dep-methods-legacy-"));
@@ -175,8 +161,7 @@ test("wire dependency-method inventory: legacy era (ping pong, setLevel/tasks/pr
 });
 
 test("wire dependency-method inventory: modern era (ping/setLevel/tasks/prompts -32601, discover without prompts capability)", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "dep-methods-modern-"));
@@ -215,6 +200,14 @@ test("wire dependency-method inventory: modern era (ping/setLevel/tasks/prompts 
     );
   }
 
+  // subscriptions/listen carrying a CONFORMANT filter is the dangerous shape:
+  // the SDK stdio entry auto-provides the method with zero registration and
+  // ACCEPTS a valid filter, answering with an id-less
+  // notifications/subscriptions/acknowledged that never settles the request
+  // id. docs/tool-reference.md pins the surface as intentionally absent in
+  // BOTH eras with a -32601 rejection, so the supervisor must refuse it at
+  // admission — before it can occupy a pendingRequests slot and wedge every
+  // dispatch barrier behind it.
   const subscriptionRequestId = 7;
   session.send({
     jsonrpc: "2.0",
@@ -225,42 +218,31 @@ test("wire dependency-method inventory: modern era (ping/setLevel/tasks/prompts 
       notifications: { toolsListChanged: true }
     }
   });
-  const findAcknowledgment = (): Frame | undefined =>
-    session.frames.find((frame) => frame.method === "notifications/subscriptions/acknowledged");
-  await waitFor(
-    () => findAcknowledgment() !== undefined || session.frames.some((frame) => frame.id === subscriptionRequestId),
-    30_000,
-    "modern subscription acknowledgment or terminal rejection"
+  const listenReply = await reply(session, subscriptionRequestId, "modern subscriptions/listen reply");
+  assert.deepEqual(
+    listenReply.error,
+    { code: -32601, message: "Method not found" },
+    "modern subscriptions/listen must be answered -32601 with no data, indistinguishable from any unknown method"
   );
-  const acknowledgment = findAcknowledgment();
-  assert.ok(acknowledgment, "valid modern subscriptions/listen must emit an acknowledgment notification");
-  const acknowledgmentParams = acknowledgment.params as {
-    notifications?: Record<string, unknown>;
-    _meta?: Record<string, unknown>;
-  };
-  assert.deepEqual(acknowledgmentParams.notifications, { toolsListChanged: true });
+  assert.equal(listenReply.result, undefined, "the rejection carries no result");
   assert.equal(
-    acknowledgmentParams._meta?.["io.modelcontextprotocol/subscriptionId"],
-    subscriptionRequestId,
-    "the SDK acknowledgment correlates the subscription to the listen request id"
-  );
-  assert.equal(
-    session.frames.some((frame) => frame.id === subscriptionRequestId),
+    session.frames.some((frame) => frame.method === "notifications/subscriptions/acknowledged"),
     false,
-    "an active subscription must not emit an application result before cancellation"
+    "no subscription may be established: an acknowledgment notification would prove the worker accepted the listen"
   );
 
+  // The rejection settled the id, so the connection is not wedged: ordinary
+  // requests behind it — including a tools/call, which the pre-repair build
+  // never dispatched once a listen occupied pendingRequests — still answer.
+  session.send({ jsonrpc: "2.0", id: 8, method: "tools/list", params: { _meta: MODERN_META } });
+  const barrier = await reply(session, 8, "post-rejection tools/list barrier");
+  assert.equal(barrier.error, undefined, "the connection must stay usable after the listen rejection");
   session.send({
     jsonrpc: "2.0",
-    method: "notifications/cancelled",
-    params: { requestId: subscriptionRequestId }
+    id: 9,
+    method: "tools/call",
+    params: { _meta: MODERN_META, name: "list-versions", arguments: {} }
   });
-  session.send({ jsonrpc: "2.0", id: 8, method: "tools/list", params: { _meta: MODERN_META } });
-  const barrier = await reply(session, 8, "post-cancellation tools/list barrier");
-  assert.equal(barrier.error, undefined, "the worker must remain usable after subscription cancellation");
-  assert.equal(
-    session.frames.some((frame) => frame.id === subscriptionRequestId),
-    false,
-    "claim-less cancellation ends the subscription without a duplicate application result"
-  );
+  const call = await reply(session, 9, "post-rejection tools/call");
+  assert.equal(call.error, undefined, "tool dispatch must not be blocked by a phantom pending listen");
 });

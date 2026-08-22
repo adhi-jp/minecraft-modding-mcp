@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 
+import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError, isAppError } from "../errors.js";
 import { log } from "../logger.js";
 import {
@@ -17,11 +18,16 @@ import type {
 } from "../source-service.js";
 import { normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
 
-// Read-through delivery for non-indexed jar resources: text files under these
-// prefixes are served directly from the backing jar when the source index has
-// no row for them. The per-file cap bounds response size; binary entries
-// answer with metadata only.
-const READ_THROUGH_PREFIXES = ["assets/", "data/"] as const;
+// Read-through delivery for non-indexed jar resources: any entry of the
+// backing jar is served directly when the source index has no row for it.
+//
+// Delivery used to be gated on an `assets/`+`data/` path prefix, which made the
+// two entries an agent reaches for FIRST when inspecting a mod jar —
+// `fabric.mod.json` at the archive root and `META-INF/MANIFEST.MF` — permanently
+// unreachable (ERR_FILE_NOT_FOUND) even though `assets/**` read-through proved
+// the mechanism worked. The prefix carries no safety value: the real guards are
+// the traversal-shaped path rejection, the per-file byte cap, and the
+// text/binary classification below, and all three apply to every entry alike.
 const READ_THROUGH_MAX_BYTES = 512 * 1024;
 const READ_THROUGH_TEXT_EXTENSIONS = new Set([
   ".json",
@@ -38,9 +44,50 @@ const READ_THROUGH_TEXT_EXTENSIONS = new Set([
   ".md",
   ".fsh",
   ".vsh",
-  ".glsl"
+  ".glsl",
+  // Loader metadata that lives outside assets/ and data/.
+  ".mf",
+  ".accesswidener",
+  ".xml"
+]);
+/**
+ * Extensions known to hold non-text payloads. Listing them keeps the common
+ * case a metadata-only probe: no bytes are read at all.
+ */
+const READ_THROUGH_BINARY_EXTENSIONS = new Set([
+  ".class",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".webp",
+  ".ico",
+  ".jar",
+  ".zip",
+  ".gz",
+  ".tar",
+  ".ogg",
+  ".wav",
+  ".mp3",
+  ".nbt",
+  ".dat",
+  ".bin",
+  ".so",
+  ".dll",
+  ".dylib",
+  ".ttf",
+  ".otf",
+  ".woff",
+  ".woff2",
+  ".pack",
+  ".mca",
+  ".rsa",
+  ".dsa"
 ]);
 const NEARBY_PATH_HINT_LIMIT = 5;
+/** Ratio of C0 control bytes above which a sniffed entry counts as binary. */
+const SNIFF_MAX_CONTROL_RATIO = 0.05;
 
 function isTraversalShapedPath(filePath: string): boolean {
   return (
@@ -50,16 +97,69 @@ function isTraversalShapedPath(filePath: string): boolean {
   );
 }
 
-function hasReadThroughPrefix(filePath: string): boolean {
-  return READ_THROUGH_PREFIXES.some((prefix) => filePath.startsWith(prefix));
+/**
+ * How an entry's bytes should be treated.
+ *
+ * - `text`: a known text extension. Delivered, and invalid UTF-8 is an error
+ *   (a caller asking for a .json must not receive silently mangled bytes).
+ * - `binary`: a known binary extension. Never read; answered with size only.
+ * - `unknown`: no extension, or one not on either list. `META-INF/services/*`
+ *   entries, `LICENSE`-style files and loader files with bespoke suffixes all
+ *   land here, so these are sniffed from their (capped) bytes rather than
+ *   refused on the strength of a filename.
+ */
+type ReadThroughKind = "text" | "binary" | "unknown";
+
+function classifyReadThroughEntry(filePath: string): ReadThroughKind {
+  const dot = filePath.lastIndexOf(".");
+  const slash = filePath.lastIndexOf("/");
+  if (dot < 0 || dot < slash) {
+    return "unknown";
+  }
+  const extension = filePath.slice(dot).toLowerCase();
+  if (READ_THROUGH_TEXT_EXTENSIONS.has(extension)) {
+    return "text";
+  }
+  if (READ_THROUGH_BINARY_EXTENSIONS.has(extension)) {
+    return "binary";
+  }
+  return "unknown";
 }
 
-function readThroughTextExtension(filePath: string): boolean {
-  const dot = filePath.lastIndexOf(".");
-  if (dot < 0) {
-    return false;
+/**
+ * Decodes a capped buffer when it really is UTF-8 text, else reports binary.
+ * A NUL byte, a strict-UTF-8 decode failure, or a high C0 control-byte ratio
+ * all mean "do not hand this back as text".
+ */
+function sniffUtf8Text(buffer: Buffer): string | undefined {
+  if (buffer.length === 0) {
+    return "";
   }
-  return READ_THROUGH_TEXT_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+  if (buffer.includes(0)) {
+    return undefined;
+  }
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return undefined;
+  }
+  let control = 0;
+  for (const byte of buffer) {
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) {
+      control += 1;
+    }
+  }
+  return control / buffer.length > SNIFF_MAX_CONTROL_RATIO ? undefined : decoded;
+}
+
+/** Trims a capped buffer back to a UTF-8 character boundary at `limit`. */
+function trimToUtf8Boundary(buffer: Buffer, limit: number): Buffer {
+  let cut = Math.min(limit, buffer.length);
+  while (cut > 0 && ((buffer[cut] ?? 0) & 0xc0) === 0x80) {
+    cut -= 1;
+  }
+  return buffer.subarray(0, cut);
 }
 
 /**
@@ -72,7 +172,7 @@ async function collectNearbyPaths(binaryJarPath: string, missingPath: string): P
     const wanted = basename(missingPath);
     const entries = await listJarEntries(binaryJarPath);
     return entries
-      .filter((entry) => hasReadThroughPrefix(entry) && basename(entry) === wanted)
+      .filter((entry) => basename(entry) === wanted)
       .slice(0, NEARBY_PATH_HINT_LIMIT);
   } catch {
     return [];
@@ -117,7 +217,7 @@ export async function getArtifactFile(svc: SourceService, input: GetArtifactFile
     const artifact = svc.getArtifact(input.artifactId);
     const normalizedPath = normalizePathStyle(input.filePath);
     const row = svc.filesRepo.getFileContent(artifact.artifactId, normalizedPath);
-    if (!row && hasReadThroughPrefix(normalizedPath) && artifact.binaryJarPath) {
+    if (!row && artifact.binaryJarPath) {
       return await readFileThroughJar(svc, {
         artifact,
         binaryJarPath: artifact.binaryJarPath,
@@ -130,7 +230,16 @@ export async function getArtifactFile(svc: SourceService, input: GetArtifactFile
       throw createError({
         code: ERROR_CODES.FILE_NOT_FOUND,
         message: `Source file "${input.filePath}" was not found.`,
-        details: { artifactId: input.artifactId, filePath: input.filePath }
+        details: {
+          artifactId: input.artifactId,
+          filePath: input.filePath,
+          nextAction:
+            "This artifact has no backing binary jar, so only indexed source files are reachable. List what is indexed with list-artifact-files.",
+          ...buildSuggestedCall({
+            tool: "list-artifact-files",
+            params: { artifactId: input.artifactId, limit: 50 }
+          })
+        }
       });
     }
 
@@ -179,19 +288,20 @@ async function readFileThroughJar(
   }
 ): Promise<GetArtifactFileOutput> {
   const { artifact, binaryJarPath, filePath, artifactId } = args;
-  const isText = readThroughTextExtension(filePath);
-  const cap = isText
-    ? Math.min(
-        clampLimit(args.maxBytes, svc.config.maxContentBytes, Number.MAX_SAFE_INTEGER),
-        READ_THROUGH_MAX_BYTES
-      )
-    : 0;
+  const kind = classifyReadThroughEntry(filePath);
+  const cap =
+    kind === "binary"
+      ? 0
+      : Math.min(
+          clampLimit(args.maxBytes, svc.config.maxContentBytes, Number.MAX_SAFE_INTEGER),
+          READ_THROUGH_MAX_BYTES
+        );
   let capped: CappedJarEntry;
   try {
     // Read at most the cap (+ slack to trim back to a UTF-8 boundary); an
-    // oversized entry is never fully materialized in memory. Binary entries
-    // are metadata-only probes (no content read at all).
-    capped = await readJarEntryCapped(binaryJarPath, filePath, isText ? cap + 4 : 0);
+    // oversized entry is never fully materialized in memory. Known-binary
+    // entries are metadata-only probes (no content read at all).
+    capped = await readJarEntryCapped(binaryJarPath, filePath, kind === "binary" ? 0 : cap + 4);
   } catch (error) {
     if (!isAppError(error) || error.code !== ERROR_CODES.SOURCE_NOT_FOUND) {
       // Unsafe paths and unreadable/corrupt jars are their own failures;
@@ -228,31 +338,45 @@ async function readFileThroughJar(
     deliveryMode: "jar-read-through" as const
   };
 
-  if (!isText) {
-    return {
-      ...base,
-      content: "",
-      contentBytes: capped.entrySize,
-      truncated: false,
-      contentOmittedReason:
-        "Entry is not a known text format; binary content is not delivered. Size and existence are reported instead."
-    };
+  const omitBinary = (reason: string): GetArtifactFileOutput => ({
+    ...base,
+    content: "",
+    contentBytes: capped.entrySize,
+    truncated: false,
+    contentOmittedReason: reason
+  });
+
+  if (kind === "binary") {
+    return omitBinary(
+      "Entry is not a known text format; binary content is not delivered. Size and existence are reported instead."
+    );
   }
 
   const truncated = capped.entrySize > cap;
-  let content: string;
-  if (truncated) {
-    // Trim the capped prefix back to a UTF-8 character boundary before
-    // decoding; the tail past the cap is dropped by design.
-    const buffer = capped.buffer;
-    let cut = Math.min(cap, buffer.length);
-    while (cut > 0 && ((buffer[cut] ?? 0) & 0xc0) === 0x80) {
-      cut -= 1;
+  // Trim the capped prefix back to a UTF-8 character boundary before decoding;
+  // the tail past the cap is dropped by design.
+  const trimmed = truncated ? trimToUtf8Boundary(capped.buffer, cap) : capped.buffer;
+
+  if (kind === "unknown") {
+    // No extension to go on: decide from the bytes rather than refuse a text
+    // entry (META-INF/services/*, LICENSE files) on the strength of its name.
+    const sniffed = sniffUtf8Text(trimmed);
+    if (sniffed === undefined) {
+      return omitBinary(
+        "Entry has no known text extension and its bytes are not UTF-8 text; binary content is not delivered. Size and existence are reported instead."
+      );
     }
-    content = buffer.slice(0, cut).toString("utf8");
-  } else {
-    content = decodeJarEntryUtf8OrThrow(capped.buffer, binaryJarPath, filePath);
+    return {
+      ...base,
+      content: sniffed,
+      contentBytes: capped.entrySize,
+      truncated
+    };
   }
+
+  const content = truncated
+    ? trimmed.toString("utf8")
+    : decodeJarEntryUtf8OrThrow(capped.buffer, binaryJarPath, filePath);
   return {
     ...base,
     content,
@@ -274,13 +398,13 @@ export async function listArtifactFiles(svc: SourceService, input: ListArtifactF
       prefix
     });
     const normalizedPrefix = normalizeOptionalString(prefix);
-    if (
-      normalizedPrefix &&
-      page.items.length === 0 &&
-      (normalizedPrefix.startsWith("assets/") || normalizedPrefix.startsWith("data/"))
-    ) {
+    // A prefix that matched nothing is the exact moment read-through is worth
+    // naming: the index holds Java source only, while EVERY jar entry —
+    // archive-root files such as fabric.mod.json and META-INF/** included — is
+    // reachable by exact path.
+    if (normalizedPrefix && page.items.length === 0 && artifact.binaryJarPath) {
       warnings.push(
-        "Indexed artifacts currently include Java source only; non-Java resources are not indexed. Text files under assets/ and data/ are served directly from the backing jar — request them by exact path with get-artifact-file (read-through delivery)."
+        "Indexed artifacts currently include Java source only; non-Java resources are not indexed. Any text entry of the backing jar — including archive-root files such as fabric.mod.json and META-INF/** — is served directly by exact path with get-artifact-file (read-through delivery)."
       );
     }
     return {

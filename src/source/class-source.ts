@@ -37,7 +37,13 @@ import { collectDidYouMeanCandidates } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
 import { findNestedJarClasses, resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
-import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
+import {
+  dedupeQualityFlags,
+  inheritArtifactMapping,
+  normalizeMapping,
+  normalizeOptionalString,
+  normalizePathStyle
+} from "./shared-utils.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
@@ -522,15 +528,14 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
       )
         ? []
         : matches;
-    if (filteredMatches.length === 0 && partialVanillaLookup) {
-      warnings.push(
-        `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
-      );
-    }
-    if (filteredMatches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
-      warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
-    }
-    return { matches: filteredMatches, total: filteredMatches.length, warnings };
+    return finishFindClass(svc, {
+      artifact,
+      artifactId,
+      className,
+      matches: filteredMatches,
+      partialVanillaLookup,
+      warnings
+    });
   }
 
   const result = svc.symbolsRepo.findScopedSymbols({
@@ -540,19 +545,36 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
     symbolKinds: TYPE_SYMBOL_KINDS,
     limit: limit * 5
   });
-  const matches: FindClassMatch[] = [];
+  // The extractor stores ONE qualifiedName per FILE (the top-level type), so a
+  // nested type's row carries its OUTER type's FQN. Reporting that verbatim
+  // returned a qualifiedName that did not contain the searched token at all —
+  // feeding match[0] into get-class-source then fetched the wrong class.
+  const candidates: FindClassMatch[] = [];
   for (const row of result.items) {
-    if (matches.length >= limit) break;
     const isTypeSymbol = row.symbolKind === "class" || row.symbolKind === "interface" ||
       row.symbolKind === "enum" || row.symbolKind === "record";
     if (!isTypeSymbol) continue;
-    matches.push({
-      qualifiedName: row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", "."),
+    const enclosingQualifiedName =
+      row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+    const enclosingSimpleName = enclosingQualifiedName.split(".").at(-1) ?? enclosingQualifiedName;
+    const nested = enclosingSimpleName !== row.symbolName;
+    candidates.push({
+      qualifiedName: nested ? `${enclosingQualifiedName}.${row.symbolName}` : enclosingQualifiedName,
       filePath: row.filePath,
       line: row.line,
-      symbolKind: row.symbolKind
+      symbolKind: row.symbolKind,
+      ...(nested ? { nested: true, enclosingClass: enclosingQualifiedName } : {})
     });
   }
+  // A top-level type named exactly like the query is what the caller almost
+  // always means; a nested type that merely shares the simple name comes after.
+  candidates.sort((left, right) => {
+    const leftNested = left.nested === true ? 1 : 0;
+    const rightNested = right.nested === true ? 1 : 0;
+    if (leftNested !== rightNested) return leftNested - rightNested;
+    return left.qualifiedName.localeCompare(right.qualifiedName);
+  });
+  const matches = candidates.slice(0, limit);
   const partialVanillaLookup =
     hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
   const filteredMatches =
@@ -561,15 +583,60 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
     )
       ? []
       : matches;
-  if (filteredMatches.length === 0 && partialVanillaLookup) {
+  return finishFindClass(svc, {
+    artifact,
+    artifactId,
+    className,
+    matches: filteredMatches,
+    partialVanillaLookup,
+    warnings
+  });
+}
+
+/**
+ * Shared tail for both findClass branches: coverage/namespace warnings plus a
+ * machine-usable recovery route.
+ *
+ * An empty result on an artifact whose index excludes net.minecraft is
+ * internally consistent but externally contradictory — get-class-source answers
+ * the SAME class from the binary fallback. The caller therefore gets both the
+ * reason and the exact call that works.
+ */
+function finishFindClass(
+  svc: SourceService,
+  input: {
+    artifact: ReturnType<SourceService["getArtifact"]>;
+    artifactId: string;
+    className: string;
+    matches: FindClassMatch[];
+    partialVanillaLookup: boolean;
+    warnings: string[];
+  }
+): FindClassOutput {
+  const { artifact, artifactId, className, matches, partialVanillaLookup, warnings } = input;
+  let suggestedCall: FindClassOutput["suggestedCall"];
+  if (matches.length === 0 && partialVanillaLookup) {
     warnings.push(
       `Artifact source coverage is partial and excludes net.minecraft; returning non-vanilla matches for "${className}" would be misleading. Use get-class-source/get-class-members for binary fallback or get-class-api-matrix for mapped API inspection.`
     );
+    suggestedCall = buildSuggestedCall({
+      tool: "get-class-source",
+      params: {
+        className,
+        target: { kind: "artifact", artifactId },
+        mode: "metadata"
+      }
+    }).suggestedCall;
   }
-  if (filteredMatches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
+  if (matches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
     warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
   }
-  return { matches: filteredMatches, total: filteredMatches.length, warnings };
+  return {
+    matches,
+    total: matches.length,
+    warnings,
+    ...(suggestedCall ? { suggestedCall } : {})
+  };
 }
 
 export async function findClassIncludingNested(
@@ -691,7 +758,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     const artifact = svc.getArtifact(artifactId);
     artifactId = artifact.artifactId;
     origin = artifact.origin;
-    requestedMapping = input.mapping != null ? requestedMapping : (artifact.requestedMapping ?? requestedMapping);
+    requestedMapping = inheritArtifactMapping(input.mapping, artifact);
     mappingApplied = artifact.mappingApplied ?? requestedMapping;
     provenance = artifact.provenance;
     qualityFlags = artifact.qualityFlags;
@@ -1087,6 +1154,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     const artifact = svc.getArtifact(artifactId);
     artifactId = artifact.artifactId;
     origin = artifact.origin;
+    requestedMapping = inheritArtifactMapping(input.mapping, artifact);
     mappingApplied = artifact.mappingApplied ?? requestedMapping;
     provenance = artifact.provenance;
     qualityFlags = artifact.qualityFlags;
@@ -1388,7 +1456,18 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     truncated,
     ...(nextCursor ? { nextCursor } : {}),
     ...(memberCursorIgnored ? { cursorIgnored: true } : {}),
-    context: signatureContext,
+    context: {
+      ...signatureContext,
+      // The jar-derived context describes the BYTECODE the reader opened. The
+      // members handed back have already been remapped into requestedMapping,
+      // so echoing the jar namespace here contradicted `returnedNamespace` in
+      // the same payload. Report what the response actually contains, and fill
+      // the version the resolver established when the jar path yielded none.
+      ...(signatureContext.minecraftVersion === "unknown" && version
+        ? { minecraftVersion: version }
+        : {}),
+      mappingNamespace: requestedMapping
+    },
     origin,
     artifactId,
     requestedMapping,

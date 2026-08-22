@@ -216,3 +216,120 @@ test("an invalid-UTF-8 text entry is rejected instead of silently corrupted", as
     (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Root-level and META-INF entries (regression: read-through used to be gated
+// on an assets/ + data/ path prefix, so the two files an agent reaches for
+// first when inspecting a mod jar were permanently ERR_FILE_NOT_FOUND).
+// ---------------------------------------------------------------------------
+
+const FABRIC_MOD_JSON = JSON.stringify({ schemaVersion: 1, id: "modid", version: "1.0.0" });
+const MANIFEST = "Manifest-Version: 1.0\r\nFabric-Loom-Version: 1.11\r\n";
+
+test("an archive-root fabric.mod.json is served read-through", async () => {
+  const { service, artifactId } = await resolveFixtureArtifact({
+    "fabric.mod.json": FABRIC_MOD_JSON
+  });
+
+  const result = await service.getArtifactFile({ artifactId, filePath: "fabric.mod.json" });
+
+  assert.equal(result.content, FABRIC_MOD_JSON);
+  assert.equal(result.deliveryMode, "jar-read-through");
+  assert.equal(result.truncated, false);
+});
+
+test("META-INF/MANIFEST.MF is served read-through", async () => {
+  const { service, artifactId } = await resolveFixtureArtifact({
+    "META-INF/MANIFEST.MF": MANIFEST
+  });
+
+  const result = await service.getArtifactFile({ artifactId, filePath: "META-INF/MANIFEST.MF" });
+
+  assert.match(result.content, /Manifest-Version: 1\.0/);
+  assert.equal(result.deliveryMode, "jar-read-through");
+});
+
+test("an archive-root mixin config and access widener are served read-through", async () => {
+  const mixins = JSON.stringify({ package: "com.example.mixin", mixins: ["ExampleMixin"] });
+  const widener = "accessWidener v2 named\naccessible field net/minecraft/world/item/Item id I\n";
+  const { service, artifactId } = await resolveFixtureArtifact({
+    "modid.mixins.json": mixins,
+    "modid.accesswidener": widener
+  });
+
+  assert.equal((await service.getArtifactFile({ artifactId, filePath: "modid.mixins.json" })).content, mixins);
+  assert.equal(
+    (await service.getArtifactFile({ artifactId, filePath: "modid.accesswidener" })).content,
+    widener
+  );
+});
+
+test("an extension-less text entry is sniffed and delivered, not refused on its name", async () => {
+  const license = "MIT License\n\nPermission is hereby granted...\n";
+  const { service, artifactId } = await resolveFixtureArtifact({
+    LICENSE_modid: license,
+    "META-INF/services/net.fabricmc.api.ModInitializer": "com.example.ExampleMod\n"
+  });
+
+  assert.equal((await service.getArtifactFile({ artifactId, filePath: "LICENSE_modid" })).content, license);
+  assert.match(
+    (
+      await service.getArtifactFile({
+        artifactId,
+        filePath: "META-INF/services/net.fabricmc.api.ModInitializer"
+      })
+    ).content,
+    /com\.example\.ExampleMod/
+  );
+});
+
+test("an extension-less BINARY entry stays metadata-only after sniffing", async () => {
+  const blob = Buffer.concat([Buffer.from([0x00, 0x01, 0x02, 0x03]), Buffer.alloc(64, 0)]);
+  const { service, artifactId } = await resolveFixtureArtifact({ "META-INF/blob": blob });
+
+  const result = await service.getArtifactFile({ artifactId, filePath: "META-INF/blob" });
+
+  assert.equal(result.content, "");
+  assert.equal(result.contentBytes, blob.length);
+  assert.ok(result.contentOmittedReason && /not UTF-8 text/i.test(result.contentOmittedReason));
+});
+
+test("a root-level entry keeps the 512 KiB cap and the truncation flag", async () => {
+  const bigText = `{"pad":"${"x".repeat(700 * 1024)}"}`;
+  const { service, artifactId } = await resolveFixtureArtifact({ "fabric.mod.json": bigText });
+
+  const result = await service.getArtifactFile({ artifactId, filePath: "fabric.mod.json" });
+
+  assert.equal(result.truncated, true);
+  assert.ok(Buffer.byteLength(result.content, "utf8") <= 512 * 1024);
+  assert.equal(result.contentBytes, Buffer.byteLength(bigText, "utf8"));
+});
+
+test("a root-level traversal-shaped path is still ERR_INVALID_INPUT", async () => {
+  const { service, artifactId } = await resolveFixtureArtifact({ "fabric.mod.json": FABRIC_MOD_JSON });
+
+  for (const filePath of ["../fabric.mod.json", "/fabric.mod.json", "META-INF/../../fabric.mod.json"]) {
+    await assert.rejects(
+      () => service.getArtifactFile({ artifactId, filePath }),
+      (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+    );
+  }
+});
+
+test("a missing root-level entry reports nearby paths instead of a bare not-found", async () => {
+  const { service, artifactId } = await resolveFixtureArtifact({
+    "META-INF/neoforge.mods.toml": "[[mods]]\nmodId=\"modid\"\n"
+  });
+
+  await assert.rejects(
+    () => service.getArtifactFile({ artifactId, filePath: "neoforge.mods.toml" }),
+    (error: Error & { code?: string; details?: { nearbyPaths?: string[] } }) => {
+      assert.equal(error.code, "ERR_FILE_NOT_FOUND");
+      assert.ok(
+        error.details?.nearbyPaths?.includes("META-INF/neoforge.mods.toml"),
+        `expected relocation hint, got: ${JSON.stringify(error.details)}`
+      );
+      return true;
+    }
+  );
+});

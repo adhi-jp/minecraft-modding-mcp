@@ -4,6 +4,8 @@ import test from "node:test";
 
 import { encodeJsonRpcMessage, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Era-neutral response-framing correlation tests.
  *
@@ -30,18 +32,6 @@ function startFixture(env: NodeJS.ProcessEnv = {}): ChildProcessWithoutNullStrea
       stdio: ["pipe", "pipe", "pipe"]
     }
   );
-}
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
 }
 
 function send(child: ChildProcessWithoutNullStreams, message: object, mode: ConcreteFramingMode): void {
@@ -177,8 +167,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<void>
 }
 
 test("response framing correlation: newline then Content-Length pipeline answers each request in its own framing", { timeout: 20_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
@@ -211,8 +200,7 @@ test("response framing correlation: newline then Content-Length pipeline answers
 });
 
 test("response framing correlation: Content-Length then newline pipeline answers each request in its own framing", { timeout: 20_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
@@ -243,8 +231,7 @@ test("response framing correlation: Content-Length then newline pipeline answers
 });
 
 test("response framing correlation: mid-stream switch keeps in-flight and post-switch requests in their own framings", { timeout: 20_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
@@ -285,8 +272,7 @@ test("response framing correlation: mid-stream switch keeps in-flight and post-s
 });
 
 test("response framing correlation: request queued across a worker restart is answered in its admission framing", { timeout: 30_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
@@ -331,8 +317,7 @@ test("response framing correlation: request queued across a worker restart is an
 });
 
 test("response framing correlation: worker-restart synthesis uses the originating request's framing", { timeout: 30_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();

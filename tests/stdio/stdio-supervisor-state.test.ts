@@ -314,7 +314,7 @@ test("cap-blocked initialize is terminalized instead of retained indefinitely", 
     jsonrpc: "2.0",
     id: 31,
     method: "initialize",
-    params: {}
+    params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-state-test", version: "1.0.0" } }
   } as JSONRPCRequest);
 
   assert.equal(supervisor.queuedNotifications.length, 0);
@@ -834,7 +834,7 @@ test("initial initialization error terminalizes retained initialization exactly 
     if (supervisor.restartTimer) clearTimeout(supervisor.restartTimer);
   });
   supervisor.spawnWorker();
-  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 71, method: "initialize", params: {} } as JSONRPCRequest);
+  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 71, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-state-test", version: "1.0.0" } } } as JSONRPCRequest);
   supervisor.handleWorkerReady(child);
   assert.equal(writes.length, 1);
 
@@ -859,7 +859,7 @@ test("initial initialization error terminalizes retained initialization exactly 
   assert.equal(writes.length, 1);
   assert.equal(outbound.length, 1);
 
-  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 74, method: "initialize", params: {} } as JSONRPCRequest);
+  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 74, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-state-test", version: "1.0.0" } } } as JSONRPCRequest);
   assert.equal(writes.length, 2);
   supervisor.handleWorkerMessage(replacement, {
     jsonrpc: "2.0",
@@ -900,7 +900,7 @@ test("replacement initialization replay failure terminalizes queued work without
   } as never) as unknown as Harness;
 
   supervisor.spawnWorker();
-  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 72, method: "initialize", params: {} } as JSONRPCRequest);
+  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 72, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-state-test", version: "1.0.0" } } } as JSONRPCRequest);
   supervisor.handleWorkerReady(children[0]);
   supervisor.handleWorkerMessage(children[0], { jsonrpc: "2.0", id: 72, result: { capabilities: {} } } as JSONRPCMessage);
   assert.equal(outbound.length, 1);
@@ -960,7 +960,7 @@ test("consecutive replay failures use one exponential retry owner and adoption r
   } as never) as unknown as Harness;
 
   supervisor.spawnWorker();
-  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 77, method: "initialize", params: {} } as JSONRPCRequest);
+  supervisor.handleClientMessage({ jsonrpc: "2.0", id: 77, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-state-test", version: "1.0.0" } } } as JSONRPCRequest);
   supervisor.handleWorkerReady(children[0]);
   supervisor.handleWorkerMessage(children[0], { jsonrpc: "2.0", id: 77, result: { capabilities: {} } } as JSONRPCMessage);
   supervisor.handleWorkerExit(children[0], 1, null);
@@ -1003,11 +1003,25 @@ test("running cancellation suppresses a worker response and drains queued work",
   const child = supervisor.child as FakeChild;
   supervisor.handleClientMessage(modernCall(40, "validate-project"));
   supervisor.handleClientMessage(modernCall(41, "list-versions"));
+  const writesBeforeCancel = workerWrites.length;
   supervisor.handleClientMessage({
     jsonrpc: "2.0",
     method: "notifications/cancelled",
     params: { requestId: 40 }
   } as JSONRPCMessage);
+  // The cancellation itself drains the queue: it terminally settles id 40, so
+  // the validate barrier and the pendingRequests slot are released right here
+  // rather than waiting for a worker answer that MCP cancellation semantics
+  // say may never arrive (the pre-repair build drained only if and when the
+  // worker happened to answer, and never at all otherwise).
+  assert.equal(supervisor.pendingRequests.has("number:40"), false, "the cancelled request is settled at once");
+  assert.equal(
+    workerWrites.length,
+    writesBeforeCancel + 2,
+    "the cancellation is forwarded and the queued list-versions is released behind it"
+  );
+  assert.equal(workerWrites.at(-1)?.includes('"id":41'), true, "the queued request reaches the worker");
+
   const writesBeforeResponse = workerWrites.length;
   supervisor.handleWorkerMessage(child, {
     jsonrpc: "2.0",
@@ -1015,7 +1029,7 @@ test("running cancellation suppresses a worker response and drains queued work",
     result: { content: [{ type: "text", text: "late" }] }
   } as JSONRPCMessage);
   assert.equal(outbound.some((message) => "id" in message && message.id === 40), false);
-  assert.equal(workerWrites.length, writesBeforeResponse + 1);
+  assert.equal(workerWrites.length, writesBeforeResponse, "a suppressed late answer changes nothing further");
 });
 
 test("running cancellation followed by shutdown emits no terminal response or replacement", async () => {

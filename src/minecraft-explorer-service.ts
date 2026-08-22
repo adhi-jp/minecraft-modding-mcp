@@ -6,7 +6,7 @@ import { matchesMemberPattern } from "./source/member-pattern.js";
 import type { Config } from "./types.js";
 import { isUnobfuscatedVersion } from "./version-service.js";
 
-export type MappingNamespace = "obfuscated" | "mojang" | "yarn";
+export type MappingNamespace = "obfuscated" | "mojang" | "intermediary" | "yarn";
 
 type SignatureAccess = "public" | "all";
 

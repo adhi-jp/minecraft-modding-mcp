@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Five-version legacy negotiation matrix, driven over the REAL wire
  * (production supervisor + production SDK worker): every approved legacy
@@ -27,18 +29,6 @@ const APPROVED_LEGACY_VERSIONS = [
 const NEGOTIATE_DOWN_TARGET = "2025-11-25";
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -121,8 +111,7 @@ async function negotiate(
 
 for (const version of APPROVED_LEGACY_VERSIONS) {
   test(`wire negotiation matrix: initialize ${version} is echoed verbatim`, { timeout: 120_000 }, async (t) => {
-    if (!(await canUseNativeStdioPipes())) {
-      t.skip("native child-process stdio pipes close immediately in this runtime");
+    if (await skipWithoutCapability(t, "native-stdio-pipes")) {
       return;
     }
     const result = await negotiate(t, version);
@@ -131,8 +120,7 @@ for (const version of APPROVED_LEGACY_VERSIONS) {
 }
 
 test(`wire negotiation matrix: a bogus legacy-shaped version negotiates down to ${NEGOTIATE_DOWN_TARGET}`, { timeout: 120_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const result = await negotiate(t, "1999-01-01");

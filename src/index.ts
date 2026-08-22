@@ -1611,7 +1611,14 @@ export async function startServer(): Promise<void> {
   // transport is started synchronously inside serveStdio, so resolving here
   // keeps the READY marker contract: the worker is listening once
   // startServer() returns.
-  serveStdio(buildServer, { transport });
+  // maxSubscriptions: 0 is defense in depth for the supervisor's admission
+  // rejection of subscriptions/listen (docs/tool-reference.md, "Absent modern
+  // surfaces"). The SDK stdio entry auto-provides that method with zero
+  // registration and its default cap is 1024, so without this a frame that
+  // somehow bypassed admission would be ACCEPTED — answered with an id-less
+  // acknowledgment notification that never settles the request id — instead of
+  // being refused.
+  serveStdio(buildServer, { transport, maxSubscriptions: 0 });
   // In stdio mode, explicitly resume stdin so JSON-RPC lines are consumed.
   process.stdin.resume();
   serverStarted = true;

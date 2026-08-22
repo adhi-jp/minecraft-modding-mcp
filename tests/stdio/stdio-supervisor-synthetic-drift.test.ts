@@ -11,6 +11,8 @@ import { buildWorkerRestartReply } from "../../src/stdio-supervisor.ts";
 import { decorateSyntheticReply } from "../../src/synthetic-decorator.ts";
 import { SERVER_IDENTITY } from "../../src/server-identity.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Live-SDK structural drift guard.
  *
@@ -33,18 +35,6 @@ const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 const CALL_TOOL_PAYLOAD_KEYS = new Set(["content", "structuredContent", "isError"]);
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -99,8 +89,7 @@ function envelopeKeys(result: Record<string, unknown>): string[] {
 }
 
 test("wire drift guard: a live modern SDK result and the synthetic decorator share the modern envelope shape and the canonical identity", { timeout: 120_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "synthetic-drift-"));

@@ -7,6 +7,8 @@ import test from "node:test";
 
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 type RpcResponse = {
   id: string | number;
   result?: Record<string, unknown>;
@@ -72,18 +74,6 @@ async function stopFixture(child: ChildProcessWithoutNullStreams): Promise<void>
   }
 }
 
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
-
 function send(child: ChildProcessWithoutNullStreams, message: object, mode: ConcreteFramingMode): void {
   child.stdin.write(encodeJsonRpcMessage(message as never, mode));
 }
@@ -134,8 +124,7 @@ function collectResponses(child: ChildProcessWithoutNullStreams): {
 }
 
 for (const framing of ["line", "content-length"] as const) test(`running timeout and overflow use exact envelopes with ${framing} framing`, { timeout: 20_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
@@ -144,7 +133,7 @@ for (const framing of ["line", "content-length"] as const) test(`running timeout
   });
   const replies = collectResponses(child);
 
-  send(child, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, framing);
+  send(child, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, framing);
   await replies.next(1);
   send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, framing);
   send(child, {
@@ -199,15 +188,14 @@ for (const framing of ["line", "content-length"] as const) test(`running timeout
 });
 
 for (const framing of ["line", "content-length"] as const) test(`queued timeout preserves the worker with ${framing} framing`, { timeout: 18_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
   t.after(() => child.kill("SIGKILL"));
   const replies = collectResponses(child);
 
-  send(child, { jsonrpc: "2.0", id: 10, method: "initialize", params: {} }, framing);
+  send(child, { jsonrpc: "2.0", id: 10, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, framing);
   await replies.next(10);
   send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, framing);
   send(child, {
@@ -243,14 +231,13 @@ for (const framing of ["line", "content-length"] as const) test(`queued timeout 
 });
 
 test("queued cancellation removes the validate barrier without forwarding a result", { timeout: 5_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
   t.after(() => child.kill("SIGKILL"));
   const replies = collectResponses(child);
-  send(child, { jsonrpc: "2.0", id: 20, method: "initialize", params: {} }, "line");
+  send(child, { jsonrpc: "2.0", id: 20, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, "line");
   await replies.next(20);
   send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, "line");
   send(child, { jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "list-versions", arguments: { delayMs: 500 } } }, "line");
@@ -264,14 +251,13 @@ test("queued cancellation removes the validate barrier without forwarding a resu
 });
 
 test("running cancellation suppresses timeout output but still recovers queued work", { timeout: 16_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const child = startFixture();
   t.after(() => child.kill("SIGKILL"));
   const replies = collectResponses(child);
-  send(child, { jsonrpc: "2.0", id: 30, method: "initialize", params: {} }, "line");
+  send(child, { jsonrpc: "2.0", id: 30, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, "line");
   await replies.next(30);
   send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, "line");
   send(child, { jsonrpc: "2.0", id: 31, method: "tools/call", params: { name: "validate-project", arguments: {} } }, "line");
@@ -283,8 +269,7 @@ test("running cancellation suppresses timeout output but still recovers queued w
 });
 
 test("fatal worker exception exits, restarts, replays initialization, and serves the next call", { timeout: 15_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-fatal-"));

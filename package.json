@@ -14,7 +14,9 @@
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
-    "docs/**/*.md"
+    "docs/README-ja.md",
+    "docs/examples.md",
+    "docs/tool-reference.md"
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -61,7 +63,7 @@
   "bugs": "https://github.com/adhi-jp/minecraft-modding-mcp/issues",
   "homepage": "https://github.com/adhi-jp/minecraft-modding-mcp#readme",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",

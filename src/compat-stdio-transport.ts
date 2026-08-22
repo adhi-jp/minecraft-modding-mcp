@@ -1,7 +1,11 @@
 import process from "node:process";
 
 import type { JSONRPCMessage } from "@modelcontextprotocol/server";
-import { JsonRpcFrameReader, encodeJsonRpcMessage } from "./json-rpc-framing.js";
+import {
+  JsonRpcFrameReader,
+  encodeJsonRpcMessage,
+  isJsonRpcFramingFatalError
+} from "./json-rpc-framing.js";
 
 type StdioReadable = NodeJS.ReadStream;
 type StdioWritable = NodeJS.WriteStream;
@@ -81,6 +85,14 @@ export class CompatStdioServerTransport {
       },
       onError: (error) => {
         this.onerror?.(error);
+        if (isJsonRpcFramingFatalError(error)) {
+          // The reader has stopped: it can no longer tell where a frame begins
+          // and refuses all further input. Leaving the transport attached
+          // would make it silently deaf, so the session ends here — the
+          // framing invariant's "terminate with a diagnostic" arm (the
+          // diagnostic already went out through onerror).
+          void this.close();
+        }
       }
     });
   };

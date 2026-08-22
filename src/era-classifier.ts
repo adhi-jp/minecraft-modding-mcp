@@ -1,4 +1,9 @@
-import type { JSONRPCResponse } from "@modelcontextprotocol/server";
+import {
+  UnsupportedProtocolVersionError,
+  isInitializeRequest,
+  type JSONRPCMessage,
+  type JSONRPCResponse
+} from "@modelcontextprotocol/server";
 
 /**
  * Era classification for the dual-era stdio supervisor.
@@ -256,6 +261,89 @@ export function buildMissingMetaRejection(
       code: -32602,
       message: era === "modern" ? MISSING_META_MODERN_MESSAGE : MISSING_META_UNSELECTED_MESSAGE,
       data
+    }
+  } as JSONRPCResponse;
+}
+
+/**
+ * Whether a frame is a COMPLETE, schema-valid MCP `initialize` request.
+ *
+ * Admission classifies any frame whose method is `initialize` as the legacy
+ * era signal, and that lock is one-way for the process lifetime. Generic
+ * JSON-RPC parsing is far too weak a basis for a permanent decision: a frame
+ * as empty as `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+ * passes it while carrying none of the fields the handshake needs. Burning the
+ * lock on such a frame left the process legacy-locked with NO valid era
+ * opening ever completed, and the modern era permanently unreachable.
+ *
+ * The check is the SDK's own public `isInitializeRequest` — the exact
+ * `InitializeRequestSchema` the worker would apply — so admission and the
+ * worker can never disagree about what an initialize is. Extra params
+ * (including a `_meta` envelope) are tolerated; `protocolVersion` (string),
+ * `capabilities` (object) and `clientInfo` ({name, version}) are required.
+ * Version VALUES are not judged here: an unknown legacy version negotiates
+ * down at the worker, exactly as documented.
+ */
+export function isCompleteInitializeRequest(message: JSONRPCMessage): boolean {
+  return isInitializeRequest(message);
+}
+
+const INITIALIZE_REQUIRED_FIELDS = ["protocolVersion", "capabilities", "clientInfo"] as const;
+
+export const INVALID_INITIALIZE_MESSAGE =
+  "initialize rejected: the request is not a valid MCP initialize request. params must carry " +
+  "protocolVersion (string), capabilities (object) and clientInfo ({ name, version }). " +
+  "No protocol era has been selected, so this is fully recoverable: retry with a well-formed " +
+  `initialize, or select protocol revision ${MODERN_PROTOCOL_VERSION} by including ` +
+  "the required io.modelcontextprotocol/* keys in params._meta.";
+
+/**
+ * Rejection for a frame that claims to be an `initialize` but fails the MCP
+ * initialize schema. Answered at admission, BEFORE the legacy lock is
+ * committed, so the era stays UNSELECTED and every recovery path — including
+ * the modern era — remains open.
+ */
+export function buildInvalidInitializeRejection(id: RequestId): JSONRPCResponse {
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: -32602,
+      message: INVALID_INITIALIZE_MESSAGE,
+      data: {
+        kind: "invalid_initialize",
+        required: [...INITIALIZE_REQUIRED_FIELDS],
+        eraSelected: false
+      }
+    }
+  } as JSONRPCResponse;
+}
+
+/**
+ * Unsupported modern `protocolVersion` VALUE rejection (`-32022` with
+ * `data.supported` / `data.requested`).
+ *
+ * Built from the SDK's own {@link UnsupportedProtocolVersionError} so the
+ * code, message and data stay byte-identical to the worker-produced answer
+ * clients already receive on the pre-pin path — the supervisor merely makes
+ * the check apply to EVERY modern request instead of only the one that
+ * happened to open the connection.
+ */
+export function buildUnsupportedProtocolVersionRejection(
+  id: RequestId,
+  requested: string
+): JSONRPCResponse {
+  const error = new UnsupportedProtocolVersionError({
+    supported: [MODERN_PROTOCOL_VERSION],
+    requested
+  });
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: error.code,
+      message: error.message,
+      data: error.data
     }
   } as JSONRPCResponse;
 }

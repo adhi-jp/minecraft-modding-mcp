@@ -40,6 +40,7 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - `ERR_CLASS_NOT_FOUND` errors from the class tools carry a top-level `didYouMean` array (parallel to `suggestedCall`) with ranked near-miss candidates from the artifact's symbol index: each entry is `{ className, matchReason }` where `matchReason` is `"exact-simple-name"` (same simple name in another package — the moved-class case, ranked first), `"case-insensitive"`, or `"edit-distance:N"`. Candidates are hints, never assertions that the class exists at the suggested location; the array is empty when the index has nothing usable. All same-simple-name FQNs are enumerated rather than collapsed.
 - `find-class` searches the nested `.class` inventories of Jar-in-Jar shell artifacts such as the Fabric API umbrella JAR. It accepts simple or qualified names, returns dotted names for inner classes, deduplicates a class bundled more than once, and honors `limit`. The returned source path is inferred from the outer class. For top-level matches, `get-class-source` and `get-class-members` resolve the actual containing nested JAR before reading content; dotted inner-class matches are also readable through `get-class-source`.
 - Source-oriented tools expose `artifactContents` so callers can tell whether the backing artifact is a `source-jar` or a `decompiled-binary`. `get-class-source`, `get-class-members`, `search-class-source`, and `get-artifact-file` also expose `returnedNamespace`.
+- When `mapping` is omitted, `get-class-source`, `get-class-members`, and `batch-class-members` all inherit the mapping the target artifact was resolved with, and report it as `returnedNamespace`. The `mapping` parameter's advertised schema description still says the default is `obfuscated`; that wording is pinned by the frozen legacy `inputSchema` bytes and is accurate only for targets that carry no resolved mapping of their own. An explicit `mapping` is never overridden.
 - Cache-backed source, mapping, validation, batch, and workflow tools accept `gradleUserHome?: string` when they need Loom cache data. Use it for builds that used an isolated `GRADLE_USER_HOME`; the server searches `<gradleUserHome>/loom-cache` and `<gradleUserHome>/caches/fabric-loom` before the MCP process default. The value selects a Gradle User Home, not arbitrary Loom cache roots.
 - `get-class-members` returns `decompiledFallback` (with `constructors`, `fields`, `methods`, each entry is `{ name, line, kind }`) and `decompiledMemberCounts` whenever bytecode enumeration yields zero but the decompiled source for the class is already indexed. The bytecode-derived `members` / `counts` are preserved as-is; the fallback is additive and carries no descriptor or access modifier. `qualityFlags` gains `"members-from-decompiled-source"` in that case. Use `get-class-source` for descriptors and full context.
 - `get-class-members` also returns an additive `status: "ok" | "members_unavailable" | "partial"` field so callers can distinguish "really 0 members" from "extraction unavailable":
@@ -455,7 +456,7 @@ The stdio server implements MCP protocol revision `2026-07-28` and keeps the leg
 
 - A process starts with no era selected.
 - `initialize` selects the LEGACY era. Any `io.modelcontextprotocol/*` era-claim keys inside `initialize` `params._meta` are ignored for classification and stripped before the frame reaches the worker (other `_meta` keys pass through), so a hybrid client that attaches a modern claim to `initialize` still completes the legacy handshake.
-- A request whose `params._meta` carries BOTH `io.modelcontextprotocol/protocolVersion` (string) and `io.modelcontextprotocol/clientCapabilities` (object) selects the MODERN era. Selection is shallow: values are validated by the worker after selection, so an unsupported version string still locks modern and then answers `-32022`.
+- A request whose `params._meta` carries BOTH `io.modelcontextprotocol/protocolVersion` (string) and `io.modelcontextprotocol/clientCapabilities` (object) selects the MODERN era. Selection is shallow: the era signal is a shape check only. The version VALUE is validated by the SUPERVISOR on EVERY modern request, so an unsupported version string still locks modern and then answers `-32022` — on that request and on every later one, regardless of which method pinned the connection.
 - The lock is one-way and survives internal worker restarts. There is no era-switch method; switching eras requires a fresh process (see the recovery sequence below).
 - `server/discover` is era-neutral: it never selects an era. Per-state outcomes are in the rejection table.
 - An ordinary request received before any era signal is rejected with `-32602` `data.kind: "missing_meta"`. A notification received before any era signal is consumed without a response and without forwarding.
@@ -545,17 +546,18 @@ The ProblemDetails row takes precedence over the resource-class rows; otherwise 
 | worker (SDK) | unmatched resource URI | `resources/read`, both eras | `-32602` | message `Resource not found: <uri>` with `data.uri` (the pre-migration server answered `MCP error -32602: Resource <uri> not found` without `data` — code unchanged, message family changed) |
 | worker (SDK) | unknown or disabled tool, MODERN era | `tools/call` | `-32602` | raw JSON-RPC error (sanctioned modern contract; the modern era never had a v1 contract here) |
 | supervisor | unknown or disabled tool, LEGACY era | `tools/call` | none | SUCCESSFUL `CallToolResult` with `isError: true`, text `MCP error -32602: Tool <name> not found`, and NO `structuredContent` key — the missing `structuredContent` is the discriminator against a genuine tool failure |
+| supervisor | `initialize` that is not a valid MCP initialize request | `initialize` | `-32602` | `data.kind: "invalid_initialize"` with `data.required[]` and `data.eraSelected: false` — the era is NOT locked, so the client may retry a well-formed `initialize` or select the modern era instead |
 | supervisor | modern-locked; `initialize` arrives | `initialize` | `-32601` | `data.kind: "era_conflict"`, `selectedEra: "modern"`, `requestedEra: "legacy"`, `supported[]` = all six versions |
 | supervisor | legacy-locked; modern-claim request arrives | any modern-claim request | `-32600` | `data.kind: "era_conflict"`, `selectedEra: "legacy"`, `requestedEra: "modern"` |
 | supervisor / worker | `subscriptions/listen` | both eras | `-32601` | plain `Method not found` (no data). Non-legacy states reject at supervisor admission; a modern-signal listen still era-locks first, and a claim-less listen in non-legacy states fails the envelope check with `-32602` before the method rejection |
-| worker (SDK) | modern request with an unsupported `protocolVersion` value | forwarded requests | `-32022` | `data.supported: ["2026-07-28"]`, `data.requested` |
+| supervisor | modern request with an unsupported `protocolVersion` value | every modern request | `-32022` | `data.supported: ["2026-07-28"]`, `data.requested` |
 | supervisor | queue overflow, non-`tools/call` request | requests | `-32000` | message `MCP supervisor request queue is full.` (`tools/call` overflow receives the `ERR_LIMIT_EXCEEDED` `isError` result instead — see `## Meta fields`) |
 
 `server/discover` per state: a valid modern-claim discover never selects or changes the era. It receives a DiscoverResult in the unselected and modern-locked states; in the legacy-locked state it is forwarded to the legacy-pinned worker, which answers `-32601` (the probe's any-error fallback rule covers this). A claim-less discover: unselected → `-32602` `missing_meta`; modern-locked → `-32602` `missing_meta`; legacy-locked → forwarded → `-32601`.
 
 Era-conflict messages embed a launcher-neutral recovery sequence: close this transport, terminate and respawn the configured server command as a fresh stdio process, discard or re-issue any pending request ids, then perform the wanted era's opening (`initialize` + `notifications/initialized`, or a request carrying the required `io.modelcontextprotocol/*` `_meta` envelope).
 
-Notification variants: a modern-era notification without a valid claim (for example a claim-less `notifications/cancelled`) is never forwarded to the worker; it is dropped with a logged `supervisor.notification_dropped` warning and, like every notification, receives no response. Supervisor-side bookkeeping still applies: a claim-less cancellation for a running `validate-project` still cancels it, and the eventual response is suppressed per MCP cancellation semantics.
+Notification variants: a modern-era notification without a valid claim (for example a claim-less `notifications/cancelled`) is never forwarded to the worker; it is dropped with a logged `supervisor.notification_dropped` warning and, like every notification, receives no response. Supervisor-side bookkeeping still applies: a claim-less cancellation still cancels ANY tracked in-flight request (not only `validate-project`), releasing its pending slot, its deadline timer, and the `validate-project` barrier if it held one, and the eventual worker response is suppressed per MCP cancellation semantics via the ordinary response-finality tombstone. An `initialize` in flight is the one exception — its handshake lifecycle owns that entry.
 
 ### Synthetic terminal responses and retry semantics
 
@@ -652,6 +654,8 @@ Path-based overrides treat blank values and the literal strings `undefined` and 
 | `MCP_MAX_CONTENT_BYTES` | `1000000` | Maximum bytes for file read operations |
 | `MCP_MAX_SEARCH_HITS` | `200` | Maximum search result count |
 | `MCP_SEARCH_SCAN_PAGE_SIZE` | `250` | Page size used by literal scan fallbacks |
+| `MCP_SEARCH_SCAN_MAX_BYTES` | `67108864` | Maximum bytes read by literal scan fallbacks before the scan stops |
+| `MCP_LOOM_TINY_MAX_INDEX_ENTRIES` | derived from the live V8 heap limit | Hard cap on index slots one Loom `.tiny` load may accumulate before it stops and warns instead of exhausting the heap. Unset, the budget is derived from free heap (so raising `--max-old-space-size` raises it automatically) and clamped to 1,000,000–64,000,000 slots. |
 | `MCP_INDEX_INSERT_CHUNK_SIZE` | `200` | Batch size for SQLite index inserts |
 | `MCP_MAX_ARTIFACTS` | `200` | Maximum cached artifacts |
 | `MCP_MAX_CACHE_BYTES` | `2147483648` | Maximum total cache size in bytes |
@@ -700,7 +704,7 @@ Internal worker-mode environment variables are reserved for the transport implem
 
 | Component | Technology |
 | --- | --- |
-| Runtime | Node.js 22+ |
+| Runtime | Node.js 22.13.0+ |
 | Transport | stdio, MCP protocol revision `2026-07-28` plus the legacy initialize protocol (dual-era, see `## MCP Protocol Support`); newline framing standard, `Content-Length` as a local extension |
 | Storage | SQLite for artifact metadata, source indexing, and cache bookkeeping |
 | Decompilation | [Vineflower](https://github.com/Vineflower/vineflower) |

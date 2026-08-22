@@ -44,14 +44,30 @@ export type InProcessSession = {
   close(): Promise<void>;
 };
 
-export async function startInProcessSession(): Promise<InProcessSession> {
+export type InProcessSessionOptions = {
+  /**
+   * Forwarded verbatim to `serveStdio`. Production passes `0` (see
+   * src/index.ts) so a `subscriptions/listen` that ever bypassed the
+   * supervisor's admission rejection is refused by the worker instead of
+   * accepted; the default here leaves the SDK default in place so the two
+   * arms stay separately observable.
+   */
+  maxSubscriptions?: number;
+};
+
+export async function startInProcessSession(
+  options: InProcessSessionOptions = {}
+): Promise<InProcessSession> {
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   const frames: Frame[] = [];
   clientEnd.onmessage = (message) => {
     frames.push(message as Frame);
   };
   const { buildServer } = await import("../../src/index.ts");
-  const handle = serveStdio(buildServer, { transport: serverEnd });
+  const handle = serveStdio(buildServer, {
+    transport: serverEnd,
+    ...(options.maxSubscriptions !== undefined ? { maxSubscriptions: options.maxSubscriptions } : {})
+  });
   await clientEnd.start();
 
   const send = (message: object): Promise<void> => clientEnd.send(message as JSONRPCMessage);

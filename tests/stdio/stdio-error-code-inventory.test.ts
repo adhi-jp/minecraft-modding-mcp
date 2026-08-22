@@ -35,18 +35,65 @@ import {
   startInProcessSession,
   type InProcessSession
 } from "./inprocess-era-serve.ts";
+import type { JSONRPCMessage } from "@modelcontextprotocol/server";
 import {
   buildEraConflictRejection,
   buildMissingMetaRejection,
-  buildMethodNotFoundRejection,
   classifyEraSignal
 } from "../../src/era-classifier.ts";
 import {
+  StdioSupervisor,
   buildLegacyJsonRpcError,
   buildSupervisorQueueLimitReply,
   buildValidateProjectTimeoutReply,
   buildWorkerRestartReply
 } from "../../src/stdio-supervisor.ts";
+
+type WireError = { error?: { code?: number; message?: string; data?: unknown }; result?: unknown };
+
+/**
+ * Drives the PRODUCTION admission path for one frame and returns the frame the
+ * supervisor wrote back, plus everything it wrote to the worker.
+ *
+ * Deliberately not a reply-builder call: a builder assertion stays green even
+ * when the builder has no production call site at all, which is exactly how
+ * the subscriptions/listen row was green while the real wire answered with an
+ * id-less acknowledgment notification instead. The worker is a stub because
+ * the assertion is that NOTHING reaches it.
+ */
+function admit(message: JSONRPCMessage): { reply: WireError | undefined; workerWrites: string[] } {
+  const outbound: JSONRPCMessage[] = [];
+  const workerWrites: string[] = [];
+  const supervisor = new StdioSupervisor({
+    entryFile: "error-code-inventory-fixture.ts",
+    clientWriter: (frame: JSONRPCMessage) => outbound.push(frame),
+    eventWriter: () => {}
+  } as never) as unknown as {
+    child?: unknown;
+    childReady: boolean;
+    liveChildren: Set<unknown>;
+    handleClientMessage(frame: JSONRPCMessage): void;
+  };
+  const child = {
+    pid: 424_242,
+    stdin: {
+      destroyed: false,
+      write(payload: string) {
+        workerWrites.push(payload);
+        return true;
+      },
+      removeAllListeners() {}
+    },
+    stdout: { removeAllListeners() {} },
+    stderr: { removeAllListeners() {} },
+    kill: () => true
+  };
+  supervisor.child = child;
+  supervisor.childReady = true;
+  supervisor.liveChildren.add(child);
+  supervisor.handleClientMessage(message);
+  return { reply: outbound.at(-1) as WireError | undefined, workerWrites };
+}
 
 const BASELINE = JSON.parse(
   readFileSync(new URL("../fixtures/premigration/error-code-inventory.json", import.meta.url), "utf8")
@@ -180,7 +227,6 @@ test("the per-path inventory table matches the observed/builder/baseline codes",
   const eraConflictModern = buildEraConflictRejection(1, "modern") as { error?: { code?: number } };
   const eraConflictLegacy = buildEraConflictRejection(1, "legacy") as { error?: { code?: number } };
   const missingMeta = buildMissingMetaRejection(1, classifyEraSignal({}), "unselected") as { error?: { code?: number } };
-  const listenRejected = buildMethodNotFoundRejection(1) as { error?: { code?: number } };
   const queueOverflowOther = buildSupervisorQueueLimitReply(1, "resources/list") as { error?: { code?: number } };
   const queueOverflowToolsCall = buildSupervisorQueueLimitReply(1, "tools/call") as {
     error?: unknown;
@@ -208,8 +254,27 @@ test("the per-path inventory table matches the observed/builder/baseline codes",
   // Missing meta (covering: stdio-supervisor-era-state.test.ts, the
   // Content-Length rejection case in stdio-supervisor-era-wire.test.ts).
   assert.equal(missingMeta.error?.code, -32602, "claim-less non-handshake request → -32602 missing_meta");
-  // Modern subscriptions/listen admission (covering: stdio-supervisor-era-state.test.ts).
-  assert.equal(listenRejected.error?.code, -32601, "modern subscriptions/listen → -32601 at admission");
+  // Modern subscriptions/listen admission, OBSERVED from the production
+  // admission path rather than from a reply builder (covering wire suites:
+  // stdio-supervisor-era-state.test.ts and, end to end over a spawned
+  // supervisor + real worker, stdio-dependency-method-inventory.test.ts).
+  const listen = admit({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "subscriptions/listen",
+    params: { _meta: MODERN_META, notifications: { toolsListChanged: true } }
+  } as JSONRPCMessage);
+  assert.deepEqual(
+    listen.reply?.error,
+    { code: -32601, message: "Method not found" },
+    "modern subscriptions/listen → plain -32601 at admission, no data"
+  );
+  assert.equal(listen.reply?.result, undefined, "the listen rejection carries no result");
+  assert.equal(
+    listen.workerWrites.length,
+    0,
+    "the listen must never reach the worker: the SDK entry auto-provides the method and would accept it"
+  );
   // Unsupported modern version -32022 is WORKER-emitted (SDK), pinned over
   // the wire by stdio-supervisor-era-wire.test.ts (data {supported:["2026-07-28"], requested}).
   // Queue overflow (covering: stdio-supervisor.test.ts, synthetic-inventory).
@@ -260,6 +325,33 @@ test("the per-path inventory table matches the observed/builder/baseline codes",
     assert.ok(expected, `baseline entry ${entry.path}:${entry.method} must be enumerated in the inventory table`);
     assert.equal(entry.wireCode, expected.wireCode, `${entry.path}:${entry.method} wireCode`);
     assert.equal(entry.problemCode, expected.problemCode, `${entry.path}:${entry.method} problemCode`);
+  }
+});
+
+test("subscriptions/listen defense in depth: a worker built with maxSubscriptions: 0 refuses a listen that bypassed admission", async () => {
+  // Production passes maxSubscriptions: 0 to serveStdio (src/index.ts). The
+  // supervisor's -32601 admission rejection is the contract clients see; this
+  // is the second layer, and the reason it matters: with the SDK DEFAULT of
+  // 1024 the entry ACCEPTS a conformant listen and answers with an id-less
+  // notifications/subscriptions/acknowledged, so the request id is never
+  // settled. With the cap at 0 the id gets a terminal response instead.
+  const guarded = await startInProcessSession({ maxSubscriptions: 0 });
+  try {
+    const frame = await guarded.request({
+      jsonrpc: "2.0",
+      id: id(),
+      method: "subscriptions/listen",
+      params: { _meta: MODERN_META, notifications: { toolsListChanged: true } }
+    });
+    assert.equal(frame.error?.code, -32603, "the capacity guard answers a terminal error, never an acknowledgment");
+    assert.equal(frame.error?.message, "Subscription limit reached");
+    assert.equal(
+      guarded.frames.some((candidate) => candidate.method === "notifications/subscriptions/acknowledged"),
+      false,
+      "no subscription may be established"
+    );
+  } finally {
+    await guarded.close();
   }
 });
 

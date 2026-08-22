@@ -8,16 +8,27 @@ import type {
   JSONRPCResponse
 } from "@modelcontextprotocol/server";
 
-import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "./json-rpc-framing.js";
+import {
+  encodeJsonRpcMessage,
+  isJsonRpcFramingFatalError,
+  JsonRpcFrameReader,
+  type ConcreteFramingMode
+} from "./json-rpc-framing.js";
 import { log } from "./logger.js";
 import { buildSuggestedCall } from "./build-suggested-call.js";
 import { getToolSchema, registeredToolCount } from "./tool-schema-registry.js";
 import {
   buildEraConflictRejection,
+  buildInvalidInitializeRejection,
+  buildMethodNotFoundRejection,
   buildMissingMetaRejection,
+  buildUnsupportedProtocolVersionRejection,
   classifyEraSignal,
   extractModernRequestContext,
+  isCompleteInitializeRequest,
   stripModernEraClaimInPlace,
+  MODERN_PROTOCOL_VERSION,
+  PROTOCOL_VERSION_META_KEY,
   type Era,
   type EraSignal
 } from "./era-classifier.js";
@@ -41,6 +52,26 @@ const MIN_VALIDATE_PROJECT_TIMEOUT_MS = 10_000;
 const MAX_VALIDATE_PROJECT_TIMEOUT_MS = 600_000;
 const MAX_WORKER_STARTUP_WATCHDOG_MS = 30_000;
 const MAX_SUPERVISOR_QUEUE = 2;
+/**
+ * Hard ceiling on retained response-finality tombstones (see
+ * syntheticTombstones). Retention is normally bounded per worker generation,
+ * but a client can synthesize terminal outcomes (queue overflow, cancellation)
+ * for unlimited fresh ids INSIDE one healthy generation, so the map also
+ * evicts in insertion order once it reaches this size. Losing the oldest
+ * tombstone can at worst let a very old late worker answer through, which is
+ * strictly preferable to unbounded supervisor memory.
+ */
+const MAX_SYNTHETIC_TOMBSTONES = 1024;
+/**
+ * Methods the supervisor answers `-32601 Method not found` at admission in
+ * every NON-legacy state. `subscriptions/listen` is auto-provided by the SDK
+ * stdio entry with zero registration, so the worker would otherwise ACCEPT it
+ * and answer with an id-less acknowledgment notification, never settling the
+ * request id (see docs/tool-reference.md, "Absent modern surfaces"). The
+ * legacy era needs no entry: nothing registers the method there, so the
+ * worker's own registry answers -32601.
+ */
+const MODERN_UNSUPPORTED_METHODS = new Set(["subscriptions/listen"]);
 const DEFAULT_TREE_CLEANUP_TIMEOUT_MS = 5_000;
 const DEFAULT_CLEANUP_TOKEN_RETRY_BASE_MS = 1_000;
 const DEFAULT_CLEANUP_TOKEN_RETRY_CAP_MS = 30_000;
@@ -240,7 +271,6 @@ export type PendingRequestSnapshot = {
 type PendingRequest = PendingRequestSnapshot & {
   deadlineTimer?: NodeJS.Timeout;
   timeoutPhase?: "queue" | "running";
-  clientCancelled?: boolean;
 };
 
 type QueuedRequest = {
@@ -904,6 +934,13 @@ export class StdioSupervisor {
    * one-way and survives worker restarts.
    */
   private era: Era = "unselected";
+  /**
+   * Whether `start()` attached this instance to the real process stdio. Only
+   * then may a teardown touch process-wide state (the framing-fatal exit
+   * code); white-box suites construct supervisors without starting them and
+   * must never have their own runner's exit status rewritten.
+   */
+  private ownsProcessStdio = false;
 
   constructor(options: SupervisorOptions) {
     this.entryFile = options.entryFile;
@@ -936,6 +973,7 @@ export class StdioSupervisor {
   }
 
   async start(): Promise<void> {
+    this.ownsProcessStdio = true;
     process.stdin.on("data", this.handleClientData);
     process.stdin.on("error", this.handleClientError);
     process.stdin.on("end", this.handleClientClosed);
@@ -956,6 +994,24 @@ export class StdioSupervisor {
         this.handleClientMessage(message);
       },
       onError: (error) => {
+        if (isJsonRpcFramingFatalError(error)) {
+          // The client stream can no longer be framed. Every later byte would
+          // be guesswork, so the session ends with this diagnostic rather than
+          // leaving a live process that silently answers nothing (the wedge
+          // this repair removes).
+          this.eventWriter("error", "supervisor.client_framing_fatal", {
+            message: error.message
+          });
+          if (this.ownsProcessStdio) {
+            // A client protocol violation ended the session — distinguishable
+            // by a launcher from the code 0 of an ordinary stdin close. Set the
+            // code rather than calling process.exit(), so the shutdown finishes
+            // and the diagnostic is flushed.
+            process.exitCode = 1;
+          }
+          void this.shutdown();
+          return;
+        }
         log("warn", "supervisor.client_parse_error", { message: error.message });
       }
     });
@@ -1006,6 +1062,24 @@ export class StdioSupervisor {
         );
         return;
       }
+      if (!isCompleteInitializeRequest(message)) {
+        // The legacy lock is ONE-WAY and lasts the process lifetime, so it may
+        // only be committed on a frame that is actually a valid era opening.
+        // Generic JSON-RPC parsing is not that check: `params: {}` reaches
+        // here as a well-formed request and used to burn the lock, after which
+        // the worker rejected the handshake, the supervisor replaced that with
+        // a -32603 telling the client to RETRY, and the retry — or any modern
+        // request — could never succeed in this process again. Rejecting here
+        // leaves the era UNSELECTED, which makes that advice true.
+        this.eventWriter("warn", "supervisor.invalid_initialize_rejected", {
+          id: message.id
+        });
+        this.writeToClient(
+          buildInvalidInitializeRejection(message.id as RequestId),
+          this.modeForMessage(message)
+        );
+        return;
+      }
       this.era = "legacy";
       // The SDK's opening classifier treats an initialize that carries a
       // valid modern era claim as MODERN, diverging from this admission rule
@@ -1044,6 +1118,26 @@ export class StdioSupervisor {
 
     const eraSignal = this.admitEraRequest(message);
     if (!eraSignal) {
+      return;
+    }
+
+    if (this.era !== "legacy" && MODERN_UNSUPPORTED_METHODS.has(message.method)) {
+      // Admission-time method rejection, AFTER the envelope check and the era
+      // lock admitEraRequest already applied, so the documented ordering holds:
+      // a claim-less listen in a non-legacy state fails -32602 first, a
+      // modern-signal listen still locks modern, and only then is the method
+      // itself rejected. Rejected pre-queue: no pendingRequests entry is
+      // created, so an unanswerable request can never occupy a dispatch
+      // barrier or a queue slot.
+      this.eventWriter("info", "supervisor.unsupported_method_rejected", {
+        id: message.id,
+        method: message.method,
+        era: this.era
+      });
+      this.writeToClient(
+        buildMethodNotFoundRejection(message.id as RequestId),
+        this.modeForMessage(message)
+      );
       return;
     }
 
@@ -1240,7 +1334,13 @@ export class StdioSupervisor {
       // (the legacy-pinned worker answers -32601) and a modern-signal
       // discover forwards WITHOUT locking; only signal-less discovers in
       // non-legacy states are rejected.
-      if (this.era === "legacy" || signal.classification === "modern-signal") {
+      if (this.era === "legacy") {
+        return signal;
+      }
+      if (signal.classification === "modern-signal") {
+        if (this.rejectUnsupportedProtocolVersion(message, signal, mode)) {
+          return undefined;
+        }
         return signal;
       }
       this.writeToClient(
@@ -1258,6 +1358,9 @@ export class StdioSupervisor {
       if (this.era === "unselected") {
         this.lockModernEra();
       }
+      if (this.rejectUnsupportedProtocolVersion(message, signal, mode)) {
+        return undefined;
+      }
       return signal;
     }
 
@@ -1271,6 +1374,54 @@ export class StdioSupervisor {
       mode
     );
     return undefined;
+  }
+
+  /**
+   * Deep validation of a shallow-valid modern claim's protocolVersion VALUE,
+   * applied to EVERY modern request at admission. Returns whether the request
+   * was terminally answered here.
+   *
+   * The version check used to be delegated entirely to the worker, and the SDK
+   * only performs it while the connection is still OPENING: once an instance
+   * is pinned, `processMessage` delivers straight to it without re-reading the
+   * envelope. So the contract ("any unsupported version string answers -32022
+   * with data.supported/data.requested") held for exactly one request per
+   * process — and whether it held at all depended on which method the client
+   * happened to send first, since the era-neutral `server/discover` does not
+   * pin. Every later request with `"1999-12-31"` was SERVED, tool handlers
+   * included.
+   *
+   * Ordering is deliberate and matches the SDK's own listen path: the envelope
+   * shape is checked first (era gating above), the era lock is committed
+   * BEFORE this check — an unsupported version still locks modern, exactly as
+   * documented — and only then is the value judged, ahead of any method-level
+   * rejection. The reply is built from the SDK's own
+   * UnsupportedProtocolVersionError, so it stays byte-identical to the answer
+   * the worker gives on the still-opening path.
+   */
+  private rejectUnsupportedProtocolVersion(
+    message: JSONRPCRequest,
+    signal: EraSignal,
+    mode: ConcreteFramingMode | undefined
+  ): boolean {
+    if (signal.classification !== "modern-signal") {
+      return false;
+    }
+    const meta = (message.params as { _meta: Record<string, unknown> })._meta;
+    const requested = meta[PROTOCOL_VERSION_META_KEY] as string;
+    if (requested === MODERN_PROTOCOL_VERSION) {
+      return false;
+    }
+    this.eventWriter("warn", "supervisor.unsupported_protocol_version", {
+      id: message.id,
+      method: message.method,
+      requested
+    });
+    this.writeToClient(
+      buildUnsupportedProtocolVersionRejection(message.id as RequestId, requested),
+      mode
+    );
+    return true;
   }
 
   /**
@@ -1399,22 +1550,89 @@ export class StdioSupervisor {
     }
 
     const pending = this.pendingRequests.get(key);
-    if (pending) {
-      pending.clientCancelled = true;
+    const released = pending !== undefined && this.releaseCancelledRequest(key, pending);
+    if (this.shouldForwardCancellation(message, pending !== undefined)) {
+      const child = this.child;
+      if (child && !child.stdin.destroyed) {
+        this.writeToWorker(child, message);
+      }
     }
+    if (released) {
+      // The released entry may have been the last occupant of a dispatch
+      // barrier, so queued work can move immediately.
+      this.drainQueue();
+    }
+  }
+
+  /**
+   * Terminal release of a FORWARDED request the client cancelled.
+   *
+   * MCP cancellation semantics forbid a response for a cancelled id, so the
+   * supervisor stops waiting on the worker the moment the cancellation is
+   * admitted — and a worker is under no obligation to ever answer a cancelled
+   * request. Keeping the entry in `pendingRequests` as a suppression marker
+   * (the pre-repair behavior) therefore stranded EVERY dispatch barrier the
+   * map gates — canDispatchImmediately's empty-map requirement, drainQueue's
+   * validate release — for the life of the process whenever the worker never
+   * answered, and let a client grow the map without bound by pairing fresh
+   * ids with cancellations.
+   *
+   * Suppression is instead recorded as an ordinary response-finality
+   * tombstone, which already carries exactly the needed semantics: a late
+   * worker answer for the id is discarded with a logged event, and
+   * re-forwarding the id (a legal retry) clears it. The result is one
+   * mechanism for "this request instance is over" rather than two.
+   *
+   * Carve-out: an in-flight `initialize` is NOT released. Its pending entry is
+   * owned by the legacy handshake lifecycle (replay correlation,
+   * isInitializationResponse, the preserved-key rule in
+   * failPendingRequestsOnWorkerExit), which has its own recovery paths
+   * (startup watchdog, worker exit, clearInitialInitializationState) and never
+   * consulted the cancellation marker anyway — so handshake behavior is
+   * unchanged, byte for byte.
+   *
+   * Returns whether an entry was actually released.
+   */
+  private releaseCancelledRequest(key: string, pending: PendingRequest): boolean {
+    if (pending.method === "initialize") {
+      return false;
+    }
+    if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+    pending.deadlineTimer = undefined;
+    this.pendingRequests.delete(key);
+    if (this.runningValidateKey === key) this.runningValidateKey = undefined;
+    if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+    this.recordFinalityTombstone(key, pending.mode);
+    this.eventWriter("info", "supervisor.request_cancelled", {
+      id: pending.id,
+      method: pending.method,
+      toolName: pending.toolName
+    });
+    return true;
+  }
+
+  /**
+   * Era gating for a cancellation notification. Extracted from
+   * handleCancellation so supervisor-side bookkeeping (releasing the cancelled
+   * request) stays independent of whether the frame may reach the worker — a
+   * DROPPED cancellation still cancels, exactly as documented.
+   */
+  private shouldForwardCancellation(
+    message: JSONRPCNotification,
+    hasPendingTarget: boolean
+  ): boolean {
     const cancellationSignal = classifyEraSignal(message.params).classification;
     if (this.era === "unselected") {
-      if (pending === undefined || cancellationSignal === "claim-shaped-invalid") {
+      if (!hasPendingTarget || cancellationSignal === "claim-shaped-invalid") {
         // Unknown cancellations could be the worker connection's first frame;
         // claim-shaped-invalid notifications are not protocol-valid. Drop both.
         // A known active claim-less target is different: that pending request
         // proves this current worker already received a modern discover.
-        return;
+        return false;
       }
     }
     if (this.era === "modern") {
-      const activeClaimlessCancellation =
-        cancellationSignal === "claim-less" && pending !== undefined;
+      const activeClaimlessCancellation = cancellationSignal === "claim-less" && hasPendingTarget;
       if (cancellationSignal !== "modern-signal" && !activeClaimlessCancellation) {
         // A claim-less cancellation is safe only while its target is pending:
         // that proves this current worker already received a modern request.
@@ -1424,13 +1642,10 @@ export class StdioSupervisor {
           method: message.method,
           reason: "missing-meta"
         });
-        return;
+        return false;
       }
     }
-    const child = this.child;
-    if (child && !child.stdin.destroyed) {
-      this.writeToWorker(child, message);
-    }
+    return true;
   }
 
   private handleValidateProjectDeadline(key: string): void {
@@ -1442,15 +1657,15 @@ export class StdioSupervisor {
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       pending.deadlineTimer = undefined;
       if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
-      if (!pending.clientCancelled) {
-        this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
-          request: pending,
-          phase: "queue",
-          deadlineMs: this.validateProjectTimeoutMs,
-          now: this.monotonicNow(),
-          workerRestartInitiated: false
-        }));
-      }
+      // A cancelled queued entry was spliced out of queuedRequests (and its
+      // timer cleared) at cancellation, so anything still here is live.
+      this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
+        request: pending,
+        phase: "queue",
+        deadlineMs: this.validateProjectTimeoutMs,
+        now: this.monotonicNow(),
+        workerRestartInitiated: false
+      }));
       this.drainQueue();
       return;
     }
@@ -1462,17 +1677,15 @@ export class StdioSupervisor {
     this.validateBarrierKey = undefined;
     // The entry stays in pendingRequests until writeSyntheticReply settles it:
     // the FORWARDED pending is what entitles the id to a finality tombstone.
-    if (pending.clientCancelled) {
-      this.pendingRequests.delete(key);
-    } else {
-      this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
-        request: pending,
-        phase: "running",
-        deadlineMs: this.validateProjectTimeoutMs,
-        now: this.monotonicNow(),
-        workerRestartInitiated: true
-      }));
-    }
+    // A cancelled request never reaches here: releaseCancelledRequest already
+    // settled it and cleared this timer.
+    this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
+      request: pending,
+      phase: "running",
+      deadlineMs: this.validateProjectTimeoutMs,
+      now: this.monotonicNow(),
+      workerRestartInitiated: true
+    }));
     this.recoverTimedOutWorker();
   }
 
@@ -1568,6 +1781,17 @@ export class StdioSupervisor {
         this.handleWorkerMessage(child, message);
       },
       onError: (error) => {
+        if (isJsonRpcFramingFatalError(error)) {
+          // The worker's own output stream desynchronized: its reader is dead,
+          // so this generation can never be read again. Recover the way any
+          // other unusable worker is recovered — terminate it and restart.
+          this.eventWriter("error", "supervisor.worker_framing_fatal", {
+            pid: child.pid,
+            message: error.message
+          });
+          this.handleWorkerProcessError(child, error);
+          return;
+        }
         log("warn", "supervisor.worker_parse_error", { message: error.message });
       }
     });
@@ -1761,10 +1985,6 @@ export class StdioSupervisor {
           this.runningValidateKey = undefined;
           if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
         }
-        if (pending?.clientCancelled) {
-          this.drainQueue();
-          return;
-        }
       }
     }
 
@@ -1898,13 +2118,10 @@ export class StdioSupervisor {
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       if (this.runningValidateKey === key) this.runningValidateKey = undefined;
       if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
-      // Cancelled entries are settled without synthesis; forwarded entries
-      // stay in pendingRequests until writeSyntheticReply settles them (the
-      // FORWARDED pending is what entitles the id to a finality tombstone).
-      if (pending.clientCancelled) {
-        this.pendingRequests.delete(key);
-        continue;
-      }
+      // Forwarded entries stay in pendingRequests until writeSyntheticReply
+      // settles them (the FORWARDED pending is what entitles the id to a
+      // finality tombstone). Cancelled entries are already gone — the
+      // cancellation settled them terminally at admission.
       const toolName = pending.toolName ?? "unknown";
       const pruned = prunedByTool.get(toolName) ?? [];
       const { reply } = buildWorkerRestartReply(
@@ -1964,12 +2181,29 @@ export class StdioSupervisor {
     if (pending && pending === snapshot) {
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       this.pendingRequests.delete(key);
-      this.syntheticTombstones.set(key, {
-        generation: this.workerGeneration,
-        mode: snapshot.mode
-      });
+      this.recordFinalityTombstone(key, snapshot.mode);
     }
     this.writeToClient(decorateSyntheticReply(reply, snapshot.era), snapshot.mode);
+  }
+
+  /**
+   * Records a response-finality tombstone for a request instance the
+   * supervisor has terminally settled (synthesized reply or client
+   * cancellation). Insertion-order eviction at MAX_SYNTHETIC_TOMBSTONES keeps
+   * the map bounded even inside one healthy worker generation, where the
+   * per-generation purge cannot fire.
+   */
+  private recordFinalityTombstone(key: string, mode: ConcreteFramingMode | undefined): void {
+    // Re-set moves an existing key to the end of the insertion order, so the
+    // eviction victim is always the least recently recorded tombstone.
+    this.syntheticTombstones.delete(key);
+    this.syntheticTombstones.set(key, { generation: this.workerGeneration, mode });
+    while (this.syntheticTombstones.size > MAX_SYNTHETIC_TOMBSTONES) {
+      const oldest = this.syntheticTombstones.keys().next();
+      if (oldest.done) break;
+      this.syntheticTombstones.delete(oldest.value);
+      debugSupervisor("tombstone_evicted", { key: oldest.value, cap: MAX_SYNTHETIC_TOMBSTONES });
+    }
   }
 
   /**
@@ -2421,6 +2655,17 @@ export class StdioSupervisor {
     process.stdin.off("error", this.handleClientError);
     process.stdin.off("end", this.handleClientClosed);
     process.stdin.off("close", this.handleClientClosed);
+    // Symmetric with start()'s resume(). Without this a shutdown triggered
+    // while stdin is still OPEN (a framing-fatal teardown, a signal) leaves the
+    // stdin handle referenced and the process alive with nothing left to serve;
+    // the ordinary shutdown path never noticed because stdin had already ended.
+    // pause() stops the flow, unref() releases the event-loop reference (absent
+    // on a file-backed stdin, hence the guard).
+    process.stdin.pause();
+    const unrefStdin = (process.stdin as { unref?: () => void }).unref;
+    if (typeof unrefStdin === "function") {
+      unrefStdin.call(process.stdin);
+    }
     process.off("SIGINT", this.handleTerminateSignal);
     process.off("SIGTERM", this.handleTerminateSignal);
 

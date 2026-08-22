@@ -232,16 +232,20 @@ function legacyCall(id: number, name: string, args: Record<string, unknown> = {}
 }
 
 /**
- * Per-request DISTINCT modern context sentinels (protocolVersion string,
- * clientCapabilities object, clientInfo). Any synthesis path that echoed a
- * captured context VALUE into a reply — under any field name — would make the
- * exact-shape deepEqual assertions below diverge from the fixture-derived
- * expectation for at least one request. (Any string protocolVersion is a
- * shallow-valid modern signal; deep value validation is worker-side.)
+ * Per-request DISTINCT modern context sentinels. Any synthesis path that
+ * echoed a captured context VALUE into a reply — under any field name — would
+ * make the exact-shape deepEqual assertions below diverge from the
+ * fixture-derived expectation for at least one request.
+ *
+ * protocolVersion carries no sentinel: it must be the one SUPPORTED modern
+ * revision, because an unsupported version VALUE is now answered -32022 at
+ * admission and never reaches a synthesis path at all. The clientCapabilities
+ * and clientInfo sentinels stay per-request unique, so a leaked context value
+ * is still caught.
  */
 function sentinelMeta(id: number): Record<string, unknown> {
   return {
-    [PROTOCOL_VERSION_KEY]: `2090-01-0${(id % 8) + 1}+ctx-sentinel-${id}`,
+    [PROTOCOL_VERSION_KEY]: "2026-07-28",
     [CLIENT_CAPABILITIES_KEY]: { [`cap-sentinel-${id}`]: { marker: id } },
     [CLIENT_INFO_KEY]: { name: `info-sentinel-${id}`, version: `${id}.0.0` }
   };

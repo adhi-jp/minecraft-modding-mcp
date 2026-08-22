@@ -886,3 +886,127 @@ test("SourceService getClassSource does not flag non-decompiled origin", async (
   assert.ok(!result.qualityFlags.includes("decompiled-source-signatures-unverified"));
   assert.ok(!result.warnings.some((warning) => warning.includes("get-class-members")));
 });
+
+// ---------------------------------------------------------------------------
+// Nested-type reporting and ranking.
+//
+// Regression: the symbol extractor stores ONE qualifiedName per FILE (the
+// top-level type), so a nested `ClipContext.Block` was reported as
+// `net.minecraft.world.level.ClipContext` — a name that does not contain the
+// searched token — AND ranked above the real
+// `net.minecraft.world.level.block.Block`. Feeding match[0] into
+// get-class-source then fetched the wrong class.
+// ---------------------------------------------------------------------------
+
+test("findClass reports a nested type by its own FQN and ranks the top-level match first", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { seedIndexedArtifact } = await import("../helpers/seed-artifact.ts");
+  const root = await mkdtemp(join(tmpdir(), "findclass-nested-"));
+  const service = new SourceService(buildTestConfig(root));
+  const artifactId = "artifact-nested-ranking";
+
+  seedIndexedArtifact(service, {
+    artifactId,
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed"],
+    version: "1.21.11",
+    files: [
+      {
+        filePath: "net/minecraft/world/level/ClipContext.java",
+        content: "package net.minecraft.world.level;\npublic class ClipContext {\n  public static enum Block {}\n}\n"
+      },
+      {
+        filePath: "net/minecraft/world/level/block/Block.java",
+        content: "package net.minecraft.world.level.block;\npublic class Block {}\n"
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/world/level/ClipContext.java",
+        symbolKind: "class",
+        symbolName: "ClipContext",
+        qualifiedName: "net.minecraft.world.level.ClipContext",
+        line: 2
+      },
+      {
+        // The nested enum: stored under the OUTER type's qualifiedName.
+        filePath: "net/minecraft/world/level/ClipContext.java",
+        symbolKind: "enum",
+        symbolName: "Block",
+        qualifiedName: "net.minecraft.world.level.ClipContext",
+        line: 3
+      },
+      {
+        filePath: "net/minecraft/world/level/block/Block.java",
+        symbolKind: "class",
+        symbolName: "Block",
+        qualifiedName: "net.minecraft.world.level.block.Block",
+        line: 2
+      }
+    ]
+  });
+
+  const result = (service as unknown as {
+    findClass: (input: { className: string; artifactId: string; limit?: number }) => {
+      matches: Array<{ qualifiedName: string; nested?: boolean; enclosingClass?: string; symbolKind: string }>;
+      total: number;
+    };
+  }).findClass({ className: "Block", artifactId, limit: 10 });
+
+  assert.equal(result.total, 2);
+  // Pre-fix match[0] was "net.minecraft.world.level.ClipContext".
+  assert.equal(result.matches[0].qualifiedName, "net.minecraft.world.level.block.Block");
+  assert.equal(result.matches[0].nested, undefined);
+  assert.equal(result.matches[1].qualifiedName, "net.minecraft.world.level.ClipContext.Block");
+  assert.equal(result.matches[1].nested, true);
+  assert.equal(result.matches[1].enclosingClass, "net.minecraft.world.level.ClipContext");
+  assert.equal(result.matches[1].symbolKind, "enum");
+});
+
+test("findClass hands back a working call when partial coverage makes the index unable to answer", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { seedIndexedArtifact } = await import("../helpers/seed-artifact.ts");
+  const root = await mkdtemp(join(tmpdir(), "findclass-partial-"));
+  const service = new SourceService(buildTestConfig(root));
+  const artifactId = "artifact-partial-coverage";
+
+  seedIndexedArtifact(service, {
+    artifactId,
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    // The merged Loom source jar carries loader classes but no net/minecraft.
+    qualityFlags: ["source-backed", "partial-source-no-net-minecraft"],
+    version: "1.21.11",
+    files: [{ filePath: "net/neoforged/Loader.java", content: "package net.neoforged;\npublic class Loader {}\n" }],
+    symbols: [
+      {
+        filePath: "net/neoforged/Loader.java",
+        symbolKind: "class",
+        symbolName: "Loader",
+        qualifiedName: "net.neoforged.Loader",
+        line: 2
+      }
+    ]
+  });
+
+  const result = (service as unknown as {
+    findClass: (input: { className: string; artifactId: string }) => {
+      total: number;
+      warnings: string[];
+      suggestedCall?: { tool: string; params: Record<string, unknown> };
+    };
+  }).findClass({ className: "Item", artifactId });
+
+  assert.equal(result.total, 0);
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("excludes net.minecraft")),
+    `expected a coverage warning, got: ${JSON.stringify(result.warnings)}`
+  );
+  // Pre-fix the empty result carried no machine-usable recovery route.
+  assert.equal(result.suggestedCall?.tool, "get-class-source");
+  assert.deepEqual(result.suggestedCall?.params.target, { kind: "artifact", artifactId });
+  assert.equal(result.suggestedCall?.params.className, "Item");
+});

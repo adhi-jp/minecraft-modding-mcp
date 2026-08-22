@@ -108,13 +108,46 @@ export interface ArtifactProvenance {
    * lost to single-jar selection.
    */
   companionSourceJars?: string[];
+  /**
+   * Set when the resolver had to serve a jar built for a DIFFERENT Minecraft
+   * version than the caller asked for.
+   *
+   * Provenance used to echo the requested version here while the served jar was
+   * another version entirely, so nothing in the response could distinguish an
+   * exact hit from a fallback except a quality flag.
+   */
+  versionApproximation?: {
+    requestedVersion: string;
+    servedVersion?: string;
+    sourceJarPath: string;
+  };
 }
+
+/** Mod loader a runtime jar belongs to, inferred from its cache path. */
+export type RuntimeLoader = "fabric" | "forge" | "neoforge" | "unknown";
 
 export interface RuntimeValidationProvenance<
   TMapping extends RuntimeValidationNamespace = RuntimeValidationNamespace
 > {
+  /**
+   * The Minecraft version the served jar ACTUALLY carries.
+   *
+   * This used to echo the requested version even when a fallback served a
+   * different one, so a Fabric 1.21.11 access widener could be validated
+   * against a NeoForge 1.21.10 jar while provenance still claimed 1.21.11.
+   */
   version: string;
   jarPath: string;
+  /** Set only when the served jar is a DIFFERENT version than the caller asked for. */
+  requestedVersion?: string;
+  /** True whenever `requestedVersion` is present. */
+  versionApproximated?: boolean;
+  /** Loader the served jar belongs to, read from its path. */
+  servedLoader?: RuntimeLoader;
+  /** Loader the caller's workspace (or the file format) implies. */
+  expectedLoader?: RuntimeLoader;
+  /** True when `servedLoader` contradicts a KNOWN `expectedLoader`. */
+  loaderMismatch?: boolean;
   requestedScope?: ArtifactScope;
   appliedScope?: ArtifactScope;
   requestedMapping: TMapping;

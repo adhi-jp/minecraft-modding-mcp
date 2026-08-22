@@ -2,7 +2,7 @@ import { defaultDownloadPath, downloadToCache } from "../../repo-downloader.js";
 import { collectMatchedJarEntriesAsUtf8 } from "../../source-jar-reader.js";
 import type { DirectionIndex, PairKey } from "../internal-types.js";
 import { mergeDirectionIndexes } from "../parsers/symbol-records.js";
-import { parseTinyMappings } from "../parsers/tiny.js";
+import { parseTinyMappingsInto } from "../parsers/tiny.js";
 import type { MappingLoaderDeps, MappingLoaderResult } from "./types.js";
 
 async function fetchYarnCoordinates(
@@ -43,18 +43,14 @@ async function parseTinyFromJar(jarPath: string): Promise<Map<PairKey, Direction
     { continueOnError: true }
   )).sort((left, right) => left.filePath.localeCompare(right.filePath));
 
+  // Parsed straight into the shared accumulator: a parse-then-merge loop would
+  // hold each entry's full index alongside the accumulated one. `ensurePairIndex`
+  // + `addLookupEntries` union into what is already there, matching what
+  // `mergeDirectionIndexes` did.
   const merged = new Map<PairKey, DirectionIndex>();
   for (const entry of tinyEntries) {
     try {
-      const parsed = parseTinyMappings(entry.content);
-      for (const [key, index] of parsed.entries()) {
-        const existing = merged.get(key);
-        if (!existing) {
-          merged.set(key, index);
-        } else {
-          mergeDirectionIndexes(existing, index);
-        }
-      }
+      parseTinyMappingsInto(merged, entry.content);
     } catch {
       // skip malformed tiny entries
     }

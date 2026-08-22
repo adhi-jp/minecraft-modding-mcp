@@ -15,6 +15,8 @@ import {
   registerToolSchema
 } from "../../src/tool-schema-registry.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Legacy-era unknown-tool intercept: the premigration contract returned a
  * successful isError result for an unregistered tool name, and the
@@ -74,18 +76,6 @@ const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
 const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startWireSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -152,8 +142,7 @@ async function wireReply(session: { frames: Frame[] }, id: number | string, labe
 }
 
 test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both answer the frozen v1 isError envelope, indistinguishably", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-wire-"));
@@ -236,8 +225,7 @@ test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both an
 });
 
 test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -32602 (sanctioned modern contract)", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-modern-"));
@@ -283,8 +271,7 @@ test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -3260
 });
 
 test("wire legacy registry HIT: tools/call get-runtime-metrics is answered by the worker, never the frozen miss envelope", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "unknown-tool-hit-"));

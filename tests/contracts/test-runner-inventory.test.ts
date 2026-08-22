@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 210;
+const EXPECTED_ORDINARY_TEST_FILES = 217;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -126,7 +126,47 @@ const EXPECTED_ORDINARY_TEST_FILES = 210;
 // 11 legacy prefix strips, zero SKIP/TODO, timing-only decoration removal) and
 // the frozen-minus-live comparison that reports removals while tolerating
 // additions.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1835;
+// 210 -> 211 / 1835 -> 1850 (protocol-layer repairs): 15 new tests across four
+// defects. tests/stdio/stdio-framing-fatal-wire.test.ts is a new 2-test file
+// pinning the framing invariant over the real wire (an unarrivable declared
+// body terminates the session; a header with no usable length still
+// recovers). The other 12 extend existing suites: 4 framing-reader arms
+// (unarrived oversized body, duplicate Content-Length, over-declared length,
+// schema-invalid-but-well-framed body), the subscriptions/listen
+// defense-in-depth arm, the cancellation dispatch-barrier release, the
+// malformed-initialize rejection (white-box + 2 wire), the per-request
+// protocolVersion validation (1 white-box + 2 wire) and the bounded-map proof
+// for request/cancel pairs with fresh ids.
+// 212 -> 213 / 1862 -> 1871 (named-set gate: MISSING vs UNPROVEN): the post-suite gate
+// used to fail on ANY TAP SKIP/TODO directive, so a host without Java, without working
+// child-process stdio pipes, or on a non-POSIX platform failed `npm test` on a green
+// suite with an opaque skip count. tests/contracts/named-set-gate.test.ts is a new
+// 9-test file pinning the split (a vanished frozen name is MISSING and always fatal; a
+// skipped one is UNPROVEN, fatal by default, downgradable by
+// MCP_ALLOW_UNPROVEN_NAMED_TESTS), the capability attribution carried in the skip
+// directive, the un-attributed-directive rule, and a real forced-capability-off run
+// through the node test runner. The 13 guarded files keep their declarations: only the
+// body of each guard changed, never a test name.
+// 213 -> 214 / 1871 -> 1875 (manual-smoke suite watchdog):
+// tests/stdio/manual-smoke-suite-watchdog.test.ts adds 4 tests for the helper that
+// replaced the manual stdio smoke's fixed 60 s aggregate cap over
+// tests/stdio/stdio-supervisor-timeout.test.ts — a suite whose own declared per-test
+// budgets already sum past that cap, so a fully passing run was being killed. The
+// watchdog polices IDLENESS with a budget derived from the suite's longest declared
+// per-test timeout: budget derivation, slow-but-progressing, wedged, and non-zero exit.
+// 214 -> 217 / 1875 -> 1903 (reference-project defect repair round): three new files —
+// tests/source-service/artifact-mapping-inheritance.test.ts (4 tests: an
+// artifact-targeted call inherits the artifact's resolved mapping, so
+// get-class-source and get-class-members stop disagreeing on the omitted-mapping
+// default), tests/source-service/access-transformer-moddev.test.ts (5 tests:
+// ModDevGradle loader-version artifact discovery and the no-self-contradicting-hint
+// rule) and tests/source-service/runtime-provenance-truthfulness.test.ts (5 tests:
+// served version/loader provenance and the refusal to certify across loaders).
+// Three existing files grow: artifact-file-read-through +8 (root-level and META-INF
+// jar entries), version-diff-service +4 (class diff namespace and packageFilter
+// agreement) and classsource-findclass +2 (nested-type FQN/ranking, partial-coverage
+// recovery call).
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1903;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

@@ -323,6 +323,13 @@ test("an era-neutral modern discover admitted before any lock carries era unsele
 
 test("two back-to-back modern requests hold their own context simultaneously and each worker frame carries its own _meta verbatim", () => {
   const { supervisor, workerWrites } = createEraHarness();
+  // The distinguishing sentinels are clientCapabilities and clientInfo: a
+  // last-seen-global context carrier would collapse both requests onto the
+  // second one's values. (This test used an UNSUPPORTED protocolVersion as a
+  // third sentinel; unsupported versions are now answered -32022 at admission
+  // and never reach a pending snapshot at all, so per-request carriage of
+  // DIFFERENT version values is pinned over the wire instead — see the
+  // concurrent -32022 test in stdio-supervisor-era-wire.test.ts.)
   const capsA = { sampling: {} };
   const capsB = { elicitation: {} };
   const infoA = { name: "sentinel-a", version: "1" };
@@ -331,7 +338,7 @@ test("two back-to-back modern requests hold their own context simultaneously and
     modernCall(1, { protocolVersion: "2026-07-28", clientCapabilities: capsA, clientInfo: infoA })
   );
   supervisor.handleClientMessage(
-    modernCall(2, { protocolVersion: "2027-09-09", clientCapabilities: capsB, clientInfo: infoB })
+    modernCall(2, { protocolVersion: "2026-07-28", clientCapabilities: capsB, clientInfo: infoB })
   );
 
   // Both snapshots must hold their OWN values BEFORE any response — a
@@ -342,7 +349,7 @@ test("two back-to-back modern requests hold their own context simultaneously and
   assert.equal(first.era, "modern");
   assert.equal(second.era, "modern");
   assert.equal(first.protocolVersion, "2026-07-28");
-  assert.equal(second.protocolVersion, "2027-09-09");
+  assert.equal(second.protocolVersion, "2026-07-28");
   assert.equal(first.clientCapabilities, capsA);
   assert.equal(second.clientCapabilities, capsB);
   assert.equal(first.clientInfo, infoA);
@@ -352,11 +359,36 @@ test("two back-to-back modern requests hold their own context simultaneously and
   const metaA = frameMeta(workerFrameById(workerWrites, 1));
   const metaB = frameMeta(workerFrameById(workerWrites, 2));
   assert.equal(metaA[PROTOCOL_VERSION_KEY], "2026-07-28");
-  assert.equal(metaB[PROTOCOL_VERSION_KEY], "2027-09-09");
+  assert.equal(metaB[PROTOCOL_VERSION_KEY], "2026-07-28");
   assert.deepEqual(metaA[CLIENT_CAPABILITIES_KEY], { sampling: {} });
   assert.deepEqual(metaB[CLIENT_CAPABILITIES_KEY], { elicitation: {} });
   assert.deepEqual(metaA[CLIENT_INFO_KEY], { name: "sentinel-a", version: "1" });
   assert.deepEqual(metaB[CLIENT_INFO_KEY], { name: "sentinel-b", version: "2" });
+});
+
+test("an unsupported modern protocolVersion is answered -32022 at admission and captures no request context", () => {
+  const { supervisor, outbound, workerWrites } = createEraHarness();
+  supervisor.handleClientMessage(
+    modernCall(1, {
+      protocolVersion: "2027-09-09",
+      clientCapabilities: { sampling: {} },
+      clientInfo: { name: "sentinel-a", version: "1" }
+    })
+  );
+
+  assert.deepEqual(outbound.at(-1), {
+    jsonrpc: "2.0",
+    id: 1,
+    error: {
+      code: -32022,
+      message: "Unsupported protocol version: 2027-09-09",
+      data: { supported: ["2026-07-28"], requested: "2027-09-09" }
+    }
+  });
+  assert.equal(workerWrites.length, 0, "an unsupported version must never reach the worker");
+  assert.equal(supervisor.pendingRequests.size, 0, "a rejected request captures no snapshot");
+  // The shallow claim still locked the era, exactly as documented.
+  assert.equal(supervisor.era, "modern", "an unsupported version string still locks modern");
 });
 
 test("a modern request queued while the worker is down carries its context through restart and release unchanged", () => {

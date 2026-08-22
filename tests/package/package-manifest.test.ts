@@ -26,10 +26,12 @@ test("package.json declares distribution entrypoints and include list", async ()
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
-    "docs/**/*.md"
+    "docs/README-ja.md",
+    "docs/examples.md",
+    "docs/tool-reference.md"
   ]);
   assert.deepEqual(packageJson.publishConfig, { access: "public" });
-  assert.deepEqual(packageJson.engines, { node: ">=22" });
+  assert.deepEqual(packageJson.engines, { node: ">=22.13.0" });
   assert.equal(packageJson.scripts?.clean, "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"");
   assert.equal(packageJson.scripts?.build, "npm run clean && tsc -p tsconfig.json");
   assert.equal(packageJson.scripts?.prepack, "npm run build");

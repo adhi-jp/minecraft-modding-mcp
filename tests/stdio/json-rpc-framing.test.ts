@@ -3,9 +3,18 @@ import test from "node:test";
 
 import {
   encodeJsonRpcMessage,
+  isJsonRpcFramingFatalError,
   JsonRpcFrameReader,
   loadMaxFrameBytes
 } from "../../src/json-rpc-framing.ts";
+
+/**
+ * The reader's framing invariant: after ANY framing violation it either
+ * provably resynchronizes — resuming where the peer itself delimited — or it
+ * terminates the session with a diagnostic. It never silently consumes a
+ * later valid frame, and it never waits on bytes an untrusted declared length
+ * merely promised.
+ */
 
 const NORMAL_MESSAGE = {
   jsonrpc: "2.0" as const,
@@ -36,6 +45,10 @@ function createHarness(maxFrameBytes: number): {
 }
 
 test("oversized Content-Length frames report the limit and preserve the next frame", () => {
+  // The provable-resynchronization arm: the ENTIRE declared body is already in
+  // the reader's buffer, so dropping exactly those bytes is a bounded
+  // operation on data in hand that lands on the offset the peer itself named
+  // as the next frame's first byte. No unarrived byte is trusted.
   const harness = createHarness(64);
   const oversizedBody = Buffer.alloc(96, 0x20);
   const oversizedFrame = Buffer.concat([
@@ -50,7 +63,51 @@ test("oversized Content-Length frames report the limit and preserve the next fra
 
   assert.equal(harness.errors.length, 1);
   assert.match(harness.errors[0]?.message ?? "", /Content-Length 96.*limit.*64/i);
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), false, "a verified skip is recoverable");
+  assert.equal(harness.reader.isFatal, false);
   assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
+});
+
+test("an oversized Content-Length whose body has NOT arrived is framing-fatal instead of wedging the reader", () => {
+  // The defect this replaces: the reader armed a discard countdown with the
+  // ATTACKER-DECLARED length and refused to reclassify any later input until
+  // it drained, so a 26-byte header with no body silently swallowed every
+  // subsequent valid frame for the process lifetime. Skipping an unarrived
+  // body cannot be made sound — an arbitrary binary body offers no delimiter
+  // to scan forward to — so the session ends instead.
+  const harness = createHarness(64);
+
+  harness.process(Buffer.from("Content-Length: 999999999\r\n\r\n", "utf8"));
+
+  assert.equal(harness.errors.length, 1);
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), true, "the violation must be terminal");
+  assert.match(harness.errors[0]?.message ?? "", /Content-Length 999999999.*limit.*64/i);
+  assert.match(harness.errors[0]?.message ?? "", /Only 0 of the declared 999999999 body bytes/);
+  assert.match(harness.errors[0]?.message ?? "", /session is terminated/);
+  assert.equal(harness.reader.isFatal, true);
+
+  // The reader is stopped, not merely blocked: a perfectly valid frame after
+  // the violation is neither delivered NOR silently absorbed into a phantom
+  // body, and no second error is reported.
+  harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
+  assert.deepEqual(harness.frames, []);
+  assert.equal(harness.errors.length, 1);
+});
+
+test("duplicate Content-Length headers are framing-fatal rather than last-wins", () => {
+  const harness = createHarness(1_048_576);
+  const body = JSON.stringify(NORMAL_MESSAGE);
+
+  harness.process(Buffer.from(
+    `Content-Length: 30\r\nContent-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`,
+    "utf8"
+  ));
+
+  assert.equal(harness.errors.length, 1);
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), true);
+  assert.match(harness.errors[0]?.message ?? "", /Duplicate Content-Length header \(30 then \d+\)/);
+  assert.deepEqual(harness.frames, [], "an ambiguous body length may never yield a frame");
+  assert.equal(harness.reader.isFatal, true);
 });
 
 test("oversized Content-Length frames are rejected before a chunked body is buffered", () => {
@@ -223,26 +280,64 @@ test("a Content-Length frame terminated by bare LF (no CR anywhere) decodes in c
   assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
 });
 
-test("an under-declared Content-Length surfaces a parse error and the reader recovers", () => {
-  // Documents CURRENT behavior: a Content-Length smaller than the actual body
-  // slices the body at the declared length (JSON parse error), resets the mode
-  // to unknown, and leaves the body tail buffered — the tail corrupts the NEXT
-  // line-delimited frame (second parse error), after which parsing recovers.
+test("an under-declared Content-Length is framing-fatal instead of corrupting the next frame", () => {
+  // This test previously DOCUMENTED the corruption: the body was sliced at the
+  // declared length, the 10-byte tail stayed buffered, and it destroyed the
+  // NEXT perfectly valid line frame (a second parse error, one frame silently
+  // lost). A declared length whose bytes do not parse as JSON has failed its
+  // only verification, so it cannot be trusted to say where the next frame
+  // starts — under-declaration, over-declaration and an honestly framed bad
+  // body are indistinguishable at this point.
   const harness = createModeHarness();
   const body = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" });
   harness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(body, "utf8") - 10}\r\n\r\n${body}`, "utf8"));
 
   assert.equal(harness.frames.length, 0);
   assert.equal(harness.errors.length, 1);
-  assert.equal(harness.reader.currentMode, "unknown");
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), true);
+  assert.match(harness.errors[0]?.message ?? "", /is not valid JSON/);
+  assert.equal(harness.reader.isFatal, true);
 
+  // The next valid frame is neither delivered nor corrupted into a second
+  // error: the reader stopped, and the client learns that from the diagnostic.
   harness.process(pingFrame(8, "line"));
-  assert.equal(harness.frames.length, 0);
-  assert.equal(harness.errors.length, 2);
-
   harness.process(pingFrame(9, "line"));
-  assert.deepEqual(harness.frames, [{ id: 9, mode: "line" }]);
-  assert.equal(harness.errors.length, 2);
+  assert.equal(harness.frames.length, 0);
+  assert.equal(harness.errors.length, 1);
+});
+
+test("an over-declared Content-Length is framing-fatal rather than swallowing the following frame", () => {
+  // The mirror hazard: a length LONGER than the body makes the reader wait,
+  // absorbing the next frame's bytes into this body. Detected by the same
+  // rule, because the concatenation is not valid JSON.
+  const harness = createModeHarness();
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 11, method: "ping" });
+  harness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(body, "utf8") + 20}\r\n\r\n${body}`, "utf8"));
+  assert.deepEqual(harness.errors, [], "the reader is still waiting for the declared remainder");
+
+  harness.process(pingFrame(12, "line"));
+  assert.equal(harness.errors.length, 1);
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), true);
+  assert.equal(harness.frames.length, 0, "neither frame may be delivered from a desynchronized stream");
+  assert.equal(harness.reader.isFatal, true);
+});
+
+test("a Content-Length body that is valid JSON but not a JSON-RPC message stays recoverable", () => {
+  // Valid JSON of exactly the declared length PROVES the frame boundary, so a
+  // schema violation is an ordinary message-level error and the next frame is
+  // still delivered — the reader only terminates when the boundary itself is
+  // in doubt.
+  const harness = createModeHarness();
+  const body = JSON.stringify([{ jsonrpc: "2.0", id: 13, method: "ping" }]);
+  harness.process(Buffer.from(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`, "utf8"));
+
+  assert.equal(harness.errors.length, 1);
+  assert.equal(isJsonRpcFramingFatalError(harness.errors[0]), false);
+  assert.equal(harness.reader.isFatal, false);
+
+  harness.process(pingFrame(14, "line"));
+  assert.deepEqual(harness.frames, [{ id: 14, mode: "line" }]);
+  assert.equal(harness.errors.length, 1);
 });
 
 test("frames split across chunk boundaries survive a framing switch", () => {
@@ -270,6 +365,10 @@ test("frames split across chunk boundaries survive a framing switch", () => {
 });
 
 test("reset and clear cancel oversized-frame discard state", () => {
+  // An oversized header whose body never arrives now leaves the reader in the
+  // terminal framing-fatal state instead of a discard countdown; reset() and
+  // clear() are the explicit re-arm for both, so a transport that rebuilds its
+  // session gets a working reader back.
   for (const resetReader of [
     (reader: JsonRpcFrameReader) => reader.reset(),
     (reader: JsonRpcFrameReader) => reader.clear()
@@ -277,8 +376,10 @@ test("reset and clear cancel oversized-frame discard state", () => {
     const harness = createHarness(64);
     harness.process(Buffer.from("Content-Length: 96\r\n\r\n", "utf8"));
     assert.equal(harness.errors.length, 1);
+    assert.equal(harness.reader.isFatal, true);
 
     resetReader(harness.reader);
+    assert.equal(harness.reader.isFatal, false);
     harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
     assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
   }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import * as supervisorModule from "../../src/stdio-supervisor.ts";
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 
 async function processExists(pid: number): Promise<boolean> {
   try {
@@ -17,8 +18,7 @@ async function processExists(pid: number): Promise<boolean> {
 }
 
 test("POSIX process-group termination removes a worker and its descendant", { timeout: 5_000 }, async (t) => {
-  if (process.platform === "win32") {
-    t.skip("POSIX process groups are not available on Windows");
+  if (await skipWithoutCapability(t, "posix-process-groups")) {
     return;
   }
   const terminate = (supervisorModule as Record<string, unknown>).terminatePosixProcessGroup;

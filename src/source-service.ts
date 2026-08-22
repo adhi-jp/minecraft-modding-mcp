@@ -370,12 +370,18 @@ export type FindClassMatch = {
   filePath: string;
   line: number;
   symbolKind: string;
+  /** Set when the match is a type declared INSIDE another type. */
+  nested?: boolean;
+  /** The enclosing top-level type, present only on a nested match. */
+  enclosingClass?: string;
 };
 
 export type FindClassOutput = {
   matches: FindClassMatch[];
   total: number;
   warnings: string[];
+  /** Recovery route when the index legitimately cannot answer (partial coverage). */
+  suggestedCall?: { tool: string; params: Record<string, unknown> };
 };
 
 type MemberAccess = "public" | "all";
@@ -834,6 +840,7 @@ export class SourceService {
     requestedScope: ArtifactScope;
     atNamespace: AccessTransformerNamespace;
     loader: import("./workspace-mapping-service.js").WorkspaceProjectLoader | "unknown";
+    projectMinecraftVersion?: string;
   }): ReturnType<typeof artifactResolver.discoverAccessTransformerRuntimeCandidates> {
     return artifactResolver.discoverAccessTransformerRuntimeCandidates(this, input);
   }

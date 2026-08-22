@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -14,6 +13,7 @@ import {
   createDirectWorkerBridgeTransport,
   selectManualStdioMode
 } from "../helpers/manual-stdio-bridge.ts";
+import { longestDeclaredTestTimeoutMs, runWithIdleWatchdog } from "../helpers/suite-watchdog.ts";
 import type { ListVersionsOutput } from "../../src/version-service.ts";
 
 const EXPECTED_TOOLS = [
@@ -43,8 +43,6 @@ const BATCH_TOOLS = [
   "batch-symbol-exists",
   "batch-mappings"
 ] as const;
-
-const execFileAsync = promisify(execFile);
 
 type ErrorPayload = {
   type: string;
@@ -910,13 +908,42 @@ async function main(): Promise<boolean> {
   return stdioMode.supportsWorkerRestartValidation;
 }
 
+const SUPERVISOR_TIMEOUT_SUITE = "tests/stdio/stdio-supervisor-timeout.test.ts";
+/**
+ * Startup, teardown and scheduling slack on top of the slowest thing the suite is allowed
+ * to do in silence. Only needs to absorb tsx boot and a loaded machine, not suite growth.
+ */
+const SUPERVISOR_TIMEOUT_IDLE_SLACK_MS = 30_000;
+/** Used only if the suite ever stops declaring per-test timeouts of its own. */
+const SUPERVISOR_TIMEOUT_IDLE_FALLBACK_MS = 60_000;
+
+/**
+ * Run the supervisor timeout suite under an IDLE watchdog rather than a total wall-clock
+ * cap.
+ *
+ * The suite's seven tests declare per-test budgets summing to 112 s, so the old fixed 60 s
+ * `execFile` cap killed a fully passing run; it asserted speed where the intent was to
+ * catch a wedged runner. The watchdog below is derived from the suite's own longest
+ * declared per-test timeout, so adding or retiming a test rescales it automatically.
+ */
 async function runSupervisorTimeoutProbe(): Promise<void> {
-  await execFileAsync(
-    process.execPath,
-    ["--import", "tsx", "--test", "tests/stdio/stdio-supervisor-timeout.test.ts"],
-    { cwd: process.cwd(), timeout: 60_000 }
+  const declared = longestDeclaredTestTimeoutMs(await readFile(SUPERVISOR_TIMEOUT_SUITE, "utf8"));
+  const idleBudgetMs = (declared ?? SUPERVISOR_TIMEOUT_IDLE_FALLBACK_MS) + SUPERVISOR_TIMEOUT_IDLE_SLACK_MS;
+
+  const { elapsedMs } = await runWithIdleWatchdog({
+    command: process.execPath,
+    args: ["--import", "tsx", "--test", SUPERVISOR_TIMEOUT_SUITE],
+    cwd: process.cwd(),
+    idleBudgetMs,
+    label: `supervisor timeout suite (${SUPERVISOR_TIMEOUT_SUITE})`
+  });
+
+  console.log(
+    `Manual stdio supervisor timeout smoke passed in ${(elapsedMs / 1000).toFixed(1)}s ` +
+      `(no total-runtime cap; killed only after ${idleBudgetMs / 1000}s with no output, derived ` +
+      `from the suite's longest declared per-test timeout): queue/running timeout, overflow, ` +
+      `cancellation, and queued recovery validated.`
   );
-  console.log("Manual stdio supervisor timeout smoke passed: queue/running timeout, overflow, cancellation, and queued recovery validated.");
 }
 
 async function runBatchToolsOffProbe(): Promise<void> {

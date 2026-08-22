@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Worker-level protocol tests: spawn the REAL worker directly
  * (MCP_STDIO_WORKER_MODE=1, no supervisor) and speak newline-delimited
@@ -27,18 +29,6 @@ type Frame = Record<string, unknown> & { id?: unknown; method?: unknown };
 
 const ENVELOPE_PROTOCOL_KEY = "io.modelcontextprotocol/protocolVersion";
 const ENVELOPE_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startWorker(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -105,8 +95,7 @@ async function waitFor(
 }
 
 test("worker builds a fresh server per serveStdio instance: legacy initialize after a modern server/discover negotiates down", { timeout: 60_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "worker-protocol-r5-"));
@@ -159,8 +148,7 @@ test("worker builds a fresh server per serveStdio instance: legacy initialize af
 });
 
 test("worker emits $/stageUpdate notifications carrying the originating JSON-RPC request id", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "worker-protocol-r8-"));

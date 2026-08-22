@@ -7,6 +7,8 @@ import test from "node:test";
 
 import { encodeJsonRpcMessage } from "../../src/json-rpc-framing.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 /**
  * Wire-level era test against the REAL supervisor + REAL worker:
  * spawn `node --import tsx src/cli.ts` WITHOUT MCP_STDIO_WORKER_MODE, so the
@@ -39,18 +41,6 @@ const ERA_CONFLICT_LEGACY_MESSAGE =
   "Modern per-request _meta request rejected: this server process is era-locked to the legacy initialize handshake, so requests carrying the modern per-request _meta envelope can no longer be accepted. Supported protocol versions: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07 (legacy initialize handshake) and 2026-07-28 (modern per-request _meta). To use the modern era, start a fresh process: close this transport, terminate and respawn the configured server command as a fresh stdio process, discard or re-issue any pending request ids, then send a request carrying the required io.modelcontextprotocol/* _meta envelope.";
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 function startSupervisor(root: string): {
   child: ChildProcessWithoutNullStreams;
@@ -114,9 +104,8 @@ async function waitFor(
   throw new Error(`timed out waiting for ${label}`);
 }
 
-test("wire: unsupported modern protocol version locks modern and the worker's -32022 passes through to the client", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+test("wire: unsupported modern protocol version locks modern and -32022 reaches the client on the FIRST request", { timeout: 90_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -126,9 +115,11 @@ test("wire: unsupported modern protocol version locks modern and the worker's -3
     await rm(root, { recursive: true, force: true });
   });
 
-  // Shallow-valid modern envelope with an UNSUPPORTED version value: locks
-  // modern at supervisor admission; the worker performs the deep value check
-  // and answers -32022 with the supported/requested detail.
+  // Shallow-valid modern envelope with an UNSUPPORTED version value: the
+  // shallow claim locks modern at admission, and the deep value check then
+  // answers -32022 with the supported/requested detail. (The value check used
+  // to belong to the worker, where the SDK applies it only while the
+  // connection is still opening — see the per-request test below.)
   session.send({
     jsonrpc: "2.0",
     id: 1,
@@ -177,8 +168,7 @@ test("wire: unsupported modern protocol version locks modern and the worker's -3
 });
 
 test("wire: two concurrent modern requests with different unsupported versions each get their own -32022 requested value", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -234,8 +224,7 @@ test("wire: two concurrent modern requests with different unsupported versions e
 });
 
 test("wire: ready-first pipelined modern discover and legacy initialize on one process serve a DiscoverResult, negotiate legacy, and end era-locked legacy", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -311,8 +300,7 @@ test("wire: ready-first pipelined modern discover and legacy initialize on one p
 });
 
 test("wire: worker-down modern discover queues, releases to a DiscoverResult, and a legacy initialize then locks legacy", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -377,8 +365,7 @@ test("wire: worker-down modern discover queues, releases to a DiscoverResult, an
 });
 
 test("wire: after a modern lock, a deep-invalid clientInfo _meta value forwards to the worker and answers the SDK's bare -32602", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -463,8 +450,7 @@ test("wire: after a modern lock, a deep-invalid clientInfo _meta value forwards 
 });
 
 test("wire: a Content-Length-framed claim-less request is rejected -32602 in Content-Length framing", { timeout: 30_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   // The rejection is supervisor-produced (no worker involved), so the light
@@ -516,8 +502,7 @@ test("wire: a Content-Length-framed claim-less request is rejected -32602 in Con
 });
 
 test("wire: initialize carrying a valid modern _meta envelope still completes the LEGACY handshake", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "era-wire-"));
@@ -563,4 +548,201 @@ test("wire: initialize carrying a valid modern _meta envelope still completes th
   };
   assert.equal(list.error, undefined, "tools/list must be served on the legacy-locked process");
   assert.ok(Array.isArray(list.result?.tools), "tools/list must carry a tools array");
+});
+
+test("wire: a malformed initialize is rejected -32602 WITHOUT burning the one-way era lock, and the modern era is still reachable", { timeout: 90_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+
+  // Generically valid JSON-RPC, but missing EVERY required MCP initialize
+  // field. The pre-repair supervisor committed the one-way legacy lock on the
+  // method name alone, before any schema check: the worker then failed the
+  // handshake, the client was told "MCP worker restarted ... Retry the
+  // request" (a transient-sounding -32603), and the process was legacy-locked
+  // for its whole life even though NO valid era opening had ever completed.
+  session.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 30_000, "rejection reply for the malformed initialize");
+  const rejection = session.frames.find((frame) => frame.id === 1) as {
+    error?: { code?: number; message?: string; data?: Record<string, unknown> };
+  };
+  assert.equal(rejection.error?.code, -32602, "a malformed initialize is a params error, not a worker restart");
+  assert.equal(rejection.error?.data?.kind, "invalid_initialize");
+  assert.deepEqual(rejection.error?.data?.required, ["protocolVersion", "capabilities", "clientInfo"]);
+  assert.equal(rejection.error?.data?.eraSelected, false, "the rejection states that no era was selected");
+  assert.doesNotMatch(
+    rejection.error?.message ?? "",
+    /worker restarted/i,
+    "the client must not be told a schema violation was a transient worker failure"
+  );
+
+  // The era is still UNSELECTED, so the modern era remains reachable — the
+  // exact recovery the pre-repair build made impossible.
+  session.send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: { _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} } }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 2), 30_000, "modern tools/list reply for id 2");
+  const list = session.frames.find((frame) => frame.id === 2) as {
+    result?: { tools?: unknown };
+    error?: { code?: number; data?: unknown };
+  };
+  assert.equal(list.error, undefined, `the modern era must still be selectable, got ${JSON.stringify(list.error)}`);
+  assert.ok(Array.isArray(list.result?.tools), "the modern tools/list must be served");
+});
+
+test("wire: after a malformed initialize the legacy handshake still succeeds on a retry", { timeout: 90_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+
+  // The other half of "the era was not burned": retrying the SAME era with a
+  // well-formed frame works. The pre-repair build answered the first frame
+  // with retry advice it could not honor — the worker had been restarted and
+  // the legacy lock kept, so a corrected initialize raced a replayed handshake
+  // instead of negotiating cleanly.
+  session.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 30_000, "rejection for the partial initialize");
+  const rejection = session.frames.find((frame) => frame.id === 1) as { error?: { code?: number } };
+  assert.equal(rejection.error?.code, -32602, "a partial initialize (no capabilities/clientInfo) is rejected too");
+
+  session.send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "era-wire-retry", version: "1.0.0" }
+    }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 2), 30_000, "initialize reply for the corrected frame");
+  const initialize = session.frames.find((frame) => frame.id === 2) as {
+    result?: { protocolVersion?: unknown };
+    error?: unknown;
+  };
+  assert.equal(initialize.error, undefined, "the corrected initialize must negotiate");
+  assert.equal(initialize.result?.protocolVersion, "2025-06-18");
+
+  session.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+  session.send({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} });
+  await waitFor(() => session.frames.some((frame) => frame.id === 3), 30_000, "tools/list reply for id 3");
+  const list = session.frames.find((frame) => frame.id === 3) as { result?: { tools?: unknown }; error?: unknown };
+  assert.equal(list.error, undefined, "the legacy-locked process must serve after the retry");
+  assert.ok(Array.isArray(list.result?.tools));
+});
+
+test("wire: an unsupported modern protocolVersion is rejected -32022 on EVERY request, not only the one that opened the connection", { timeout: 90_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+
+  const badMeta = { [PROTOCOL_VERSION_KEY]: "1999-12-31", [CLIENT_CAPABILITIES_KEY]: {} };
+  const goodMeta = { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} };
+  const errorFor = (id: number): { code?: number; message?: string; data?: unknown } | undefined =>
+    (session.frames.find((frame) => frame.id === id) as { error?: { code?: number; message?: string; data?: unknown } } | undefined)?.error;
+
+  // A VALID request first, so the worker connection is pinned. The SDK
+  // re-reads the envelope only while the connection is opening; once pinned it
+  // delivers straight to the instance. Everything after this point used to be
+  // served with any version string at all.
+  session.send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: goodMeta } });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 60_000, "tools/list reply for id 1");
+  assert.equal(errorFor(1), undefined, "the valid-version request pins the connection and is served");
+
+  session.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: badMeta } });
+  await waitFor(() => session.frames.some((frame) => frame.id === 2), 30_000, "-32022 for the post-pin tools/list");
+  assert.deepEqual(errorFor(2), {
+    code: -32022,
+    message: "Unsupported protocol version: 1999-12-31",
+    data: { supported: ["2026-07-28"], requested: "1999-12-31" }
+  }, "a post-pin list method must not be served with an unsupported version (it used to answer 41 tools)");
+
+  session.send({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { _meta: badMeta, name: "json-to-nbt", arguments: { json: { hello: "world" }, rootName: "t" } }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 3), 30_000, "-32022 for the post-pin tools/call");
+  assert.deepEqual(errorFor(3), {
+    code: -32022,
+    message: "Unsupported protocol version: 1999-12-31",
+    data: { supported: ["2026-07-28"], requested: "1999-12-31" }
+  }, "a post-pin tool handler must never EXECUTE under an unsupported version");
+  assert.equal(
+    (session.frames.find((frame) => frame.id === 3) as { result?: unknown }).result,
+    undefined,
+    "the rejected call carries no result"
+  );
+
+  // Per-request, not sticky: a valid version still works afterwards.
+  session.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: { _meta: goodMeta } });
+  await waitFor(() => session.frames.some((frame) => frame.id === 4), 30_000, "tools/list reply for id 4");
+  assert.equal(errorFor(4), undefined, "the rejection is per-request and does not poison the connection");
+});
+
+test("wire: the -32022 contract does not depend on which method the client happens to send first", { timeout: 90_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "era-wire-"));
+  const session = startSupervisor(root);
+  t.after(async () => {
+    session.child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
+  });
+  await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
+
+  // server/discover is era-neutral and does NOT pin the worker connection, so
+  // before the repair a client that probed first still got -32022 while a
+  // client that called tools/list first did not. Correctness must not depend
+  // on the client's opening move.
+  const badMeta = { [PROTOCOL_VERSION_KEY]: "1999-12-31", [CLIENT_CAPABILITIES_KEY]: {} };
+  session.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "server/discover",
+    params: { _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} } }
+  });
+  await waitFor(() => session.frames.some((frame) => frame.id === 1), 60_000, "discover reply for id 1");
+
+  for (const [id, method, params] of [
+    [2, "server/discover", { _meta: badMeta }],
+    [3, "resources/list", { _meta: badMeta }],
+    [4, "subscriptions/listen", { _meta: badMeta, notifications: { toolsListChanged: true } }]
+  ] as Array<[number, string, Record<string, unknown>]>) {
+    session.send({ jsonrpc: "2.0", id, method, params });
+    await waitFor(() => session.frames.some((frame) => frame.id === id), 30_000, `-32022 for ${method}`);
+    const frame = session.frames.find((candidate) => candidate.id === id) as {
+      error?: { code?: number; data?: unknown };
+      result?: unknown;
+    };
+    assert.equal(frame.error?.code, -32022, `${method} with an unsupported version must answer -32022`);
+    assert.deepEqual(frame.error?.data, { supported: ["2026-07-28"], requested: "1999-12-31" });
+    assert.equal(frame.result, undefined, `${method} must not be served`);
+  }
 });

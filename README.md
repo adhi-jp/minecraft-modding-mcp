@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@adhisang/minecraft-modding-mcp)](https://www.npmjs.com/package/@adhisang/minecraft-modding-mcp)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
+[![Node.js >=22.13.0](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org/)
 [![CI](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml)
 
 **English** | [日本語](docs/README-ja.md)
@@ -32,7 +32,7 @@ It runs over stdio and works with Claude Desktop, Claude Code, VS Code, Codex CL
 The server implements MCP protocol revision `2026-07-28` and keeps the legacy initialize-based protocol (`2025-11-25` back through `2024-10-07`) fully supported in the same binary — no configuration needed:
 
 - **Legacy clients** initialize as before and see the same tool names, input contracts, and response envelopes — byte-compatible except for a short list of recorded deviations (see the legacy-exceptions list in [docs/tool-reference.md → MCP Protocol Support](docs/tool-reference.md#mcp-protocol-support)).
-- **Modern clients** (2026-07-28) skip `initialize`, probe with `server/discover`, and send per-request `io.modelcontextprotocol/*` `_meta`. Modern results carry `resultType`, cache metadata (`ttlMs` / `cacheScope`), and the server identity echo.
+- **Modern clients** (2026-07-28) skip `initialize`, probe with `server/discover`, and send per-request `io.modelcontextprotocol/*` `_meta`. Modern results carry `resultType` and the server identity echo; the cacheable methods additionally carry cache metadata (`ttlMs` / `cacheScope`).
 - One stdio process serves one era, selected by the client's first signal; the selection persists across the server's internal worker restarts.
 
 Wire-level details — era selection, the rejection and version-negotiation tables, cache values, and framing — are in [docs/tool-reference.md → MCP Protocol Support](docs/tool-reference.md#mcp-protocol-support).
@@ -43,7 +43,7 @@ Wire-level details — era selection, the rejection and version-negotiation tabl
 
 Requirements:
 
-- Node.js 22+
+- Node.js 22.13.0+
 - Java is only required for `remap-mod-jar` and decompile or remap flows that need Vineflower or tiny-remapper
 
 Start the server locally:
@@ -400,7 +400,7 @@ Detailed parameter constraints, migration notes, resource behavior, and the full
 
 Repository requirements:
 
-- Node.js 22+
+- Node.js 22.13.0+
 - `pnpm`
 - Java when running remap or decompile flows locally
 

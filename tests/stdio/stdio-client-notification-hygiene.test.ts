@@ -40,6 +40,8 @@ import {
   startInProcessSession
 } from "./inprocess-era-serve.ts";
 
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
+
 // inprocess-era-serve.ts exports no logLevel key, so this literal stays local.
 const LOG_LEVEL_KEY = "io.modelcontextprotocol/logLevel";
 
@@ -87,18 +89,6 @@ before(async () => {
 after(async () => {
   await new Promise<void>((resolve) => manifestServer?.close(() => resolve()));
 });
-
-async function canUseNativeStdioPipes(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdin.resume();process.stdin.once('end',()=>process.exit(42));setTimeout(()=>process.exit(0),150);"],
-      { stdio: ["pipe", "ignore", "ignore"] }
-    );
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
 
 type ChildSession = {
   child: ChildProcessWithoutNullStreams;
@@ -208,8 +198,7 @@ async function shutdownChildGracefully(
 }
 
 test("direct worker emits $/stageUpdate for the inline validate-mixin recipe (emission control for the suppression guards below)", { timeout: 90_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-worker-"));
@@ -255,8 +244,7 @@ test("direct worker emits $/stageUpdate for the inline validate-mixin recipe (em
 });
 
 test("legacy wire: $/stageUpdate never reaches the supervisor's client stream and notifications/message is never emitted", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-legacy-"));
@@ -319,8 +307,7 @@ test("legacy wire: $/stageUpdate never reaches the supervisor's client stream an
 });
 
 test("modern wire: $/stageUpdate never reaches the supervisor's client stream and notifications/message is never emitted", { timeout: 150_000 }, async (t) => {
-  if (!(await canUseNativeStdioPipes())) {
-    t.skip("native child-process stdio pipes close immediately in this runtime");
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
   const root = await mkdtemp(join(tmpdir(), "notif-hygiene-modern-"));

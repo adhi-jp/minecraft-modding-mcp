@@ -39,6 +39,7 @@ import type {
   DependencyResolutionProvenance,
   MappingSourcePriority,
   ResolvedSourceArtifact,
+  RuntimeLoader,
   RuntimeValidationProvenance,
   SourceMapping,
   SourceTargetInput,
@@ -72,7 +73,20 @@ type RuntimeJarCandidate = {
   appliedScope: ArtifactScope;
   origin: RuntimeValidationProvenance["origin"];
   namespaceHint?: "intermediary" | "mojang" | "named";
+  /** How the candidate was tied to the requested Minecraft version. */
+  versionEvidence?: RuntimeVersionEvidence;
 };
+
+/**
+ * Why a runtime jar is believed to belong to the requested Minecraft version.
+ *
+ * - `exact-token`: the Minecraft version appears verbatim in the path.
+ * - `loader-token`: the path carries the loader version that maps 1:1 onto the
+ *   Minecraft version (NeoForge `21.11.x` <-> Minecraft `1.21.11`).
+ * - `project-anchored`: the jar sits inside the caller's own project build
+ *   directory and the project declares exactly the requested Minecraft version.
+ */
+export type RuntimeVersionEvidence = "exact-token" | "loader-token" | "project-anchored";
 
 export type MappingFallbackSuggestion = {
   suggestedCall?: { tool: string; params: Record<string, unknown> };
@@ -82,6 +96,7 @@ export type MappingFallbackSuggestion = {
 };
 
 const VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
+const LOADER_VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
 const MAX_HELPER_REGEX_CACHE = 128;
 
 function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
@@ -137,6 +152,127 @@ export function hasExactVersionToken(path: string, version: string): boolean {
       new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}(?![0-9a-z]|\\.[0-9])`, "i")
     );
   return pattern.test(normalizedPath);
+}
+
+/**
+ * True when a path carries the NeoForge/Forge loader version that corresponds
+ * 1:1 to `mcVersion`.
+ *
+ * ModDevGradle names every artifact after the LOADER version and never after
+ * Minecraft: MC 1.21.11 produces `build/moddev/artifacts/neoforge-21.11.38-beta-merged.jar`.
+ * A plain `hasExactVersionToken(path, "1.21.11")` therefore rejected every
+ * artifact of the canonical NeoForge workspace, which made
+ * validate-access-transformer unusable there.
+ *
+ * NeoForge derives its version from Minecraft as `<minor>.<patch>.<build>`, so
+ * `1.21.11` -> `21.11.<build>` and `1.21` -> `21.0.<build>`. The trailing dot
+ * before the build number keeps `21.1.` from matching `21.10.5`.
+ */
+export function hasLoaderRuntimeVersionToken(path: string, mcVersion: string): boolean {
+  const match = /^1\.(\d+)(?:\.(\d+))?$/.exec(mcVersion.trim());
+  if (!match) {
+    return false;
+  }
+  const minor = match[1];
+  const patch = match[2] ?? "0";
+  const normalizedPath = normalizePathStyle(path).toLowerCase();
+  const cacheKey = `loader:${minor}.${patch}`;
+  const pattern =
+    LOADER_VERSION_TOKEN_REGEX_CACHE.get(cacheKey)
+    ?? rememberCachedRegex(
+      LOADER_VERSION_TOKEN_REGEX_CACHE,
+      cacheKey,
+      new RegExp(`(^|[^0-9a-z.])${minor}\\.${patch}\\.\\d`, "i")
+    );
+  return pattern.test(normalizedPath);
+}
+
+const RUNTIME_JAR_VERSION_REGEX = /(?:^|[^0-9.])(1\.\d+(?:\.\d+)?)(?![0-9.])/;
+
+/**
+ * Minecraft version a runtime jar path carries, or undefined when the path
+ * names none. Loom lays its cache out as
+ * `<gradle>/caches/fabric-loom/<mcVersion>/...`, so the first `1.x[.y]` token
+ * of the path is the version the jar was built for.
+ */
+export function inferRuntimeJarMinecraftVersion(path: string): string | undefined {
+  return RUNTIME_JAR_VERSION_REGEX.exec(normalizePathStyle(path))?.[1];
+}
+
+/**
+ * Loader a runtime jar belongs to, read from its path.
+ *
+ * A Loom cache holds NeoForge-patched jars under a `/neoforge/` segment
+ * (`caches/fabric-loom/1.21.10/neoforge/21.10.50-beta/minecraft-merged-mojang-at-patched.jar`).
+ * Serving one of those to a Fabric workspace silently validated a Fabric access
+ * widener against NeoForge bytecode, so the loader has to travel with the jar.
+ */
+export function inferRuntimeJarLoader(path: string): RuntimeLoader {
+  const lower = normalizePathStyle(path).toLowerCase();
+  if (lower.includes("neoforge") || lower.includes("neoform") || lower.includes("moddev")) {
+    return "neoforge";
+  }
+  if (/(^|[/\-_])forge([/\-_.]|$)/.test(lower) || lower.includes("forge_gradle") || lower.includes("srg")) {
+    return "forge";
+  }
+  if (lower.includes("fabric-loom") || lower.includes("loom-cache") || lower.includes("intermediary")) {
+    return "fabric";
+  }
+  return "unknown";
+}
+
+/**
+ * Fills in the truthful version/loader half of a runtime provenance record.
+ *
+ * `version` becomes the version the SERVED jar carries; the caller's original
+ * request is preserved under `requestedVersion` and flagged. A served loader
+ * that contradicts a KNOWN expected loader is flagged too — never silently
+ * dropped.
+ */
+export function describeServedRuntimeJar(input: {
+  jarPath: string;
+  requestedVersion: string;
+  expectedLoader?: RuntimeLoader;
+}): {
+  version: string;
+  requestedVersion?: string;
+  versionApproximated?: boolean;
+  servedLoader: RuntimeLoader;
+  expectedLoader?: RuntimeLoader;
+  loaderMismatch?: boolean;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  const servedVersion = inferRuntimeJarMinecraftVersion(input.jarPath);
+  const versionApproximated =
+    servedVersion !== undefined && servedVersion !== input.requestedVersion.trim();
+  const servedLoader = inferRuntimeJarLoader(input.jarPath);
+  const expectedLoader = input.expectedLoader;
+  const loaderMismatch =
+    expectedLoader !== undefined &&
+    expectedLoader !== "unknown" &&
+    servedLoader !== "unknown" &&
+    servedLoader !== expectedLoader;
+
+  if (versionApproximated) {
+    notes.push(
+      `Runtime jar is Minecraft ${servedVersion}, not the requested ${input.requestedVersion}; results are approximate.`
+    );
+  }
+  if (loaderMismatch) {
+    notes.push(
+      `Runtime jar is a ${servedLoader} artifact while the workspace is ${expectedLoader}; its bytecode differs from the ${expectedLoader} runtime.`
+    );
+  }
+
+  return {
+    version: versionApproximated && servedVersion ? servedVersion : input.requestedVersion,
+    ...(versionApproximated ? { requestedVersion: input.requestedVersion, versionApproximated: true } : {}),
+    servedLoader,
+    ...(expectedLoader ? { expectedLoader } : {}),
+    ...(loaderMismatch ? { loaderMismatch: true } : {}),
+    notes
+  };
 }
 
 function inferMergedRuntimeNamespaceHint(
@@ -580,11 +716,19 @@ export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceSer
   requestedScope: ArtifactScope;
   atNamespace: AccessTransformerNamespace;
   loader: WorkspaceProjectLoader | "unknown";
+  /** Minecraft version the workspace itself declares, when it could be read. */
+  projectMinecraftVersion?: string;
 }): Promise<{ searchedPaths: string[]; candidateArtifacts: string[]; selected?: RuntimeJarCandidate }> {
   const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
   const normalizedProjectPathLower = normalizedProjectPath
     ? normalizePathStyle(normalizedProjectPath).toLowerCase()
     : undefined;
+  // A jar inside the caller's own build directory belongs to the version that
+  // workspace declares, whatever its filename says.
+  const projectAnchorAllowed =
+    normalizedProjectPathLower !== undefined &&
+    input.projectMinecraftVersion !== undefined &&
+    input.projectMinecraftVersion.trim() === input.version.trim();
   const searchRoots = buildLoaderRuntimeSearchRoots({
     projectPath: normalizedProjectPath,
     gradleUserHome: input.gradleUserHome
@@ -630,7 +774,20 @@ export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceSer
       seen.add(normalizedPath);
 
       const lower = normalizedPath.toLowerCase();
-      if (!hasExactVersionToken(normalizedPath, input.version)) {
+      const insideProject = normalizedProjectPathLower !== undefined && lower.startsWith(normalizedProjectPathLower);
+      // Positive version evidence is REQUIRED; the three forms are ranked so a
+      // verbatim Minecraft version always beats an inferred one.
+      const versionEvidence: RuntimeVersionEvidence | undefined = hasExactVersionToken(
+        normalizedPath,
+        input.version
+      )
+        ? "exact-token"
+        : hasLoaderRuntimeVersionToken(normalizedPath, input.version)
+          ? "loader-token"
+          : projectAnchorAllowed && insideProject
+            ? "project-anchored"
+            : undefined;
+      if (!versionEvidence) {
         continue;
       }
 
@@ -639,6 +796,11 @@ export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceSer
       const looksForge = lower.includes("forge");
       const looksNeoForge = lower.includes("neoforge") || lower.includes("moddev") || lower.includes("neoform");
       const looksPatchedRuntime = lower.includes("patched") || lower.includes("client-extra") || lower.includes("joined");
+      // client-extra / *-minecraft-resources jars carry resources ONLY, so they
+      // can never answer a class lookup. They stay selectable (a workspace that
+      // has nothing else still gets an answer) but must lose to any real
+      // classes jar.
+      const looksResourcesOnly = lower.includes("client-extra") || lower.includes("minecraft-resources");
       const appliedScope: ArtifactScope =
         looksMerged
           ? "merged"
@@ -656,19 +818,22 @@ export async function discoverAccessTransformerRuntimeCandidates(_svc: SourceSer
 
       const score =
         10_000 +
-        (normalizedProjectPathLower && lower.startsWith(normalizedProjectPathLower) ? 4_000 : 0) +
+        (versionEvidence === "exact-token" ? 5_000 : versionEvidence === "loader-token" ? 3_500 : 3_000) +
+        (insideProject ? 4_000 : 0) +
         (looksPatchedRuntime ? 3_000 : 0) +
         (looksSrg ? 2_500 : 0) +
         (input.loader === "forge" && looksForge ? 1_500 : 0) +
         (input.loader === "neoforge" && looksNeoForge ? 1_500 : 0) +
         (input.requestedScope === appliedScope ? 1_000 : 0) +
-        (looksMerged ? -500 : 0);
+        (looksMerged ? -500 : 0) +
+        (looksResourcesOnly ? -6_000 : 0);
 
       candidates.push({
         jarPath: normalizedPath,
         score,
         appliedScope,
-        origin: "local-jar"
+        origin: "local-jar",
+        versionEvidence
       });
     }
   }
@@ -701,6 +866,10 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
     const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
     version = detected ?? version;
   }
+
+  const expectedLoader: RuntimeLoader | undefined = normalizedProjectPath
+    ? await detectWorkspaceRuntimeLoader(svc, normalizedProjectPath)
+    : undefined;
 
   const requestedScope: ArtifactScope = input.scope ?? (normalizedProjectPath ? "loader" : "vanilla");
   if (requestedScope === "vanilla") {
@@ -777,9 +946,22 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
     }
   }
 
-  return {
-    version,
+  // Provenance must describe the jar that was SERVED, never the request.
+  const served = describeServedRuntimeJar({
     jarPath: discovery.selected.jarPath,
+    requestedVersion: version,
+    expectedLoader
+  });
+  notes.push(...served.notes);
+
+  return {
+    version: served.version,
+    jarPath: discovery.selected.jarPath,
+    ...(served.requestedVersion ? { requestedVersion: served.requestedVersion } : {}),
+    ...(served.versionApproximated ? { versionApproximated: true } : {}),
+    servedLoader: served.servedLoader,
+    ...(served.expectedLoader ? { expectedLoader: served.expectedLoader } : {}),
+    ...(served.loaderMismatch ? { loaderMismatch: true } : {}),
     requestedScope,
     appliedScope,
     requestedMapping: input.awNamespace,
@@ -788,6 +970,32 @@ export async function resolveAccessWidenerRuntimeArtifact(svc: SourceService, in
     resolutionNotes: notes.length > 0 ? notes : undefined,
     scopeFallback
   };
+}
+
+/**
+ * Loader a workspace declares, normalized onto {@link RuntimeLoader}. Quilt is
+ * Fabric-compatible for runtime-jar purposes; anything undetected stays
+ * "unknown" so no mismatch is ever asserted on a guess.
+ */
+async function detectWorkspaceRuntimeLoader(
+  svc: SourceService,
+  projectPath: string
+): Promise<RuntimeLoader> {
+  const detection = await svc.workspaceMappingService.detectProjectLoader(projectPath);
+  if (!detection.resolved) {
+    return "unknown";
+  }
+  switch (detection.loader) {
+    case "fabric":
+    case "quilt":
+      return "fabric";
+    case "forge":
+      return "forge";
+    case "neoforge":
+      return "neoforge";
+    default:
+      return "unknown";
+  }
 }
 
 export async function resolveAccessTransformerNamespace(svc: SourceService, input: {
@@ -840,9 +1048,15 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
 }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
   const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
   let version = input.version;
-  if (input.preferProjectVersion && normalizedProjectPath) {
-    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
-    version = detected ?? version;
+  // The workspace's own declared version is read whenever a project is given:
+  // preferProjectVersion decides whether it OVERRIDES the requested version,
+  // but discovery needs it either way to anchor project-local artifacts whose
+  // filenames carry only a loader version.
+  const projectMinecraftVersion = normalizedProjectPath
+    ? await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath)
+    : undefined;
+  if (input.preferProjectVersion && projectMinecraftVersion) {
+    version = projectMinecraftVersion;
   }
 
   const requestedScope: ArtifactScope = input.scope ?? (normalizedProjectPath ? "loader" : "vanilla");
@@ -875,7 +1089,8 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
     gradleUserHome: input.gradleUserHome,
     requestedScope,
     atNamespace: input.atNamespace,
-    loader
+    loader,
+    projectMinecraftVersion
   });
 
   if (!discovery.selected) {
@@ -891,7 +1106,15 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
         candidateArtifacts: discovery.candidateArtifacts,
         loaderEvidence: loaderDetection.evidence,
         loaderWarnings: loaderDetection.warnings,
-        nextAction: "Provide projectPath for a Forge/NeoForge workspace with generated runtime jars, or run the Gradle tasks that populate transformed runtime artifacts before retrying."
+        ...(projectMinecraftVersion ? { projectMinecraftVersion } : {}),
+        // An error must never ask for something the caller already sent.
+        nextAction: normalizedProjectPath
+          ? `Searched the workspace "${normalizedProjectPath}" and the Gradle caches but found no runtime jar for Minecraft ${version}${
+              projectMinecraftVersion && projectMinecraftVersion !== version
+                ? ` (the workspace declares ${projectMinecraftVersion}; retry with version="${projectMinecraftVersion}" or preferProjectVersion=true)`
+                : ""
+            }. Run the Gradle task that populates transformed runtime artifacts (NeoForge/ModDevGradle writes them under build/moddev/artifacts), then retry.`
+          : "Provide projectPath for a Forge/NeoForge workspace with generated runtime jars, or run the Gradle tasks that populate transformed runtime artifacts before retrying."
       }
     });
   }
@@ -915,15 +1138,40 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
         }
       : undefined;
 
-  return {
-    version,
+  const resolutionNotes = [
+    ...(scopeFallback ? [scopeFallback.reason] : []),
+    ...(selected.versionEvidence && selected.versionEvidence !== "exact-token"
+      ? [
+          selected.versionEvidence === "loader-token"
+            ? `Runtime jar matched Minecraft ${version} through its loader version token (ModDevGradle names artifacts after the loader, not Minecraft).`
+            : `Runtime jar matched Minecraft ${version} because it lives in the workspace build directory of a project declaring that version.`
+        ]
+      : [])
+  ];
+
+  const servedAt = describeServedRuntimeJar({
     jarPath: selected.jarPath,
+    requestedVersion: version,
+    // An access transformer is a Forge/NeoForge artifact; the workspace loader
+    // refines that when it is known.
+    expectedLoader: loader === "forge" ? "forge" : loader === "neoforge" ? "neoforge" : undefined
+  });
+  resolutionNotes.push(...servedAt.notes);
+
+  return {
+    version: servedAt.version,
+    jarPath: selected.jarPath,
+    ...(servedAt.requestedVersion ? { requestedVersion: servedAt.requestedVersion } : {}),
+    ...(servedAt.versionApproximated ? { versionApproximated: true } : {}),
+    servedLoader: servedAt.servedLoader,
+    ...(servedAt.expectedLoader ? { expectedLoader: servedAt.expectedLoader } : {}),
+    ...(servedAt.loaderMismatch ? { loaderMismatch: true } : {}),
     requestedScope,
     appliedScope: selected.appliedScope,
     requestedMapping: input.atNamespace,
     mappingApplied,
     origin: selected.origin,
-    resolutionNotes: scopeFallback ? [scopeFallback.reason] : undefined,
+    resolutionNotes: resolutionNotes.length > 0 ? resolutionNotes : undefined,
     scopeFallback
   };
 }
@@ -1601,8 +1849,23 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
           });
         }
         resolved.qualityFlags.push("version-approximated");
+        // Provenance must name the version that was SERVED. Echoing the request
+        // here made a fallback indistinguishable from an exact hit, and left
+        // downstream version context pointing at a version the jar is not.
+        const servedVersion = inferRuntimeJarMinecraftVersion(
+          versionSourceDiscovery.selectedSourceJarPath
+        );
+        provenance.versionApproximation = {
+          requestedVersion: value,
+          ...(servedVersion ? { servedVersion } : {}),
+          sourceJarPath: versionSourceDiscovery.selectedSourceJarPath
+        };
+        if (servedVersion) {
+          provenance.resolvedFrom.version = servedVersion;
+        }
         warnings.push(
-          `Requested version "${value}" but resolved source jar does not contain exact version string: ${versionSourceDiscovery.selectedSourceJarPath}`
+          `Requested version "${value}" but resolved source jar does not contain exact version string: ${versionSourceDiscovery.selectedSourceJarPath}` +
+            (servedVersion ? ` (serving Minecraft ${servedVersion})` : "")
         );
       }
     }

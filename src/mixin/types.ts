@@ -235,6 +235,10 @@ export type AccessWidenerValidationResult = {
   >;
   summary: { total: number; valid: number; invalid: number };
   provenance?: RuntimeValidationProvenance<SourceMapping>;
+  /** True when the runtime jar used for evidence was not an exact match for the request. */
+  approximate?: boolean;
+  /** Why the verdict is approximate; present only alongside `approximate`. */
+  approximationReasons?: string[];
   warnings: string[];
 };
 
@@ -253,5 +257,9 @@ export type AccessTransformerValidationResult = {
   >;
   summary: { total: number; valid: number; invalid: number };
   provenance?: RuntimeValidationProvenance<AccessTransformerNamespace>;
+  /** True when the runtime jar used for evidence was not an exact match for the request. */
+  approximate?: boolean;
+  /** Why the verdict is approximate; present only alongside `approximate`. */
+  approximationReasons?: string[];
   warnings: string[];
 };

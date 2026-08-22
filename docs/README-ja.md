@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/@adhisang/minecraft-modding-mcp)](https://www.npmjs.com/package/@adhisang/minecraft-modding-mcp)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
-[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
+[![Node.js >=22.13.0](https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen.svg)](https://nodejs.org/)
 [![CI](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/adhi-jp/minecraft-modding-mcp/actions/workflows/ci.yml)
 
 **[English](../README.md)** | 日本語
@@ -33,7 +33,7 @@ stdio で動作し、Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini
 
 要件:
 
-- Node.js 22+
+- Node.js 22.13.0+
 - Java は `remap-mod-jar` と、Vineflower または tiny-remapper を必要とするデコンパイル / リマップ処理でのみ必要です
 
 ローカルでサーバーを起動:
@@ -380,7 +380,7 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 
 リポジトリ要件:
 
-- Node.js 22+
+- Node.js 22.13.0+
 - `pnpm`
 - ローカルでリマップやデコンパイルを実行する場合は Java
 

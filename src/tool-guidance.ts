@@ -1258,6 +1258,83 @@ export function buildInvalidInputGuidance(
   return undefined;
 }
 
+/**
+ * Parameters a hint may ask for, and which are meaningful to check against the
+ * caller's own payload. Restricted to top-level scalar/object inputs so the
+ * check never mistakes a nested field for a supplied argument.
+ */
+const HINT_ASKABLE_PARAMETERS = [
+  "projectPath",
+  "gradleUserHome",
+  "version",
+  "artifactId",
+  "mapping",
+  "atNamespace",
+  "awNamespace",
+  "scope",
+  "className",
+  "content",
+  "jarPath",
+  "mixinConfigPath",
+  "sourcePriority"
+] as const;
+
+const HINT_ASK_PATTERN = new RegExp(
+  `\\b(?:Provide|Pass|Specify|Supply) (?:a |an |the )?(${HINT_ASKABLE_PARAMETERS.join("|")})\\b`
+);
+
+function isSuppliedInputValue(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * Removes an ask for a parameter the caller already sent.
+ *
+ * `validate-access-transformer` failed on the canonical NeoForge workspace with
+ * "Provide projectPath for a Forge/NeoForge workspace ..." — while projectPath
+ * WAS supplied. A hint that asks for what it already has is worse than no hint:
+ * it sends the agent into a retry loop with an identical payload. The producing
+ * sites word their guidance conditionally; this is the backstop that keeps any
+ * remaining site from contradicting the request.
+ *
+ * The ask is a leading clause, so an "..., or <alternative>" tail survives as
+ * its own sentence; a hint that is nothing BUT a satisfied ask is dropped.
+ * Applies only to execution errors — an input-validation failure may legitimately
+ * ask again for a parameter that was present but malformed.
+ */
+export function dropSatisfiedParameterAsks(hints: string[], normalizedInput: unknown): string[] {
+  if (
+    hints.length === 0 ||
+    typeof normalizedInput !== "object" ||
+    normalizedInput == null ||
+    Array.isArray(normalizedInput)
+  ) {
+    return hints;
+  }
+  const supplied = normalizedInput as Record<string, unknown>;
+  const rewritten: string[] = [];
+  for (const hint of hints) {
+    const match = HINT_ASK_PATTERN.exec(hint);
+    if (!match || !isSuppliedInputValue(supplied[match[1]])) {
+      rewritten.push(hint);
+      continue;
+    }
+    const alternative = hint.indexOf(", or ");
+    if (alternative < 0) {
+      continue;
+    }
+    const tail = hint.slice(alternative + ", or ".length).trim();
+    if (!tail) {
+      continue;
+    }
+    rewritten.push(tail.charAt(0).toUpperCase() + tail.slice(1));
+  }
+  return rewritten;
+}
+
 export function mapErrorToProblem(
   caughtError: unknown,
   requestId: string,
@@ -1310,10 +1387,10 @@ export function mapErrorToProblem(
     ) {
       failedStage = "input-validation";
     }
-    const baseHints = [
-      ...(toHints(caughtError.details) ?? []),
-      ...(invalidInputGuidance?.hints ?? [])
-    ];
+    const baseHints = dropSatisfiedParameterAsks(
+      [...(toHints(caughtError.details) ?? []), ...(invalidInputGuidance?.hints ?? [])],
+      context?.normalizedInput
+    );
     const hintsWithFallback =
       primaryDropped && !effectiveSuggestedCall
         ? [...baseHints, VALIDATION_FALLBACK_HINT]

@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { evaluateNamedSetGate } from "./named-set-gate.mjs";
 import { selectOrdinaryTestFiles } from "./test-file-selection.mjs";
 import {
   collectNamedSetFromTapFile,
   compareNamedTestSets,
-  formatMissingReport,
   parseFrozenNamedSet
 } from "./test-name-inventory.mjs";
 
@@ -106,50 +106,33 @@ function discardTapCapture() {
 
 /**
  * Post-run regression gate: every named test point frozen in the premigration baseline
- * must still be present in this run. Additions are expected and never fail; only
- * removals, renames, malformed TAP, and SKIP/TODO directives do.
+ * must still be present in this run AND must actually have executed. Additions never
+ * fail. A frozen name that vanished is MISSING and always fails; a frozen name that was
+ * present but skipped is UNPROVEN, which fails by default and can be downgraded to a loud
+ * warning on a capability-limited machine — see `scripts/named-set-gate.mjs` for the
+ * category definitions and the `MCP_ALLOW_UNPROVEN_NAMED_TESTS` contract.
  */
 async function checkNamedTestSet() {
   const frozen = parseFrozenNamedSet(await readFile(FROZEN_NAMED_SET_PATH, "utf8"));
   const live = await collectNamedSetFromTapFile(tapPath);
+  const comparison = compareNamedTestSets(frozen.keys, live.provenKeys, live.unproven);
 
-  const failures = [];
-  if (live.pointCount === 0 || live.unterminatedYaml) {
-    failures.push(
-      `captured TAP is malformed (points=${live.pointCount}, unterminatedYaml=${live.unterminatedYaml})`
-    );
+  const verdict = evaluateNamedSetGate({
+    frozen,
+    live,
+    comparison,
+    env: process.env,
+    // The captured TAP path is only rendered when the gate fails, which is exactly when
+    // `finish` leaves the capture on disk for inspection.
+    context: { frozenPath: FROZEN_NAMED_SET_PATH, tapPath }
+  });
+  // A downgraded-UNPROVEN run still exits 0, but its warning belongs on stderr where a
+  // "passed" summary cannot bury it.
+  const write = verdict.status === "ok" ? console.log : console.error;
+  for (const line of verdict.report) {
+    write(line);
   }
-  if (live.directiveRows.length > 0) {
-    failures.push(
-      `${live.directiveRows.length} test point(s) carry a SKIP/TODO directive; a skipped test cannot ` +
-        `prove its frozen name still runs:\n` +
-        live.directiveRows
-          .slice(0, 20)
-          .map((key) => `  - ${key.split("\t").slice(2).join("\t")}`)
-          .join("\n")
-    );
-  }
-  const comparison = compareNamedTestSets(frozen.keys, live.keys);
-  if (!comparison.ok) {
-    failures.push(formatMissingReport(comparison));
-  }
-
-  if (failures.length > 0) {
-    console.error("\nnamed-test set gate: FAILED");
-    for (const failure of failures) {
-      console.error(failure);
-    }
-    console.error(
-      `\nbaseline: ${FROZEN_NAMED_SET_PATH} (${frozen.rowCount} rows)\ncaptured TAP kept at: ${tapPath}`
-    );
-    return false;
-  }
-
-  console.log(
-    `named-test set gate: OK (all ${frozen.rowCount} frozen named rows present; ` +
-      `${live.pointCount} live points, ${comparison.addedCount} added)`
-  );
-  return true;
+  return verdict.ok;
 }
 
 let spawnFailed = false;
