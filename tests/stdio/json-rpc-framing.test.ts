@@ -71,7 +71,7 @@ test("oversized Content-Length frames report the limit and preserve the next fra
 test("an oversized Content-Length whose body has NOT arrived is framing-fatal instead of wedging the reader", () => {
   // The defect this replaces: the reader armed a discard countdown with the
   // ATTACKER-DECLARED length and refused to reclassify any later input until
-  // it drained, so a 26-byte header with no body silently swallowed every
+  // it drained, so a 29-byte header with no body silently swallowed every
   // subsequent valid frame for the process lifetime. Skipping an unarrived
   // body cannot be made sound — an arbitrary binary body offers no delimiter
   // to scan forward to — so the session ends instead.

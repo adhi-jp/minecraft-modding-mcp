@@ -64,8 +64,8 @@ function asError(value: unknown): Error {
  *
  * Fatal violations (this class, reader stops permanently):
  *  - an oversized Content-Length whose declared body has NOT fully arrived
- *    (waiting on it is what let a 26-byte header wedge the transport for the
- *    process lifetime),
+ *    (waiting on it is what let a single unanswerable header wedge the
+ *    transport for the process lifetime),
  *  - a Content-Length body that is not valid JSON — under-declaration,
  *    over-declaration and an honestly-framed bad body are indistinguishable,
  *    and the first two have already desynchronized the stream,
@@ -292,7 +292,7 @@ export class JsonRpcFrameReader {
    *
    * When the body has NOT fully arrived the reader must not wait for it: the
    * declared length is attacker-controlled, and arming a countdown with it is
-   * precisely what let a 26-byte header (`Content-Length: 999999999\r\n\r\n`
+   * precisely what let a 29-byte header (`Content-Length: 999999999\r\n\r\n`
    * with no body) silently swallow every later frame for the process lifetime.
    * There is no delimiter to scan forward to either — an arbitrary binary body
    * offers none — so the session is terminated instead.

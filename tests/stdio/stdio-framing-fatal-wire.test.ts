@@ -17,7 +17,7 @@ import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
  * or the session is terminated with a diagnostic. It must never silently
  * consume subsequent valid frames.
  *
- * The regression this pins: a 26-byte `Content-Length: 999999999\r\n\r\n` with
+ * The regression this pins: a 29-byte `Content-Length: 999999999\r\n\r\n` with
  * NO body used to arm a discard countdown with the attacker-declared length.
  * The reader then refused to reclassify any input until 999999999 bytes had
  * been consumed, so every later frame — including perfectly valid ones — was
@@ -120,7 +120,7 @@ test("wire: a Content-Length header whose declared body never arrives terminates
   });
   await waitFor(session.workerReady, 60_000, "supervisor worker_ready adoption");
 
-  // 26 bytes, no body. Nothing here is expensive for the attacker and the
+  // 29 bytes, no body. Nothing here is expensive for the attacker and the
   // declared length can never be delivered.
   session.writeRaw("Content-Length: 999999999\r\n\r\n");
   session.send(discover(9));

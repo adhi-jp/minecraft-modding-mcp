@@ -222,7 +222,20 @@ const EXPECTED_ORDINARY_TEST_FILES = 220;
 // resolver cases are t.test subtests inside
 // tests/mapping/mapping-service-method-exact-api-matrix.test.ts and the compact-projection
 // case is a row in an existing table loop, neither of which this counter includes.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1931;
+// 220 -> 220 / 1931 -> 1935 (release-gate reconciliation): no new files. One existing
+// file grows: tests/package/publish-workflow.test.ts +4. The npm release path's
+// prerelease protection lived entirely in shell inside .github/workflows/publish.yml
+// with nothing in the repository asserting any of it, so a future edit could revert it
+// silently while every property that file already pinned stayed green. The four new
+// tests lift the `Resolve the npm dist-tag`, `Verify the pushed tag matches the package
+// version` and `Reject a bypass of the frozen named-test set gate` steps out of the real
+// workflow by step name and EXECUTE them under `bash -e` rather than restating their
+// logic: a prerelease resolving to `rc` and two stable versions (one already published)
+// to `latest`, the tag/version guard proven in both directions, and the escape hatch
+// rejected at any value — including empty and `0` — while an unset variable passes. A
+// fourth pins the rejection step ahead of `pnpm test`, since a bypass caught after the
+// suite has run catches nothing.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1935;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
