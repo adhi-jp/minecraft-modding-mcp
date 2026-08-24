@@ -33,8 +33,8 @@ test("package.json declares distribution entrypoints and include list", async ()
   assert.deepEqual(packageJson.publishConfig, { access: "public" });
   assert.deepEqual(packageJson.engines, { node: ">=22.13.0" });
   assert.equal(packageJson.scripts?.clean, "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"");
-  assert.equal(packageJson.scripts?.build, "npm run clean && tsc -p tsconfig.json");
-  assert.equal(packageJson.scripts?.prepack, "npm run build");
+  assert.equal(packageJson.scripts?.build, "pnpm run clean && tsc -p tsconfig.json");
+  assert.equal(packageJson.scripts?.prepack, "pnpm run build");
   assert.equal(packageJson.scripts?.dev, "tsx src/cli.ts");
   assert.equal(packageJson.scripts?.start, "node dist/cli.js");
   assert.equal(packageJson.scripts?.test, "node scripts/run-tests.mjs");
@@ -50,7 +50,7 @@ test("package.json declares distribution entrypoints and include list", async ()
   );
   assert.equal(
     packageJson.scripts?.validate,
-    "npm run check && npm test && npm run test:coverage && npm run test:perf"
+    "pnpm run check && pnpm test && pnpm run test:coverage && pnpm run test:perf"
   );
   assert.equal(
     packageJson.scripts?.["test:manual:package-smoke"],

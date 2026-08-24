@@ -3,6 +3,7 @@
   "version": "7.0.0-rc.0",
   "description": "MCP server for AI-assisted Minecraft modding: inspect decompiled source, resolve Mojang/Yarn/Intermediary mappings, diff versions, analyze Fabric/Forge/NeoForge mod JARs, and validate Mixin, Access Widener, and Access Transformer files.",
   "type": "module",
+  "packageManager": "pnpm@10.30.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -21,8 +22,8 @@
   "scripts": {
     "dev": "tsx src/cli.ts",
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "prepack": "npm run build",
+    "build": "pnpm run clean && tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
     "start": "node dist/cli.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "check:changelog": "node scripts/check-changelog.mjs",
@@ -36,7 +37,7 @@
     "test:perf:strict": "STRICT_PERF=1 node --test --test-concurrency=1 --import tsx tests/perf/*.perf.ts",
     "test:manual:stdio-smoke": "node --import tsx tests/manual/stdio-client-smoke.manual.ts",
     "test:manual:package-smoke": "node --import tsx tests/manual/package-distribution-smoke.manual.ts",
-    "validate": "npm run check && npm test && npm run test:coverage && npm run test:perf"
+    "validate": "pnpm run check && pnpm test && pnpm run test:coverage && pnpm run test:perf"
   },
   "keywords": [
     "claude",

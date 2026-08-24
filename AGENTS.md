@@ -15,7 +15,8 @@
 - Do not add compatibility aliases for renamed public tools or parameters unless explicitly requested by the user and documented with a removal plan.
 
 ## Change Coupling Rules (MUST)
-- Any user-visible or public API change MUST update `README.md`, `CHANGELOG.md`, and relevant tests in the same change set.
+- Any user-visible or public API change MUST update `CHANGELOG.md` and the relevant tests in the same change set.
+- `README.md` and `docs/tool-reference.md` MUST be updated in the same change set when the change touches something they already document — a tool, parameter, response field, error code, environment variable, or setup step. Both are shipped in the package, so a stale statement there reaches users. A change with no counterpart in either file does not need an edit to it.
 - Do not defer documentation or test updates to follow-up commits.
 
 ## Verification Gate (MUST)
@@ -23,13 +24,13 @@
   - `pnpm check`
   - `pnpm test`
 - When MCP transport/tool registration or manual workflows change, also run `pnpm test:manual:stdio-smoke` when environment permits.
-- For search/index/performance-sensitive changes, run the repository performance validation suite.
+- For search, index, or performance-sensitive changes, also run `pnpm test:perf`.
 - Do not claim "done", "fixed", or "passing" without fresh command output evidence.
 
 ## Release Safety (MUST)
 - Release and publish workflows MUST use a clean build to prevent stale `dist` artifacts from being shipped.
 - `package.json` release-facing contracts (`files`, `engines`, `bin`, and release scripts) MUST match implemented behavior and tests.
-- Baseline runtime/tooling for this repository is Node.js 22+ and `pnpm`.
+- Baseline runtime/tooling for this repository is Node.js 22.13.0+ and `pnpm`. `engines.node` and `packageManager` in `package.json` are the source of truth for both. The Node floor is not a preference: 22.0–22.12 fail at process start, because `node:sqlite` stayed behind `--experimental-sqlite` until 22.13.0 and the symbol index needs a statement API added in the same release.
 
 ## Changelog and Tag Safety (MUST)
 - Treat `origin` release tags (`vX.Y.Z`) as the source of truth for published versions.
@@ -46,7 +47,7 @@
   - Build a checklist from the target CHANGELOG section (`Added`/`Changed`/`Fixed`/`Performance`/`Documentation`).
   - For each checklist item, collect concrete evidence from code/tests/docs (for example: symbol/parameter presence via `rg`, behavior validation via targeted tests, and contract text in README).
   - If any bullet is unverifiable, stale, or contradicted by code/tests, update CHANGELOG and/or implementation in the same change set until all items reconcile.
-  - Record the verification evidence in the release work log/PR notes; do not proceed on assumption-only validation.
+  - Record the verification evidence in the release commit's `Verification:` section; do not proceed on assumption-only validation. That body is the evidence of record — it is durable in git history, needs no tracked file, and does not depend on a pull request existing.
   - Restructure every promoted entry for the end-user reader, then run `pnpm check:changelog` and resolve every finding. Do not proceed while it fails.
 - Never finalize a release with unresolved CHANGELOG-to-implementation drift.
 
@@ -56,7 +57,8 @@
 
 ## Commit Rules (MUST)
 - Use Conventional Commits.
-- Breaking changes MUST use `!` in the type/scope summary and include a `BREAKING CHANGE:` footer.
+- A commit that INTRODUCES a breaking change MUST use `!` in its type/scope summary and include a `BREAKING CHANGE:` footer. Breaking means the public MCP tool surface (tool names, input parameters, response envelope shape) or the Node package surface (exports, types, `engines`) stops working for an existing caller.
+- A release commit that only cuts a version and its CHANGELOG section is an aggregation, not an introduction, and carries neither marker. The breaking changes it releases are announced by the major version bump and the `**Breaking**` entries in the release section.
 - Keep commits logically scoped; do not mix unrelated changes.
 - Do not commit files under `docs/specs/`, `docs/plans/`, or `docs/reports/`; keep specifications, implementation plans, and session reports out of repository history. `.gitignore` enforces all three, so a document that genuinely needs to ship belongs at a tracked path rather than force-added from one of these.
 - Do not force-add ignored files or otherwise commit files outside the agreed commit scope unless the user explicitly instructs you to include those extra files.
@@ -66,7 +68,8 @@
 - `CHANGELOG.md` is an END-USER document. Its reader consumes the published npm package and the MCP tool surface; they have no access to this repository, its tests, or its history.
 - CHANGELOG entries MUST describe user-facing changes only.
 - Do NOT record CI/CD pipeline changes, internal refactoring notes, implementation memos, workflow tweaks, or other changes that are invisible to end users.
-- Examples of entries to exclude: "Codecov workflow temporarily disabled", "Added a mandatory AGENTS release-prep step", internal build script changes.
+- Examples of entries to exclude: "Added a CHANGELOG gate workflow", "Moved internal scripts to pnpm", "Added a mandatory AGENTS release-prep step", internal build script changes.
+- Write such examples as actions rather than states. A state goes stale on its own: this list previously read "Codecov workflow temporarily disabled", which stopped being true once that workflow was re-enabled.
 
 ### Work-log detail and the release cut (MUST)
 - While work is in flight, `## [Unreleased]` MAY carry work-log-grade detail: root-cause narratives, measured internals, and the evidence that made the entry writable. Recording it there is allowed.
