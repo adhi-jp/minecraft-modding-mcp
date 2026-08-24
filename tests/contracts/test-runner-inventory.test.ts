@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 220;
+const EXPECTED_ORDINARY_TEST_FILES = 221;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
@@ -235,7 +235,38 @@ const EXPECTED_ORDINARY_TEST_FILES = 220;
 // rejected at any value — including empty and `0` — while an unset variable passes. A
 // fourth pins the rejection step ahead of `pnpm test`, since a bypass caught after the
 // suite has run catches nothing.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1935;
+// 220 -> 221 / 1935 -> 1957 (release CHANGELOG gate): one new file,
+// tests/contracts/changelog-release-section-gate.test.ts, adds 22 tests for
+// scripts/changelog-release-gate.mjs. CHANGELOG.md is an end-user document whose
+// work-log detail is only permitted under `## [Unreleased]`, and the release cut that
+// must rewrite it had nothing enforcing it: a section promoted verbatim shipped once in
+// 4.1.0 and again in 7.0.0-rc.0. The gate is mechanical, so the tests pin what it fires
+// on (every forbidden marker, the length ceiling from both sides), what it must not
+// touch (`## [Unreleased]`, user-facing docs/README/package.json paths), the structural
+// failures (missing, undated and empty sections) and the report an author reads. One
+// test runs the live CHANGELOG.md section for the current package version, so the gate
+// and the file it guards cannot drift apart. Six of the thirteen came from an external
+// review that reproduced real bypasses of the first implementation: a violation parked on
+// a continuation line or spread across nested bullets, a fenced sample heading truncating
+// the section, CRLF input the extractor could not read while the version lister could, and
+// a repeated version heading hiding everything under it. Those tests pin the closed
+// bypasses; the CLI and workflow-wiring tests pin that the gate is actually reachable,
+// since a correct gate nobody runs enforces nothing. A second review round added four
+// more after finding that the first fix had closed only the reported shape of each
+// escape: `-` was recognized but `*`, `+` and ordered markers were not, an entry still
+// ended at the first blank line so a later paragraph of the same item was dropped, the
+// markers were case-sensitive, and a four-space run or a backtick-bearing info string was
+// accepted as a code fence. Text belonging to no entry is now a finding rather than
+// silently skipped, which is what turned those escapes from invisible into failures.
+// A third round added five more, again because the previous fix had generalized only as far
+// as the reported case: nesting was decided by a fixed column, which both split this
+// repository's two-space child bullets into separate entries and rejected a legal
+// one-to-three-space top-level item; an unclosed fence inside an item swallowed every later
+// release section, so the gate saw a clean file; an item with no visible text counted as an
+// entry; markup that renders away (code spans, backslash escapes, character references,
+// HTML comments) split a marker in the source while the reader still saw the forbidden
+// token; and link reference definitions and HTML comments were reported as visible text.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1957;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

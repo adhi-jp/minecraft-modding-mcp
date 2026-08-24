@@ -36,6 +36,11 @@ jobs:
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
+      # A release section promoted verbatim from a work log must not reach npm. Fail-closed
+      # and dependency-free, so it runs before anything is installed, built or published.
+      - name: Audit the released CHANGELOG section
+        run: node scripts/check-changelog.mjs
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test

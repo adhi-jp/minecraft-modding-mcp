@@ -1,0 +1,39 @@
+# Release CHANGELOG gate.
+#
+# Separate from ci.yml on purpose. ci.yml covers the gate's own sources — `scripts/**` and
+# `.github/workflows/**` — so changing the policy module runs the contract tests. What it
+# does not cover, and must not, is a CHANGELOG.md or AGENTS.md edit: running the full suite
+# and coverage for a documentation-only commit would be the wrong trade. This workflow
+# carries only the gate for those commits: no pnpm install, no build, no tests, seconds per
+# run. A release cut touches package.json and CHANGELOG.md, so it reaches both.
+name: Changelog gate
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CHANGELOG.md'
+      - 'package.json'
+      - 'AGENTS.md'
+      - 'scripts/changelog-release-gate.mjs'
+      - 'scripts/check-changelog.mjs'
+      - '.github/workflows/changelog-gate.yml'
+  pull_request:
+    paths:
+      - 'CHANGELOG.md'
+      - 'package.json'
+      - 'AGENTS.md'
+      - 'scripts/changelog-release-gate.mjs'
+      - 'scripts/check-changelog.mjs'
+      - '.github/workflows/changelog-gate.yml'
+permissions:
+  contents: read
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit the released CHANGELOG section
+        run: node scripts/check-changelog.mjs

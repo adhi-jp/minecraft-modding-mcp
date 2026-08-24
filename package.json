@@ -25,6 +25,7 @@
     "prepack": "npm run build",
     "start": "node dist/cli.js",
     "check": "tsc --noEmit -p tsconfig.json",
+    "check:changelog": "node scripts/check-changelog.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:file": "node --test --import tsx",
     "test:grep": "node scripts/run-tests.mjs --test-name-pattern",
