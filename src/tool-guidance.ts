@@ -9,6 +9,8 @@ import {
 import {
   extractAllowlistedContext,
   extractDidYouMean,
+  extractIssueOriginOverride,
+  extractNestedJars,
   issueOriginForErrorCode,
   retryClassForErrorCode,
   statusForErrorCode,
@@ -1379,6 +1381,7 @@ export function mapErrorToProblem(
     const effectiveExampleCalls = invalidInputGuidance?.exampleCalls ?? exampleCalls;
     const sanitizedContext = extractAllowlistedContext(caughtError.details);
     const extractedDidYouMean = extractDidYouMean(caughtError.details);
+    const extractedNestedJars = extractNestedJars(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
     if (
       !failedStage
@@ -1403,12 +1406,18 @@ export function mapErrorToProblem(
       code: caughtError.code,
       instance: requestId,
       retryClass: retryClassForErrorCode(caughtError.code),
-      issueOrigin: issueOriginForErrorCode(caughtError.code),
+      // A per-throw-site `details.issueOrigin` wins over the code-keyed default,
+      // so a code shared by caller mistakes and tool-side gaps can classify each
+      // throw honestly without re-labelling the code for every other site.
+      issueOrigin:
+        extractIssueOriginOverride(caughtError.details) ??
+        issueOriginForErrorCode(caughtError.code),
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: hintsWithFallback,
       ...(effectiveSuggestedCall ? { suggestedCall: effectiveSuggestedCall } : {}),
       ...(effectiveExampleCalls ? { exampleCalls: effectiveExampleCalls } : {}),
       ...(extractedDidYouMean ? { didYouMean: extractedDidYouMean } : {}),
+      ...(extractedNestedJars ? { nestedJars: extractedNestedJars } : {}),
       ...(failedStage ? { failedStage } : {}),
       ...(sanitizedContext ? { context: sanitizedContext } : {})
     };

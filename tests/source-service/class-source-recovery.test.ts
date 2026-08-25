@@ -224,3 +224,54 @@ test("getClassSource CLASS_NOT_FOUND preserves representative context details", 
     });
   }
 });
+
+// The hint ends in `mapping="mojang"`, so firing it at a caller who already sent
+// a non-obfuscated mapping asks for the argument they just supplied and sends
+// them round the same call again. `dropSatisfiedParameterAsks` is the generic
+// backstop for exactly that, and it cannot reach this one: it matches an
+// imperative "Provide/Pass mapping", while this sentence reads `usually require
+// mapping="mojang"`, and the sentence is concatenated into the SAME nextAction
+// string as the find-class guidance, which is published as one hint that no
+// mid-string excision can repair. So the suppression has to happen at the site.
+test("the obfuscated namespace hint is suppressed when the caller already supplied a mapping", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { buildClassSourceNotFoundError } = await import("../../src/source/class-source.ts");
+  const root = await mkdtemp(join(tmpdir(), "class-source-obf-hint-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const base = {
+    artifactId: "obf-hint-artifact",
+    className: "net.minecraft.world.item.Item",
+    lookupClassName: "net.minecraft.world.item.Item",
+    mappingApplied: "obfuscated" as const,
+    qualityFlags: [] as string[],
+    attemptedBinaryFallback: false
+  };
+
+  // Control: with no caller-supplied mapping the advice is correct and must
+  // survive, otherwise the assertion below would pass on a hint that never fires.
+  const omitted = buildClassSourceNotFoundError(service, {
+    ...base,
+    requestedMapping: "obfuscated" as const
+  });
+  const omittedNextAction = (omitted.details as { nextAction?: string }).nextAction ?? "";
+  assert.ok(
+    omittedNextAction.includes("indexed in obfuscated runtime names"),
+    `control: the hint must still fire when the caller named no mapping; got: ${omittedNextAction}`
+  );
+
+  const supplied = buildClassSourceNotFoundError(service, {
+    ...base,
+    requestedMapping: "mojang" as const,
+    callerSuppliedMapping: "mojang" as const
+  });
+  const suppliedNextAction = (supplied.details as { nextAction?: string }).nextAction ?? "";
+  assert.ok(
+    suppliedNextAction.includes("find-class"),
+    "the recovery guidance itself must survive the suppression"
+  );
+  assert.ok(
+    !suppliedNextAction.includes("mapping=\"mojang\""),
+    `the hint must not re-ask for the mapping the caller already sent; got: ${suppliedNextAction}`
+  );
+});

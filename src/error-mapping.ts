@@ -65,6 +65,14 @@ export type ProblemDetails = {
   exampleCalls?: ExampleCall[];
   /** Ranked near-miss candidates for a class/symbol that was not found. */
   didYouMean?: DidYouMeanCandidate[];
+  /**
+   * Nested-jar inventory of the shell jar the lookup ran against, as jar-entry
+   * names (e.g. "META-INF/jars/api.jar"). A shell jar holds no classes of its
+   * own, so a class-not-found error on one is only actionable with the list of
+   * inner jars the caller can target next. Like `didYouMean`, it travels as a
+   * dedicated typed field: `context` is primitive-only and can never carry it.
+   */
+  nestedJars?: string[];
   failedStage?: string;
   context?: Record<string, string | number | boolean>;
 };
@@ -105,6 +113,64 @@ export function extractDidYouMean(details: unknown): DidYouMeanCandidate[] | und
     });
   }
   return cleaned.slice(0, MAX_DID_YOU_MEAN_ENTRIES);
+}
+
+// A shell jar bundles a handful of inner jars, not hundreds; the cap only
+// bounds a pathological inventory, it is not an expected truncation point.
+const MAX_NESTED_JAR_ENTRIES = 64;
+
+/**
+ * Validates and extracts a `nestedJars` inventory from error details.
+ * `buildClassSourceNotFoundError` records it whenever the lookup ran against a
+ * shell jar, but `context` is primitive-only, so without this the inventory
+ * never left the process. Malformed payloads are dropped whole rather than
+ * partially published, matching {@link extractDidYouMean}. An empty inventory
+ * is dropped too: the producing site omits the key entirely in that case, so an
+ * empty array carries no information a caller could act on.
+ */
+export function extractNestedJars(details: unknown): string[] | undefined {
+  const raw = (details as { nestedJars?: unknown } | undefined)?.nestedJars;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const cleaned: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !entry) {
+      return undefined;
+    }
+    cleaned.push(entry);
+  }
+  return cleaned.slice(0, MAX_NESTED_JAR_ENTRIES);
+}
+
+const ISSUE_ORIGIN_VALUES = new Set<string>([
+  "code_issue",
+  "tool_issue",
+  "environment"
+]);
+
+/**
+ * Per-throw-site {@link IssueOrigin} override carried on an AppError's
+ * `details.issueOrigin`.
+ *
+ * The default classification is keyed purely on the error CODE, which is right
+ * for codes whose every throw site shares one origin. A few codes do not:
+ * `ERR_CONTEXT_UNRESOLVED` covers both a caller naming a version no artifact
+ * carries (genuinely `code_issue`) and the tool resolving an artifact with no
+ * binary jar behind the caller's back (`tool_issue`). Publishing the latter as
+ * caller-fixable sends an agent into a retry loop over input it cannot repair.
+ *
+ * This override is deliberately opt-in and per-error: `issueOriginForErrorCode`
+ * and its default sets stay untouched, so the exhaustive classification map in
+ * tests/runtime/error-mapping.test.ts keeps forcing a conscious decision for
+ * every new code. The key is not in `CONTEXT_ALLOWLIST`, so it cannot leak into
+ * the public `context` blob.
+ */
+export function extractIssueOriginOverride(details: unknown): IssueOrigin | undefined {
+  const raw = (details as { issueOrigin?: unknown } | undefined)?.issueOrigin;
+  return typeof raw === "string" && ISSUE_ORIGIN_VALUES.has(raw)
+    ? (raw as IssueOrigin)
+    : undefined;
 }
 
 export function statusForErrorCode(code: string): number {
@@ -390,6 +456,7 @@ export function errorToBatchEntryProblem(
     const fieldErrors = extractFieldErrors(caughtError.details);
     const context = extractAllowlistedContext(caughtError.details);
     const didYouMean = extractDidYouMean(caughtError.details);
+    const nestedJars = extractNestedJars(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -398,11 +465,14 @@ export function errorToBatchEntryProblem(
       code: caughtError.code,
       instance,
       retryClass: retryClassForErrorCode(caughtError.code),
-      issueOrigin: issueOriginForErrorCode(caughtError.code),
+      issueOrigin:
+        extractIssueOriginOverride(caughtError.details) ??
+        issueOriginForErrorCode(caughtError.code),
       ...(fieldErrors ? { fieldErrors } : {}),
       ...(baseHints ? { hints: baseHints } : {}),
       ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {}),
       ...(didYouMean ? { didYouMean } : {}),
+      ...(nestedJars ? { nestedJars } : {}),
       ...(context ? { context } : {})
     };
   }

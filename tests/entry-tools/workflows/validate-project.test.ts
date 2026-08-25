@@ -739,3 +739,76 @@ test("ValidateProjectService version-required tasks throw ERR_INVALID_INPUT with
     );
   }
 });
+
+// `suggestedCall` is a payload the caller may replay verbatim. This branch fires
+// precisely because no version is knowable here, and it used to fill the hole
+// with a hardcoded "1.21.10": a payload that RUNS and validates the mixin
+// against a Minecraft version the project does not use. A wrong answer that
+// executes is worse than no suggestion.
+//
+// The repair splits the two roles rather than dropping the recovery payload:
+// `suggestedCall` becomes a real, argument-free next step (list-versions, the
+// same recovery the sibling "version required but none resolved" site in
+// src/source/class-source.ts already uses), and the task="mixin" retry shape
+// moves to an `exampleCalls` template with a placeholder the caller must
+// visibly replace.
+test("task=\"mixin\" without a version suggests list-versions and a placeholder template, never a fabricated version", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("should not be called");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("should not be called");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  const caught = await service
+    .execute({
+      task: "mixin",
+      detail: "summary",
+      subject: { kind: "mixin", input: { mode: "inline", source: "public class Example {}" } }
+    } as Parameters<typeof service.execute>[0])
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.INVALID_INPUT);
+  const details = (caught as { details?: Record<string, unknown> }).details ?? {};
+
+  // No fabricated concrete version may survive ANYWHERE in the recovery payload
+  // -- not in the suggestedCall, not in a template, not in the prose hint.
+  assert.equal(
+    JSON.stringify(details).includes("1.21.10"),
+    false,
+    `no invented Minecraft version may appear in the recovery payload; got ${JSON.stringify(details)}`
+  );
+
+  const suggested = details.suggestedCall as
+    | { tool?: string; params?: Record<string, unknown> }
+    | undefined;
+  assert.ok(suggested, "the caller still needs a re-executable next step");
+  assert.equal(
+    suggested.tool,
+    "list-versions",
+    "the suggestedCall must be a step the caller can run with what they already have"
+  );
+  assert.deepEqual(suggested.params, {}, "list-versions needs no arguments");
+
+  const examples = details.exampleCalls as
+    | Array<{ tool: string; params: Record<string, unknown> }>
+    | undefined;
+  const template = examples?.find((example) => example.tool === "validate-project");
+  assert.ok(
+    template,
+    `the caller still needs the retry shape as a template; got ${JSON.stringify(examples)}`
+  );
+  assert.equal(template.params.task, "mixin");
+  assert.equal(
+    template.params.version,
+    "<your-mc-version>",
+    "the template must make the substitution the caller has to perform obvious"
+  );
+});

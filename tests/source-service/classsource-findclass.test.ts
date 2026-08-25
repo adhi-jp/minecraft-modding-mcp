@@ -473,6 +473,65 @@ test("SourceService findClass does not label a native dependency miss as Minecra
   assert.ok(result.warnings.every((warning) => !warning.includes("obfuscated runtime names")));
 });
 
+// The find-class miss above is guarded; the get-class-source miss was not, and
+// the two answered the same artifact differently. A native dependency reaches
+// `mappingApplied: "obfuscated"` by SUBSTITUTION -- the mapping pipeline declined
+// and the resolver stamped the namespace anyway -- so its class names are the
+// library's own and no Mojang mapping exists to look them up in. The hint's
+// name test only asks for a capitalized simple name, so an ordinary library
+// class qualifies and the caller was told to remap a jar that was never
+// obfuscated instead of being told the class is absent.
+test("SourceService getClassSource does not blame Minecraft obfuscation for a native dependency miss", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-getclasssource-dependency-hint-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "native-dependency-source",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: ["dependency-mapping-unverified"],
+    files: [],
+    symbols: [],
+    provenance: {
+      target: { kind: "coordinate", value: "com.example:fixture-lib:1.0.0" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: {
+        origin: "local-m2",
+        coordinate: "com.example:fixture-lib:1.0.0"
+      },
+      transformChain: [],
+      dependencyResolution: {
+        group: "com.example",
+        name: "fixture-lib",
+        resolvedVersion: "1.0.0",
+        source: "gradle.properties:fixture_lib_version",
+        cacheHit: false
+      }
+    }
+  });
+
+  const caught = await service
+    .getClassSource({
+      artifactId: "native-dependency-source",
+      className: "GameTest",
+      mode: "full"
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  const details = (caught as { code?: string; details?: { nextAction?: string } } | undefined);
+  assert.equal(details?.code, ERROR_CODES.CLASS_NOT_FOUND);
+  const nextAction = details?.details?.nextAction ?? "";
+  assert.ok(nextAction.includes("find-class"), "the miss must still route the caller to find-class");
+  assert.ok(
+    !nextAction.includes("indexed in obfuscated runtime names"),
+    `a native dependency miss must not advise remapping; got: ${nextAction}`
+  );
+});
+
 test("SourceService getClassSource rejects representative invalid input combinations", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");
 
@@ -667,6 +726,64 @@ test("SourceService getClassMembers rejects representative unresolved preconditi
       await testCase.run();
     });
   }
+});
+
+// `issueOrigin` is derived from the error CODE alone, and ERR_CONTEXT_UNRESOLVED
+// is classified `code_issue` because it also covers real caller mistakes (naming
+// a version no artifact carries). This site is not one of those: the artifact was
+// resolved by the TOOL, and whether it carries a binary jar is not something the
+// request can express. Published as caller-fixable, it invites an agent to keep
+// re-sending an input that was never at fault. The per-throw-site override fixes
+// this ONE site; the code-keyed default map must stay exactly as it was.
+test("a members lookup on an artifact with no binary jar is published as a tool issue", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const { issueOriginForErrorCode } = await import("../../src/error-mapping.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-origin-"));
+  const sourceJarPath = join(root, "source-only.jar");
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "source-only-artifact",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    sourceJarPath,
+    files: [{ filePath: "com/example/Demo.java", content: "package com.example;\npublic class Demo {}" }],
+    symbols: []
+  });
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: { artifactId: string; className: string }) => Promise<unknown>;
+  })
+    .getClassMembers({ artifactId: "source-only-artifact", className: "com.example.Demo" })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-req") as {
+    code: string;
+    issueOrigin: string;
+    context?: Record<string, unknown>;
+  };
+  assert.equal(problem.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+  assert.equal(
+    problem.issueOrigin,
+    "tool_issue",
+    "a missing binary jar on a tool-resolved artifact is not something the caller's input can fix"
+  );
+  // The override is per-error only: the code-keyed default is untouched, so the
+  // sibling caller-error sites keep classifying as code_issue.
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED), "code_issue");
+  // The override key must not ride out in the public primitive context blob.
+  assert.equal(problem.context?.issueOrigin, undefined);
 });
 
 test("SourceService getClassMembers delegates to explorer and returns member payload", async () => {

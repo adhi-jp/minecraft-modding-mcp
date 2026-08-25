@@ -30,14 +30,35 @@ if (!input.version) {
       task: "mixin",
       failedStage: "input-validation",
       nextAction:
-        "Pass version explicitly (e.g. \"1.21.10\"). task=\"project-summary\" supports preferProjectVersion for auto-detection from gradle.properties, but direct task=\"mixin\" requires an explicit version.",
+        "Pass version explicitly: the Minecraft version this project targets. task=\"project-summary\" supports preferProjectVersion for auto-detection from gradle.properties, but direct task=\"mixin\" requires an explicit version. Call the suggested list-versions to see what is available, then replay the exampleCalls template with that version substituted.",
+      // No concrete version can be derived here -- the caller omitted it and this
+      // task does not auto-detect one. A `suggestedCall` is a payload the caller
+      // may replay verbatim, so filling the hole with a made-up version produced
+      // a call that RUNS and validates the mixin against the wrong Minecraft
+      // version, which is worse than no suggestion.
+      //
+      // So the two roles are split, following what the sibling "a version is
+      // required but none was resolved" site already does in
+      // src/source/class-source.ts: `suggestedCall` is a REAL next step that
+      // needs nothing the caller does not have (list-versions takes no
+      // arguments and answers exactly the question blocking them), while the
+      // task="mixin" retry shape travels as an `exampleCalls` template whose
+      // placeholder makes the substitution the caller must perform obvious.
+      ...buildSuggestedCall({ tool: "list-versions", params: {} }),
       ...buildSuggestedCall({
         tool: "validate-project",
-        params: {
-          task: "mixin",
-          subject: input.subject,
-          version: "1.21.10"
-        }
+        params: undefined,
+        examples: [
+          {
+            params: {
+              task: "mixin",
+              subject: input.subject,
+              version: "<your-mc-version>"
+            },
+            reason:
+              "Replace <your-mc-version> with the Minecraft version this project targets (gradle.properties, or task=\"project-summary\" with preferProjectVersion=true reports it)."
+          }
+        ]
       })
     }
   });

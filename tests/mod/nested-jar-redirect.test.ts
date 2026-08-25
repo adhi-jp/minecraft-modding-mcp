@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { SourceService } from "../../src/source-service.ts";
+import { mapErrorToProblem } from "../../src/tool-guidance.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { buildInnerJarBytes, createShellJar } from "../helpers/nested-jar.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
@@ -301,6 +302,88 @@ test("a class in no nested jar keeps the class-not-found contract and names the 
       assert.deepEqual(error.details?.nestedJars, ["META-INF/jars/api.jar"]);
       return true;
     }
+  );
+});
+
+// The test above proves the inventory reaches `error.details`, which is an
+// in-process object no caller ever sees. Everything a caller reads is the
+// ProblemDetails envelope, and that envelope used to drop the inventory whole:
+// there was no `nestedJars` field on it, and `context` is a primitive-only
+// allowlist that an array cannot pass. So the one recovery step that works on a
+// shell jar -- target one of the inner jars -- was documented in
+// docs/tool-reference.md and unreachable in practice.
+test("a shell jar's class-not-found envelope carries the nested-jar inventory to the caller", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-redirect-wire-"));
+  const inner = await buildMixedInnerJar();
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const caught = await service
+    .getClassSource({
+      className: "com.example.absent.Missing",
+      target: { kind: "jar", value: shellPath },
+      mapping: "obfuscated",
+      mode: "full"
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+  assert.ok(caught, "the lookup must fail for a class in no nested jar");
+
+  const problem = mapErrorToProblem(caught, "nested-wire-req") as {
+    code: string;
+    nestedJars?: string[];
+    context?: Record<string, unknown>;
+  };
+  assert.equal(problem.code, "ERR_CLASS_NOT_FOUND");
+  assert.deepEqual(
+    problem.nestedJars,
+    ["META-INF/jars/api.jar"],
+    "the published envelope must name the inner jars the caller can target next"
+  );
+  // The primitive-only context allowlist must not absorb the structured array.
+  assert.equal(problem.context?.nestedJars, undefined);
+});
+
+// A shell jar holds no classes of its own, so "this artifact is indexed in
+// obfuscated runtime names, use mapping=\"mojang\"" is simply false about it --
+// no mapping choice can make a jar with an empty class index answer. find-class
+// already excluded shell jars from that advice; get-class-source did not, and
+// answered a shell miss by telling the caller to remap a jar that was never
+// obfuscated, instead of pointing at the nested jars that hold the content.
+test("a shell jar's class-not-found hint does not blame an obfuscated namespace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nested-redirect-hint-"));
+  const inner = await buildMixedInnerJar();
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+
+  const service = new SourceService(buildTestConfig(root));
+  const caught = await service
+    .getClassSource({
+      className: "com.example.absent.Missing",
+      target: { kind: "jar", value: shellPath },
+      mapping: "obfuscated",
+      mode: "full"
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+  assert.ok(caught, "the lookup must fail for a class in no nested jar");
+
+  const nextAction = (caught as { details?: { nextAction?: string } }).details?.nextAction ?? "";
+  assert.ok(nextAction.length > 0, "the error must still carry recovery guidance");
+  assert.ok(
+    !nextAction.includes("indexed in obfuscated runtime names"),
+    `a shell-jar miss must not advise remapping; got: ${nextAction}`
+  );
+
+  const problem = mapErrorToProblem(caught, "nested-hint-req") as { hints?: string[] };
+  assert.ok(
+    (problem.hints ?? []).every((hint) => !hint.includes("indexed in obfuscated runtime names")),
+    `the published hints must not advise remapping a shell jar; got: ${JSON.stringify(problem.hints)}`
   );
 });
 

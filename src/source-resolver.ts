@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
@@ -317,6 +318,8 @@ export async function resolveSourceTarget(
   const isTransientFailure = (statusCode?: number): boolean =>
     statusCode === undefined || statusCode >= 500 || statusCode === 429;
 
+  const localM2BinaryJarPath = resolveLocalCoordinateBinaryCandidate(explicitConfig.localM2Path, coordinate);
+
   for (const candidate of resolveLocalCoordinateCandidates(explicitConfig.localM2Path, coordinate)) {
     if (await hasJavaSources(candidate)) {
       const signature = readStatsSignature(candidate);
@@ -325,7 +328,7 @@ export async function resolveSourceTarget(
         artifactSignature: signature,
         origin: "local-m2",
         sourceJarPath: candidate,
-        binaryJarPath: resolveLocalCoordinateBinaryCandidate(explicitConfig.localM2Path, coordinate),
+        binaryJarPath: localM2BinaryJarPath,
         coordinate,
         isDecompiled: false,
         resolvedAt: resolvedAtNow()
@@ -348,15 +351,25 @@ export async function resolveSourceTarget(
     };
   }
 
+  // Both local branches above are gated on SOURCES: a module that ships a binary jar
+  // locally but publishes no sources jar falls through them, and the binary jar they
+  // already discovered would be dropped even though it is still perfectly usable. Keep
+  // it here so the artifact that is ultimately returned still carries a binaryJarPath
+  // for binary-only consumers (get-class-members and friends).
+  const localBinaryJarPath = localM2BinaryJarPath ?? gradleCacheCandidate?.binaryJarPath;
+
   const remoteSourceUrls = buildRemoteSourceUrls(repos, coordinate);
   for (let index = 0; index < remoteSourceUrls.length; index++) {
     const sourceUrl = remoteSourceUrls[index];
     const hasNextAttempt = index < remoteSourceUrls.length - 1;
     try {
-      const download = await downloadToCache(sourceUrl, defaultDownloadPath(explicitConfig.cacheDir, sourceUrl), {
-        retries: explicitConfig.fetchRetries,
-        timeoutMs: explicitConfig.fetchTimeoutMs
-      });
+      const sourceDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, sourceUrl);
+      const download: DownloadResult = existsSync(sourceDestinationPath)
+        ? { ok: true, path: sourceDestinationPath, contentLength: statSync(sourceDestinationPath).size }
+        : await downloadToCache(sourceUrl, sourceDestinationPath, {
+            retries: explicitConfig.fetchRetries,
+            timeoutMs: explicitConfig.fetchTimeoutMs
+          });
 
       if (!download.ok || !download.path || !(await hasJavaSources(download.path))) {
         const transient = download.ok
@@ -382,6 +395,7 @@ export async function resolveSourceTarget(
         artifactSignature: signature,
         origin: "remote-repo",
         sourceJarPath: download.path,
+        binaryJarPath: localBinaryJarPath,
         coordinate,
         repoUrl: sourceUrl,
         isDecompiled: false,
@@ -416,10 +430,13 @@ export async function resolveSourceTarget(
     const binaryUrl = binaryCandidates[index];
     const hasNextAttempt = index < binaryCandidates.length - 1;
     try {
-      const downloaded: DownloadResult = await downloadToCache(binaryUrl, defaultDownloadPath(explicitConfig.cacheDir, binaryUrl), {
-        retries: explicitConfig.fetchRetries,
-        timeoutMs: explicitConfig.fetchTimeoutMs
-      });
+      const binaryDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, binaryUrl);
+      const downloaded: DownloadResult = existsSync(binaryDestinationPath)
+        ? { ok: true, path: binaryDestinationPath }
+        : await downloadToCache(binaryUrl, binaryDestinationPath, {
+            retries: explicitConfig.fetchRetries,
+            timeoutMs: explicitConfig.fetchTimeoutMs
+          });
 
       if (!downloaded.ok || !downloaded.path) {
         const transient = downloaded.ok

@@ -220,3 +220,155 @@ test("source-resolver uses async discovery for sibling jars and Gradle cache can
   assert.doesNotMatch(source, /readdirSync\(/);
   assert.doesNotMatch(source, /fastGlob\.sync\(/);
 });
+
+test("resolveSourceTarget(targetKind=coordinate) keeps the Gradle cache binary jar when the module ships no sources jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-gradle-binary-only-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const binaryJarPath = join(
+    gradleUserHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-gametest-api-v1",
+    "4.0.21",
+    "binary-hash",
+    "fabric-gametest-api-v1-4.0.21.jar"
+  );
+
+  await createJar(binaryJarPath, {
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const remoteSourcesFixture = join(root, "remote-sources.jar");
+  await createJar(remoteSourcesFixture, {
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest.java": [
+      "package net.fabricmc.fabric.api.gametest.v1;",
+      "public interface FabricGameTest {}"
+    ].join("\n")
+  });
+  const remoteSourcesBytes = await readFile(remoteSourcesFixture);
+
+  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = gradleUserHome;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/fabric-gametest-api-v1-4.0.21-sources.jar")) {
+      return new Response(remoteSourcesBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const resolved = await resolveSourceTarget(
+      { kind: "coordinate", value: "net.fabricmc.fabric-api:fabric-gametest-api-v1:4.0.21" },
+      { allowDecompile: true },
+      buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+    );
+
+    assert.equal(resolved.origin, "remote-repo");
+    assert.equal(resolved.isDecompiled, false);
+    assert.ok(resolved.sourceJarPath);
+    assert.equal(resolved.binaryJarPath, binaryJarPath);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousGradleUserHome === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previousGradleUserHome;
+    }
+  }
+});
+
+test("resolveSourceTarget(targetKind=coordinate) reuses the cached binary jar instead of downloading it again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-binary-cache-"));
+  const binaryFixture = join(root, "remote-binary.jar");
+  await createJar(binaryFixture, {
+    "com/example/Cached.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const binaryBytes = await readFile(binaryFixture);
+
+  let binaryFetches = 0;
+  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = join(root, "gradle-home");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/cached-module-1.2.3.jar")) {
+      binaryFetches += 1;
+      return new Response(binaryBytes, {
+        status: 200,
+        headers: { etag: "binary-etag-1" }
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+    const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
+
+    const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+    const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+    assert.equal(binaryFetches, 1);
+    assert.equal(first.origin, "decompiled");
+    assert.equal(second.binaryJarPath, first.binaryJarPath);
+    assert.equal(second.artifactSignature, first.artifactSignature);
+    assert.equal(second.artifactId, first.artifactId);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousGradleUserHome === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previousGradleUserHome;
+    }
+  }
+});
+
+test("resolveSourceTarget(targetKind=coordinate) reuses the cached source jar instead of downloading it again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-source-cache-"));
+  const sourcesFixture = join(root, "remote-sources.jar");
+  await createJar(sourcesFixture, {
+    "com/example/Cached.java": [
+      "package com.example;",
+      "public class Cached {}"
+    ].join("\n")
+  });
+  const sourcesBytes = await readFile(sourcesFixture);
+
+  let sourceFetches = 0;
+  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = join(root, "gradle-home");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/cached-module-1.2.3-sources.jar")) {
+      sourceFetches += 1;
+      return new Response(sourcesBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+    const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
+
+    const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+    const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+    assert.equal(sourceFetches, 1);
+    assert.equal(first.origin, "remote-repo");
+    assert.equal(second.sourceJarPath, first.sourceJarPath);
+    assert.equal(second.artifactSignature, first.artifactSignature);
+    assert.equal(second.artifactId, first.artifactId);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousGradleUserHome === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previousGradleUserHome;
+    }
+  }
+});

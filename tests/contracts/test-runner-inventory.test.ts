@@ -266,7 +266,35 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // entry; markup that renders away (code spans, backslash escapes, character references,
 // HTML comments) split a marker in the source while the reader still saw the forbidden
 // token; and link reference definitions and HTML comments were reported as visible text.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1957;
+// 221 -> 221 / 1957 -> 1960 (coordinate resolve defect round): no new files.
+// tests/source-service/source-resolver.test.ts adds 3 tests — a Gradle-cache
+// module with a binary jar and no sources jar must keep its binaryJarPath, and a
+// repeated coordinate resolve must reuse the cached source/binary jar instead of
+// re-downloading it (which churned the mtime-derived artifactId).
+// 221 -> 221 / 1960 -> 1966 (error-envelope honesty round): no new files. Four
+// existing files grow. tests/mod/nested-jar-redirect.test.ts +2: the shell-jar
+// nested-jar inventory reaches the published envelope (it was populated in
+// error.details and then dropped, because ProblemDetails had no field for it and
+// the context allowlist is primitive-only), and a shell-jar miss no longer
+// advises remapping a jar that holds no classes at all.
+// tests/source-service/classsource-findclass.test.ts +2: the same obfuscation
+// advice is withheld from a native dependency miss (get-class-source had no
+// guard where find-class already had one), and a members lookup on an artifact
+// the tool resolved without a binary jar publishes issueOrigin "tool_issue"
+// instead of blaming the caller's input.
+// tests/source-service/class-source-recovery.test.ts +1: the hint that ends in
+// mapping="mojang" is suppressed when the caller already sent a mapping — the
+// generic dropSatisfiedParameterAsks backstop cannot reach it, since it matches
+// an imperative "Provide/Pass mapping" and the sentence is concatenated into a
+// single published hint.
+// tests/entry-tools/workflows/validate-project.test.ts +1: task="mixin" with no
+// version stops filling the hole with a hardcoded "1.21.10" — a suggestedCall that
+// RUNS and validates the mixin against a Minecraft version the project does not
+// use. The two roles are split instead of dropping the payload: suggestedCall
+// becomes the argument-free list-versions step (the same recovery the sibling
+// "version required but none resolved" site already uses), and the task="mixin"
+// retry shape travels as a <your-mc-version> exampleCalls template.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1966;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

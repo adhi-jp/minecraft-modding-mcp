@@ -134,18 +134,46 @@ function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
+/**
+ * Whether "this artifact is indexed in obfuscated names, ask for mapping=mojang"
+ * is TRUE for this artifact, from the pieces of it the caller sees.
+ *
+ * Two artifact kinds report `mappingApplied: "obfuscated"` without being an
+ * obfuscated Minecraft index, and the hint is simply false for them:
+ *  - a native dependency artifact, where the resolver SUBSTITUTES "obfuscated"
+ *    after the mapping pipeline declines (its class names are already the
+ *    library's own, so no mapping exists to ask for), and
+ *  - a shell jar, which holds no classes at all — its content lives in the
+ *    nested jars, and no mapping choice can change that.
+ *
+ * `looksLikeDeobfuscatedClassName` matches any capitalized simple name, so
+ * without these exclusions an ordinary library class such as "GameTest"
+ * qualifies and the caller is told to remap a jar that was never obfuscated.
+ */
+function isObfuscatedNamespaceHintTrue(input: {
+  mappingApplied: SourceMapping | undefined;
+  qualityFlags: readonly string[];
+  nativeDependency: boolean;
+  className: string;
+}): boolean {
+  return (
+    input.mappingApplied === "obfuscated" &&
+    !input.nativeDependency &&
+    !input.qualityFlags.includes("shell-jar") &&
+    looksLikeDeobfuscatedClassName(input.className)
+  );
+}
+
 function shouldSuggestObfuscatedMapping(
   artifact: ReturnType<SourceService["getArtifact"]>,
   className: string
 ): boolean {
-  const nativeDependency = artifact.provenance?.dependencyResolution != null;
-  const shellArtifact = artifact.qualityFlags.includes("shell-jar");
-  return (
-    artifact.mappingApplied === "obfuscated" &&
-    !nativeDependency &&
-    !shellArtifact &&
-    looksLikeDeobfuscatedClassName(className)
-  );
+  return isObfuscatedNamespaceHintTrue({
+    mappingApplied: artifact.mappingApplied,
+    qualityFlags: artifact.qualityFlags,
+    nativeDependency: artifact.provenance?.dependencyResolution != null,
+    className
+  });
 }
 
 function classNameToClassPath(className: string): string {
@@ -321,6 +349,21 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
   mappingApplied: SourceMapping;
   requestedMapping: SourceMapping;
   qualityFlags: string[];
+  /**
+   * The mapping the CALLER wrote in the request, undefined when they omitted it.
+   * Distinct from `requestedMapping`, which falls back to the artifact's own
+   * namespace: only the caller-supplied value can tell whether the obfuscated
+   * namespace hint would be re-asking for an argument that is already present.
+   */
+  callerSuppliedMapping?: SourceMapping;
+  /**
+   * Whether the REQUESTED artifact is a native dependency, i.e. its provenance
+   * carries `dependencyResolution`. Such artifacts are handed
+   * `mappingApplied: "obfuscated"` by substitution rather than by being an
+   * obfuscated index, which the obfuscated namespace hint must not mistake for
+   * a missing mapping argument.
+   */
+  nativeDependency?: boolean;
   attemptedBinaryFallback: boolean;
   filePath?: string;
   targetKind?: string;
@@ -393,7 +436,31 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
     }
   }
 
-  if (input.mappingApplied === "obfuscated" && looksLikeDeobfuscatedClassName(input.className)) {
+  // Two gates, because the hint fails in two independent ways.
+  //
+  // `isObfuscatedNamespaceHintTrue` decides whether the claim is even true of
+  // this artifact — a dependency jar or a shell jar reports "obfuscated"
+  // without being an obfuscated index, and used to be told to remap itself.
+  //
+  // The second gate is about the ASK, not the claim: the hint ends in
+  // `mapping="mojang"`, so firing it at a caller who already sent a
+  // non-obfuscated mapping asks for the argument they just supplied and sends
+  // them round the same call again. The generic backstop in
+  // `dropSatisfiedParameterAsks` cannot rescue this one — it matches an
+  // imperative "Provide/Pass mapping", and the sentence is concatenated into
+  // the same `nextAction` string as the find-class guidance, which is published
+  // as a single hint that no mid-string excision can repair.
+  const callerAskedForNonObfuscatedMapping =
+    input.callerSuppliedMapping != null && input.callerSuppliedMapping !== "obfuscated";
+  if (
+    !callerAskedForNonObfuscatedMapping &&
+    isObfuscatedNamespaceHintTrue({
+      mappingApplied: input.mappingApplied,
+      qualityFlags: input.qualityFlags,
+      nativeDependency: input.nativeDependency === true,
+      className: input.className
+    })
+  ) {
     nextAction += ` ${obfuscatedNamespaceHint(input.className)}`;
   }
 
@@ -979,6 +1046,8 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       mappingApplied,
       requestedMapping,
       qualityFlags,
+      callerSuppliedMapping: input.mapping,
+      nativeDependency: provenance?.dependencyResolution != null,
       attemptedBinaryFallback,
       targetKind: input.target?.kind,
       targetValue:
@@ -1024,6 +1093,8 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       mappingApplied,
       requestedMapping,
       qualityFlags,
+      callerSuppliedMapping: input.mapping,
+      nativeDependency: provenance?.dependencyResolution != null,
       attemptedBinaryFallback,
       filePath,
       targetKind: input.target?.kind,
@@ -1261,6 +1332,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       details: {
         artifactId,
         className,
+        // `ERR_CONTEXT_UNRESOLVED` classifies as `code_issue` by code, which is
+        // right for the sibling case (a caller naming a version no artifact
+        // carries) and wrong here: the artifact was resolved by the TOOL, and
+        // whether it carries a binary jar is not something the request can
+        // express. Published as caller-fixable it invites an endless retry of
+        // an input that was never at fault, so this site overrides the default.
+        issueOrigin: "tool_issue",
         nextAction:
           "Resolve with target: { kind: \"jar\" | \"version\", value: ... } or use an artifact that has a binary jar."
       }
@@ -1359,6 +1437,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         mappingApplied,
         requestedMapping,
         qualityFlags,
+        callerSuppliedMapping: input.mapping,
+        nativeDependency: provenance?.dependencyResolution != null,
         attemptedBinaryFallback: true,
         targetKind: input.target?.kind,
         targetValue:
