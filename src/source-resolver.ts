@@ -464,7 +464,20 @@ export async function resolveSourceTarget(
   // already discovered would be dropped even though it is still perfectly usable. Keep
   // it here so the artifact that is ultimately returned still carries a binaryJarPath
   // for binary-only consumers (get-class-members and friends).
-  const localBinaryJarPath = localM2BinaryJarPath ?? gradleCacheCandidate?.binaryJarPath;
+  //
+  // Existence alone is not proof: an interrupted local copy would otherwise get
+  // to veto a perfectly good companion in the other cache, exactly the failure
+  // `firstReadableJarArchive` exists to prevent elsewhere in this cascade. Kept
+  // as a candidate list rather than resolved here, so the readable one is only
+  // picked - lazily, at the one site that attaches it - once a remote sources
+  // jar has actually been found and this is known to be needed.
+  const localBinaryJarCandidates = [
+    ...new Set(
+      [localM2BinaryJarPath, gradleCacheCandidate?.binaryJarPath].filter(
+        (candidate): candidate is string => candidate !== undefined
+      )
+    )
+  ];
 
   // The companion above may be the classifier-less jar, which is a different
   // artifact than a classified coordinate asks for. That substitution is fine
@@ -545,7 +558,7 @@ export async function resolveSourceTarget(
         signature,
         origin: "remote-repo",
         sourceJarPath: download.path,
-        binaryJarPath: localBinaryJarPath,
+        binaryJarPath: await firstReadableJarArchive(localBinaryJarCandidates),
         repoUrl: sourceUrl,
         isDecompiled: false
       });

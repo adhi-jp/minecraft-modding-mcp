@@ -360,7 +360,12 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // the cache, asymmetric with the binary leg's existing fix.
 // tests/source-service/source-resolver.test.ts +1: a corrupt remote sources
 // download is evicted before failover.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2022;
+// 2022 -> 2023 (+1). A corrupt local binary companion could shadow a readable
+// one in the other cache.
+// tests/source-service/source-resolver.test.ts +1: a corrupt local binary
+// companion no longer shadows a readable one when a remote sources jar is
+// found.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2023;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

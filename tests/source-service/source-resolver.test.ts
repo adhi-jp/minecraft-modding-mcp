@@ -1161,3 +1161,59 @@ test("resolveSourceTarget(targetKind=coordinate) refuses a remote sources downlo
     [{ repoUrl: sourcesUrlA, statusCode: 200 }]
   );
 });
+
+test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary companion for the readable Gradle cache one when a remote sources jar is found", async () => {
+  // Sibling of the decompile-only case above: this is the *other* place a
+  // local binary companion gets attached - alongside a remote sources jar
+  // that WAS found - and it used to pick by existence alone (`??`) instead of
+  // readability, so a corrupt ~/.m2 companion could shadow a perfectly good
+  // Gradle-cache one.
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-remote-source-local-binary-order-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const coordinate = "com.example:shadowed-remote:1.0";
+  const corruptM2JarPath = join(root, "m2", "com", "example", "shadowed-remote", "1.0", "shadowed-remote-1.0.jar");
+  await writeUnreadableJar(corruptM2JarPath, Buffer.from("this is not a zip archive", "utf8"));
+  const gradleJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "shadowed-remote",
+    "1.0",
+    "shadowed-remote-1.0.jar"
+  );
+  await createJar(gradleJarPath, {
+    "com/example/ShadowedRemote.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const sourcesPath = "/com/example/shadowed-remote/1.0/shadowed-remote-1.0-sources.jar";
+  const sourcesUrl = `${REPO_A}${sourcesPath}`;
+  const fixture = join(root, "remote-sources.jar");
+  await createJar(fixture, {
+    "com/example/ShadowedRemote.java": ["package com.example;", "public class ShadowedRemote {}"].join("\n")
+  });
+  const sourcesBytes = await readFile(fixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === sourcesUrl) {
+      return new Response(sourcesBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: coordinate },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: [REPO_A] })
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "remote-repo");
+  assert.equal(
+    resolved.binaryJarPath,
+    gradleJarPath,
+    "a corrupt companion in the first location must not shadow a good companion in the second"
+  );
+});
