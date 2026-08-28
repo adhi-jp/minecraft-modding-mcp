@@ -247,6 +247,9 @@ function retryDelay(baseMs: number, attempt: number): number {
   return Math.floor(baseMs * 2 ** attempt + Math.random() * 128);
 }
 
+/** Upper bound on how long a repository-supplied `Retry-After` may pause a retry. */
+const MAX_RETRY_AFTER_MS = 30_000;
+
 /** Stream the file through sha256 so a multi-hundred-megabyte jar never lands in memory. */
 async function digestFile(filePath: string): Promise<{ contentSha256: string; contentLength: number }> {
   const hash = createHash("sha256");
@@ -746,7 +749,13 @@ export async function downloadToCache(
         }
 
         const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
-        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : retryDelay(200, attempt);
+        // A repository-supplied Retry-After is a hint, not a mandate: an
+        // unreasonable value (or a hostile one) must not stall the caller far
+        // past what a retry is worth, so it is capped rather than trusted whole.
+        const waitMs =
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS)
+            : retryDelay(200, attempt);
         await sleep(waitMs);
         attempt += 1;
         continue;

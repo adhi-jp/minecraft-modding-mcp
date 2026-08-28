@@ -241,6 +241,49 @@ test("downloadToCache honors a positive retry-after header delay", async () => {
   assert.ok(elapsed >= 900, `expected >= ~1s retry-after delay, got ${elapsed}ms`);
 });
 
+test("downloadToCache caps an unreasonable retry-after instead of honoring it whole", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const root = await mkdtemp(join(tmpdir(), "downloader-retry-after-cap-"));
+  const destination = join(root, "file.jar");
+  let calls = 0;
+
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      // Far past any reasonable retry pace - proves the header is capped,
+      // not trusted whole, per the "Retry-After can suspend a tool call far
+      // beyond its configured timeout" review finding.
+      return new Response("", { status: 429, headers: { "retry-after": "10000" } });
+    }
+    return new Response(Buffer.from("ok-bytes"), { status: 200 });
+  }) as typeof fetch;
+
+  const resultPromise = downloadToCache("https://repo.example.com/a.jar", destination, {
+    retries: 1,
+    timeoutMs: 60_000,
+    fetchFn
+  });
+
+  // Real setImmediate (not mocked) flushes the microtasks between the first
+  // fetch resolving and the retry's `sleep()` actually scheduling its
+  // (mocked) setTimeout, so the tick below lands after that timer exists.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Pinned to the production cap: a value this test never reads from source,
+  // so it fails loudly if the cap ever regresses back toward the raw header.
+  const MAX_RETRY_AFTER_MS = 30_000;
+  t.mock.timers.tick(MAX_RETRY_AFTER_MS - 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1, "must not retry before the capped delay elapses");
+
+  t.mock.timers.tick(2);
+  const result = await resultPromise;
+
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+});
+
 test("downloadToCache rethrows a network error once retries are exhausted", async () => {
   const root = await mkdtemp(join(tmpdir(), "downloader-neterr-"));
   const destination = join(root, "file.jar");
