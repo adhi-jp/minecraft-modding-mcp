@@ -365,7 +365,12 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // tests/source-service/source-resolver.test.ts +1: a corrupt local binary
 // companion no longer shadows a readable one when a remote sources jar is
 // found.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2023;
+// 2023 -> 2024 (+1). The changelog gate's path markers were bypassed by a
+// preceding `/` or `.`.
+// tests/contracts/changelog-release-section-gate.test.ts +1: a path marker
+// preceded by `/` or `.` now fires, without over-firing on words that merely
+// end in the marker text.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2024;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

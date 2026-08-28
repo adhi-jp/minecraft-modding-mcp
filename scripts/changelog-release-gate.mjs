@@ -50,27 +50,34 @@ export const RELEASE_ENTRY_MAX_CHARS = 1500;
 export const FORBIDDEN_MARKERS = [
   {
     id: "test-path",
-    pattern: /(?:^|[\s`("'[])tests\//i,
+    // A negative lookbehind on word characters, not a fixed set of allowed
+    // prefixes: the earlier allowlist ([\s`("'[) plus start-of-string) omitted
+    // `/` and `.`, so "./tests/foo" and "packages/tests/foo" — the ordinary way
+    // to write a relative or nested repository path in prose — slipped through
+    // undetected. Only a preceding letter/digit/underscore still blocks the
+    // match, so a real word that merely ends in "tests" (protests, contests)
+    // is still spared.
+    pattern: /(?<![A-Za-z0-9_])tests\//i,
     why: "names a path under tests/ — the reader cannot open this repository's test tree",
   },
   {
     id: "source-path",
-    pattern: /(?:^|[\s`("'[])src\//i,
+    pattern: /(?<![A-Za-z0-9_])src\//i,
     why: "names a path under src/ — describe the observable behavior, not the file that implements it",
   },
   {
     id: "script-path",
-    pattern: /(?:^|[\s`("'[])scripts\//i,
+    pattern: /(?<![A-Za-z0-9_])scripts\//i,
     why: "names a repository script — build tooling is not part of the published surface",
   },
   {
     id: "workflow-path",
-    pattern: /(?:^|[\s`("'[])\.github\//i,
+    pattern: /(?<![A-Za-z0-9_])\.github\//i,
     why: "names a CI workflow — CI/CD changes are excluded from CHANGELOG.md entirely",
   },
   {
     id: "build-output-path",
-    pattern: /(?:^|[\s`("'[])(?:dist|coverage)\//i,
+    pattern: /(?<![A-Za-z0-9_])(?:dist|coverage)\//i,
     why: "names build or coverage output — describe what the installed package does instead",
   },
   {

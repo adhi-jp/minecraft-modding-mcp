@@ -75,6 +75,33 @@ test("every forbidden marker is detected in a released entry", () => {
   }
 });
 
+test("a path-based marker fires even when preceded by '/' or '.', not only the allowed-punctuation set", () => {
+  // Regression: the boundary used to be a fixed allowlist of preceding characters
+  // ([\s`("'[) plus start-of-string) that omitted `/` and `.`, so the ordinary way
+  // to write a relative or nested repository path in prose slipped through
+  // undetected. A real word that merely ends in the marker text ("protests",
+  // "contests") must still be spared.
+  const probes: Array<{ marker: string; entry: string }> = [
+    { marker: "test-path", entry: "- See ./tests/nested-jar-redirect-sample.json for the raw payload shape." },
+    { marker: "test-path", entry: "- Root cause traced through packages/tests/foo-bar.ts coverage." },
+    { marker: "source-path", entry: "- See ./src/repo-downloader.ts for the new redirect handling." },
+    { marker: "script-path", entry: "- Config lives at ./scripts/changelog-release-gate.mjs now." }
+  ];
+
+  for (const { marker, entry } of probes) {
+    const findings = auditReleaseSection(extractReleaseSection(sectionFixture([entry]), "9.9.9"));
+    assert.ok(
+      findings.some((finding) => finding.kind === "internal-reference" && finding.marker === marker),
+      `marker "${marker}" did not fire on: ${entry}`
+    );
+  }
+
+  const safe = auditReleaseSection(
+    extractReleaseSection(sectionFixture(["- This protests the outcome loudly."]), "9.9.9")
+  );
+  assert.deepEqual(safe, [], "a word that merely ends in the marker text must not fire");
+});
+
 test("the length ceiling is exclusive: exactly the ceiling passes, one over fails", () => {
   const entry = (payload: number) => `- ${"a".repeat(payload)}`;
 
