@@ -370,7 +370,14 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // tests/contracts/changelog-release-section-gate.test.ts +1: a path marker
 // preceded by `/` or `.` now fires, without over-firing on words that merely
 // end in the marker text.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2024;
+// 2024 -> 2026 (+2). The tool_issue override on a missing binaryJarPath also
+// mislabeled a caller-fixable target/artifactId as tool-caused.
+// tests/source-service/classsource-findclass.test.ts +1: the tool-resolved case now
+// actually goes through target resolution instead of a raw artifactId, and the
+// caller-named-artifactId case is pinned to code_issue.
+// tests/entry-tools/verify-mixin-target/verify-mixin-target.test.ts +1: a caller-named
+// target: { kind: "jar", ... } with no binary companion is pinned to code_issue.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2026;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

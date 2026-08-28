@@ -731,16 +731,72 @@ test("SourceService getClassMembers rejects representative unresolved preconditi
 
 // `issueOrigin` is derived from the error CODE alone, and ERR_CONTEXT_UNRESOLVED
 // is classified `code_issue` because it also covers real caller mistakes (naming
-// a version no artifact carries). This site is not one of those: the artifact was
-// resolved by the TOOL, and whether it carries a binary jar is not something the
-// request can express. Published as caller-fixable, it invites an agent to keep
-// re-sending an input that was never at fault. The per-throw-site override fixes
-// this ONE site; the code-keyed default map must stay exactly as it was.
-test("a members lookup on an artifact with no binary jar is published as a tool issue", async () => {
+// a version no artifact carries, or an artifactId/jar they picked themselves).
+// This site overrides that ONLY when the TOOL - not the caller - picked the
+// artifact: a version/coordinate target resolved internally. The per-throw-site
+// override fixes this ONE case; the code-keyed default map must stay exactly as
+// it was.
+test("a members lookup on a tool-resolved artifact with no binary jar is published as a tool issue", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
   const { issueOriginForErrorCode } = await import("../../src/error-mapping.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-origin-"));
+  const coordinate = "com.example:demo-tool-issue:1.0.0";
+  const sourceJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "demo-tool-issue",
+    "1.0.0",
+    "demo-tool-issue-1.0.0-sources.jar"
+  );
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: {
+      target: { kind: "coordinate"; value: string };
+      className: string;
+    }) => Promise<unknown>;
+  })
+    .getClassMembers({ target: { kind: "coordinate", value: coordinate }, className: "com.example.Demo" })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-req") as {
+    code: string;
+    issueOrigin: string;
+    context?: Record<string, unknown>;
+  };
+  assert.equal(problem.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+  assert.equal(
+    problem.issueOrigin,
+    "tool_issue",
+    "a missing binary jar on a tool-resolved artifact is not something the caller's input can fix"
+  );
+  // The override is per-error only: the code-keyed default is untouched, so the
+  // sibling caller-error sites keep classifying as code_issue.
+  assert.equal(issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED), "code_issue");
+  // The override key must not ride out in the public primitive context blob.
+  assert.equal(problem.context?.issueOrigin, undefined);
+});
+
+// The sibling of the test above: when the CALLER named the artifact directly
+// (by artifactId, bypassing target resolution), a missing binary jar is their
+// own input to fix, so the override must NOT fire and the code-keyed
+// `code_issue` default must stand.
+test("a members lookup on a caller-named artifact with no binary jar stays a code issue", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-caller-named-"));
   const sourceJarPath = join(root, "source-only.jar");
   await createJar(sourceJarPath, {
     "com/example/Demo.java": "package com.example;\npublic class Demo {}"
@@ -769,22 +825,15 @@ test("a members lookup on an artifact with no binary jar is published as a tool 
 
   assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
 
-  const problem = mapErrorToProblem(caught, "members-no-binary-req") as {
+  const problem = mapErrorToProblem(caught, "members-no-binary-caller-named-req") as {
     code: string;
     issueOrigin: string;
-    context?: Record<string, unknown>;
   };
-  assert.equal(problem.code, ERROR_CODES.CONTEXT_UNRESOLVED);
   assert.equal(
     problem.issueOrigin,
-    "tool_issue",
-    "a missing binary jar on a tool-resolved artifact is not something the caller's input can fix"
+    "code_issue",
+    "the caller picked this artifactId directly, so a missing binary jar is their input to fix"
   );
-  // The override is per-error only: the code-keyed default is untouched, so the
-  // sibling caller-error sites keep classifying as code_issue.
-  assert.equal(issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED), "code_issue");
-  // The override key must not ride out in the public primitive context blob.
-  assert.equal(problem.context?.issueOrigin, undefined);
 });
 
 test("SourceService getClassMembers delegates to explorer and returns member payload", async () => {

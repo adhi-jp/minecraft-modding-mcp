@@ -357,12 +357,16 @@ export class VerifyMixinTargetService {
           owner,
           // `ERR_CONTEXT_UNRESOLVED` classifies as `code_issue` by code, which
           // is right for the sibling case (a caller naming a version no
-          // artifact carries) and wrong here: the artifact was picked by the
-          // TOOL from the request's target, and whether it ships a binary jar
-          // is not something the request can express. Published as
-          // caller-fixable it invites an endless retry of an input that was
-          // never at fault, so this site overrides the default.
-          issueOrigin: "tool_issue",
+          // artifact carries) and for a `target: { kind: "jar", ... }` request:
+          // there the caller named the exact jar, and having none for its own
+          // sources is exactly the input the caller can change. It is wrong
+          // only when the artifact was picked by the TOOL from a non-jar target
+          // (version/coordinate/workspace/dependency), where whether it ships a
+          // binary jar is not something the request can express. Published as
+          // caller-fixable in that case it invites an endless retry of an input
+          // that was never at fault, so this site overrides the default only
+          // then.
+          issueOrigin: input.target?.kind === "jar" ? undefined : "tool_issue",
           nextAction:
             `verify-mixin-target reads the target's members from bytecode, so it needs an artifact with a binary jar. `
             + `Re-target with target: { kind: "jar", value: "<path to the jar>" }, or with a version whose artifact carries one `

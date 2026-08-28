@@ -1013,3 +1013,48 @@ test("C29: the missing-binary-jar failure classifies as tool_issue and carries a
     }
   );
 });
+
+test("C29b: the missing-binary-jar failure stays code_issue when the caller named the jar directly", async () => {
+  // Sibling of C29: here the caller named the exact jar via
+  // target: { kind: "jar", ... }, so having no binary companion is the
+  // caller's own input to fix. The override must not fire.
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "caller-named-sources-only",
+      mappingApplied: "obfuscated",
+      binaryJarPath: undefined,
+      provenance: undefined,
+      warnings: []
+    }),
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when the binary jar is missing");
+    }
+  });
+  await assert.rejects(
+    () =>
+      service.execute({
+        owner: baseInput.owner,
+        target: { kind: "jar", value: "/tmp/caller-picked-sources.jar" },
+        member: { kind: "method", name: "tick" }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      const details = (err as { details?: { issueOrigin?: string } }).details ?? {};
+      const problem = mapErrorToProblem(err, "req-c29b-caller-named-jar", {
+        tool: "verify-mixin-target",
+        normalizedInput: {
+          owner: baseInput.owner,
+          target: { kind: "jar", value: "/tmp/caller-picked-sources.jar" },
+          member: { kind: "method", name: "tick" }
+        }
+      }) as { issueOrigin: string };
+      assert.equal(details.issueOrigin, undefined);
+      assert.equal(
+        problem.issueOrigin,
+        "code_issue",
+        "the caller named this jar directly, so a missing binary companion is their input to fix"
+      );
+      return true;
+    }
+  );
+});

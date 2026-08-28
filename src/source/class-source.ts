@@ -1349,6 +1349,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   }
 
   if (!binaryJarPath) {
+    // The override below applies only when the TOOL picked this artifact
+    // without the caller expressing an opinion on it: a version/coordinate
+    // target, or falling through the workspace/dependency shapes. A caller who
+    // passed `artifactId` directly, or `target: { kind: "jar", ... }`, named
+    // the exact artifact/jar themselves - having no binary companion is then
+    // exactly the input they can change.
+    const artifactWasCallerNamed = Boolean(normalizedArtifactId) || input.target?.kind === "jar";
     throw createError({
       code: ERROR_CODES.CONTEXT_UNRESOLVED,
       message: `Class members require a binary jar, but artifact "${artifactId}" has no binaryJarPath.`,
@@ -1357,11 +1364,12 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         className,
         // `ERR_CONTEXT_UNRESOLVED` classifies as `code_issue` by code, which is
         // right for the sibling case (a caller naming a version no artifact
-        // carries) and wrong here: the artifact was resolved by the TOOL, and
-        // whether it carries a binary jar is not something the request can
+        // carries) and wrong when the artifact was resolved by the TOOL, since
+        // whether it carries a binary jar is not something that request could
         // express. Published as caller-fixable it invites an endless retry of
-        // an input that was never at fault, so this site overrides the default.
-        issueOrigin: "tool_issue",
+        // an input that was never at fault, so this site overrides the default
+        // for the tool-resolved case only.
+        issueOrigin: artifactWasCallerNamed ? undefined : "tool_issue",
         nextAction:
           "Resolve with target: { kind: \"jar\" | \"version\", value: ... } or use an artifact that has a binary jar."
       }
