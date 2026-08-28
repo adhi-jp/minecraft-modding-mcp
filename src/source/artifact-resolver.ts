@@ -1382,14 +1382,25 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
   };
 }
 
+/**
+ * Describe what an artifact's indexed contents are.
+ *
+ * `sourceKind` is a derivation question — was the text produced by decompiling
+ * bytecode? — and only the persisted `isDecompiled` flag answers it. `origin`
+ * records provenance (where the bytes came from) and is deliberately not read:
+ * the two axes disagree in practice, most visibly for a Jar-in-Jar shell, whose
+ * row keeps origin "decompiled" while ingest clears the derivation flag. It
+ * stays in the input shape only because every caller already carries it
+ * alongside the fields that are read.
+ */
 export function buildArtifactContentsSummary(_svc: SourceService, input: {
   origin: ResolvedSourceArtifact["origin"];
   sourceJarPath?: string;
-  isDecompiled?: boolean;
+  isDecompiled: boolean;
   qualityFlags: string[];
 }): ArtifactContentsSummary {
   const sourceKind =
-    input.isDecompiled || input.origin === "decompiled" || !normalizeOptionalString(input.sourceJarPath)
+    input.isDecompiled || !normalizeOptionalString(input.sourceJarPath)
       ? "decompiled-binary"
       : "source-jar";
   const sourceCoverage = hasPartialNetMinecraftCoverage(input.qualityFlags) ? "partial" : "full";

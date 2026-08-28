@@ -836,6 +836,9 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
 
   let artifactId = normalizedArtifactId;
   let origin: ResolvedSourceArtifact["origin"] = "local-jar";
+  // Derivation, tracked separately from origin: whether the indexed text was
+  // produced by decompiling bytecode. Only the persisted flag answers that.
+  let isDecompiled = false;
   let warnings: string[] = [];
   let requestedMapping: SourceMapping = normalizeMapping(input.mapping);
   let mappingApplied: SourceMapping = requestedMapping;
@@ -866,6 +869,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     });
     artifactId = resolved.artifactId;
     origin = resolved.origin;
+    isDecompiled = resolved.isDecompiled;
     warnings = [...resolved.warnings];
     requestedMapping = resolved.requestedMapping;
     mappingApplied = resolved.mappingApplied;
@@ -879,6 +883,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     const artifact = svc.getArtifact(artifactId);
     artifactId = artifact.artifactId;
     origin = artifact.origin;
+    isDecompiled = artifact.isDecompiled;
     requestedMapping = inheritArtifactMapping(input.mapping, artifact);
     mappingApplied = artifact.mappingApplied ?? requestedMapping;
     provenance = artifact.provenance;
@@ -902,6 +907,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
 
   let activeArtifactId = artifactId;
   let activeOrigin = origin;
+  let activeIsDecompiled = isDecompiled;
   let activeProvenance = provenance;
   let activeQualityFlags = [...qualityFlags];
   let activeMappingApplied = mappingApplied;
@@ -942,6 +948,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
 
     activeArtifactId = fallbackResolved.artifactId;
     activeOrigin = fallbackResolved.origin;
+    activeIsDecompiled = fallbackResolved.isDecompiled;
     activeMappingApplied = fallbackResolved.mappingApplied ?? activeMappingApplied;
     activeProvenance = fallbackResolved.provenance ?? activeProvenance;
     activeQualityFlags = dedupeQualityFlags([...(fallbackResolved.qualityFlags ?? []), "binary-fallback"]);
@@ -989,6 +996,9 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     });
     activeArtifactId = redirectResolved.artifactId;
     activeOrigin = redirectResolved.origin;
+    // The INNER jar's derivation: the shell that bundled it holds no source of
+    // its own, so its flag says nothing about the text being returned here.
+    activeIsDecompiled = redirectResolved.isDecompiled;
     activeMappingApplied = redirectResolved.mappingApplied ?? activeMappingApplied;
     activeProvenance = redirectResolved.provenance
       ? {
@@ -1170,7 +1180,16 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
   // decompiled source vs `gameRenderState()` in the runtime jar). Flag it so
   // callers verify names against get-class-members (bytecode-derived) before
   // copying signatures out of this source.
-  if (activeOrigin === "decompiled") {
+  //
+  // The gate is the persisted `isDecompiled` flag, never `origin === "decompiled"`:
+  // origin records WHERE the bytes came from, derivation records WHETHER the text
+  // was decompiled, and the two disagree. A Jar-in-Jar shell keeps the origin the
+  // resolver chose while ingest clears its derivation flag (src/source/indexer.ts),
+  // so an origin-keyed gate warned about decompiled signatures for a jar that holds
+  // no source at all. file-access, search, artifact-resolver and the mapping
+  // pipeline all read the boolean; do not "restore consistency" by keying this
+  // back on the origin.
+  if (activeIsDecompiled) {
     activeQualityFlags = dedupeQualityFlags([
       ...activeQualityFlags,
       "decompiled-source-signatures-unverified"
@@ -1205,7 +1224,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     artifactContents: svc.buildArtifactContentsSummary({
       origin: activeOrigin,
       sourceJarPath: activeSourceJarPath,
-      isDecompiled: activeOrigin === "decompiled",
+      isDecompiled: activeIsDecompiled,
       qualityFlags: activeQualityFlags
     }),
     ...(continuation?.suggestedCall ? { suggestedCall: continuation.suggestedCall } : {}),
@@ -1243,6 +1262,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
 
   let artifactId = normalizedArtifactId;
   let origin: ResolvedSourceArtifact["origin"] = "local-jar";
+  // See getClassSource: derivation is the persisted flag, not the origin.
+  let isDecompiled = false;
   let warnings: string[] = [];
   let mappingApplied: SourceMapping = requestedMapping;
   let provenance: ArtifactProvenance | undefined;
@@ -1278,6 +1299,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     });
     artifactId = resolved.artifactId;
     origin = resolved.origin;
+    isDecompiled = resolved.isDecompiled;
     warnings.push(...resolved.warnings);
     requestedMapping = resolved.requestedMapping;
     mappingApplied = resolved.mappingApplied;
@@ -1291,6 +1313,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     const artifact = svc.getArtifact(artifactId);
     artifactId = artifact.artifactId;
     origin = artifact.origin;
+    isDecompiled = artifact.isDecompiled;
     requestedMapping = inheritArtifactMapping(input.mapping, artifact);
     mappingApplied = artifact.mappingApplied ?? requestedMapping;
     provenance = artifact.provenance;
@@ -1624,7 +1647,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     artifactContents: svc.buildArtifactContentsSummary({
       origin,
       sourceJarPath,
-      isDecompiled: origin === "decompiled",
+      isDecompiled,
       qualityFlags: fallbackQualityFlags
     }),
     ...(decompiledFallback ? { decompiledFallback } : {}),

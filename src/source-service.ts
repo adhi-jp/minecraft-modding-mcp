@@ -810,7 +810,7 @@ export class SourceService {
   buildArtifactContentsSummary(input: {
     origin: ResolvedSourceArtifact["origin"];
     sourceJarPath?: string;
-    isDecompiled?: boolean;
+    isDecompiled: boolean;
     qualityFlags: string[];
   }): ArtifactContentsSummary {
     return artifactResolver.buildArtifactContentsSummary(this, input);

@@ -8,7 +8,8 @@ import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { buildInnerJarBytes, createShellJar } from "../helpers/nested-jar.ts";
+import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -1002,6 +1003,251 @@ test("SourceService getClassSource does not flag non-decompiled origin", async (
   assert.notEqual(result.origin, "decompiled");
   assert.ok(!result.qualityFlags.includes("decompiled-source-signatures-unverified"));
   assert.ok(!result.warnings.some((warning) => warning.includes("get-class-members")));
+});
+
+// ---------------------------------------------------------------------------
+// Derivation vs provenance.
+//
+// `origin` records WHERE the bytes came from; the persisted `isDecompiled`
+// flag records WHETHER the indexed text was produced by decompiling them. The
+// two axes are orthogonal and disagree in practice (a Jar-in-Jar shell keeps
+// the resolver's origin while ingest clears its derivation flag), so every
+// derivation question must be answered from the boolean.
+// ---------------------------------------------------------------------------
+
+test("SourceService getClassSource flags decompiled text whose origin is not decompiled", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-m2-decompiled-"));
+  const service = new SourceService(buildTestConfig(root));
+  // Bytes came from the local m2 repository; the indexed text was produced by
+  // decompiling them. Provenance "local-m2", derivation true.
+  seedIndexedArtifact(service, {
+    artifactId: "m2-decompiled",
+    origin: "local-m2",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: [],
+    version: "1.21.10",
+    isDecompiled: true,
+    sourceJarPath: join(root, "foo-sources.jar"),
+    files: [
+      {
+        filePath: "com/example/Foo.java",
+        content: ["package com.example;", "public class Foo {", "  public void bar() {}", "}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/Foo.java",
+        symbolKind: "class",
+        symbolName: "Foo",
+        qualifiedName: "com.example.Foo",
+        line: 2
+      }
+    ]
+  });
+
+  const result = await service.getClassSource({
+    artifactId: "m2-decompiled",
+    className: "com.example.Foo",
+    mode: "full"
+  });
+
+  assert.equal(result.origin, "local-m2");
+  assert.ok(
+    result.qualityFlags.includes("decompiled-source-signatures-unverified"),
+    "decompiled text must be flagged even when the origin names a repository"
+  );
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("get-class-members")),
+    "decompiled text must advise verifying signatures via get-class-members"
+  );
+  assert.equal(
+    result.artifactContents.sourceKind,
+    "decompiled-binary",
+    "artifactContents must describe the persisted derivation, not the origin"
+  );
+});
+
+test("SourceService getClassSource does not flag an artifact whose decompiled origin outlived its persisted flag", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-shell-origin-"));
+  const service = new SourceService(buildTestConfig(root));
+  // The Jar-in-Jar shell shape: ingest leaves the resolver's origin alone and
+  // clears isDecompiled (src/source/indexer.ts), so the persisted row pairs
+  // origin "decompiled" with derivation false. The row holds no decompiled
+  // source, so it must not claim unverified decompiled signatures.
+  seedIndexedArtifact(service, {
+    artifactId: "shell-decompiled-origin",
+    origin: "decompiled",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["shell-jar"],
+    version: "1.21.10",
+    isDecompiled: false,
+    files: [
+      {
+        filePath: "com/example/Foo.java",
+        content: ["package com.example;", "public class Foo {", "  public void bar() {}", "}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/Foo.java",
+        symbolKind: "class",
+        symbolName: "Foo",
+        qualifiedName: "com.example.Foo",
+        line: 2
+      }
+    ]
+  });
+
+  const result = await service.getClassSource({
+    artifactId: "shell-decompiled-origin",
+    className: "com.example.Foo",
+    mode: "full"
+  });
+
+  assert.equal(result.origin, "decompiled", "the published origin value stays untouched");
+  assert.ok(
+    !result.qualityFlags.includes("decompiled-source-signatures-unverified"),
+    "an artifact the index records as not decompiled must not carry the decompiled flag"
+  );
+  assert.ok(
+    !result.warnings.some((warning) => warning.includes("get-class-members")),
+    "an artifact the index records as not decompiled must not warn about decompiled signatures"
+  );
+});
+
+test("SourceService getClassMembers reports artifactContents from the persisted decompiled flag", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-decompiled-flag-"));
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "m2-decompiled-members",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    isDecompiled: true,
+    sourceJarPath: join(root, "foo-sources.jar"),
+    binaryJarPath: join(root, "foo.jar"),
+    files: [],
+    symbols: []
+  });
+  stubExplorer(service, {
+    methods: [
+      {
+        ownerFqn: "com.example.Foo",
+        name: "bar",
+        javaSignature: "public void bar()",
+        jvmDescriptor: "()V",
+        accessFlags: 0x0001,
+        isSynthetic: false
+      }
+    ]
+  });
+
+  const result = await service.getClassMembers({
+    artifactId: "m2-decompiled-members",
+    className: "com.example.Foo"
+  });
+
+  assert.equal(result.origin, "local-m2");
+  assert.equal(
+    result.artifactContents.sourceKind,
+    "decompiled-binary",
+    "the members path must describe the persisted derivation, not the origin"
+  );
+});
+
+test("SourceService getClassSource takes the decompiled derivation from the inner artifact after a nested-jar redirect", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-class-source-nested-decompiled-"));
+  const innerJar = await buildInnerJarBytes({
+    "com/example/inner/Api.class": buildClassFile({ internalName: "com/example/inner/Api" })
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": innerJar });
+
+  const service = new SourceService(buildTestConfig(root));
+  // The shell carries no source of its own and is not decompiled.
+  seedIndexedArtifact(service, {
+    artifactId: "shell-outer",
+    origin: "local-jar",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: ["shell-jar"],
+    isDecompiled: false,
+    binaryJarPath: shellPath,
+    provenance: {
+      target: { kind: "jar", value: shellPath },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: { origin: "local-jar", binaryJarPath: shellPath },
+      transformChain: [],
+      nestedJars: ["META-INF/jars/api.jar"]
+    },
+    files: [],
+    symbols: []
+  });
+  // The artifact the redirect lands on: decompiled text under a repo origin.
+  seedIndexedArtifact(service, {
+    artifactId: "inner-decompiled",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    isDecompiled: true,
+    files: [
+      {
+        filePath: "com/example/inner/Api.java",
+        content: ["package com.example.inner;", "public class Api {", "  public void call() {}", "}"].join("\n")
+      }
+    ],
+    symbols: [
+      {
+        filePath: "com/example/inner/Api.java",
+        symbolKind: "class",
+        symbolName: "Api",
+        qualifiedName: "com.example.inner.Api",
+        line: 2
+      }
+    ]
+  });
+  // The redirect resolves the extracted nested jar; stand in for that resolve
+  // so the inner artifact's own derivation is fixed by the fixture.
+  (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async () => ({
+    artifactId: "inner-decompiled",
+    artifactAlias: "inner-decompiled",
+    origin: "local-m2" as const,
+    isDecompiled: true,
+    requestedMapping: "obfuscated" as const,
+    mappingApplied: "obfuscated" as const,
+    provenance: {
+      target: { kind: "jar" as const, value: "api.jar" },
+      resolvedAt: new Date().toISOString(),
+      resolvedFrom: { origin: "local-m2" as const },
+      transformChain: []
+    },
+    qualityFlags: [],
+    warnings: []
+  });
+
+  const result = await service.getClassSource({
+    artifactId: "shell-outer",
+    className: "com.example.inner.Api",
+    mapping: "obfuscated",
+    mode: "full"
+  });
+
+  assert.equal(result.artifactId, "inner-decompiled");
+  assert.equal(result.provenance?.nestedJar?.entryName, "META-INF/jars/api.jar");
+  assert.ok(result.qualityFlags.includes("nested-jar-redirect"));
+  assert.ok(
+    result.qualityFlags.includes("decompiled-source-signatures-unverified"),
+    "the redirect must report the inner artifact's derivation, not the shell's"
+  );
+  assert.ok(result.warnings.some((warning) => warning.includes("get-class-members")));
 });
 
 // ---------------------------------------------------------------------------
