@@ -285,6 +285,25 @@ async function describeFile(filePath: string): Promise<FileIdentity> {
 }
 
 /**
+ * Whether `sidecar`'s recorded identity still matches the bytes currently at
+ * `destinationPath`. `sidecar` is always read before the network request that
+ * motivated the caller to ask, so a concurrent resolve of the same mutable
+ * coordinate can have replaced the file in between - this is a stat, not a
+ * read, the same cross-check `readDownloadSidecar` applies on an ordinary hit.
+ */
+function sidecarStillCurrent(destinationPath: string, sidecar: DownloadSidecar | undefined): boolean {
+  if (!sidecar) {
+    return false;
+  }
+  try {
+    const current = statSync(destinationPath);
+    return current.size === sidecar.contentLength && current.mtimeMs === sidecar.contentMtimeMs;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Read the sidecar defensively: a missing, corrupt, partial, foreign-URL,
  * older-schema or stat-mismatched record is reported as absent so the caller
  * re-derives the digest from the bytes instead of trusting a record that may
@@ -534,6 +553,12 @@ export async function resolveCachedDownload(
   /**
    * Reuse the bytes already on disk, restoring the retired record first.
    *
+   * `sidecar` was read before the transfer attempt went out, so a concurrent
+   * resolve of the same mutable coordinate can have replaced `destinationPath`
+   * while this request was in flight - trust `sidecar`'s identity only if the
+   * file still matches it, the same check the notModified branch below
+   * applies, otherwise re-derive from whatever bytes are actually there.
+   *
    * Returns undefined instead of throwing: every caller of this is already on a
    * failure path, and a second failure here (the file was pruned between the
    * stat and the read, the disk is unreadable) must not replace the reason the
@@ -546,10 +571,11 @@ export async function resolveCachedDownload(
       return undefined;
     }
     try {
-      if (retiredSidecar && sidecar) {
-        writeDownloadSidecar(destinationPath, sidecar);
+      const usable = sidecarStillCurrent(destinationPath, sidecar) ? sidecar : undefined;
+      if (retiredSidecar && usable) {
+        writeDownloadSidecar(destinationPath, usable);
       }
-      return await cachedBytesResult(url, destinationPath, sidecar, cacheStatus);
+      return await cachedBytesResult(url, destinationPath, usable, cacheStatus);
     } catch {
       return undefined;
     }
@@ -578,18 +604,8 @@ export async function resolveCachedDownload(
     // got answers for the OLD bytes. Trust `sidecar`'s identity only if the
     // file still matches it; otherwise re-derive from what's actually there,
     // the same stat-then-digest check readDownloadSidecar applies on read.
-    const stillCurrent =
-      sidecar !== undefined &&
-      (() => {
-        try {
-          const current = statSync(destinationPath);
-          return current.size === sidecar.contentLength && current.mtimeMs === sidecar.contentMtimeMs;
-        } catch {
-          return false;
-        }
-      })();
     const identity: DownloadSidecar =
-      sidecar !== undefined && stillCurrent
+      sidecar !== undefined && sidecarStillCurrent(destinationPath, sidecar)
         ? sidecar
         : {
             version: DOWNLOAD_SIDECAR_VERSION,

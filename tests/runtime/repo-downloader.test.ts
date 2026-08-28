@@ -596,6 +596,63 @@ test("resolveCachedDownload(revalidate) serves the cached bytes as stale when th
   assert.equal(sidecar.etag, "etag-v1");
 });
 
+test("resolveCachedDownload(revalidate) re-derives the digest instead of trusting a stale sidecar when the revalidation request throws", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-stale-throw-race-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
+
+  // Simulates a concurrent resolve of the same mutable coordinate landing its
+  // own (newer) bytes while this request is in flight - this call's own
+  // sidecar read happened before this write, so serving "the cached bytes"
+  // must describe what is actually on disk now, not the pre-request identity.
+  const fetchFn: typeof fetch = (async () => {
+    await writeFile(destination, "snapshot-bytes-v2-concurrent-write");
+    throw new Error("getaddrinfo ENOTFOUND repo.example.com");
+  }) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "revalidate",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.cacheStatus, "stale");
+  assert.equal(result.contentSha256, sha256Of("snapshot-bytes-v2-concurrent-write"));
+  assert.notEqual(result.contentSha256, sha256Of("snapshot-bytes-v1"));
+  // The stale-if-error path must not overwrite the concurrent winner's sidecar
+  // with the pre-request (now wrong) identity it retired.
+  const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
+  assert.equal(sidecar.contentSha256, sha256Of("snapshot-bytes-v2-concurrent-write"));
+});
+
+test("resolveCachedDownload(revalidate) surfaces the original error instead of a stale-but-vanished digest when a concurrent resolve deletes the bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-stale-throw-vanish-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
+
+  const originalError = new Error("getaddrinfo ENOTFOUND repo.example.com");
+  const fetchFn: typeof fetch = (async () => {
+    // Simulates a concurrent eviction (e.g. discardCachedDownload) removing
+    // the file this call's sidecar was read against.
+    await rm(destination);
+    throw originalError;
+  }) as typeof fetch;
+
+  await assert.rejects(
+    resolveCachedDownload(url, destination, {
+      freshness: "revalidate",
+      retries: 0,
+      timeoutMs: 2_000,
+      fetchFn
+    }),
+    (error: Error) => error === originalError
+  );
+});
+
 test("resolveCachedDownload(revalidate) serves the cached bytes as stale when the repository answers 5xx", async () => {
   const root = await mkdtemp(join(tmpdir(), "downloader-stale-5xx-"));
   const destination = join(root, "snapshot.jar");
