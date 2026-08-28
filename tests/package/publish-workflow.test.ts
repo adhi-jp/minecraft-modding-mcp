@@ -188,7 +188,7 @@ test("publish workflow resolves the `rc` dist-tag for a prerelease and `latest` 
   const script = extractRunScript(await readPublishWorkflow(), "Resolve the npm dist-tag");
   const cases: Array<{ version: string; expected: string }> = [
     // The version this branch is about to tag.
-    { version: "7.0.0-rc.0", expected: "rc" },
+    { version: "7.0.0-rc.1", expected: "rc" },
     { version: "7.0.0", expected: "latest" },
     // A version already published from this repository, so the stable arm is not
     // proven only against a number that has never existed.
