@@ -5,6 +5,7 @@ import { ERROR_CODES } from "../../src/errors.ts";
 import {
   buildRemoteBinaryUrls,
   buildRemoteSourceUrls,
+  isMutableMavenCoordinate,
   normalizedCoordinateValue,
   parseCoordinate
 } from "../../src/maven-resolver.ts";
@@ -221,4 +222,22 @@ test("enumerateLocalAlternativeSourceJars returns [] for missing directory and f
     join(versionDir, "demo-1.0-extra-sources.jar"),
     join(versionDir, "demo-1.0-sources.jar")
   ]);
+});
+
+test("isMutableMavenCoordinate flags -SNAPSHOT versions and leaves release and timestamped versions immutable", () => {
+  // Maven defines only the -SNAPSHOT suffix as mutable. The suffix match here is
+  // deliberately case-insensitive where Maven's own is not: mistaking a mutable
+  // artifact for an immutable one caches it forever, while the reverse costs a
+  // single conditional request.
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-SNAPSHOT"), true);
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-snapshot"), true);
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-SnapShot"), true);
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-SNAPSHOT:client"), true);
+
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0"), false);
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0:client"), false);
+  // A resolved unique snapshot is a concrete, immutable artifact.
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-20240101.120000-3"), false);
+  // A version that merely mentions snapshot without the suffix is not mutable.
+  assert.equal(isMutableMavenCoordinate("com.example:demo:1.0.0-SNAPSHOT-final"), false);
 });

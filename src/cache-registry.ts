@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { normalizeOptionalPathForHost, type PathRuntimeInfo } from "./path-converter.js";
+import { downloadSidecarPath, isDownloadSidecarPath } from "./repo-downloader.js";
 import { openDatabase } from "./storage/db.js";
 import type Database from "./storage/sqlite.js";
 import {
@@ -576,15 +577,28 @@ async function fileBackedEntries(
 
   const root = kindRoot(config, cacheKind);
   const files = await listFilesRecursive(root);
-  return mapWithConcurrencyLimit(files, CACHE_STAT_CONCURRENCY, async (filePath): Promise<CacheEntry> => {
+  // A download sidecar (`<jar>.cache.json`, or the `.<hex>.tmp` leftover of an
+  // interrupted write) is the identity record of the jar beside it, not a cached
+  // artifact in its own right. Listing one would report a `downloads` entry whose
+  // jarPath is a JSON file and would let a jarPath selector delete a description
+  // instead of the thing described. The finished record's bytes are folded into
+  // the jar's entry below, so a listed entry weighs everything that belongs to
+  // it; bytes that describe nothing - an orphan record, a half-written one - are
+  // deliberately unaccounted, because there is no entry for them to belong to.
+  // Only this kind names files that way; every other kind keeps every file.
+  const entryFiles = cacheKind === "downloads"
+    ? files.filter((filePath) => !isDownloadSidecarPath(filePath))
+    : files;
+  return mapWithConcurrencyLimit(entryFiles, CACHE_STAT_CONCURRENCY, async (filePath): Promise<CacheEntry> => {
     const fileStat = await stat(filePath);
+    const sidecarBytes = cacheKind === "downloads" ? await downloadSidecarSizeBytes(filePath) : 0;
     const normalizedEntryId = filePath.slice(root.length + 1);
     const inferredScope = inferScope(filePath, normalizedEntryId) ?? (cacheKind === "decompiled-source" ? "vanilla" : undefined);
     return {
       cacheKind,
       entryId: normalizedEntryId,
       path: filePath,
-      sizeBytes: fileStat.size,
+      sizeBytes: fileStat.size + sidecarBytes,
       status: "healthy",
       meta: {
         updatedAt: fileStat.mtime.toISOString(),
@@ -592,6 +606,8 @@ async function fileBackedEntries(
         mapping: inferMapping(filePath, normalizedEntryId),
         scope: inferredScope,
         projectPath: inferProjectPath(filePath, config.pathRuntimeInfo),
+        // Health follows the cached artifact's own bytes: a zero-byte jar stays
+        // partial no matter how much its sidecar weighs.
         partial: fileStat.size === 0,
         corrupt: cacheKind === "registry" && detectCorruption ? await isCorruptRegistryJson(filePath) : false,
         inUse:
@@ -604,6 +620,19 @@ async function fileBackedEntries(
       }
     };
   });
+}
+
+/**
+ * Bytes of the sidecar describing `downloadPath`, or 0 when there is none.
+ * A download cached before sidecars existed, or one whose sidecar write failed,
+ * is a normal state and must not fail the inventory.
+ */
+async function downloadSidecarSizeBytes(downloadPath: string): Promise<number> {
+  try {
+    return (await stat(downloadSidecarPath(downloadPath))).size;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -838,6 +867,14 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
             if (entry.cacheKind === "workspace") {
               workspaceCache.invalidate(entry.entryId);
               continue;
+            }
+            if (entry.cacheKind === "downloads") {
+              // The sidecar is part of this entry, so it goes with the jar —
+              // outside the existsSync guard below, so a jar that vanished
+              // out-of-band since the listing still takes its sidecar with it
+              // instead of leaving an orphan behind. `force` makes a missing
+              // sidecar a no-op.
+              await rm(downloadSidecarPath(entry.path), { force: true });
             }
             if (existsSync(entry.path)) {
               // Only binary-remap inventory can return directories as entries;

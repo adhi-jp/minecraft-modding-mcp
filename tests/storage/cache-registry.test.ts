@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createCacheRegistry, pathContainsVersion } from "../../src/cache-registry.ts";
+import { downloadSidecarPath } from "../../src/repo-downloader.ts";
 import { runMigrations } from "../../src/storage/migrations.ts";
 import Database from "../../src/storage/sqlite.ts";
 
@@ -461,4 +462,184 @@ test("cache registry deleteEntries on binary-remap leaves non-binary-remap cache
 
   assert.equal(existsSync(join(root, "remapped", "alpha.jar")), false, "binary-remap entry was deleted");
   assert.equal(existsSync(downloadFile), true, "downloads cache must remain untouched");
+});
+
+// ---------------------------------------------------------------------------
+// Download sidecars.
+//
+// `resolveCachedDownload` writes `<jar>.cache.json` next to every cached jar
+// (src/repo-downloader.ts). That file is the jar's identity record, not a
+// cache artifact of its own: it must never be inventoried, sized, or deleted
+// independently of the jar it describes.
+// ---------------------------------------------------------------------------
+
+test("cache registry folds a download sidecar into the jar entry it describes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const jarPath = join(root, "downloads", "client.jar");
+  const sidecarPath = downloadSidecarPath(jarPath);
+  await writeFile(jarPath, "jar-bytes");
+  await writeFile(
+    sidecarPath,
+    JSON.stringify({
+      version: 1,
+      url: "https://example.invalid/client.jar",
+      contentSha256: "abc",
+      contentLength: "jar-bytes".length
+    })
+  );
+  const sidecarBytes = (await readFile(sidecarPath)).byteLength;
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const listed = await registry.listEntries({ cacheKinds: ["downloads"], limit: 10 });
+
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.entryId),
+    ["client.jar"],
+    "the sidecar belongs to the jar's entry; it must not be listed on its own"
+  );
+  assert.equal(
+    listed.entries[0]?.meta?.jarPath,
+    jarPath,
+    "jarPath must name the jar, never a sidecar JSON file"
+  );
+  assert.equal(
+    listed.entries[0]?.sizeBytes,
+    "jar-bytes".length + sidecarBytes,
+    "the sidecar's bytes must be folded into the jar entry, not dropped"
+  );
+
+  // The accounting rule, stated once: totals cover every byte that belongs to a
+  // cache entry, and a sidecar's bytes belong to the jar it describes. Bytes
+  // that describe nothing - an orphan sidecar, an interrupted write - belong to
+  // no entry and are therefore invisible here (see the orphan test below).
+  const summary = await registry.summarize({ cacheKinds: ["downloads"] });
+  assert.equal(summary.kinds.downloads?.entryCount, 1);
+  assert.equal(
+    summary.kinds.downloads?.totalBytes,
+    "jar-bytes".length + sidecarBytes,
+    "a sidecar's bytes are part of its jar's entry, so the total must include them"
+  );
+});
+
+test("cache registry deletes a download sidecar together with the jar it describes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-delete-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const jarPath = join(root, "downloads", "client.jar");
+  const sidecarPath = downloadSidecarPath(jarPath);
+  const keptJarPath = join(root, "downloads", "other.jar");
+  const keptSidecarPath = downloadSidecarPath(keptJarPath);
+  await writeFile(jarPath, "jar-bytes");
+  await writeFile(sidecarPath, "{}");
+  await writeFile(keptJarPath, "other-bytes");
+  await writeFile(keptSidecarPath, "{}");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const deletion = await registry.deleteEntries({
+    cacheKinds: ["downloads"],
+    selector: { jarPath },
+    executionMode: "apply"
+  });
+
+  assert.equal(deletion.deletedEntries, 1);
+  assert.equal(existsSync(jarPath), false, "the jar is deleted");
+  assert.equal(existsSync(sidecarPath), false, "a prune must not leave the sidecar orphaned");
+  assert.equal(existsSync(keptJarPath), true, "an unselected jar stays");
+  assert.equal(existsSync(keptSidecarPath), true, "an unselected jar keeps its sidecar");
+});
+
+test("cache registry ignores an orphan download sidecar whose jar is gone", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-orphan-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const orphanSidecarPath = downloadSidecarPath(join(root, "downloads", "vanished.jar"));
+  await writeFile(orphanSidecarPath, "{}");
+  await writeFile(join(root, "downloads", "neighbour.jar"), "neighbour");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const listed = await registry.listEntries({ cacheKinds: ["downloads"], limit: 10 });
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.entryId),
+    ["neighbour.jar"],
+    "a sidecar without its jar describes nothing and must not surface as an entry"
+  );
+
+  const summary = await registry.summarize({ cacheKinds: ["downloads"] });
+  assert.equal(summary.kinds.downloads?.entryCount, 1);
+  assert.equal(
+    summary.kinds.downloads?.totalBytes,
+    "neighbour".length,
+    // This is the other half of the rule the fold test states: the orphan's
+    // bytes are deliberately unaccounted. Entry membership wins over disk
+    // occupancy - a total is what the listed entries weigh, not what `du`
+    // reports - because there is no entry these bytes could belong to.
+    "an orphan sidecar belongs to no entry, so its bytes are not in the total"
+  );
+  assert.equal(
+    existsSync(orphanSidecarPath),
+    true,
+    "inventory is read-only: listing must never delete files"
+  );
+});
+
+test("cache registry still inventories a `.cache.json` file outside the downloads root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-scope-"));
+  await mkdir(join(root, "mappings"), { recursive: true });
+  const mappingPath = join(root, "mappings", "mojang-1.21.10.tiny.cache.json");
+  await writeFile(mappingPath, "{}");
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const listed = await registry.listEntries({ cacheKinds: ["mapping"], limit: 10 });
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.entryId),
+    ["mojang-1.21.10.tiny.cache.json"],
+    "the sidecar rule is scoped to the downloads kind; other kinds keep every file"
+  );
+});
+
+test("cache registry ignores the leftover of an interrupted download sidecar write", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-tmp-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const jarPath = join(root, "downloads", "client.jar");
+  await writeFile(jarPath, "jar-bytes");
+  // A process killed inside the sidecar's temp-file-plus-rename leaves this
+  // behind. It is a half-written description of `client.jar`, so it must be
+  // filtered for exactly the reason the finished sidecar is: listing it would
+  // report a downloads entry whose jarPath is a JSON temp, and hand a jarPath
+  // selector a description to delete instead of the thing described.
+  const interruptedWritePath = `${downloadSidecarPath(jarPath)}.1a2b3c4d.tmp`;
+  await writeFile(interruptedWritePath, '{"version":1,"url":"https://exam');
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const listed = await registry.listEntries({ cacheKinds: ["downloads"], limit: 10 });
+  assert.deepEqual(
+    listed.entries.map((entry) => entry.entryId),
+    ["client.jar"],
+    "an interrupted sidecar write is not a cached artifact"
+  );
+  assert.equal(listed.entries[0]?.meta?.jarPath, jarPath);
+  assert.equal(
+    existsSync(interruptedWritePath),
+    true,
+    "inventory is read-only: listing must never delete files"
+  );
 });

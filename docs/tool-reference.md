@@ -688,6 +688,8 @@ Path-based overrides treat blank values and the literal strings `undefined` and 
 | `MCP_MAPPING_SOURCE_PRIORITY` | `loom-first` | Mapping source priority (`loom-first` or `maven-first`) |
 | `MCP_VERSION_MANIFEST_URL` | Mojang manifest URL | Override the Minecraft version manifest endpoint |
 
+Jars downloaded from the repositories in `MCP_SOURCE_REPOS` are cached under `MCP_CACHE_DIR` and identified by a sha256 of their bytes, so the same jar keeps one `artifactId` no matter which repository served it. (Minecraft version jars and mapping archives share that cache directory but are identified separately.) Whether a cached jar is re-checked depends on the coordinate's **version**, not on which repository serves it. A release version is served from cache with no request. A version ending in `-SNAPSHOT` is treated as mutable, as Maven defines it, and is re-checked against every configured repository — including the defaults: where the cached copy recorded an `ETag` or `Last-Modified` the check is a conditional request and an unchanged answer costs no transfer, otherwise the jar is transferred again. A republished jar replaces the cached one and yields a new `artifactId`. If the check cannot be completed — anything short of a definitive answer, including unreachable, a timeout, 5xx, 429, or an authentication failure — the cached copy is still served; if the repository answers definitively about the artifact itself (404 or 410 gone, 403 refused) it is treated as absent there and resolution moves on to the next repository. Note that `MCP_SOURCE_REPOS` replaces the default list rather than adding to it.
+
 ### Search, Index, and Cache Tuning
 
 | Variable | Default | Description |

@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
+import { ERROR_CODES } from "../../src/errors.ts";
+import { defaultDownloadPath } from "../../src/repo-downloader.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
@@ -371,4 +374,720 @@ test("resolveSourceTarget(targetKind=coordinate) reuses the cached source jar in
       process.env.GRADLE_USER_HOME = previousGradleUserHome;
     }
   }
+});
+
+/** Run `body` with GRADLE_USER_HOME pinned so no real user cache leaks into the test. */
+async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
+  const previous = process.env.GRADLE_USER_HOME;
+  process.env.GRADLE_USER_HOME = gradleUserHome;
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.GRADLE_USER_HOME;
+    } else {
+      process.env.GRADLE_USER_HOME = previous;
+    }
+  }
+}
+
+/** Install a global fetch stub for the duration of `body`. */
+async function withFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stub;
+  try {
+    return await body();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+function requestUrlOf(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
+test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when a validator-bearing sources jar comes back from the download cache", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-etag-stable-"));
+  const sourcesFixture = join(root, "remote-sources.jar");
+  await createJar(sourcesFixture, {
+    "com/example/EtagStable.java": ["package com.example;", "public class EtagStable {}"].join("\n")
+  });
+  const sourcesBytes = await readFile(sourcesFixture);
+
+  let sourceFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/etag-module-1.2.3-sources.jar")) {
+      sourceFetches += 1;
+      return new Response(sourcesBytes, {
+        status: 200,
+        headers: {
+          etag: "\"sources-etag-1\"",
+          "last-modified": "Mon, 01 Jan 2024 00:00:00 GMT"
+        }
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+  const target = { kind: "coordinate", value: "com.example:etag-module:1.2.3" } as const;
+
+  const [first, second] = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, async () => [
+      await resolveSourceTarget(target, { allowDecompile: true }, config),
+      await resolveSourceTarget(target, { allowDecompile: true }, config)
+    ])
+  );
+
+  assert.equal(sourceFetches, 1, "the second resolve must be served from the download cache");
+  assert.equal(first.origin, "remote-repo");
+  // The cache-hit leg used to fabricate a validator-free DownloadResult, which
+  // rotated the artifact id on every warm resolve of an ETag-serving repo.
+  assert.equal(second.artifactSignature, first.artifactSignature);
+  assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) derives the same artifactId from identical bytes served with different ETags", async () => {
+  const rootA = await mkdtemp(join(tmpdir(), "resolver-coordinate-etag-a-"));
+  const rootB = await mkdtemp(join(tmpdir(), "resolver-coordinate-etag-b-"));
+  const sourcesFixture = join(rootA, "remote-sources.jar");
+  await createJar(sourcesFixture, {
+    "com/example/SameBytes.java": ["package com.example;", "public class SameBytes {}"].join("\n")
+  });
+  const sourcesBytes = await readFile(sourcesFixture);
+
+  const target = { kind: "coordinate", value: "com.example:same-bytes:4.5.6" } as const;
+  const stubServing = (etag: string): typeof fetch =>
+    (async (input: string | URL | Request) => {
+      if (requestUrlOf(input).endsWith("/same-bytes-4.5.6-sources.jar")) {
+        return new Response(sourcesBytes, { status: 200, headers: { etag } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+  const resolveWith = async (root: string, etag: string) =>
+    withGradleHome(join(root, "gradle-home"), () =>
+      withFetch(stubServing(etag), () =>
+        resolveSourceTarget(
+          target,
+          { allowDecompile: true },
+          buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+        )
+      )
+    );
+
+  const viaCdnA = await resolveWith(rootA, "\"cdn-a-etag\"");
+  const viaCdnB = await resolveWith(rootB, "\"cdn-b-etag\"");
+
+  // A CDN or repository migration rotates the validator while the bytes stay
+  // byte-identical: artifact identity must follow the bytes, not the validator.
+  assert.equal(viaCdnA.artifactSignature, viaCdnB.artifactSignature);
+  assert.equal(viaCdnA.artifactId, viaCdnB.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) revalidates a -SNAPSHOT sources jar but never re-checks a release", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-snapshot-revalidate-"));
+  const sourcesFixture = join(root, "remote-sources.jar");
+  await createJar(sourcesFixture, {
+    "com/example/Mutable.java": ["package com.example;", "public class Mutable {}"].join("\n")
+  });
+  const sourcesBytes = await readFile(sourcesFixture);
+
+  const snapshotRequests: Array<Record<string, string>> = [];
+  let releaseFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = requestUrlOf(input);
+    if (url.endsWith("/mutable-module-9.0.0-SNAPSHOT-sources.jar")) {
+      const headers = { ...((init?.headers ?? {}) as Record<string, string>) };
+      snapshotRequests.push(headers);
+      if (headers["If-None-Match"] === "\"snapshot-etag-1\"") {
+        return new Response(null, { status: 304 });
+      }
+      return new Response(sourcesBytes, {
+        status: 200,
+        headers: { etag: "\"snapshot-etag-1\"" }
+      });
+    }
+    if (url.endsWith("/release-module-9.0.0-sources.jar")) {
+      releaseFetches += 1;
+      return new Response(sourcesBytes, { status: 200, headers: { etag: "\"release-etag-1\"" } });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+  const snapshotTarget = { kind: "coordinate", value: "com.example:mutable-module:9.0.0-SNAPSHOT" } as const;
+  const releaseTarget = { kind: "coordinate", value: "com.example:release-module:9.0.0" } as const;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, async () => ({
+      snapshotFirst: await resolveSourceTarget(snapshotTarget, { allowDecompile: true }, config),
+      snapshotSecond: await resolveSourceTarget(snapshotTarget, { allowDecompile: true }, config),
+      releaseFirst: await resolveSourceTarget(releaseTarget, { allowDecompile: true }, config),
+      releaseSecond: await resolveSourceTarget(releaseTarget, { allowDecompile: true }, config)
+    }))
+  );
+
+  // A SNAPSHOT is mutable by Maven's definition, so the warm resolve must ask.
+  assert.equal(snapshotRequests.length, 2, "the second SNAPSHOT resolve must revalidate");
+  assert.equal(snapshotRequests[1]["If-None-Match"], "\"snapshot-etag-1\"");
+  assert.equal(resolved.snapshotSecond.artifactId, resolved.snapshotFirst.artifactId);
+
+  // A release version is immutable, so the warm resolve must stay off the network.
+  assert.equal(releaseFetches, 1, "a release coordinate must not be revalidated");
+  assert.equal(resolved.releaseSecond.artifactId, resolved.releaseFirst.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) decompiles the local Gradle cache binary instead of refetching it from a repository", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const binaryJarPath = join(
+    gradleUserHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "com.example",
+    "binary-only",
+    "3.2.1",
+    "binary-hash",
+    "binary-only-3.2.1.jar"
+  );
+  await createJar(binaryJarPath, {
+    "com/example/BinaryOnly.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/binary-only-3.2.1.jar")) {
+      remoteBinaryFetches += 1;
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:binary-only:3.2.1" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(remoteBinaryFetches, 0, "a jar already on local disk must not be downloaded again");
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.isDecompiled, true);
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.equal(resolved.coordinate, "com.example:binary-only:3.2.1");
+});
+
+test("resolveSourceTarget(targetKind=coordinate) still refuses a local binary-only Gradle cache hit when decompile is disabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-no-decompile-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const binaryJarPath = join(
+    gradleUserHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "com.example",
+    "binary-only",
+    "3.2.1",
+    "binary-hash",
+    "binary-only-3.2.1.jar"
+  );
+  await createJar(binaryJarPath, {
+    "com/example/BinaryOnly.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, async () => {
+      await assert.rejects(
+        () =>
+          resolveSourceTarget(
+            { kind: "coordinate", value: "com.example:binary-only:3.2.1" },
+            { allowDecompile: false },
+            buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+          ),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
+          return true;
+        }
+      );
+    })
+  );
+});
+
+/** Gradle's cache layout for one coordinate: <group>/<artifact>/<version>/<hash>/<file>. */
+function gradleCacheJarPath(
+  gradleUserHome: string,
+  groupId: string,
+  artifactId: string,
+  version: string,
+  fileName: string
+): string {
+  return join(
+    gradleUserHome,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    groupId,
+    artifactId,
+    version,
+    "binary-hash",
+    fileName
+  );
+}
+
+/** Write a file that passes an existence check but is not a readable archive. */
+async function writeUnreadableJar(jarPath: string, bytes: Buffer): Promise<void> {
+  await mkdir(dirname(jarPath), { recursive: true });
+  await writeFile(jarPath, bytes);
+}
+
+test("resolveSourceTarget(targetKind=coordinate) redownloads the binary when the local Gradle cache jar is empty", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-empty-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const truncatedJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "truncated",
+    "1.0",
+    "truncated-1.0.jar"
+  );
+  // An interrupted Gradle copy leaves a 0-byte jar behind: it exists, and it
+  // explodes the moment the decompiler tries to open it.
+  await writeUnreadableJar(truncatedJarPath, Buffer.alloc(0));
+
+  const remoteBinaryFixture = join(root, "remote-binary.jar");
+  await createJar(remoteBinaryFixture, {
+    "com/example/Truncated.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteBinaryBytes = await readFile(remoteBinaryFixture);
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/truncated-1.0.jar")) {
+      remoteBinaryFetches += 1;
+      return new Response(remoteBinaryBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:truncated:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(remoteBinaryFetches, 1, "a corrupt local jar must not suppress the remote binary fetch");
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(resolved.isDecompiled, true);
+  assert.notEqual(resolved.binaryJarPath, truncatedJarPath);
+  assert.equal(
+    resolved.repoUrl,
+    "https://repo.example.test/com/example/truncated/1.0/truncated-1.0.jar"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) redownloads the binary when the local m2 jar is not an archive", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-garbage-"));
+  const garbageJarPath = join(root, "m2", "com", "example", "garbage", "1.0", "garbage-1.0.jar");
+  await writeUnreadableJar(garbageJarPath, Buffer.from("this is not a zip archive", "utf8"));
+
+  const remoteBinaryFixture = join(root, "remote-binary.jar");
+  await createJar(remoteBinaryFixture, {
+    "com/example/Garbage.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteBinaryBytes = await readFile(remoteBinaryFixture);
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/garbage-1.0.jar")) {
+      remoteBinaryFetches += 1;
+      return new Response(remoteBinaryBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:garbage:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(remoteBinaryFetches, 1, "a non-archive local jar must not suppress the remote binary fetch");
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(resolved.isDecompiled, true);
+  assert.notEqual(resolved.binaryJarPath, garbageJarPath);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) fetches the classified binary instead of adopting the classifier-less local jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-classifier-"));
+  const unclassifiedJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "classified",
+    "1.0",
+    "classified-1.0.jar"
+  );
+  await createJar(unclassifiedJarPath, {
+    "com/example/Common.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const remoteBinaryFixture = join(root, "remote-linux.jar");
+  await createJar(remoteBinaryFixture, {
+    "com/example/Linux.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const remoteBinaryBytes = await readFile(remoteBinaryFixture);
+
+  let classifiedBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/classified-1.0-linux.jar")) {
+      classifiedBinaryFetches += 1;
+      return new Response(remoteBinaryBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:classified:1.0:linux" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(classifiedBinaryFetches, 1, "the classified binary must still be fetched");
+  assert.equal(resolved.origin, "decompiled");
+  assert.notEqual(
+    resolved.binaryJarPath,
+    unclassifiedJarPath,
+    "the classifier-less jar is a different artifact and must not stand in for it"
+  );
+  assert.equal(resolved.coordinate, "com.example:classified:1.0:linux");
+});
+
+test("resolveSourceTarget(targetKind=coordinate) decompiles a readable local m2 binary without any remote binary fetch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-m2-"));
+  const binaryJarPath = join(root, "m2", "com", "example", "m2-binary", "2.0", "m2-binary-2.0.jar");
+  await createJar(binaryJarPath, {
+    "com/example/M2Binary.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/m2-binary-2.0.jar")) {
+      remoteBinaryFetches += 1;
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:m2-binary:2.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(remoteBinaryFetches, 0, "a readable jar already on local disk must not be downloaded again");
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.isDecompiled, true);
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.equal(resolved.sourceJarPath, undefined);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) still refuses a readable local m2 binary when decompile is disabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-m2-no-decompile-"));
+  const binaryJarPath = join(root, "m2", "com", "example", "m2-binary", "2.0", "m2-binary-2.0.jar");
+  await createJar(binaryJarPath, {
+    "com/example/M2Binary.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, async () => {
+      await assert.rejects(
+        () =>
+          resolveSourceTarget(
+            { kind: "coordinate", value: "com.example:m2-binary:2.0" },
+            { allowDecompile: false },
+            buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+          ),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
+          return true;
+        }
+      );
+    })
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) reports not-found when the local binary is corrupt and the repository has nothing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-corrupt-miss-"));
+  const corruptJarPath = join(root, "m2", "com", "example", "corrupt", "1.0", "corrupt-1.0.jar");
+  await writeUnreadableJar(corruptJarPath, Buffer.alloc(0));
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, async () => {
+      await assert.rejects(
+        () =>
+          resolveSourceTarget(
+            { kind: "coordinate", value: "com.example:corrupt:1.0" },
+            { allowDecompile: true },
+            buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+          ),
+        (error: unknown) => {
+          // The caller must see the ordinary not-found failure, not a zip or
+          // decompiler crash leaking out of the local-binary probe.
+          assert.equal((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
+          assert.match(String((error as { message?: string }).message), /com\.example:corrupt:1\.0/);
+          return true;
+        }
+      );
+    })
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Repository failover.
+//
+// A cached download is a copy of what ONE repository handed out. When that
+// repository stops serving the artifact - withdrawn, re-ACL'd, gone - the cached
+// bytes must not stand in for it: they make the withdrawal invisible, and, far
+// worse, the caller reads them as success and never asks the next repository,
+// which may still publish the artifact.
+//
+// A 200 is not proof of an artifact either. A repository, a mirror, or the proxy
+// in front of one can answer a jar request with an HTML error page; accepted
+// unchecked it is written into the (immutable) download cache, returned as the
+// artifact, and only explodes later, inside the decompiler.
+// ---------------------------------------------------------------------------
+
+interface RecordedFailover {
+  stage: "source" | "binary";
+  repoUrl: string;
+  statusCode?: number;
+  reason: string;
+  attempt: number;
+  totalAttempts: number;
+}
+
+const REPO_A = "https://repo-a.example.test";
+const REPO_B = "https://repo-b.example.test";
+
+test("resolveSourceTarget(targetKind=coordinate) fails over to the second repository when the first withdraws a cached sources jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-withdrawn-failover-"));
+  // -SNAPSHOT, so the cached copy is revalidated rather than trusted blindly:
+  // this is the only freshness policy under which the repository gets to say
+  // "gone" about something we already hold.
+  const coordinate = "com.example:withdrawn-module:1.0.0-SNAPSHOT";
+  const sourcesPath =
+    "/com/example/withdrawn-module/1.0.0-SNAPSHOT/withdrawn-module-1.0.0-SNAPSHOT-sources.jar";
+  const sourcesUrlA = `${REPO_A}${sourcesPath}`;
+  const sourcesUrlB = `${REPO_B}${sourcesPath}`;
+
+  const fixtureA = join(root, "repo-a-sources.jar");
+  await createJar(fixtureA, {
+    "com/example/Withdrawn.java": ["package com.example;", "public class Withdrawn {}"].join("\n")
+  });
+  const fixtureB = join(root, "repo-b-sources.jar");
+  await createJar(fixtureB, {
+    "com/example/Withdrawn.java": [
+      "package com.example;",
+      "// served by the second repository",
+      "public class Withdrawn {}"
+    ].join("\n")
+  });
+  const bytesA = await readFile(fixtureA);
+  const bytesB = await readFile(fixtureB);
+
+  let repoAServes = true;
+  let repoBServes = false;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === sourcesUrlA && repoAServes) {
+      return new Response(bytesA, { status: 200, headers: { etag: "\"repo-a-sources-1\"" } });
+    }
+    if (url === sourcesUrlB && repoBServes) {
+      return new Response(bytesB, { status: 200, headers: { etag: "\"repo-b-sources-1\"" } });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
+  const target = { kind: "coordinate", value: coordinate } as const;
+  const failovers: RecordedFailover[] = [];
+
+  const { warm, cold } = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, async () => {
+      const warmed = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      // The artifact is pulled from A and published by B instead.
+      repoAServes = false;
+      repoBServes = true;
+      const afterWithdrawal = await resolveSourceTarget(
+        target,
+        {
+          allowDecompile: true,
+          onRepoFailover: (event) => failovers.push(event as RecordedFailover)
+        },
+        config
+      );
+      return { warm: warmed, cold: afterWithdrawal };
+    })
+  );
+
+  assert.equal(warm.repoUrl, sourcesUrlA, "the first resolve must be the one that fills the cache");
+
+  assert.equal(
+    cold.repoUrl,
+    sourcesUrlB,
+    "a repository that answers 404 must not keep answering out of our cache"
+  );
+  assert.equal(cold.sourceJarPath, defaultDownloadPath(config.cacheDir, sourcesUrlB));
+  assert.notEqual(
+    cold.artifactSignature,
+    warm.artifactSignature,
+    "identity follows the bytes, and these are the second repository's bytes"
+  );
+  assert.deepEqual(
+    failovers.map((event) => ({ stage: event.stage, repoUrl: event.repoUrl, statusCode: event.statusCode })),
+    [{ stage: "source", repoUrl: sourcesUrlA, statusCode: 404 }],
+    "moving off a repository is exactly what onRepoFailover reports"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) refuses a remote binary that is not a readable archive and fails over", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-binary-error-page-"));
+  const coordinate = "com.example:error-page:2.0.0";
+  const binaryPath = "/com/example/error-page/2.0.0/error-page-2.0.0.jar";
+  const binaryUrlA = `${REPO_A}${binaryPath}`;
+  const binaryUrlB = `${REPO_B}${binaryPath}`;
+
+  const fixture = join(root, "real-binary.jar");
+  await createJar(fixture, {
+    "com/example/ErrorPage.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const realJarBytes = await readFile(fixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === binaryUrlA) {
+      // A 200 with a perfectly plausible body that is not a jar at all.
+      return new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+    if (url === binaryUrlB) {
+      return new Response(realJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
+  const failovers: RecordedFailover[] = [];
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: coordinate },
+        {
+          allowDecompile: true,
+          onRepoFailover: (event) => failovers.push(event as RecordedFailover)
+        },
+        config
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(
+    resolved.repoUrl,
+    binaryUrlB,
+    "an error page must never be handed to the decompiler as the artifact"
+  );
+  assert.equal(resolved.binaryJarPath, defaultDownloadPath(config.cacheDir, binaryUrlB));
+  assert.equal(
+    existsSync(defaultDownloadPath(config.cacheDir, binaryUrlA)),
+    false,
+    "and the body must not stay in an immutable cache slot where every later run inherits it"
+  );
+  // The sources leg reports its own move off repository A first; what this pins
+  // is that the binary leg reported one too, and said why.
+  assert.deepEqual(
+    failovers
+      .filter((event) => event.stage === "binary")
+      .map((event) => ({ repoUrl: event.repoUrl, reason: event.reason })),
+    [{ repoUrl: binaryUrlA, reason: "downloaded-not-an-archive" }]
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary for the readable Gradle cache one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-order-"));
+  const gradleUserHome = join(root, "gradle-home");
+  // Both spell the coordinate out in full, so both are eligible. ~/.m2 is
+  // consulted first - and the copy sitting there is unreadable.
+  const corruptM2JarPath = join(root, "m2", "com", "example", "shadowed", "1.0", "shadowed-1.0.jar");
+  await writeUnreadableJar(corruptM2JarPath, Buffer.from("this is not a zip archive", "utf8"));
+  const gradleJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "shadowed",
+    "1.0",
+    "shadowed-1.0.jar"
+  );
+  await createJar(gradleJarPath, {
+    "com/example/Shadowed.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/shadowed-1.0.jar")) {
+      remoteBinaryFetches += 1;
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:shadowed:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: [REPO_A] })
+      )
+    )
+  );
+
+  assert.equal(
+    resolved.binaryJarPath,
+    gradleJarPath,
+    "a corrupt copy in the first location must not shadow a good copy in the second"
+  );
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.isDecompiled, true);
+  assert.equal(
+    remoteBinaryFetches,
+    0,
+    "and picking the readable local jar means there is nothing to download - offline or not"
+  );
 });

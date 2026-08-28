@@ -1,4 +1,3 @@
-import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
@@ -16,10 +15,16 @@ import {
   buildRemoteBinaryUrls,
   buildRemoteSourceUrls,
   hasExistingJar,
+  isMutableMavenCoordinate,
   parseCoordinate,
   normalizedCoordinateValue
 } from "./maven-resolver.js";
-import { defaultDownloadPath, downloadToCache, type DownloadResult } from "./repo-downloader.js";
+import {
+  defaultDownloadPath,
+  discardCachedDownload,
+  resolveCachedDownload,
+  type CacheFreshness
+} from "./repo-downloader.js";
 import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
 import { stableArtifactId } from "./config.js";
 import { hasAnyJarEntry, hasJavaSourceExtension } from "./source-jar-reader.js";
@@ -33,7 +38,13 @@ async function hasJavaSources(jarPath: string): Promise<boolean> {
   if (!hasExistingJar(jarPath)) {
     return false;
   }
-  return hasAnyJarEntry(jarPath, hasJavaSourceExtension);
+  // Archive errors deliberately propagate. This runs on the jar-target path
+  // (:336) where the jar IS the subject, and the reader's rejection of an
+  // unsafe archive - a traversal-named entry, for one - is the fail-closed
+  // refusal itself. Swallowing it here would downgrade "this archive is not
+  // safe to open" into "this archive has no sources" and let resolution
+  // continue past a jar it had already refused.
+  return await hasAnyJarEntry(jarPath, hasJavaSourceExtension);
 }
 
 function resolveExactJarSourceCandidate(inputJarPath: string): string {
@@ -94,19 +105,73 @@ function resolveLocalCoordinateCandidates(localM2Path: string, coordinate: strin
   return [...existing];
 }
 
-function resolveLocalCoordinateBinaryCandidate(localM2Path: string, coordinate: string): string | undefined {
+interface LocalBinaryJarCandidates {
+  /**
+   * The jar whose file name spells out the coordinate in full, classifier
+   * included. Only this one is the coordinate's own artifact, so only this one
+   * may ever be returned as the resolved artifact.
+   */
+  exact?: string;
+  /**
+   * First jar on disk that can ride along as a companion `binaryJarPath` next
+   * to a sources jar - the classifier-less jar included, because a classified
+   * coordinate's sources are routinely published against the common binary.
+   */
+  companion?: string;
+}
+
+function resolveLocalCoordinateBinaryCandidates(
+  localM2Path: string,
+  coordinate: string
+): LocalBinaryJarCandidates {
   const parsed = parseCoordinate(coordinate);
   const groupPath = parsed.groupId.replace(/\./g, "/");
   const baseDir = resolvePath(localM2Path, groupPath, parsed.artifactId, parsed.version);
   const base = `${parsed.artifactId}-${parsed.version}`;
   const classifierSuffix = parsed.classifier ? `-${parsed.classifier}` : "";
 
-  const candidates = [
-    resolvePath(baseDir, `${base}${classifierSuffix}.jar`),
-    ...(classifierSuffix ? [resolvePath(baseDir, `${base}.jar`)] : [])
-  ];
+  const exactCandidate = resolvePath(baseDir, `${base}${classifierSuffix}.jar`);
+  const fallbackCandidates = classifierSuffix ? [resolvePath(baseDir, `${base}.jar`)] : [];
 
-  return candidates.find((candidate) => hasExistingJar(candidate));
+  const exact = hasExistingJar(exactCandidate) ? exactCandidate : undefined;
+  const companion = exact ?? fallbackCandidates.find((candidate) => hasExistingJar(candidate));
+
+  return { exact, companion };
+}
+
+/**
+ * Whether a jar on disk can actually be opened as an archive.
+ *
+ * `hasExistingJar` only proves that a file is present: an interrupted Gradle or
+ * Maven copy leaves a 0-byte or truncated jar behind that passes that check and
+ * then throws inside the decompiler on every call. Every sources branch of the
+ * cascade already proves its candidate by opening the zip; a binary branch that
+ * suppresses a remote download owes the caller the same proof.
+ */
+async function isReadableJarArchive(jarPath: string): Promise<boolean> {
+  try {
+    return await hasAnyJarEntry(jarPath, () => true);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The first candidate that can actually be opened as an archive, in preference
+ * order.
+ *
+ * Preference order is not the same as a pick: choosing the most-preferred
+ * candidate and only then proving it lets one corrupt file veto every good one
+ * behind it. Each candidate is proved before the next is considered, and the
+ * archives are opened lazily, so the usual case still opens exactly one zip.
+ */
+async function firstReadableJarArchive(candidates: string[]): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    if (await isReadableJarArchive(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function resolveGradleUserHome(): string {
@@ -119,7 +184,9 @@ function resolveGradleUserHome(): string {
 
 async function resolveGradleCacheCoordinateCandidate(
   coordinate: string
-): Promise<{ sourceJarPath?: string; binaryJarPath?: string } | undefined> {
+): Promise<
+  { sourceJarPath?: string; binaryJarPath?: string; exactBinaryJarPath?: string } | undefined
+> {
   const parsed = parseCoordinate(coordinate);
   const baseDir = resolvePath(
     resolveGradleUserHome(),
@@ -136,10 +203,8 @@ async function resolveGradleCacheCoordinateCandidate(
     `${base}${classifierSuffix}-sources.jar`,
     ...(classifierSuffix ? [`${base}-sources.jar`] : [])
   ];
-  const preferredBinaryNames = [
-    `${base}${classifierSuffix}.jar`,
-    ...(classifierSuffix ? [`${base}.jar`] : [])
-  ];
+  const exactBinaryName = `${base}${classifierSuffix}.jar`;
+  const preferredBinaryNames = [exactBinaryName, ...(classifierSuffix ? [`${base}.jar`] : [])];
 
   let discoveredFiles: string[] = [];
   try {
@@ -169,7 +234,7 @@ async function resolveGradleCacheCoordinateCandidate(
     return undefined;
   }
 
-  return { sourceJarPath, binaryJarPath };
+  return { sourceJarPath, binaryJarPath, exactBinaryJarPath: pickFirst([exactBinaryName]) };
 }
 
 function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): string[] {
@@ -207,6 +272,43 @@ function artifactIdForCoordinate(
 
 function resolvedAtNow(): string {
   return new Date().toISOString();
+}
+
+interface CoordinateArtifactSpec {
+  coordinate: string;
+  /**
+   * The id space this resolution belongs to. Independent of `origin`: it only
+   * keeps artifacts discovered along different paths from colliding in the
+   * artifact id hash.
+   */
+  idSource: string;
+  signature: string;
+  origin: ResolvedSourceArtifact["origin"];
+  isDecompiled: boolean;
+  sourceJarPath?: string;
+  binaryJarPath?: string;
+  repoUrl?: string;
+  mappingVariant?: MappingVariant;
+}
+
+/** Shared shape for every artifact the coordinate cascade can return. */
+function coordinateArtifact(spec: CoordinateArtifactSpec): ResolvedSourceArtifact {
+  return {
+    artifactId: artifactIdForCoordinate(
+      spec.coordinate,
+      spec.idSource,
+      spec.signature,
+      spec.mappingVariant ?? "pass"
+    ),
+    artifactSignature: spec.signature,
+    origin: spec.origin,
+    sourceJarPath: spec.sourceJarPath,
+    binaryJarPath: spec.binaryJarPath,
+    coordinate: spec.coordinate,
+    repoUrl: spec.repoUrl,
+    isDecompiled: spec.isDecompiled,
+    resolvedAt: resolvedAtNow()
+  };
 }
 
 export interface ResolveSourceTargetOptions {
@@ -315,40 +417,46 @@ export async function resolveSourceTarget(
   }
 
   const coordinate = normalizedCoordinateValue(input.value);
+  // Maven republishes -SNAPSHOT coordinates under the same name, so their cached
+  // downloads have to be confirmed with the repository; every other version is
+  // immutable and is served straight from the download cache. Decided once so
+  // the sources leg and the binary leg cannot disagree.
+  const downloadFreshness: CacheFreshness = isMutableMavenCoordinate(coordinate)
+    ? "revalidate"
+    : "immutable";
   const isTransientFailure = (statusCode?: number): boolean =>
     statusCode === undefined || statusCode >= 500 || statusCode === 429;
 
-  const localM2BinaryJarPath = resolveLocalCoordinateBinaryCandidate(explicitConfig.localM2Path, coordinate);
+  const localM2Binary = resolveLocalCoordinateBinaryCandidates(explicitConfig.localM2Path, coordinate);
+  const localM2BinaryJarPath = localM2Binary.companion;
 
   for (const candidate of resolveLocalCoordinateCandidates(explicitConfig.localM2Path, coordinate)) {
     if (await hasJavaSources(candidate)) {
       const signature = readStatsSignature(candidate);
-      return {
-        artifactId: artifactIdForCoordinate(coordinate, "local-m2", signature),
-        artifactSignature: signature,
+      return coordinateArtifact({
+        coordinate,
+        idSource: "local-m2",
+        signature,
         origin: "local-m2",
         sourceJarPath: candidate,
         binaryJarPath: localM2BinaryJarPath,
-        coordinate,
-        isDecompiled: false,
-        resolvedAt: resolvedAtNow()
-      };
+        isDecompiled: false
+      });
     }
   }
 
   const gradleCacheCandidate = await resolveGradleCacheCoordinateCandidate(coordinate);
   if (gradleCacheCandidate?.sourceJarPath && (await hasJavaSources(gradleCacheCandidate.sourceJarPath))) {
     const signature = readStatsSignature(gradleCacheCandidate.sourceJarPath);
-    return {
-      artifactId: artifactIdForCoordinate(coordinate, "local-m2", signature),
-      artifactSignature: signature,
+    return coordinateArtifact({
+      coordinate,
+      idSource: "local-m2",
+      signature,
       origin: "local-m2",
       sourceJarPath: gradleCacheCandidate.sourceJarPath,
       binaryJarPath: gradleCacheCandidate.binaryJarPath,
-      coordinate,
-      isDecompiled: false,
-      resolvedAt: resolvedAtNow()
-    };
+      isDecompiled: false
+    });
   }
 
   // Both local branches above are gated on SOURCES: a module that ships a binary jar
@@ -358,25 +466,48 @@ export async function resolveSourceTarget(
   // for binary-only consumers (get-class-members and friends).
   const localBinaryJarPath = localM2BinaryJarPath ?? gradleCacheCandidate?.binaryJarPath;
 
+  // The companion above may be the classifier-less jar, which is a different
+  // artifact than a classified coordinate asks for. That substitution is fine
+  // for a jar that merely rides along beside a sources jar, and wrong for one
+  // returned as the resolution itself, so the decompile branch below considers
+  // only jars whose name spells the coordinate out in full.
+  //
+  // A list rather than a single pick: ~/.m2 is preferred over the Gradle cache,
+  // but preferring it must not mean an interrupted copy sitting there gets to
+  // veto a perfectly good jar behind it - forcing a needless download, or an
+  // outright failure when offline.
+  const localDecompilableBinaryCandidates = [
+    ...new Set(
+      [localM2Binary.exact, gradleCacheCandidate?.exactBinaryJarPath].filter(
+        (candidate): candidate is string => candidate !== undefined
+      )
+    )
+  ];
+
   const remoteSourceUrls = buildRemoteSourceUrls(repos, coordinate);
   for (let index = 0; index < remoteSourceUrls.length; index++) {
     const sourceUrl = remoteSourceUrls[index];
     const hasNextAttempt = index < remoteSourceUrls.length - 1;
     try {
       const sourceDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, sourceUrl);
-      const download: DownloadResult = existsSync(sourceDestinationPath)
-        ? { ok: true, path: sourceDestinationPath, contentLength: statSync(sourceDestinationPath).size }
-        : await downloadToCache(sourceUrl, sourceDestinationPath, {
-            retries: explicitConfig.fetchRetries,
-            timeoutMs: explicitConfig.fetchTimeoutMs
-          });
+      const download = await resolveCachedDownload(sourceUrl, sourceDestinationPath, {
+        freshness: downloadFreshness,
+        retries: explicitConfig.fetchRetries,
+        timeoutMs: explicitConfig.fetchTimeoutMs
+      });
 
-      if (!download.ok || !download.path || !(await hasJavaSources(download.path))) {
-        const transient = download.ok
-          ? false
-          : download.statusCode !== 404 && isTransientFailure(download.statusCode);
+      if (!download.ok || !(await hasJavaSources(download.path))) {
+        // Transience only decides the error CODE at the end of the cascade: an
+        // unstable repository earns ERR_REPO_FETCH_FAILED, while "this
+        // repository does not publish it" stays a plain not-found.
+        const transient = !download.ok && isTransientFailure(download.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
-        if (hasNextAttempt && (transient || download.ok)) {
+        // Moving off this repository is reportable however it happened. A
+        // withdrawn artifact reaches here as an ordinary failure now that the
+        // downloader refuses to launder a 404 into a stale success, and leaving
+        // that silent would hide the one event that explains why the resolved
+        // artifact came from somewhere else.
+        if (hasNextAttempt) {
           options.onRepoFailover?.({
             stage: "source",
             repoUrl: sourceUrl,
@@ -389,18 +520,20 @@ export async function resolveSourceTarget(
         continue;
       }
 
-      const signature = `${download.contentLength ?? 0}:${download.etag ?? ""}:${download.lastModified ?? ""}`;
-      return {
-        artifactId: artifactIdForCoordinate(coordinate, "remote-repo", signature),
-        artifactSignature: signature,
+      // Identity follows the bytes. The HTTP validators that used to form this
+      // signature rotate whenever a CDN or repository migration happens, even
+      // when the jar is byte-identical.
+      const signature = download.contentSha256;
+      return coordinateArtifact({
+        coordinate,
+        idSource: "remote-repo",
+        signature,
         origin: "remote-repo",
         sourceJarPath: download.path,
         binaryJarPath: localBinaryJarPath,
-        coordinate,
         repoUrl: sourceUrl,
-        isDecompiled: false,
-        resolvedAt: resolvedAtNow()
-      };
+        isDecompiled: false
+      });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
       if (hasNextAttempt) {
@@ -425,30 +558,58 @@ export async function resolveSourceTarget(
     });
   }
 
+  // A module that publishes no sources jar but whose binary jar is already on
+  // local disk has nothing left to fetch: ingest decompiles the binary, and the
+  // local copy is the same artifact the repository would hand back. Deliberately
+  // placed after the allowDecompile guard - returning it earlier would perform
+  // the decompile the caller just declined. The dedicated "local-binary" id space
+  // keeps it apart from the remote "decompiled" one; no coordinate resolve has
+  // ever returned a local binary jar, so nothing needs migrating.
+  //
+  // The jar has to be a readable archive before it may stand in for the download:
+  // a truncated local copy would otherwise be handed to the decompiler on every
+  // call with no way out. When none of the candidates is, the remote binary loop
+  // below is exactly the repair path, so this falls through to it instead of
+  // failing. The zips are opened here and only here - nothing upstream has looked
+  // inside these jars, and control only reaches this point when the branch is
+  // about to be taken.
+  const localDecompilableBinaryJarPath = await firstReadableJarArchive(
+    localDecompilableBinaryCandidates
+  );
+  if (localDecompilableBinaryJarPath) {
+    const signature = readStatsSignature(localDecompilableBinaryJarPath);
+    return coordinateArtifact({
+      coordinate,
+      idSource: "local-binary",
+      signature,
+      origin: "local-m2",
+      binaryJarPath: localDecompilableBinaryJarPath,
+      isDecompiled: true,
+      mappingVariant: options.mappingVariant ?? "pass"
+    });
+  }
+
   const binaryCandidates = resolveRemoteBinaryCandidate(coordinate, repos);
   for (let index = 0; index < binaryCandidates.length; index++) {
     const binaryUrl = binaryCandidates[index];
     const hasNextAttempt = index < binaryCandidates.length - 1;
     try {
       const binaryDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, binaryUrl);
-      const downloaded: DownloadResult = existsSync(binaryDestinationPath)
-        ? { ok: true, path: binaryDestinationPath }
-        : await downloadToCache(binaryUrl, binaryDestinationPath, {
-            retries: explicitConfig.fetchRetries,
-            timeoutMs: explicitConfig.fetchTimeoutMs
-          });
+      const downloaded = await resolveCachedDownload(binaryUrl, binaryDestinationPath, {
+        freshness: downloadFreshness,
+        retries: explicitConfig.fetchRetries,
+        timeoutMs: explicitConfig.fetchTimeoutMs
+      });
 
-      if (!downloaded.ok || !downloaded.path) {
-        const transient = downloaded.ok
-          ? false
-          : downloaded.statusCode !== 404 && isTransientFailure(downloaded.statusCode);
+      if (!downloaded.ok) {
+        const transient = isTransientFailure(downloaded.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
-        if (hasNextAttempt && (transient || downloaded.ok)) {
+        if (hasNextAttempt) {
           options.onRepoFailover?.({
             stage: "binary",
             repoUrl: binaryUrl,
             statusCode: downloaded.statusCode,
-            reason: downloaded.ok ? "downloaded-no-binary" : "download-failed",
+            reason: "download-failed",
             attempt: index + 1,
             totalAttempts: binaryCandidates.length
           });
@@ -456,22 +617,44 @@ export async function resolveSourceTarget(
         continue;
       }
 
-      const signature = readStatsSignature(downloaded.path);
-      return {
-        artifactId: artifactIdForCoordinate(
-          coordinate,
-          "decompiled",
-          signature,
-          options.mappingVariant ?? "pass"
-        ),
-        artifactSignature: signature,
+      // A 200 is not proof of a jar. A repository, a mirror, or a proxy in front
+      // of one answers a jar request with an HTML error page often enough that
+      // accepting any non-empty body writes it into the (immutable) download
+      // cache, returns it as the artifact, and blocks failover to a repository
+      // that has the real thing - with the failure surfacing much later, inside
+      // the decompiler. The sources leg has always proved its download by opening
+      // it; this one owes the caller the same proof.
+      if (!(await isReadableJarArchive(downloaded.path))) {
+        // And the body must not survive as a cache entry: this url is immutable
+        // for every non-SNAPSHOT coordinate, so the next run would be served the
+        // same poison with no request made at all.
+        discardCachedDownload(downloaded.path);
+        if (hasNextAttempt) {
+          options.onRepoFailover?.({
+            stage: "binary",
+            repoUrl: binaryUrl,
+            statusCode: downloaded.statusCode,
+            reason: "downloaded-not-an-archive",
+            attempt: index + 1,
+            totalAttempts: binaryCandidates.length
+          });
+        }
+        continue;
+      }
+
+      // A file in the URL-keyed download cache is identified by its bytes, not
+      // by a stat signature that a re-download would change for free.
+      const signature = downloaded.contentSha256;
+      return coordinateArtifact({
+        coordinate,
+        idSource: "decompiled",
+        signature,
         origin: "decompiled",
         binaryJarPath: downloaded.path,
-        coordinate,
         repoUrl: binaryUrl,
         isDecompiled: true,
-        resolvedAt: resolvedAtNow()
-      };
+        mappingVariant: options.mappingVariant ?? "pass"
+      });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
       if (hasNextAttempt) {

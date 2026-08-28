@@ -44,6 +44,27 @@ export function parseCoordinate(coordinate: string): MavenCoordinate {
   };
 }
 
+/**
+ * Whether the artifacts behind a coordinate may change under a stable name.
+ *
+ * Maven defines exactly one mutable form: a version ending in `-SNAPSHOT`,
+ * which a repository is free to republish for the same coordinate. A
+ * timestamped unique snapshot (`1.0.0-20240101.120000-3`) is the resolved,
+ * concrete build and never changes, so it is immutable - as is every release
+ * version. Callers use this to pick a cache freshness policy: mutable
+ * coordinates must be revalidated, immutable ones can be served from cache
+ * forever.
+ *
+ * The suffix is matched case-insensitively, unlike Maven's own case-sensitive
+ * `ArtifactUtils.isSnapshot`. The two error directions are not symmetric: being
+ * stricter than a repository that publishes `-snapshot` would serve a mutable
+ * artifact from cache forever, while being looser costs one conditional request
+ * per resolve on a version that almost certainly meant `-SNAPSHOT` anyway.
+ */
+export function isMutableMavenCoordinate(coordinate: string): boolean {
+  return /-SNAPSHOT$/i.test(parseCoordinate(coordinate).version);
+}
+
 function groupToPath(groupId: string): string {
   return groupId.split(".").filter(Boolean).join("/");
 }
