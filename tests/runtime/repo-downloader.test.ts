@@ -386,6 +386,42 @@ test("resolveCachedDownload(revalidate) sends If-None-Match and keeps the cached
   assert.equal(await readFile(destination, "utf8"), "snapshot-bytes-v1");
 });
 
+test("resolveCachedDownload(revalidate) re-derives the digest instead of trusting a sidecar the bytes on disk no longer match", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-revalidate-race-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await writeFile(destination, "snapshot-bytes-v1");
+  await writeSidecarFor(destination, {
+    url,
+    contentSha256: sha256Of("snapshot-bytes-v1"),
+    etag: "etag-v1",
+    lastModified: "Mon, 01 Jan 2024 00:00:00 GMT"
+  });
+
+  // Simulates a concurrent resolve of the same mutable coordinate landing
+  // its own (newer) bytes while this request's conditional check is still in
+  // flight - this call's own sidecar read happened before this write.
+  const fetchFn: typeof fetch = (async () => {
+    await writeFile(destination, "snapshot-bytes-v2-concurrent-write");
+    return new Response(null, { status: 304, headers: { etag: "etag-v1" } });
+  }) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "revalidate",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.cacheStatus, "revalidated");
+  // Must describe the bytes actually on disk (v2), not the pre-request
+  // sidecar snapshot (v1) - a stale-but-trusted digest would report v1's hash
+  // here while the file the caller reads back holds v2's bytes.
+  assert.equal(result.contentSha256, sha256Of("snapshot-bytes-v2-concurrent-write"));
+  assert.notEqual(result.contentSha256, sha256Of("snapshot-bytes-v1"));
+});
+
 test("resolveCachedDownload(revalidate) replaces the bytes and the digest on a 200", async () => {
   const root = await mkdtemp(join(tmpdir(), "downloader-revalidate-200-"));
   const destination = join(root, "snapshot.jar");

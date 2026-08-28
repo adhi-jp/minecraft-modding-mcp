@@ -569,11 +569,30 @@ export async function resolveCachedDownload(
   }
 
   if (downloaded.notModified && hasCachedBytes) {
-    const identity: DownloadSidecar = sidecar ?? {
-      version: DOWNLOAD_SIDECAR_VERSION,
-      url,
-      ...(await describeFile(destinationPath))
-    };
+    // `sidecar` was read before the conditional request went out, so a
+    // concurrent resolve of the same mutable coordinate can have replaced
+    // `destinationPath` while this request was in flight - the 304 we just
+    // got answers for the OLD bytes. Trust `sidecar`'s identity only if the
+    // file still matches it; otherwise re-derive from what's actually there,
+    // the same stat-then-digest check readDownloadSidecar applies on read.
+    const stillCurrent =
+      sidecar !== undefined &&
+      (() => {
+        try {
+          const current = statSync(destinationPath);
+          return current.size === sidecar.contentLength && current.mtimeMs === sidecar.contentMtimeMs;
+        } catch {
+          return false;
+        }
+      })();
+    const identity: DownloadSidecar =
+      sidecar !== undefined && stillCurrent
+        ? sidecar
+        : {
+            version: DOWNLOAD_SIDECAR_VERSION,
+            url,
+            ...(await describeFile(destinationPath))
+          };
     const refreshed: DownloadSidecar = {
       ...identity,
       etag: downloaded.etag ?? identity.etag,
