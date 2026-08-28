@@ -349,7 +349,14 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // tests/source-service/source-resolver.test.ts +3: a repository that withdraws a
 // cached jar now fails over to the next one; a 200 that is not a readable archive is
 // refused and failed over; a corrupt exact ~/.m2 jar no longer vetoes a good Gradle one.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2020;
+// A second independent review (Claude + Codex, cross-vendor) found six more
+// defects, each landing as its own commit with its own regression test.
+// 2020 -> 2021 (+1). A 200-with-no-body revalidation response destroyed a
+// previously-good cached artifact instead of falling back to it, unlike every
+// sibling failure leg (5xx/429/thrown-error/withdrawn-artifact).
+// tests/runtime/repo-downloader.test.ts +1: an empty-body 200 during
+// revalidation now serves the cached bytes as stale instead of destroying them.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2021;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

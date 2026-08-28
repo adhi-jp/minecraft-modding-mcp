@@ -1003,6 +1003,39 @@ test("resolveCachedDownload(immutable) re-downloads instead of serving a zero-by
   assert.equal(await readFile(destination, "utf8"), "real-bytes");
 });
 
+test("resolveCachedDownload(revalidate) serves the cached bytes as stale instead of destroying them when the repository answers 200 with no body", async () => {
+  // Regression: `downloadToCache` used to rename the (empty) temp file onto
+  // `destination` unconditionally for any `response.ok` status, before the
+  // caller could ever learn the body was empty. That destroyed the previously
+  // good cached bytes on disk, and only afterwards reported failure - unlike
+  // every sibling failure leg (5xx/429/thrown-error/withdrawn-artifact), none
+  // of which lose the cached copy.
+  const root = await mkdtemp(join(tmpdir(), "downloader-stale-empty-body-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
+
+  const fetchFn: typeof fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "revalidate",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(result.ok, true, "a good cached copy beats failing outright on a transient empty response");
+  assert.equal(result.cacheStatus, "stale");
+  assert.equal(result.contentSha256, sha256Of("snapshot-bytes-v1"));
+  assert.equal(
+    await readFile(destination, "utf8"),
+    "snapshot-bytes-v1",
+    "the previously cached bytes must survive an empty-body response, not be overwritten by it"
+  );
+  const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
+  assert.equal(sidecar.contentSha256, sha256Of("snapshot-bytes-v1"));
+});
+
 test("isDownloadSidecarPath recognises the leftover of an interrupted sidecar write", async () => {
   const jarPath = "/cache/downloads/abc123.jar";
   const sidecarPath = downloadSidecarPath(jarPath);

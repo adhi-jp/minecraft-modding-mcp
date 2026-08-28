@@ -753,6 +753,28 @@ export async function downloadToCache(
         }
 
         const contentLength = statSync(tempPath).size;
+
+        // A 200 with no body is a failed transfer that happened to answer
+        // success. Renaming it onto `destinationPath` before this is known would
+        // overwrite any good bytes already cached there - the caller's
+        // stale-if-error fallback below only has bytes to fall back to if this
+        // leg never destroys them. Report it exactly like any other failed leg
+        // instead: no `path`, `ok: false`, temp file discarded.
+        if (contentLength === 0) {
+          try {
+            unlinkSync(tempPath);
+          } catch {
+            // best-effort cleanup
+          }
+          return {
+            ok: false,
+            statusCode: status,
+            etag: response.headers.get("etag") ?? undefined,
+            lastModified: response.headers.get("last-modified") ?? undefined,
+            contentLength: 0
+          };
+        }
+
         renameSync(tempPath, destinationPath);
 
         return {
