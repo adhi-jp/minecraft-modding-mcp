@@ -219,3 +219,33 @@ test("errorResource forwards validated exampleCalls from AppError details", () =
   assert.equal(parsed.error.exampleCalls[0].tool, "get-class-source");
   assert.equal(parsed.error.exampleCalls[0].reason, "Fetch the resolved class source.");
 });
+
+test("errorResource honours a per-throw-site issueOrigin override from AppError details", () => {
+  // An mc:// resource read publishes the same AppError as the equivalent tool
+  // call, so a throw site that classified itself as a tool-side gap must not be
+  // re-labelled caller-fixable just because the caller used a resource URI.
+  const parsed = JSON.parse(
+    errorResource("mc://classes/net.example.Foo", {
+      message: 'artifact "minecraft-1.21.10" has no binary jar',
+      code: ERROR_CODES.CONTEXT_UNRESOLVED,
+      details: { artifactId: "minecraft-1.21.10", issueOrigin: "tool_issue" }
+    }).contents[0]!.text!
+  );
+  assert.equal(parsed.error.issueOrigin, "tool_issue");
+  // retryClass has no override seam and stays code-derived.
+  assert.equal(parsed.error.retryClass, "input");
+});
+
+test("errorResource keeps the issueOrigin override out of the published context blob", () => {
+  // `issueOrigin` is a classification input, not repair context: it is absent
+  // from CONTEXT_ALLOWLIST and must never be echoed back inside `context`.
+  const parsed = JSON.parse(
+    errorResource("mc://classes/net.example.Foo", {
+      message: "no binary jar",
+      code: ERROR_CODES.CONTEXT_UNRESOLVED,
+      details: { artifactId: "minecraft-1.21.10", issueOrigin: "tool_issue" }
+    }).contents[0]!.text!
+  );
+  assert.deepEqual(parsed.error.context, { artifactId: "minecraft-1.21.10" });
+  assert.equal("issueOrigin" in parsed.error.context, false);
+});

@@ -4,8 +4,7 @@ import { PROBLEM_DETAILS_READ_CACHE_FIELDS } from "./cache-policy.js";
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY } from "./era-classifier.js";
 import { ERROR_CODES, type ErrorCode } from "./errors.js";
 import {
-  retryClassForErrorCode,
-  issueOriginForErrorCode,
+  problemClassification,
   extractAllowlistedContext
 } from "./error-mapping.js";
 import {
@@ -148,8 +147,11 @@ export function errorResource(
             status: statusForResourceErrorCode(code),
             code,
             instance: uri,
-            retryClass: retryClassForErrorCode(code),
-            issueOrigin: issueOriginForErrorCode(code),
+            // Shared with the tool path via the one classification builder, so
+            // a throw site that classified itself (e.g. a tool-resolved
+            // artifact with no binary jar) is not silently re-labelled
+            // caller-fixable just because the caller used a resource URI.
+            ...problemClassification(code, details),
             ...(fieldErrors ? { fieldErrors } : {}),
             ...(hints ? { hints } : {}),
             ...(suggestedCall ? { suggestedCall } : {}),

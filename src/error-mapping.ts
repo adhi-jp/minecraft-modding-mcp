@@ -370,6 +370,55 @@ export function issueOriginForErrorCode(code: string): IssueOrigin {
   return "tool_issue";
 }
 
+/**
+ * The single source of truth for a ProblemDetails classification pair, and the
+ * ONLY supported way to compute one for an error the server caught. Every site
+ * that turns a caught error into a published envelope spreads this result — the
+ * tool envelope (`mapErrorToProblem`), batch entries, the batch-aborted
+ * sentinel, and the `mc://` resource read — so one failure always publishes the
+ * same `{ retryClass, issueOrigin }` no matter which access path the caller
+ * used.
+ *
+ * KNOWN EXCEPTION — the synthetic supervisor replies in `src/stdio-supervisor.ts`
+ * (`buildSupervisorQueueLimitReply`, `buildValidateProjectTimeoutReply`) write
+ * the pair as literals and never import this builder. They are not emission
+ * sites for a caught error at all: the supervisor answers a request the worker
+ * never got to run, so there is no source `AppError` whose `details` could carry
+ * an override and nothing to pass as the required `details` argument. Their
+ * literals are `transient` / `tool_issue`, which is exactly what this function
+ * returns for `ERR_LIMIT_EXCEEDED` and `ERR_TOOL_TIMEOUT` today — but that is a
+ * duplicated value held in agreement by hand, not a second call into this
+ * classifier. Reclassifying either code here must be mirrored there.
+ *
+ * It exists because that pair used to be assembled by hand at each site. The
+ * `issueOrigin` half has a per-throw-site override (see
+ * {@link extractIssueOriginOverride}), and honouring it was copy-pasted into
+ * some sites and forgotten in others — which is exactly how one identical
+ * AppError came to publish `tool_issue` through a tool call and `code_issue`
+ * through a resource read. Composing the pair here removes the opportunity:
+ * emission modules import this function and no longer reach the component
+ * classifiers at all.
+ *
+ * `details` is REQUIRED, deliberately without a default. A site that genuinely
+ * has no AppError behind it (a ZodError, a sanitized non-AppError, the
+ * batch-aborted sentinel) must pass `undefined` explicitly, so skipping the
+ * override can only ever be a written-down decision rather than an omission.
+ *
+ * Only `issueOrigin` is overridable per throw site. `retryClass` stays purely
+ * code-derived: it is a documented wire contract, and changing the value an
+ * existing code publishes is a Breaking change, so a `retryClass` override seam
+ * was deliberately deferred rather than added alongside this one.
+ */
+export function problemClassification(
+  code: string,
+  details: unknown
+): Pick<ProblemDetails, "retryClass" | "issueOrigin"> {
+  return {
+    retryClass: retryClassForErrorCode(code),
+    issueOrigin: extractIssueOriginOverride(details) ?? issueOriginForErrorCode(code)
+  };
+}
+
 // Non-sensitive AppError.details fields that are safe to echo to callers as
 // machine-readable repair context. Filesystem paths and free-form text are
 // intentionally excluded.
@@ -464,10 +513,7 @@ export function errorToBatchEntryProblem(
       status: statusForErrorCode(caughtError.code),
       code: caughtError.code,
       instance,
-      retryClass: retryClassForErrorCode(caughtError.code),
-      issueOrigin:
-        extractIssueOriginOverride(caughtError.details) ??
-        issueOriginForErrorCode(caughtError.code),
+      ...problemClassification(caughtError.code, caughtError.details),
       ...(fieldErrors ? { fieldErrors } : {}),
       ...(baseHints ? { hints: baseHints } : {}),
       ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {}),
@@ -494,8 +540,9 @@ export function errorToBatchEntryProblem(
     status: 500,
     code: ERROR_CODES.INTERNAL,
     instance,
-    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL),
-    issueOrigin: issueOriginForErrorCode(ERROR_CODES.INTERNAL),
+    // No AppError behind this envelope: the throw was sanitized away, so there
+    // is no per-site override to honour.
+    ...problemClassification(ERROR_CODES.INTERNAL, undefined),
     ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {})
   };
 }
@@ -508,8 +555,8 @@ export function buildBatchAbortedProblem(instance: string): ProblemDetails {
     status: 412,
     code: ERROR_CODES.BATCH_ABORTED,
     instance,
-    retryClass: retryClassForErrorCode(ERROR_CODES.BATCH_ABORTED),
-    issueOrigin: issueOriginForErrorCode(ERROR_CODES.BATCH_ABORTED)
+    // Synthesized sentinel, not a caught AppError: no per-site override exists.
+    ...problemClassification(ERROR_CODES.BATCH_ABORTED, undefined)
   };
 }
 

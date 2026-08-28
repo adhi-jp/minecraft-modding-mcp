@@ -4,15 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 
-import { ERROR_CODES, createError } from "../../src/errors.ts";
+import { ERROR_CODES, createError, type AppError } from "../../src/errors.ts";
 import {
   errorToBatchEntryProblem,
   extractAllowlistedContext,
   issueOriginForErrorCode,
+  problemClassification,
   retryClassForErrorCode,
   type IssueOrigin,
   type RetryClass
 } from "../../src/error-mapping.ts";
+import {
+  buildSupervisorQueueLimitReply,
+  buildValidateProjectTimeoutReply
+} from "../../src/stdio-supervisor.ts";
+import { errorResource } from "../../src/mcp-helpers.ts";
+import { mapErrorToProblem } from "../../src/tool-guidance.ts";
 import { legacyHandshake, startInProcessSession } from "../stdio/inprocess-era-serve.ts";
 
 const dbDownRoot = await mkdtemp(join(tmpdir(), "mcp-tool-envelope-db-down-"));
@@ -316,4 +323,137 @@ test("issueOriginForErrorCode classifies every ERROR_CODES value explicitly (no 
     );
     assert.equal(issueOriginForErrorCode(code), origin, `${code} issueOrigin`);
   }
+});
+
+/**
+ * Publish `error` through the `mc://` resource-read builder and hand back the
+ * decoded ProblemDetails-shaped payload, so a classification assertion can be
+ * written against all three emission paths in the same shape.
+ */
+function resourceProblem(error: AppError): Record<string, unknown> {
+  const entry = errorResource("mc://classes/net.example.Foo", {
+    message: error.message,
+    code: error.code,
+    details: error.details
+  }).contents[0]!;
+  return (JSON.parse(entry.text!) as { error: Record<string, unknown> }).error;
+}
+
+/** The `{ retryClass, issueOrigin }` pair, isolated from the rest of the envelope. */
+function classificationOf(problem: {
+  retryClass?: unknown;
+  issueOrigin?: unknown;
+}): { retryClass: unknown; issueOrigin: unknown } {
+  return { retryClass: problem.retryClass, issueOrigin: problem.issueOrigin };
+}
+
+test("issueOrigin override reaches the tool, batch-entry, and resource builders identically", () => {
+  // One AppError, three publication paths. The pair must not depend on WHICH
+  // builder the caller happened to reach: a tools/call and an equivalent
+  // mc:// resource read describe the same failure.
+  const appError = createError({
+    code: ERROR_CODES.CONTEXT_UNRESOLVED,
+    message: 'artifact "minecraft-1.21.10" has no binary jar',
+    details: { artifactId: "minecraft-1.21.10", issueOrigin: "tool_issue" }
+  });
+
+  const tool = mapErrorToProblem(appError, "req-classification-parity");
+  const batch = errorToBatchEntryProblem(appError, "req-classification-parity");
+  const resource = resourceProblem(appError);
+
+  assert.equal(tool.issueOrigin, "tool_issue");
+  assert.equal(batch.issueOrigin, "tool_issue");
+  assert.equal(
+    resource.issueOrigin,
+    "tool_issue",
+    "the mc:// resource-read path must honour the same per-throw-site override as the tool path"
+  );
+  assert.deepEqual(classificationOf(batch), classificationOf(tool));
+  assert.deepEqual(classificationOf(resource), classificationOf(tool));
+});
+
+test("issueOrigin default is preserved on the tool, batch-entry, and resource builders when no override is present", () => {
+  // Same code, no override: every path must still fall back to the code-keyed
+  // default, so the override seam cannot silently change unmarked errors.
+  const appError = createError({
+    code: ERROR_CODES.CONTEXT_UNRESOLVED,
+    message: "version 9.9.9 matched no artifact",
+    details: { artifactId: "minecraft-1.21.10" }
+  });
+
+  const tool = mapErrorToProblem(appError, "req-classification-default");
+  const batch = errorToBatchEntryProblem(appError, "req-classification-default");
+  const resource = resourceProblem(appError);
+
+  const expected = issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED);
+  assert.equal(expected, "code_issue");
+  assert.equal(tool.issueOrigin, expected);
+  assert.equal(batch.issueOrigin, expected);
+  assert.equal(resource.issueOrigin, expected);
+});
+
+test("issueOrigin override leaves the code-derived retryClass untouched on all three builders", () => {
+  // retryClass is a documented wire contract and stays purely code-derived: a
+  // per-throw-site override seam exists for issueOrigin ONLY. Changing a
+  // retryClass value on an existing code would be a Breaking change, so this
+  // guards the deliberately-deferred decision.
+  const appError = createError({
+    code: ERROR_CODES.CONTEXT_UNRESOLVED,
+    message: 'artifact "minecraft-1.21.10" has no binary jar',
+    details: {
+      artifactId: "minecraft-1.21.10",
+      issueOrigin: "tool_issue",
+      // A retryClass key on details must be inert: there is no override seam.
+      retryClass: "environment"
+    }
+  });
+
+  const codeDerived = retryClassForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED);
+  assert.equal(codeDerived, "input");
+
+  const tool = mapErrorToProblem(appError, "req-retry-class-guard");
+  const batch = errorToBatchEntryProblem(appError, "req-retry-class-guard");
+  const resource = resourceProblem(appError);
+
+  assert.equal(tool.retryClass, codeDerived);
+  assert.equal(batch.retryClass, codeDerived);
+  assert.equal(resource.retryClass, codeDerived);
+  assert.equal(tool.issueOrigin, "tool_issue");
+  assert.equal(batch.issueOrigin, "tool_issue");
+  assert.equal(resource.issueOrigin, "tool_issue");
+});
+
+// The supervisor answers a request the worker never ran, so it has no source
+// AppError and cannot call problemClassification — it writes the pair as
+// literals instead. problemClassification's doc records that those literals
+// "must be mirrored there"; this pins that obligation as a gate rather than
+// prose, so reclassifying either code fails here instead of silently letting
+// the synthetic replies drift away from the classifier.
+function syntheticErrorPayload(reply: unknown): { code: string; retryClass: string; issueOrigin: string } {
+  const structured = (reply as { result?: { structuredContent?: { error?: unknown } } }).result?.structuredContent?.error;
+  return structured as { code: string; retryClass: string; issueOrigin: string };
+}
+
+test("synthetic supervisor replies publish the same classification the builder would", () => {
+  const queueLimit = syntheticErrorPayload(buildSupervisorQueueLimitReply(1, "tools/call"));
+  assert.equal(queueLimit.code, ERROR_CODES.LIMIT_EXCEEDED);
+  assert.deepEqual(
+    { retryClass: queueLimit.retryClass, issueOrigin: queueLimit.issueOrigin },
+    problemClassification(ERROR_CODES.LIMIT_EXCEEDED, undefined),
+    "the queue-limit reply's hardcoded pair must match the classifier for its code"
+  );
+
+  const timeout = syntheticErrorPayload(buildValidateProjectTimeoutReply({
+    request: { id: 2, startedAt: 0 },
+    phase: "running",
+    deadlineMs: 1_000,
+    now: 2_000,
+    workerRestartInitiated: false
+  }));
+  assert.equal(timeout.code, ERROR_CODES.TOOL_TIMEOUT);
+  assert.deepEqual(
+    { retryClass: timeout.retryClass, issueOrigin: timeout.issueOrigin },
+    problemClassification(ERROR_CODES.TOOL_TIMEOUT, undefined),
+    "the tool-timeout reply's hardcoded pair must match the classifier for its code"
+  );
 });

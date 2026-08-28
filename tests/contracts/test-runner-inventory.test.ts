@@ -294,7 +294,62 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // becomes the argument-free list-versions step (the same recovery the sibling
 // "version required but none resolved" site already uses), and the task="mixin"
 // retry shape travels as a <your-mc-version> exampleCalls template.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 1966;
+// 1966 -> 1992 (coordinate download-cache round, +26). Identity and freshness are
+// separated: everything in the URL-keyed downloads cache is now identified by a
+// sha256 of its bytes, and a cached file is reused or revalidated by policy
+// rather than by a bare existsSync in each caller.
+// tests/runtime/repo-downloader.test.ts +6: resolveCachedDownload — sidecar-less
+// adoption, sidecar-backed hit, corrupt-sidecar recovery, If-None-Match/304 reuse,
+// 200 replacement, and the shape parity that stops a cache hit and a download from
+// yielding different identities.
+// tests/mapping/maven-resolver.test.ts +1: isMutableMavenCoordinate — -SNAPSHOT is
+// mutable per Maven spec; releases and timestamped unique snapshots are not.
+// tests/source-service/source-resolver.test.ts +5: the artifactId no longer shifts
+// between the downloading and cache-hit resolve, identical bytes behind different
+// ETags hash the same, a -SNAPSHOT revalidates while a release stays zero-network,
+// and a local binary jar is decompiled in place instead of being refetched (with
+// the allowDecompile:false boundary still throwing).
+// tests/source-service/classsource-findclass.test.ts +4: the decompiled-source
+// warning follows the persisted isDecompiled flag rather than origin ===
+// "decompiled", so a shell jar stops claiming decompiled text and a decompiled
+// artifact under a repository origin starts admitting it.
+// tests/runtime/error-mapping.test.ts +3 and tests/runtime/mcp-helpers.test.ts +2:
+// one classification builder feeds every ProblemDetails site, so a per-throw-site
+// issueOrigin override reaches a mc:// resource read and a tool call alike, and
+// retryClass stays code-derived.
+// tests/entry-tools/verify-mixin-target/verify-mixin-target.test.ts +1: a
+// tool-resolved artifact with no binary jar is a tool issue, not a caller mistake.
+// tests/storage/cache-registry.test.ts +4: a download sidecar is part of its jar's
+// cache entry — folded into its size, deleted with it, never inventoried alone.
+// 1992 -> 2013 (adversarial-review repair round, +21). A read-only review of the
+// round above found the local-binary short-circuit would adopt any file that
+// merely existed, so a truncated jar in a local cache could permanently shadow a
+// good remote one; the rest close coverage gaps the review named.
+// tests/source-service/source-resolver.test.ts +6: the short-circuit now requires
+// a readable archive named for the coordinate in full, so an empty jar, a non-zip
+// jar, and a classifier-less stand-in each fall through to the repository instead
+// of being adopted; the readable-jar and allowDecompile:false paths are pinned
+// against regression.
+// tests/runtime/repo-downloader.test.ts +13: serving cached bytes after a failed
+// revalidation is now reported as such and covered on all three legs (throw, 5xx,
+// withdrawn artifact); the original network error survives a fallback that cannot
+// read the cache; the stale record is retired before replacement bytes land; the
+// size, url and version rejections on a sidecar are exercised; a 304 after a 503
+// retry, a weak ETag round-trip, and both zero-byte paths are covered.
+// tests/storage/cache-registry.test.ts +1: the leftover of an interrupted sidecar
+// write is not a cache entry of its own.
+// tests/runtime/error-mapping.test.ts +1: the synthetic supervisor replies, which
+// cannot call the classification builder, are pinned to the pair it would return.
+// 2013 -> 2020 (+7). An independent review found the downloads cache could launder
+// a repository's definitive rejection into a cached-bytes success, and that a sidecar
+// was bound to its jar by size alone.
+// tests/runtime/repo-downloader.test.ts +4: 403/404/410 refuse the stale fallback
+// while 429 keeps it; a record written under the older schema, and one whose file has
+// been rewritten to the same length, are both re-derived rather than trusted.
+// tests/source-service/source-resolver.test.ts +3: a repository that withdraws a
+// cached jar now fails over to the next one; a 200 that is not a readable archive is
+// refused and failed over; a corrupt exact ~/.m2 jar no longer vetoes a good Gradle one.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2020;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

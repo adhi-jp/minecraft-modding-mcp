@@ -352,7 +352,22 @@ export class VerifyMixinTargetService {
       throw createError({
         code: ERROR_CODES.CONTEXT_UNRESOLVED,
         message: `verify-mixin-target requires a binary jar but artifact "${resolved.artifactId}" has none.`,
-        details: { artifactId: resolved.artifactId, owner }
+        details: {
+          artifactId: resolved.artifactId,
+          owner,
+          // `ERR_CONTEXT_UNRESOLVED` classifies as `code_issue` by code, which
+          // is right for the sibling case (a caller naming a version no
+          // artifact carries) and wrong here: the artifact was picked by the
+          // TOOL from the request's target, and whether it ships a binary jar
+          // is not something the request can express. Published as
+          // caller-fixable it invites an endless retry of an input that was
+          // never at fault, so this site overrides the default.
+          issueOrigin: "tool_issue",
+          nextAction:
+            `verify-mixin-target reads the target's members from bytecode, so it needs an artifact with a binary jar. `
+            + `Re-target with target: { kind: "jar", value: "<path to the jar>" }, or with a version whose artifact carries one `
+            + `(resolve-artifact reports binaryJarPath for the target you pass).`
+        }
       });
     }
     let signature: ExplorerSignatureOutput;

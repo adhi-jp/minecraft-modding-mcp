@@ -9,10 +9,8 @@ import {
 import {
   extractAllowlistedContext,
   extractDidYouMean,
-  extractIssueOriginOverride,
   extractNestedJars,
-  issueOriginForErrorCode,
-  retryClassForErrorCode,
+  problemClassification,
   statusForErrorCode,
   type ExampleCall,
   type ProblemDetails,
@@ -1358,8 +1356,9 @@ export function mapErrorToProblem(
       status: 400,
       code: ERROR_CODES.INVALID_INPUT,
       instance: requestId,
-      retryClass: retryClassForErrorCode(ERROR_CODES.INVALID_INPUT),
-      issueOrigin: issueOriginForErrorCode(ERROR_CODES.INVALID_INPUT),
+      // Schema rejection, not an AppError: there is no throw site that could
+      // have carried a per-site override.
+      ...problemClassification(ERROR_CODES.INVALID_INPUT, undefined),
       fieldErrors: toFieldErrorsFromZod(caughtError, context?.normalizedInput),
       hints: hintsWithFallback,
       ...(guidance?.suggestedCall ? { suggestedCall: guidance.suggestedCall } : {}),
@@ -1405,13 +1404,11 @@ export function mapErrorToProblem(
       status: statusForErrorCode(caughtError.code),
       code: caughtError.code,
       instance: requestId,
-      retryClass: retryClassForErrorCode(caughtError.code),
-      // A per-throw-site `details.issueOrigin` wins over the code-keyed default,
-      // so a code shared by caller mistakes and tool-side gaps can classify each
-      // throw honestly without re-labelling the code for every other site.
-      issueOrigin:
-        extractIssueOriginOverride(caughtError.details) ??
-        issueOriginForErrorCode(caughtError.code),
+      // `problemClassification` applies a per-throw-site `details.issueOrigin`
+      // over the code-keyed default, so a code shared by caller mistakes and
+      // tool-side gaps classifies each throw honestly without re-labelling the
+      // code for every other site.
+      ...problemClassification(caughtError.code, caughtError.details),
       fieldErrors: extractFieldErrorsFromDetails(caughtError.details),
       hints: hintsWithFallback,
       ...(effectiveSuggestedCall ? { suggestedCall: effectiveSuggestedCall } : {}),
@@ -1430,8 +1427,9 @@ export function mapErrorToProblem(
     status: 500,
     code: ERROR_CODES.INTERNAL,
     instance: requestId,
-    retryClass: retryClassForErrorCode(ERROR_CODES.INTERNAL),
-    issueOrigin: issueOriginForErrorCode(ERROR_CODES.INTERNAL)
+    // Non-AppError throw, sanitized to a fixed public envelope: no per-site
+    // override is available here.
+    ...problemClassification(ERROR_CODES.INTERNAL, undefined)
   };
 }
 

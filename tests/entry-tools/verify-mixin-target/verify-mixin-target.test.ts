@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  issueOriginForErrorCode,
+  retryClassForErrorCode
+} from "../../../src/error-mapping.ts";
 import { createError, ERROR_CODES, isAppError } from "../../../src/errors.ts";
+import { mapErrorToProblem } from "../../../src/tool-guidance.ts";
 import {
   VerifyMixinTargetService,
   type VerifyMixinTargetDeps,
@@ -939,6 +944,71 @@ test("C28: getSignature errors other than CLASS_NOT_FOUND propagate unchanged", 
       // Non CLASS_NOT_FOUND failures are rethrown as-is (no find-class wrapping).
       assert.equal(err, boom);
       assert.equal(isAppError(err), false);
+      return true;
+    }
+  );
+});
+
+test("C29: the missing-binary-jar failure classifies as tool_issue and carries a repair-oriented nextAction", async () => {
+  // The artifact was picked by the TOOL, not named by the caller: whether it
+  // carries a binary jar is not something the request can express. Published
+  // under the code-keyed `code_issue` default it invites an endless retry of an
+  // input that was never at fault.
+  const service = new VerifyMixinTargetService({
+    resolveArtifact: async () => ({
+      artifactId: "minecraft-1.21.10",
+      mappingApplied: "obfuscated",
+      binaryJarPath: undefined,
+      provenance: undefined,
+      warnings: []
+    }),
+    getSignature: async () => {
+      throw new Error("getSignature must not be reached when the binary jar is missing");
+    }
+  });
+  await assert.rejects(
+    () =>
+      service.execute({
+        ...baseInput,
+        member: { kind: "method", name: "tick" }
+      }),
+    (err: unknown) => {
+      assert.ok(isAppError(err));
+      const details = (err as { details?: { issueOrigin?: string; nextAction?: string } }).details ?? {};
+      assert.equal(typeof details.nextAction, "string");
+      assert.ok((details.nextAction ?? "").trim().length > 0, "nextAction must be non-empty");
+
+      // What this test's title claims is a property of the PUBLISHED envelope,
+      // not of a field the throw site happened to set on `details`. The two
+      // only coincide when the emission path honours the per-site override, so
+      // assert on the envelope: map the caught error through the same builder
+      // the tool path uses, with the same `{ tool, normalizedInput }` context
+      // src/index.ts passes.
+      const problem = mapErrorToProblem(err, "req-c29-missing-binary-jar", {
+        tool: "verify-mixin-target",
+        normalizedInput: { ...baseInput, member: { kind: "method", name: "tick" } }
+      });
+
+      // Guards the assertion below against passing for the wrong reason:
+      // ERR_CONTEXT_UNRESOLVED's code-keyed default is `code_issue`, so
+      // `tool_issue` on the wire can ONLY come from the override being applied
+      // during emission. If mapErrorToProblem ever stopped honouring it, the
+      // details field would still read `tool_issue` and the envelope would not.
+      assert.equal(issueOriginForErrorCode(problem.code), "code_issue");
+      assert.equal(
+        problem.issueOrigin,
+        "tool_issue",
+        "a tool-resolved artifact with no binary jar is a tool-side gap, not a caller mistake"
+      );
+
+      // retryClass has no per-throw-site override seam and must stay purely
+      // code-derived here, pinning that deliberately-deferred decision at this
+      // site: `details.issueOrigin` moves one half of the pair and not the other.
+      assert.equal(problem.retryClass, retryClassForErrorCode(problem.code));
+      assert.equal(problem.retryClass, "input");
+
+      // The repair guidance must reach the wire, not just sit on `details`.
+      assert.deepEqual(problem.hints, [(details.nextAction ?? "").trim()]);
       return true;
     }
   );
