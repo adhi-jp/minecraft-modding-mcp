@@ -5,7 +5,9 @@ import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY } from "./era-c
 import { ERROR_CODES, type ErrorCode } from "./errors.js";
 import {
   problemClassification,
-  extractAllowlistedContext
+  extractAllowlistedContext,
+  extractDidYouMean,
+  extractNestedJars
 } from "./error-mapping.js";
 import {
   toHints,
@@ -123,6 +125,8 @@ export function errorResource(
   const { suggestedCall, exampleCalls } = extractValidatedSuggestionAndExamples(details);
   const fieldErrors = extractFieldErrorsFromDetails(details);
   const context = extractAllowlistedContext(details);
+  const didYouMean = extractDidYouMean(details);
+  const nestedJars = extractNestedJars(details);
   return {
     // ProblemDetails-read cache override (adopted policy): STRUCTURAL
     // identification — this constructor IS the error-resource path, so the
@@ -156,6 +160,8 @@ export function errorResource(
             ...(hints ? { hints } : {}),
             ...(suggestedCall ? { suggestedCall } : {}),
             ...(exampleCalls ? { exampleCalls } : {}),
+            ...(didYouMean ? { didYouMean } : {}),
+            ...(nestedJars ? { nestedJars } : {}),
             ...(context ? { context } : {})
           },
           meta: { uri }

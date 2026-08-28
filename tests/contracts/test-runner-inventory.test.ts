@@ -377,7 +377,11 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // caller-named-artifactId case is pinned to code_issue.
 // tests/entry-tools/verify-mixin-target/verify-mixin-target.test.ts +1: a caller-named
 // target: { kind: "jar", ... } with no binary companion is pinned to code_issue.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2026;
+// 2026 -> 2027 (+1). errorResource dropped didYouMean and nestedJars on the
+// mc:// resource-read error path.
+// tests/runtime/mcp-helpers.test.ts +1: errorResource forwards didYouMean and
+// nestedJars, matching the tool-call error path's recovery metadata.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2027;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

@@ -196,6 +196,25 @@ test("errorResource drops a placeholder-only suggestedCall via the shared valida
   assert.equal("suggestedCall" in parsed.error, false);
 });
 
+test("errorResource forwards didYouMean and nestedJars from AppError details", () => {
+  // Regression: the function's own comment claims a resource read "gets the
+  // same recovery metadata" as the equivalent tool call, but only hints,
+  // suggestedCall/exampleCalls, fieldErrors, and context were actually wired -
+  // didYouMean and nestedJars, both extracted on the tool path via the same
+  // error-mapping.ts helpers, were silently dropped on this one.
+  const entry = errorResource("mc://source/net.example.Shell", {
+    message: "class not found",
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    details: {
+      didYouMean: [{ className: "net.example.Shelf", matchReason: "levenshtein" }],
+      nestedJars: ["META-INF/jars/api.jar", "META-INF/jars/impl.jar"]
+    }
+  }).contents[0]!;
+  const parsed = JSON.parse(entry.text!);
+  assert.deepEqual(parsed.error.didYouMean, [{ className: "net.example.Shelf", matchReason: "levenshtein" }]);
+  assert.deepEqual(parsed.error.nestedJars, ["META-INF/jars/api.jar", "META-INF/jars/impl.jar"]);
+});
+
 test("errorResource forwards validated exampleCalls from AppError details", () => {
   const entry = errorResource("mc://x", {
     message: "ambiguous",
