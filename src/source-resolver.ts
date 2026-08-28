@@ -496,7 +496,22 @@ export async function resolveSourceTarget(
         timeoutMs: explicitConfig.fetchTimeoutMs
       });
 
-      if (!download.ok || !(await hasJavaSources(download.path))) {
+      let sourceJarHasJavaSources: boolean;
+      try {
+        sourceJarHasJavaSources = download.ok && (await hasJavaSources(download.path));
+      } catch {
+        // The download reports success, but the bytes are not a readable
+        // archive - the same "200 but not really a jar" shape the binary leg
+        // guards against below. Evict it now: this url is immutable for every
+        // non-SNAPSHOT coordinate, so a future call would otherwise be served
+        // the same poison with no request made at all.
+        if (download.ok) {
+          discardCachedDownload(download.path);
+        }
+        sourceJarHasJavaSources = false;
+      }
+
+      if (!download.ok || !sourceJarHasJavaSources) {
         // Transience only decides the error CODE at the end of the cascade: an
         // unstable repository earns ERR_REPO_FETCH_FAILED, while "this
         // repository does not publish it" stays a plain not-found.

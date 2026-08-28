@@ -1091,3 +1091,73 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary
     "and picking the readable local jar means there is nothing to download - offline or not"
   );
 });
+
+test("resolveSourceTarget(targetKind=coordinate) refuses a remote sources download that is not a readable archive and fails over", async () => {
+  // Regression: the binary leg above evicts a poisoned download with
+  // discardCachedDownload before failing over, so a future call re-fetches
+  // instead of being served the same corrupt bytes forever (immutable urls
+  // never ask again). The sources leg relied on hasJavaSources, which
+  // deliberately propagates archive-open errors for its OTHER caller (the
+  // local jar-target path) - and that propagation used to escape uncaught
+  // here too, skipping the eviction this test pins.
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-sources-error-page-"));
+  const coordinate = "com.example:sources-error-page:2.0.0";
+  const sourcesPath = "/com/example/sources-error-page/2.0.0/sources-error-page-2.0.0-sources.jar";
+  const sourcesUrlA = `${REPO_A}${sourcesPath}`;
+  const sourcesUrlB = `${REPO_B}${sourcesPath}`;
+
+  const fixture = join(root, "real-sources.jar");
+  await createJar(fixture, {
+    "com/example/SourcesErrorPage.java": ["package com.example;", "public class SourcesErrorPage {}"].join("\n")
+  });
+  const realJarBytes = await readFile(fixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === sourcesUrlA) {
+      // A 200 with a perfectly plausible body that is not a jar at all.
+      return new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+    if (url === sourcesUrlB) {
+      return new Response(realJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
+  const failovers: RecordedFailover[] = [];
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: coordinate },
+        {
+          allowDecompile: true,
+          onRepoFailover: (event) => failovers.push(event as RecordedFailover)
+        },
+        config
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "remote-repo");
+  assert.equal(
+    resolved.sourceJarPath,
+    defaultDownloadPath(config.cacheDir, sourcesUrlB),
+    "an error page must never be handed back as the resolved sources jar"
+  );
+  assert.equal(
+    existsSync(defaultDownloadPath(config.cacheDir, sourcesUrlA)),
+    false,
+    "and the poisoned body must not stay in an immutable cache slot where every later run inherits it"
+  );
+  assert.deepEqual(
+    failovers
+      .filter((event) => event.stage === "source")
+      .map((event) => ({ repoUrl: event.repoUrl, statusCode: event.statusCode })),
+    [{ repoUrl: sourcesUrlA, statusCode: 200 }]
+  );
+});

@@ -356,7 +356,11 @@ const EXPECTED_ORDINARY_TEST_FILES = 221;
 // sibling failure leg (5xx/429/thrown-error/withdrawn-artifact).
 // tests/runtime/repo-downloader.test.ts +1: an empty-body 200 during
 // revalidation now serves the cached bytes as stale instead of destroying them.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2021;
+// 2021 -> 2022 (+1). A corrupt remote sources download was never evicted from
+// the cache, asymmetric with the binary leg's existing fix.
+// tests/source-service/source-resolver.test.ts +1: a corrupt remote sources
+// download is evicted before failover.
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2022;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
