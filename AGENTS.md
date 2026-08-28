@@ -20,11 +20,14 @@
 - Do not defer documentation or test updates to follow-up commits.
 
 ## Verification Gate (MUST)
-- Before claiming completion for production changes, run:
+- Before claiming completion for production changes, run the verification appropriate to what actually changed — not reflexively the full matrix below, and never less than what the change touches.
+- When `src/**` or `tests/**` changed, run:
   - `pnpm check`
   - `pnpm test`
 - When MCP transport/tool registration or manual workflows change, also run `pnpm test:manual:stdio-smoke` when environment permits.
 - For search, index, or performance-sensitive changes, also run `pnpm test:perf`.
+- When a change is confined to `CHANGELOG.md` content and/or the `version` field in `package.json`, with no other `src/**` or `tests/**` edits, `pnpm check`/`pnpm test` are not required; run `pnpm check:changelog` and any test that asserts against the changed value directly (for example, a test comparing the server version or the changelog-to-package-version header). Any accompanying `src/**` or `tests/**` edit brings the change back under the full gate above.
+- Do not re-run a verification command solely to re-confirm a result already produced for the current, unchanged tree. If a later run — your own or a delegated worker's — reports an outcome that contradicts a fresh prior run with no tree change in between, diagnose the discrepancy before re-running the full suite again; a concurrent invocation sharing the same working tree is a common non-code cause.
 - Do not claim "done", "fixed", or "passing" without fresh command output evidence.
 
 ## Release Safety (MUST)
@@ -59,6 +62,7 @@
 - Use Conventional Commits.
 - A commit that INTRODUCES a breaking change MUST use `!` in its type/scope summary and include a `BREAKING CHANGE:` footer. Breaking means the public MCP tool surface (tool names, input parameters, response envelope shape) or the Node package surface (exports, types, `engines`) stops working for an existing caller.
 - A release commit that only cuts a version and its CHANGELOG section is an aggregation, not an introduction, and carries neither marker. The breaking changes it releases are announced by the major version bump and the `**Breaking**` entries in the release section.
+- Release commit subject: `chore(release): {version}`. No verb, no `v` prefix.
 - Keep commits logically scoped; do not mix unrelated changes.
 - Do not commit files under `docs/specs/`, `docs/plans/`, or `docs/reports/`; keep specifications, implementation plans, and session reports out of repository history. `.gitignore` enforces all three, so a document that genuinely needs to ship belongs at a tracked path rather than force-added from one of these.
 - Do not force-add ignored files or otherwise commit files outside the agreed commit scope unless the user explicitly instructs you to include those extra files.
