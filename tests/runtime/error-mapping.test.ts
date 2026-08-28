@@ -8,6 +8,7 @@ import { ERROR_CODES, createError, type AppError } from "../../src/errors.ts";
 import {
   errorToBatchEntryProblem,
   extractAllowlistedContext,
+  extractNestedJars,
   issueOriginForErrorCode,
   problemClassification,
   retryClassForErrorCode,
@@ -126,6 +127,34 @@ test("errorToBatchEntryProblem attaches issueOrigin and allowlisted context", ()
   assert.deepEqual(problem.context, { queryLength: 5000, maxLength: 1000 });
   // Filesystem paths are not allowlisted and must not leak into context.
   assert.equal((problem.context as Record<string, unknown>)?.jarPath, undefined);
+});
+
+test("extractNestedJars returns the inventory unchanged when every entry is a non-empty string", () => {
+  const result = extractNestedJars({ nestedJars: ["META-INF/jars/a.jar", "META-INF/jars/b.jar"] });
+  assert.deepEqual(result, ["META-INF/jars/a.jar", "META-INF/jars/b.jar"]);
+});
+
+test("extractNestedJars drops the whole array when any entry is not a non-empty string", () => {
+  assert.equal(extractNestedJars({ nestedJars: ["a.jar", 42] }), undefined);
+  assert.equal(extractNestedJars({ nestedJars: ["a.jar", ""] }), undefined);
+  assert.equal(extractNestedJars({ nestedJars: ["a.jar", null] }), undefined);
+});
+
+test("extractNestedJars drops an empty array (matching the producing site, which omits the key instead)", () => {
+  assert.equal(extractNestedJars({ nestedJars: [] }), undefined);
+});
+
+test("extractNestedJars caps the inventory at 64 entries", () => {
+  const oversized = Array.from({ length: 70 }, (_, i) => `META-INF/jars/jar-${i}.jar`);
+  const result = extractNestedJars({ nestedJars: oversized });
+  assert.equal(result?.length, 64);
+  assert.deepEqual(result, oversized.slice(0, 64));
+});
+
+test("extractNestedJars returns undefined for a missing or malformed field", () => {
+  assert.equal(extractNestedJars({}), undefined);
+  assert.equal(extractNestedJars(undefined), undefined);
+  assert.equal(extractNestedJars({ nestedJars: "not-an-array" }), undefined);
 });
 
 test("extractAllowlistedContext drops unknown and non-primitive fields", () => {
