@@ -499,6 +499,7 @@ export const findClassSchema = z.object(findClassShape).superRefine(requireExact
 export const searchClassSourceShape = {
   artifactId: optionalNonEmptyString,
   target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  projectPath: optionalNonEmptyString.describe("Workspace root for dependency or workspace target resolution."),
   query: nonEmptyString,
   intent: searchIntentSchema.optional(),
   match: searchMatchSchema.optional(),
@@ -530,6 +531,7 @@ export const searchClassSourceSchema = z.object(searchClassSourceShape).superRef
 export const getArtifactFileShape = {
   artifactId: optionalNonEmptyString,
   target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  projectPath: optionalNonEmptyString.describe("Workspace root for dependency or workspace target resolution."),
   filePath: nonEmptyString,
   maxBytes: optionalPositiveInt
 };
@@ -538,6 +540,7 @@ export const getArtifactFileSchema = z.object(getArtifactFileShape).superRefine(
 export const listArtifactFilesShape = {
   artifactId: optionalNonEmptyString,
   target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  projectPath: optionalNonEmptyString.describe("Workspace root for dependency or workspace target resolution."),
   prefix: optionalNonEmptyString,
   limit: optionalPositiveInt,
   cursor: optionalNonEmptyString,
@@ -901,6 +904,7 @@ export const jsonToNbtSchema = z.object(jsonToNbtShape);
 export const indexArtifactShape = {
   artifactId: optionalNonEmptyString,
   target: sourceLookupTargetSchema.optional().describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
+  projectPath: optionalNonEmptyString.describe("Workspace root for dependency or workspace target resolution."),
   force: z.boolean().default(false)
 };
 export const indexArtifactSchema = z.object(indexArtifactShape).superRefine(requireExactlyOneArtifactRef);

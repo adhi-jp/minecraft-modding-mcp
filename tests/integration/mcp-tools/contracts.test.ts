@@ -256,6 +256,21 @@ test("validate-access-transformer tools/list schema exposes AT namespace and run
   assert.match(schema.properties?.scope?.description ?? "", /loader.*runtime/i);
 });
 
+test("get-artifact-file, index-artifact, list-artifact-files, and search-class-source tools/list schemas expose projectPath for workspace resolution", async () => {
+  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
+  for (const name of ["get-artifact-file", "index-artifact", "list-artifact-files", "search-class-source"]) {
+    const schema = toolMap.get(name) as
+      | { properties?: { projectPath?: { description?: string } } }
+      | undefined;
+    assert.ok(schema, `${name} must be registered`);
+    assert.match(
+      schema?.properties?.projectPath?.description ?? "",
+      /workspace root/i,
+      `${name} tools/list schema must advertise projectPath`
+    );
+  }
+});
+
 test("tools/list schemas expose explicit defaults for public input parameters", async () => {
   const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const listVersionsSchema = toolMap.get("list-versions") as {

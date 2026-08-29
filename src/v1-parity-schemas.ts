@@ -2032,6 +2032,10 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
         ],
         "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
       },
+      "projectPath": {
+        "$ref": "#/properties/artifactId",
+        "description": "Workspace root for dependency or workspace target resolution."
+      },
       "filePath": {
         "$ref": "#/properties/target/anyOf/0/properties/value"
       },
@@ -2853,6 +2857,10 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
         ],
         "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
       },
+      "projectPath": {
+        "$ref": "#/properties/artifactId",
+        "description": "Workspace root for dependency or workspace target resolution."
+      },
       "force": {
         "type": "boolean",
         "default": false
@@ -3525,6 +3533,10 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
           }
         ],
         "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
+      },
+      "projectPath": {
+        "$ref": "#/properties/artifactId",
+        "description": "Workspace root for dependency or workspace target resolution."
       },
       "prefix": {
         "$ref": "#/properties/artifactId"
@@ -4377,6 +4389,10 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
           }
         ],
         "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
+      },
+      "projectPath": {
+        "$ref": "#/properties/artifactId",
+        "description": "Workspace root for dependency or workspace target resolution."
       },
       "query": {
         "$ref": "#/properties/target/anyOf/0/properties/value"

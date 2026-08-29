@@ -9,7 +9,11 @@ import {
   searchClassSourceSchema
 } from "../../../src/tool-schemas.ts";
 
-const CASES: Array<{ name: string; schema: { safeParse: (value: unknown) => { success: boolean } }; base: Record<string, unknown> }> = [
+const CASES: Array<{
+  name: string;
+  schema: { safeParse: (value: unknown) => { success: boolean }; parse: (value: unknown) => unknown };
+  base: Record<string, unknown>;
+}> = [
   { name: "find-class", schema: findClassSchema, base: { className: "Block" } },
   { name: "get-artifact-file", schema: getArtifactFileSchema, base: { filePath: "a/B.java" } },
   { name: "list-artifact-files", schema: listArtifactFilesSchema, base: {} },
@@ -89,3 +93,20 @@ test("find-class preserves top-level projectPath for workspace-relative targets"
 
   assert.equal(parsed.projectPath, "/tmp/example-workspace");
 });
+
+for (const { name, schema, base } of CASES) {
+  test(`${name} preserves top-level projectPath for workspace-relative targets`, () => {
+    const parsed = schema.parse({
+      ...base,
+      target: {
+        kind: "dependency",
+        group: "com.example",
+        name: "fixture-lib",
+        versionFromProject: true
+      },
+      projectPath: " /tmp/example-workspace "
+    });
+
+    assert.equal((parsed as { projectPath?: string }).projectPath, "/tmp/example-workspace");
+  });
+}

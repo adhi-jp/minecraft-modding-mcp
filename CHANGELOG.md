@@ -7,6 +7,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Fixed
+
+- `search-class-source`, `get-artifact-file`, `list-artifact-files`, and `index-artifact` now accept a top-level `projectPath` parameter, matching `find-class`. Previously, a `target.kind="workspace"` or unversioned `target.kind="dependency"` call to these 4 tools was rejected with an error asking the caller to supply `projectPath`, but the tools' schemas had no such field to pass it through, making the error's own advice impossible to follow.
+- The `projectPath` fix above now also updates these 4 tools' `tools/list`-advertised `inputSchema`, not just runtime validation, so MCP clients can actually discover the parameter.
+
 ## [7.0.0-rc.1] - 2026-08-28
 
 ### Added
