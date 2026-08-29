@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { homedir } from "node:os";
@@ -21,6 +22,7 @@ import {
 } from "./maven-resolver.js";
 import {
   defaultDownloadPath,
+  digestFile,
   discardCachedDownload,
   resolveCachedDownload,
   type CacheFreshness
@@ -32,6 +34,52 @@ import { hasAnyJarEntry, hasJavaSourceExtension } from "./source-jar-reader.js";
 function readStatsSignature(filePath: string): string {
   const stats = artifactSignatureFromFile(filePath);
   return stats.signature;
+}
+
+/**
+ * Digests already derived from a local jar, each pinned to the stat that
+ * produced it.
+ *
+ * Keyed by the symlink-resolved path, so a jar reached through two names is
+ * hashed once. The entry is only ever *reused*, never trusted on its own: a
+ * mismatched mtime or size discards it, so the map cannot serve a digest for
+ * bytes that have since been replaced.
+ */
+const contentSignatureCache = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
+
+/**
+ * The identity of a jar sitting on local disk: a sha256 of its bytes.
+ *
+ * `~/.m2` and the Gradle module cache move a file's mtime for reasons that have
+ * nothing to do with its contents - an eviction followed by a re-fetch of
+ * byte-identical bytes, a filesystem restore, a plain `touch`. An `mtimeMs:size`
+ * signature turns every one of those into a fresh artifactId and a fresh
+ * decompile, which is exactly the instability the download cache's
+ * content-addressed identity removed from the remote half of this cascade.
+ *
+ * Hashing is not free and this cascade is re-walked on every target-driven tool
+ * call, so the digest is memoized against the stat that produced it. The stat is
+ * taken *before* the digest on purpose: bytes replaced mid-hash are recorded
+ * against a stat they no longer have, so the entry is rejected on the next call
+ * and re-derived - a wasted hash, never a wrong identity.
+ */
+async function contentSignature(jarPath: string): Promise<string> {
+  // The same normalization `artifactSignatureFromFile` applied, kept so this
+  // path still refuses a vanished or non-jar file the way it always has.
+  const resolvedPath = normalizeJarPath(jarPath);
+  const stats = statSync(resolvedPath);
+  const cached = contentSignatureCache.get(resolvedPath);
+  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+    return cached.sha256;
+  }
+
+  const { contentSha256 } = await digestFile(resolvedPath);
+  contentSignatureCache.set(resolvedPath, {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    sha256: contentSha256
+  });
+  return contentSha256;
 }
 
 async function hasJavaSources(jarPath: string): Promise<boolean> {
@@ -432,7 +480,7 @@ export async function resolveSourceTarget(
 
   for (const candidate of resolveLocalCoordinateCandidates(explicitConfig.localM2Path, coordinate)) {
     if (await hasJavaSources(candidate)) {
-      const signature = readStatsSignature(candidate);
+      const signature = await contentSignature(candidate);
       return coordinateArtifact({
         coordinate,
         idSource: "local-m2",
@@ -447,7 +495,7 @@ export async function resolveSourceTarget(
 
   const gradleCacheCandidate = await resolveGradleCacheCoordinateCandidate(coordinate);
   if (gradleCacheCandidate?.sourceJarPath && (await hasJavaSources(gradleCacheCandidate.sourceJarPath))) {
-    const signature = readStatsSignature(gradleCacheCandidate.sourceJarPath);
+    const signature = await contentSignature(gradleCacheCandidate.sourceJarPath);
     return coordinateArtifact({
       coordinate,
       idSource: "local-m2",
@@ -605,7 +653,7 @@ export async function resolveSourceTarget(
     localDecompilableBinaryCandidates
   );
   if (localDecompilableBinaryJarPath) {
-    const signature = readStatsSignature(localDecompilableBinaryJarPath);
+    const signature = await contentSignature(localDecompilableBinaryJarPath);
     return coordinateArtifact({
       coordinate,
       idSource: "local-binary",

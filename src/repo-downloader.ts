@@ -32,8 +32,9 @@ import { createError, ERROR_CODES } from "./errors.js";
  * artifact already carries an upstream SHA-1 contract, and a version jar keeps
  * an `mtimeMs:size` signature. They are a different cache layer, not a
  * migration this module is waiting on. Artifacts on local disk outside the
- * cache entirely (`~/.m2`, the Gradle module cache) likewise keep their own
- * stat signature.
+ * cache entirely (`~/.m2`, the Gradle module cache) are identified by their
+ * bytes as well - see `contentSignature` in `source-resolver.ts`, which reuses
+ * {@link digestFile} to get there.
  */
 
 export interface DownloadResult {
@@ -251,7 +252,7 @@ function retryDelay(baseMs: number, attempt: number): number {
 const MAX_RETRY_AFTER_MS = 30_000;
 
 /** Stream the file through sha256 so a multi-hundred-megabyte jar never lands in memory. */
-async function digestFile(filePath: string): Promise<{ contentSha256: string; contentLength: number }> {
+export async function digestFile(filePath: string): Promise<{ contentSha256: string; contentLength: number }> {
   const hash = createHash("sha256");
   let contentLength = 0;
   for await (const chunk of createReadStream(filePath)) {

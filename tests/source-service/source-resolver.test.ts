@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -1216,4 +1217,146 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary
     gradleJarPath,
     "a corrupt companion in the first location must not shadow a good companion in the second"
   );
+});
+
+/** The sha256 of a file's bytes, as an artifactSignature is now expected to be. */
+async function sha256OfFile(filePath: string): Promise<string> {
+  return createHash("sha256").update(await readFile(filePath)).digest("hex");
+}
+
+/** Move a file's mtime without touching a single one of its bytes. */
+async function touchWithoutRewriting(filePath: string): Promise<void> {
+  const bumped = new Date(Date.now() + 60_000);
+  await utimes(filePath, bumped, bumped);
+}
+
+test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when a local m2 sources jar is touched without a byte changing", async () => {
+  // The instability the remote-download leg of this cascade was fixed for,
+  // reaching the local leg by a different route: a cache eviction and re-fetch
+  // of byte-identical bytes, a filesystem restore, or a plain `touch` all move
+  // mtime while the jar stays the same artifact. A stat signature turned every
+  // one of those into a new artifactId and a fresh decompile.
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-m2-touch-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const coordinate = "com.example:touched-module:4.5.6";
+  const sourceJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "touched-module",
+    "4.5.6",
+    "touched-module-4.5.6-sources.jar"
+  );
+  await createJar(sourceJarPath, {
+    "com/example/Touched.java": ["package com.example;", "public class Touched {}"].join("\n")
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "coordinate", value: coordinate } as const;
+
+  const first = await withGradleHome(gradleUserHome, () =>
+    resolveSourceTarget(target, { allowDecompile: true }, config)
+  );
+  await touchWithoutRewriting(sourceJarPath);
+  const second = await withGradleHome(gradleUserHome, () =>
+    resolveSourceTarget(target, { allowDecompile: true }, config)
+  );
+
+  assert.equal(first.origin, "local-m2");
+  assert.equal(second.origin, "local-m2");
+  assert.equal(
+    first.artifactSignature,
+    await sha256OfFile(sourceJarPath),
+    "a local m2 artifact is identified by the bytes of its jar"
+  );
+  assert.equal(second.artifactSignature, first.artifactSignature);
+  assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) gives a local m2 sources jar a new artifactId once its bytes really change", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-m2-rewritten-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const coordinate = "com.example:rewritten-module:4.5.6";
+  const sourceJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "rewritten-module",
+    "4.5.6",
+    "rewritten-module-4.5.6-sources.jar"
+  );
+  await createJar(sourceJarPath, {
+    "com/example/Rewritten.java": ["package com.example;", "public class Rewritten {}"].join("\n")
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "coordinate", value: coordinate } as const;
+
+  const first = await withGradleHome(gradleUserHome, () =>
+    resolveSourceTarget(target, { allowDecompile: true }, config)
+  );
+
+  // Republished under the same coordinate with different contents - the one
+  // case where a new id is the correct answer, and the thing the memo must not
+  // be allowed to hide.
+  await createJar(sourceJarPath, {
+    "com/example/Rewritten.java": [
+      "package com.example;",
+      "public class Rewritten {",
+      "  public void addedInTheRepublish() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const second = await withGradleHome(gradleUserHome, () =>
+    resolveSourceTarget(target, { allowDecompile: true }, config)
+  );
+
+  assert.equal(second.origin, "local-m2");
+  assert.equal(second.artifactSignature, await sha256OfFile(sourceJarPath));
+  assert.notEqual(second.artifactSignature, first.artifactSignature);
+  assert.notEqual(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when a local binary-only Gradle cache jar is touched", async () => {
+  // The binary-only local hit takes its own branch and its own id space
+  // ("local-binary"), so it needs its own proof that identity follows bytes.
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-touch-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const coordinate = "com.example:binary-only:3.2.1";
+  const binaryJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "binary-only",
+    "3.2.1",
+    "binary-only-3.2.1.jar"
+  );
+  await createJar(binaryJarPath, {
+    "com/example/BinaryOnly.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+  const target = { kind: "coordinate", value: coordinate } as const;
+
+  const { first, second } = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, async () => {
+      const firstResolve = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      await touchWithoutRewriting(binaryJarPath);
+      const secondResolve = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      return { first: firstResolve, second: secondResolve };
+    })
+  );
+
+  assert.equal(first.origin, "local-m2");
+  assert.equal(first.isDecompiled, true);
+  assert.equal(
+    first.artifactSignature,
+    await sha256OfFile(binaryJarPath),
+    "a local binary-only artifact is identified by the bytes of its jar"
+  );
+  assert.equal(second.artifactSignature, first.artifactSignature);
+  assert.equal(second.artifactId, first.artifactId);
 });
