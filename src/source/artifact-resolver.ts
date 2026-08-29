@@ -58,6 +58,15 @@ type VersionSourceCandidate = {
   score: number;
 };
 
+/**
+ * The Maven group under which the Minecraft runtime artifact itself is published
+ * (`net.minecraft:client`, `net.minecraft:server`, the Loom merged jars). A
+ * coordinate in this group carries a real Minecraft version in its version
+ * segment; a coordinate in any other group carries a third-party library's own
+ * release number, which says nothing about Minecraft.
+ */
+const MINECRAFT_ARTIFACT_GROUP_ID = "net.minecraft";
+
 export type VersionSourceDiscovery = {
   searchedPaths: string[];
   candidateArtifacts: string[];
@@ -1614,36 +1623,49 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     let resolvedTarget: SourceTargetInput = { kind, value };
     let resolvedVersion: string | undefined;
     let versionSourceDiscovery: VersionSourceDiscovery | undefined;
-    let runtimeNamesUnobfuscated = false;
     if (kind === "version") {
       const versionJar = await svc.versionService.resolveVersionJar(value);
       resolvedVersion = versionJar.version;
-      runtimeNamesUnobfuscated = isUnobfuscatedVersion(resolvedVersion);
       resolvedTarget = {
         kind: "jar",
         value: versionJar.jarPath
       };
       warnings.push(`Resolved Minecraft ${versionJar.version} from ${versionJar.clientJarUrl}.`);
     }
+    let coordinateGroupId: string | undefined;
     if (kind === "coordinate") {
       try {
-        resolvedVersion = parseCoordinate(value).version;
+        const parsed = parseCoordinate(value);
+        resolvedVersion = parsed.version;
+        coordinateGroupId = parsed.groupId;
       } catch {
         // coordinate validity is validated by resolver
       }
     }
-    if (!runtimeNamesUnobfuscated && resolvedVersion && isUnobfuscatedVersion(resolvedVersion)) {
-      runtimeNamesUnobfuscated = true;
-    }
+
+    // `isUnobfuscatedVersion` answers "does this MINECRAFT version ship unobfuscated
+    // names in its runtime jar?", so it may only be asked about a string that really is
+    // a Minecraft version. A kind="version" target always carries one. A coordinate
+    // carries one only when it names the Minecraft runtime artifact itself
+    // (net.minecraft:client:26.1); for any other coordinate the version segment is a
+    // third-party library's own release number. Without this gate a dependency such as
+    // org.jetbrains:annotations:26.0.2 parses as an "unobfuscated Minecraft version"
+    // and short-circuits applyMappingPipeline into reporting mappingApplied="mojang"
+    // with no remap performed, no verification, and no dependency-mapping-unverified
+    // warning. A kind="dependency" target is excluded outright regardless of its group,
+    // because binary remap is force-disabled for it (see forceBinaryRemapDisabled
+    // below), so its mapping is never actually enforced either way.
+    const versionNamesMinecraft =
+      kind === "version" ||
+      (kind === "coordinate" && !dependencyOrigin && coordinateGroupId === MINECRAFT_ARTIFACT_GROUP_ID);
+    const minecraftVersion = versionNamesMinecraft ? resolvedVersion : undefined;
+    const runtimeNamesUnobfuscated =
+      minecraftVersion !== undefined && isUnobfuscatedVersion(minecraftVersion);
 
     let effectiveMapping: SourceMapping = mapping;
-    if (
-      (mapping === "intermediary" || mapping === "yarn") &&
-      resolvedVersion &&
-      isUnobfuscatedVersion(resolvedVersion)
-    ) {
+    if ((mapping === "intermediary" || mapping === "yarn") && runtimeNamesUnobfuscated) {
       warnings.push(
-        `Version ${resolvedVersion} is unobfuscated; ${mapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
+        `Version ${minecraftVersion} is unobfuscated; ${mapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
       );
       effectiveMapping = "obfuscated";
     }
@@ -1817,7 +1839,12 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       provenance.companionSourceJars = versionSourceDiscovery.companionSourceJarPaths;
     }
 
-    if (dependencyOrigin && dependencyRequestedMapping && dependencyRequestedMapping !== "obfuscated") {
+    if (
+      dependencyOrigin &&
+      dependencyRequestedMapping &&
+      dependencyRequestedMapping !== "obfuscated" &&
+      mappingDecision.qualityFlags.includes("dependency-mapping-unverified")
+    ) {
       const coord = resolved.coordinate ?? value;
       warnings.push(
         `Dependency artifact ${coord} mapping "${dependencyRequestedMapping}" is not enforced (binary remap is disabled for non-vanilla artifacts); the JAR is returned in its native namespace and mappingApplied is reported as "obfuscated" with qualityFlag "dependency-mapping-unverified". Caller must validate symbol availability.`

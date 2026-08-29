@@ -441,3 +441,269 @@ test("target.kind=jar preserves ERR_JAR_NOT_FOUND across representative entry po
     });
   }
 });
+
+test("resolveArtifact does not warn that a dependency mapping is unenforced when a source-backed jar satisfies it", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-dependency-source-backed-"));
+  const sourceJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "depdemo",
+    "2.0.0",
+    "depdemo-2.0.0-sources.jar"
+  );
+  await createJar(sourceJarPath, {
+    "com/example/Depdemo.java": ["package com.example;", "public class Depdemo {}"].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "dependency", group: "com.example", name: "depdemo", version: "2.0.0" },
+    mapping: "mojang"
+  } as any);
+
+  assert.equal(resolved.requestedMapping, "mojang");
+  assert.equal(resolved.mappingApplied, "mojang");
+  assert.ok(
+    resolved.qualityFlags.includes("source-backed"),
+    `Expected source-backed flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+  );
+  assert.ok(!resolved.qualityFlags.includes("dependency-mapping-unverified"));
+  assert.ok(
+    resolved.warnings.every((w: string) => !w.includes("is not enforced")),
+    `Did not expect an unenforced-mapping warning, got: ${JSON.stringify(resolved.warnings)}`
+  );
+});
+
+test("resolveArtifact warns and reports obfuscated mapping when a dependency has no source-backed jar", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-dependency-binary-only-"));
+  const binaryJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "depbinary",
+    "3.0.0",
+    "depbinary-3.0.0.jar"
+  );
+  await createJar(binaryJarPath, {
+    "com/example/DepBinary.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  // This branch resolves to an undecompiled binary-only artifact (mapping falls
+  // back to "obfuscated" before ingestion), so real decompiling is never needed
+  // for the assertions below; stub it out the same way coordinate-mapping.test.ts
+  // does for its decompile-adjacent case, to keep this test hermetic.
+  (service as unknown as { ingestIfNeeded: (resolved: unknown) => Promise<void> }).ingestIfNeeded =
+    async () => {};
+  const resolved = await service.resolveArtifact({
+    target: { kind: "dependency", group: "com.example", name: "depbinary", version: "3.0.0" },
+    mapping: "mojang"
+  } as any);
+
+  assert.equal(resolved.requestedMapping, "mojang");
+  assert.equal(resolved.mappingApplied, "obfuscated");
+  assert.ok(
+    resolved.qualityFlags.includes("dependency-mapping-unverified"),
+    `Expected dependency-mapping-unverified flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+  );
+  assert.ok(
+    resolved.warnings.some(
+      (w: string) => w.includes("is not enforced") && w.includes("dependency-mapping-unverified")
+    ),
+    `Expected an unenforced-mapping warning, got: ${JSON.stringify(resolved.warnings)}`
+  );
+});
+
+test("resolveArtifact does not read a dependency's own coordinate version as an unobfuscated Minecraft runtime", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-dependency-unobf-version-"));
+  // 26.0.2 parses as a modern (unobfuscated) Minecraft version, but it is this
+  // library's own release number and says nothing about Minecraft's namespace.
+  // Reading it as one used to short-circuit the mapping pipeline into reporting
+  // mappingApplied="mojang" with no remap, no verification and no warning.
+  const binaryJarPath = join(
+    root,
+    "m2",
+    "org",
+    "jetbrains",
+    "annotations",
+    "26.0.2",
+    "annotations-26.0.2.jar"
+  );
+  await createJar(binaryJarPath, {
+    "org/jetbrains/annotations/NotNull.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { ingestIfNeeded: (resolved: unknown) => Promise<void> }).ingestIfNeeded =
+    async () => {};
+  const resolved = await service.resolveArtifact({
+    target: { kind: "dependency", group: "org.jetbrains", name: "annotations", version: "26.0.2" },
+    mapping: "mojang"
+  } as any);
+
+  assert.equal(resolved.requestedMapping, "mojang");
+  assert.equal(resolved.mappingApplied, "obfuscated");
+  assert.ok(
+    resolved.qualityFlags.includes("dependency-mapping-unverified"),
+    `Expected dependency-mapping-unverified flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+  );
+  assert.ok(
+    resolved.warnings.some(
+      (w: string) => w.includes("is not enforced") && w.includes("dependency-mapping-unverified")
+    ),
+    `Expected an unenforced-mapping warning, got: ${JSON.stringify(resolved.warnings)}`
+  );
+  assert.ok(
+    resolved.warnings.every((w: string) => !w.includes("is unobfuscated")),
+    `A dependency version must never be described as an unobfuscated Minecraft version, got: ${JSON.stringify(resolved.warnings)}`
+  );
+});
+
+test("resolveArtifact does not read a direct coordinate's own version as an unobfuscated Minecraft runtime", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-coordinate-unobf-version-"));
+  const binaryJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "libunobf",
+    "26.0.2",
+    "libunobf-26.0.2.jar"
+  );
+  await createJar(binaryJarPath, {
+    "com/example/LibUnobf.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { ingestIfNeeded: (resolved: unknown) => Promise<void> }).ingestIfNeeded =
+    async () => {};
+
+  // A coordinate reached directly (not via the kind="dependency" sugar) gets the
+  // same treatment: a binary-only artifact cannot guarantee mojang, so this must
+  // fail loudly rather than pass through on a version that merely looks like a
+  // modern Minecraft release. Identical to how a sub-26 coordinate already behaves.
+  await assert.rejects(
+    service.resolveArtifact({
+      target: { kind: "coordinate", value: "com.example:libunobf:26.0.2" },
+      mapping: "mojang"
+    }),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, ERROR_CODES.MAPPING_NOT_APPLIED);
+      return true;
+    }
+  );
+});
+
+test("resolveArtifact still reads a net.minecraft coordinate's version as a real Minecraft version", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-coordinate-minecraft-group-"));
+  const binaryJarPath = join(root, "m2", "net", "minecraft", "client", "26.1", "client-26.1.jar");
+  await createJar(binaryJarPath, {
+    "net/minecraft/world/item/Item.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { ingestIfNeeded: (resolved: unknown) => Promise<void> }).ingestIfNeeded =
+    async () => {};
+
+  // The counterexample to the two tests above: net.minecraft:client:26.1 really is
+  // the Minecraft runtime artifact, so its version segment really is a Minecraft
+  // version and the unobfuscated-runtime pass-through still applies.
+  const resolved = await service.resolveArtifact({
+    target: { kind: "coordinate", value: "net.minecraft:client:26.1" },
+    mapping: "mojang"
+  });
+
+  assert.equal(resolved.requestedMapping, "mojang");
+  assert.equal(resolved.mappingApplied, "mojang");
+  assert.ok(
+    !resolved.qualityFlags.includes("dependency-mapping-unverified"),
+    `Expected no dependency-mapping-unverified flag, got: ${JSON.stringify(resolved.qualityFlags)}`
+  );
+});
+
+test(
+  "resolveArtifact still treats a genuine unobfuscated Minecraft version target as unobfuscated",
+  { concurrency: false },
+  async () => {
+    const { SourceService } = await import("../../src/source-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "service-version-unobfuscated-"));
+    const remoteJarPath = join(root, "remote-client.jar");
+    // A .java entry keeps this hermetic: the artifact resolves source-backed, so
+    // no decompiler download is needed for the assertions below.
+    await createJar(remoteJarPath, {
+      "net/minecraft/server/Main.java": "package net.minecraft.server;\npublic class Main {}"
+    });
+    const remoteJarBytes = await readFile(remoteJarPath);
+
+    const originalFetch = globalThis.fetch;
+    const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
+    process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://example.test/version_manifest_v2.json") {
+        return new Response(
+          JSON.stringify({
+            latest: { release: "26.1" },
+            versions: [
+              { id: "26.1", type: "release", url: "https://example.test/versions/26.1.json" }
+            ]
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      if (url === "https://example.test/versions/26.1.json") {
+        return new Response(
+          JSON.stringify({
+            id: "26.1",
+            downloads: { client: { url: "https://example.test/downloads/client-26.1.jar" } }
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      if (url === "https://example.test/downloads/client-26.1.jar") {
+        return new Response(remoteJarBytes, {
+          status: 200,
+          headers: { "content-length": String(remoteJarBytes.byteLength), etag: "mc-26-1" }
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      const service = new SourceService(buildTestConfig(root));
+      const resolved = await service.resolveArtifact({
+        target: { kind: "version", value: "26.1" },
+        mapping: "yarn"
+      });
+
+      // yarn is relabelled to the obfuscated namespace only when the runtime is
+      // known to ship unobfuscated names, so this pins runtimeNamesUnobfuscated
+      // still being true for a real Minecraft version target.
+      assert.equal(resolved.mappingApplied, "obfuscated");
+      assert.ok(
+        resolved.warnings.some(
+          (w: string) =>
+            w.includes("Version 26.1 is unobfuscated") &&
+            w.includes("yarn mappings are not applicable")
+        ),
+        `Expected the unobfuscated-runtime downgrade warning, got: ${JSON.stringify(resolved.warnings)}`
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalManifestUrl === undefined) {
+        delete process.env.MCP_VERSION_MANIFEST_URL;
+      } else {
+        process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+      }
+    }
+  }
+);
