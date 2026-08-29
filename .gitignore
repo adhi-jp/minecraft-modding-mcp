@@ -46,3 +46,8 @@ coverage/
 docs/plans/
 docs/reports/
 docs/specs/
+docs/archive/
+
+# Local agent instructions
+AGENTS.override.md
+CLAUDE.local.md
