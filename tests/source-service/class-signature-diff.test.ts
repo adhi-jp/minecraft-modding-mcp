@@ -107,7 +107,7 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
             minecraftVersion: "1.0.0",
             mappingType: "unknown",
             mappingNamespace: "obfuscated",
-            jarHash: "fake",
+            jarSignature: "fake",
             generatedAt: new Date().toISOString()
           }
         };
@@ -181,7 +181,7 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
           minecraftVersion: "1.0.1",
           mappingType: "unknown",
           mappingNamespace: "obfuscated",
-          jarHash: "fake",
+          jarSignature: "fake",
           generatedAt: new Date().toISOString()
         }
       };
@@ -411,7 +411,7 @@ test("SourceService diffClassSignatures reports class added and absent_in_both s
           minecraftVersion: "1.0.1",
           mappingType: "unknown",
           mappingNamespace: "obfuscated",
-          jarHash: "fake",
+          jarSignature: "fake",
           generatedAt: new Date().toISOString()
         }
       };

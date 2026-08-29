@@ -443,7 +443,7 @@ test("SourceService supports mojang mapping on unobfuscated version targets with
             minecraftVersion: "26.1",
             mappingType: "mojang",
             mappingNamespace: "mojang",
-            jarHash: "hash",
+            jarSignature: "hash",
             generatedAt: new Date().toISOString()
           }
         };
@@ -517,7 +517,7 @@ test("SourceService checkSymbolExists falls back to unobfuscated runtime bytecod
           minecraftVersion: "26.1",
           mappingType: "mojang",
           mappingNamespace: "mojang",
-          jarHash: "hash",
+          jarSignature: "hash",
           generatedAt: new Date().toISOString()
         }
       };

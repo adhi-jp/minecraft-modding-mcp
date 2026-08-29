@@ -14,7 +14,7 @@ const MEMBERS_FIXTURE: Record<string, unknown> = {
   members: { constructors: [], fields: [], methods: [{ name: "tick", javaSignature: "tick()V" }] },
   counts: { constructors: 0, fields: 0, methods: 1, total: 1 },
   truncated: false,
-  context: { minecraftVersion: "1.21.10", mappingType: "mojang", mappingNamespace: "mojang", jarHash: "deadbeef", generatedAt: "2026-04-18T00:00:00Z" },
+  context: { minecraftVersion: "1.21.10", mappingType: "mojang", mappingNamespace: "mojang", jarSignature: "deadbeef", generatedAt: "2026-04-18T00:00:00Z" },
   origin: "remote-repo",
   artifactId: "artifact-1.21.10-mojang",
   requestedMapping: "mojang",

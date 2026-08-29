@@ -905,7 +905,7 @@ test("SourceService getClassMembers delegates to explorer and returns member pay
           minecraftVersion: "1.0.0",
           mappingType: "unknown",
           mappingNamespace: "obfuscated",
-          jarHash: "fake",
+          jarSignature: "fake",
           generatedAt: new Date().toISOString()
         }
       };

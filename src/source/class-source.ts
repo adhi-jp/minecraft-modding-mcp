@@ -1394,6 +1394,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   let binaryExtractionFailed = false;
   let binaryExtractionFailureReason: string | undefined;
   let nestedJarRedirect: { entryName: string; shellArtifactId: string } | undefined;
+  // A dependency (Maven/Gradle) artifact is served from its real cache path, in
+  // which no number is a Minecraft version: the path yields a cache-layout
+  // constant or the dependency's own coordinate version, and `version` here is
+  // likewise that coordinate version. Every minecraftVersion source available on
+  // this path is therefore wrong for such an artifact, so all of them are gated
+  // below and the response reports the "unknown" sentinel instead.
+  const dependencyOrigin = provenance?.dependencyResolution != null;
   const fetchSignature = (jarPath: string) =>
     svc.explorerService.getSignature({
       fqn: lookupClassName,
@@ -1401,7 +1408,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       access,
       includeSynthetic,
       includeInherited,
-      memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined
+      memberPattern: requestedMapping === mappingApplied ? memberPattern : undefined,
+      dependencyOrigin
     });
   try {
     let signature;
@@ -1483,10 +1491,10 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     binaryExtractionFailed = true;
     binaryExtractionFailureReason = error instanceof Error ? error.message : String(error);
     signatureContext = {
-      minecraftVersion: version ?? "unknown",
+      minecraftVersion: dependencyOrigin ? "unknown" : version ?? "unknown",
       mappingType: "unknown",
       mappingNamespace: mappingApplied === "intermediary" ? "obfuscated" : mappingApplied,
-      jarHash: "",
+      jarSignature: "",
       generatedAt: new Date().toISOString()
     };
     signatureConstructors = [];
@@ -1639,8 +1647,11 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       // members handed back have already been remapped into requestedMapping,
       // so echoing the jar namespace here contradicted `returnedNamespace` in
       // the same payload. Report what the response actually contains, and fill
-      // the version the resolver established when the jar path yielded none.
-      ...(signatureContext.minecraftVersion === "unknown" && version
+      // the version the resolver established when the jar path yielded none —
+      // except for a dependency artifact, whose resolver-side `version` is its
+      // own coordinate version, not Minecraft's. Filling it here would only
+      // swap one wrong value for another.
+      ...(signatureContext.minecraftVersion === "unknown" && version && !dependencyOrigin
         ? { minecraftVersion: version }
         : {}),
       mappingNamespace: requestedMapping

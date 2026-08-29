@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -582,7 +582,7 @@ test("MinecraftExplorerService reuses cached signatures but refreshes response c
   assert.deepEqual(first.methods.map((method) => method.name), ["first"]);
   assert.deepEqual(second.methods.map((method) => method.name), ["first"]);
   assert.notEqual(second.context.generatedAt, first.context.generatedAt);
-  assert.notEqual(second.context.jarHash, first.context.jarHash);
+  assert.notEqual(second.context.jarSignature, first.context.jarSignature);
 });
 
 test("MinecraftExplorerService avoids delete/set churn and spread copies on cache hits", async () => {
@@ -592,4 +592,44 @@ test("MinecraftExplorerService avoids delete/set churn and spread copies on cach
 
   assert.doesNotMatch(block, /this\.signatureCache\.delete\(cacheKey\);\s*this\.signatureCache\.set\(cacheKey, cached\);/);
   assert.doesNotMatch(block, /return\s*\{\s*\.\.\.cached,/);
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a dependency-origin jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-dep-origin-"));
+  // Real Gradle cache layout. The first "N.N" substring in this path is the
+  // "files-2.1" cache-layout constant, and the next candidate is the
+  // dependency's own coordinate version - neither is a Minecraft version.
+  const cacheDir = join(
+    root,
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-gametest-api-v1",
+    "4.0.21+4a7fa0819e",
+    "0123456789abcdef"
+  );
+  await mkdir(cacheDir, { recursive: true });
+  const jarPath = join(cacheDir, "fabric-gametest-api-v1-4.0.21+4a7fa0819e.jar");
+  await createJar(jarPath, {
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest.class": buildClassFile({
+      internalName: "net/fabricmc/fabric/api/gametest/v1/FabricGameTest",
+      methods: [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const service = createService(root);
+  const fqn = "net.fabricmc.fabric.api.gametest.v1.FabricGameTest";
+
+  // Guard the premise: without the flag the path heuristic still fires, and
+  // what it produces is exactly the garbage this flag exists to suppress.
+  const unflagged = await service.getSignature({ jarPath, fqn });
+  assert.equal(unflagged.context.minecraftVersion, "2.1");
+
+  const flagged = await service.getSignature({ jarPath, fqn, dependencyOrigin: true });
+  assert.equal(flagged.context.minecraftVersion, "unknown");
+  assert.equal(flagged.context.mappingNamespace, "obfuscated");
+
+  // contextForJar runs on cache hits too, so the flag must hold there as well.
+  const cachedHit = await service.getSignature({ jarPath, fqn, dependencyOrigin: true });
+  assert.equal(cachedHit.context.minecraftVersion, "unknown");
+  assert.equal(cachedHit.context.mappingNamespace, "obfuscated");
 });

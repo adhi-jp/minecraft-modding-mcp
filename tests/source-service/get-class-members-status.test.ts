@@ -244,7 +244,7 @@ test("MEMBERS_STATUS_LEGACY=1 strips the new fields", async () => {
             minecraftVersion: "1.21.10",
             mappingType: "unknown",
             mappingNamespace: "obfuscated",
-            jarHash: "fake",
+            jarSignature: "fake",
             generatedAt: new Date().toISOString()
           }
         };

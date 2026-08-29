@@ -7,7 +7,9 @@ import test from "node:test";
 import { ERROR_CODES } from "../../src/errors.ts";
 import { SourceService } from "../../src/source-service.ts";
 import { createWorkspaceContextCache } from "../../src/workspace-context-cache.ts";
+import { buildClassFile } from "../helpers/classfile.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
+import { createJar } from "../helpers/zip.ts";
 
 type AnySourceService = SourceService & {
   synthesizeDependencyTarget: (
@@ -440,4 +442,76 @@ test("get-class-members accepts and dispatches a dependency target", async () =>
     name: "fabric-api",
     versionFromProject: true
   });
+});
+
+test("get-class-members reports unknown minecraftVersion for a dependency artifact", async () => {
+  // Regression: the response context used to carry a plausible-but-wrong
+  // Minecraft version for dependency artifacts. Two independent sources were
+  // wrong - the jar path heuristic (which greps the Gradle cache constant
+  // "2.1" out of ".../files-2.1/...") and the resolver's `version` (which for
+  // a dependency is the artifact's OWN coordinate version). Both must yield
+  // the "unknown" sentinel instead.
+  const root = await mkdtemp(join(tmpdir(), "dep-target-context-"));
+  const cacheDir = join(
+    root,
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-gametest-api-v1",
+    "4.0.21+4a7fa0819e",
+    "0123456789abcdef"
+  );
+  await mkdir(cacheDir, { recursive: true });
+  const jarPath = join(cacheDir, "fabric-gametest-api-v1-4.0.21+4a7fa0819e.jar");
+  await createJar(jarPath, {
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest.class": buildClassFile({
+      internalName: "net/fabricmc/fabric/api/gametest/v1/FabricGameTest",
+      methods: [
+        { name: "<init>", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "invokeTestMethod", descriptor: "()V", accessFlags: 0x0001 }
+      ]
+    })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async () => ({
+    artifactId: "dep-artifact",
+    artifactAlias: "fabric-gametest-api-v1",
+    origin: "local-m2" as const,
+    isDecompiled: false,
+    binaryJarPath: jarPath,
+    coordinate: "net.fabricmc.fabric-api:fabric-gametest-api-v1:4.0.21+4a7fa0819e",
+    version: "4.0.21+4a7fa0819e",
+    requestedMapping: "obfuscated" as const,
+    mappingApplied: "obfuscated" as const,
+    provenance: {
+      dependencyResolution: {
+        group: "net.fabricmc.fabric-api",
+        name: "fabric-gametest-api-v1",
+        resolvedVersion: "4.0.21+4a7fa0819e",
+        source: "gradle-cache",
+        cacheHit: true
+      }
+    },
+    qualityFlags: [],
+    artifactContents: { hasSources: false, hasBinary: true },
+    warnings: []
+  });
+
+  const result = await service.getClassMembers({
+    className: "net.fabricmc.fabric.api.gametest.v1.FabricGameTest",
+    mapping: "obfuscated",
+    target: {
+      kind: "dependency",
+      group: "net.fabricmc.fabric-api",
+      name: "fabric-gametest-api-v1",
+      versionFromProject: true
+    }
+  });
+
+  assert.equal(result.context.minecraftVersion, "unknown");
+  // The dependency's own coordinate version must not leak in as a substitute.
+  assert.notEqual(result.context.minecraftVersion, "4.0.21+4a7fa0819e");
+  assert.notEqual(result.context.minecraftVersion, "2.1");
+  assert.ok(result.counts.total > 0, "expected members to be read from the dependency jar");
 });

@@ -79,7 +79,7 @@ async function buildService(): Promise<{
           minecraftVersion: "unknown",
           mappingType: "unknown",
           mappingNamespace: "obfuscated",
-          jarHash: "deadbeef",
+          jarSignature: "deadbeef",
           generatedAt: "2026-08-22T00:00:00.000Z"
         }
       };

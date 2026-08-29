@@ -67,7 +67,7 @@ test("SourceService traces symbol lifecycle across versions and reports gaps", a
           minecraftVersion: version,
           mappingType: "obfuscated",
           mappingNamespace: "obfuscated",
-          jarHash: "fake",
+          jarSignature: "fake",
           generatedAt: new Date().toISOString()
         }
       };

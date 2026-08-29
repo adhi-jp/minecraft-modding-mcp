@@ -373,7 +373,7 @@ test("SourceService getClassMembers looks up bytecode using the resolved artifac
           minecraftVersion: "1.21.10",
           mappingType: "mojang",
           mappingNamespace: "mojang",
-          jarHash: "hash",
+          jarSignature: "hash",
           generatedAt: new Date().toISOString()
         }
       };
@@ -444,7 +444,7 @@ test("SourceService getClassMembers infers missing artifact version from project
           minecraftVersion: "1.21.10",
           mappingType: "obfuscated",
           mappingNamespace: "obfuscated",
-          jarHash: "hash",
+          jarSignature: "hash",
           generatedAt: new Date().toISOString()
         }
       };

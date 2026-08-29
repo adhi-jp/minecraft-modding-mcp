@@ -105,7 +105,7 @@ export function stubExplorer(
           minecraftVersion: "1.21.10",
           mappingType: "unknown",
           mappingNamespace: "obfuscated",
-          jarHash: "fake",
+          jarSignature: "fake",
           generatedAt: new Date().toISOString()
         }
       };

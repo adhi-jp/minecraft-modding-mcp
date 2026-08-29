@@ -14,7 +14,12 @@ export interface ResponseContext {
   minecraftVersion: string;
   mappingType: string;
   mappingNamespace: MappingNamespace;
-  jarHash: string;
+  /**
+   * Cheap per-response staleness stamp derived from the jar's path, mtime and
+   * size — NOT a hash of the jar's byte content. Named accordingly so callers
+   * do not mistake it for a content identity key.
+   */
+  jarSignature: string;
   generatedAt: string;
 }
 
@@ -56,6 +61,13 @@ export interface GetSignatureInput {
   access?: SignatureAccess;
   includeSynthetic?: boolean;
   includeInherited?: boolean;
+  /**
+   * True when the jar being read is a resolved dependency (Maven/Gradle)
+   * artifact rather than a vanilla Minecraft version jar. Dependency jars live
+   * under cache paths whose embedded numbers are not Minecraft versions, so the
+   * path-derived version heuristic must be skipped for them.
+   */
+  dependencyOrigin?: boolean;
 }
 
 export interface GetSignatureOutput {
@@ -719,7 +731,7 @@ export class MinecraftExplorerService {
         methods: cached.methods,
         fields: cached.fields,
         warnings: cached.warnings,
-        context: this.contextForJar(jarPath)
+        context: this.contextForJar(jarPath, input.dependencyOrigin)
       };
     }
 
@@ -972,21 +984,28 @@ export class MinecraftExplorerService {
       methods: output.methods,
       fields: output.fields,
       warnings: output.warnings,
-      context: this.contextForJar(jarPath)
+      context: this.contextForJar(jarPath, input.dependencyOrigin)
     };
   }
 
-  private contextForJar(jarPath: string): ResponseContext {
-    const minecraftVersion = extractVersionFromPath(jarPath);
+  private contextForJar(jarPath: string, dependencyOrigin = false): ResponseContext {
+    // extractVersionFromPath grabs the first "N.N(.N)" substring anywhere in the
+    // path, which only means anything for vanilla jars stored under
+    // version-numbered directories. A dependency jar's path yields either a
+    // cache-layout constant (Gradle's ".../files-2.1/...") or the dependency's
+    // OWN coordinate version — both plausible-looking and both wrong. Report the
+    // established "we don't know" sentinel rather than a confident wrong value.
+    const minecraftVersion = dependencyOrigin ? undefined : extractVersionFromPath(jarPath);
     return {
       minecraftVersion: minecraftVersion ?? "unknown",
       mappingType: "unknown",
       // Unobfuscated releases ship mojang names in their bytecode; claiming
       // "obfuscated" for them misled namespace reconciliation downstream.
-      // With no derivable version the conservative "obfuscated" stands.
+      // With no derivable version the conservative "obfuscated" stands — which
+      // is also the right default for a dependency jar's own bytecode namespace.
       mappingNamespace:
         minecraftVersion && isUnobfuscatedVersion(minecraftVersion) ? "mojang" : "obfuscated",
-      jarHash: artifactSignatureFromFile(jarPath).sourceArtifactId,
+      jarSignature: artifactSignatureFromFile(jarPath).sourceArtifactId,
       generatedAt: new Date().toISOString()
     };
   }
