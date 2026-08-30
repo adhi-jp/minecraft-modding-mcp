@@ -1946,3 +1946,478 @@ test("resolveSourceTarget(targetKind=jar) propagates an unreadable SUBJECT jar i
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// The shape of an accepted binary jar.
+//
+// ONE rule, and these tests exist to keep it one: a suspicious binary jar is
+// DESCRIBED, never refused. A jar with no `.class` entries decompiles to
+// nothing, and without the "binary-jar-no-classes" flag the caller has no way
+// to tell that from a decompiler failure - so the flag is added and the
+// artifact is still returned. Mapping jars (yarn/intermediary v2, carrying
+// mappings/mappings.tiny and nothing else), resource-only mod jars, and a jar
+// of nothing but directory entries (`jar --create --no-manifest <empty-dir>`
+// publishes exactly that) are all this shape and all legitimate.
+//
+// Refusing any of them costs a caller a real artifact - locally it is skipped,
+// and after a download it is discarded from an immutable cache slot - which is
+// strictly worse than the empty decompile the flag already explains. The
+// "still resolves" tests below exist to break anyone who later turns the flag,
+// or any neighbouring shape check, back into a rejection.
+//
+// The bar for USABLE is unchanged and deliberately low: openable, with at
+// least one entry the reader admits.
+// ---------------------------------------------------------------------------
+
+/** The `.class` bytes every fixture in this file uses as a stand-in for a class. */
+const CLASS_FILE_MAGIC = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
+
+const NO_CLASSES_FLAG = "binary-jar-no-classes";
+
+test("resolveSourceTarget(targetKind=coordinate) flags a remote binary that carries no class entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-binary-no-classes-"));
+  const classFreeFixture = join(root, "class-free.jar");
+  // A readable, perfectly well-formed jar - it just has nothing to decompile.
+  await createJar(classFreeFixture, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n",
+    "data/example/recipe.json": "{}"
+  });
+  const classFreeBytes = await readFile(classFreeFixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/no-classes-1.0.jar")) {
+      return new Response(classFreeBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:no-classes:1.0" },
+        { allowDecompile: true },
+        config
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "decompiled", "a class-free jar is still a resolvable artifact");
+  assert.equal(
+    resolved.binaryJarPath,
+    defaultDownloadPath(config.cacheDir, "https://repo.example.test/com/example/no-classes/1.0/no-classes-1.0.jar")
+  );
+  assert.deepEqual(
+    resolved.qualityFlags,
+    [NO_CLASSES_FLAG],
+    "an empty decompile must arrive with its reason attached, not as a mystery"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) flags a local binary that carries no class entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-no-classes-"));
+  const binaryJarPath = join(root, "m2", "com", "example", "local-no-classes", "1.0", "local-no-classes-1.0.jar");
+  await createJar(binaryJarPath, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n",
+    "assets/example/icon.png": Buffer.from([0x89, 0x50, 0x4e, 0x47])
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:local-no-classes:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.deepEqual(resolved.qualityFlags, [NO_CLASSES_FLAG]);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) leaves an ordinary binary jar unflagged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-binary-with-classes-"));
+  const binaryJarPath = join(root, "m2", "com", "example", "with-classes", "1.0", "with-classes-1.0.jar");
+  await createJar(binaryJarPath, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n",
+    "com/example/WithClasses.class": CLASS_FILE_MAGIC
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:with-classes:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.deepEqual(
+    resolved.qualityFlags ?? [],
+    [],
+    "a jar with classes has nothing to report, and must not be given a flag to explain"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) still resolves a class-free MAPPING jar - yarn and intermediary v2 must never be rejected", async () => {
+  // Both artifacts the flag's rationale names, spelled the way a caller
+  // actually asks for them: with the ":v2" classifier, which is a different
+  // candidate path (`<artifact>-<version>-v2.jar`) from the classifier-less
+  // one. Their real shape is a tiny mappings file, a manifest, and not one
+  // class. Refusing that shape would break mapping resolution for every Fabric
+  // workspace, which is why the check only ever OBSERVES it.
+  const mappingArtifacts = [
+    {
+      label: "intermediary v2",
+      coordinate: "net.fabricmc:intermediary:1.21.4:v2",
+      segments: ["net", "fabricmc", "intermediary", "1.21.4"],
+      fileName: "intermediary-1.21.4-v2.jar",
+      namespaces: "official\tintermediary"
+    },
+    {
+      label: "yarn v2",
+      coordinate: "net.fabricmc:yarn:1.21.4+build.8:v2",
+      segments: ["net", "fabricmc", "yarn", "1.21.4+build.8"],
+      fileName: "yarn-1.21.4+build.8-v2.jar",
+      namespaces: "intermediary\tnamed"
+    }
+  ];
+
+  for (const artifact of mappingArtifacts) {
+    const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-mapping-jar-"));
+    const mappingJarPath = join(root, "m2", ...artifact.segments, artifact.fileName);
+    await createJar(mappingJarPath, {
+      "META-INF/": "",
+      "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n",
+      "mappings/": "",
+      "mappings/mappings.tiny": `tiny\t2\t0\t${artifact.namespaces}\n`
+    });
+
+    let remoteBinaryFetches = 0;
+    const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+      if (requestUrlOf(input).endsWith(`/${artifact.fileName}`)) {
+        remoteBinaryFetches += 1;
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+      withFetch(fetchStub, () =>
+        resolveSourceTarget(
+          { kind: "coordinate", value: artifact.coordinate },
+          { allowDecompile: true },
+          buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+        )
+      )
+    );
+
+    assert.equal(resolved.origin, "local-m2", `${artifact.label} is a legitimate artifact`);
+    assert.equal(resolved.binaryJarPath, mappingJarPath, artifact.label);
+    assert.equal(
+      remoteBinaryFetches,
+      0,
+      `${artifact.label}: there is nothing to go looking for a replacement of`
+    );
+    assert.deepEqual(
+      resolved.qualityFlags,
+      [NO_CLASSES_FLAG],
+      `${artifact.label} is described, never refused`
+    );
+  }
+});
+
+test("resolveSourceTarget(targetKind=coordinate) still resolves a class-free RESOURCE-ONLY mod jar - data and asset packs must never be rejected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-resource-mod-"));
+  // A shipped Fabric shape: fabric.mod.json plus assets, no code at all.
+  const modJarPath = join(root, "m2", "com", "example", "resource-mod", "1.0", "resource-mod-1.0.jar");
+  await createJar(modJarPath, {
+    "fabric.mod.json": JSON.stringify({ schemaVersion: 1, id: "resource_mod", version: "1.0" }),
+    "assets/": "",
+    "assets/resource_mod/lang/en_us.json": "{\"key\": \"value\"}",
+    "assets/resource_mod/textures/block/example.png": Buffer.from([0x89, 0x50, 0x4e, 0x47])
+  });
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/resource-mod-1.0.jar")) {
+      remoteBinaryFetches += 1;
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:resource-mod:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "local-m2", "a resource-only mod jar is a legitimate artifact");
+  assert.equal(resolved.binaryJarPath, modJarPath);
+  assert.equal(remoteBinaryFetches, 0);
+  assert.deepEqual(resolved.qualityFlags, [NO_CLASSES_FLAG], "it is described, never refused");
+});
+
+test("resolveSourceTarget(targetKind=coordinate) accepts a LOCAL jar of nothing but directory entries and flags it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-dirs-only-"));
+  const gradleUserHome = join(root, "gradle-home");
+  const dirsOnlyJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "dirs-only",
+    "1.0",
+    "dirs-only-1.0.jar"
+  );
+  // `jar --create --no-manifest <empty-directory>` publishes exactly this, and
+  // so does a jar carrying only META-INF/. Refusing it would skip a real local
+  // artifact and send the caller to the network for a replacement that may not
+  // exist - the flag says everything a refusal would have said, and costs
+  // nobody their artifact.
+  await createJar(dirsOnlyJarPath, {
+    "META-INF/": "",
+    "com/": "",
+    "com/example/": ""
+  });
+
+  const remoteBinaryFixture = join(root, "remote-binary.jar");
+  await createJar(remoteBinaryFixture, {
+    "com/example/DirsOnly.class": CLASS_FILE_MAGIC
+  });
+  const remoteBinaryBytes = await readFile(remoteBinaryFixture);
+
+  let remoteBinaryFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input).endsWith("/dirs-only-1.0.jar")) {
+      remoteBinaryFetches += 1;
+      return new Response(remoteBinaryBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:dirs-only:1.0" },
+        { allowDecompile: true },
+        config
+      )
+    )
+  );
+
+  assert.equal(resolved.binaryJarPath, dirsOnlyJarPath, "the local jar is the resolved artifact");
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(
+    remoteBinaryFetches,
+    0,
+    "an accepted local jar suppresses the remote binary fetch, as it always has"
+  );
+  assert.deepEqual(
+    resolved.qualityFlags,
+    [NO_CLASSES_FLAG],
+    "a directory-only jar has no classes, and the flag alone is the whole answer"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) accepts a DOWNLOADED binary of nothing but directory entries and flags it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-remote-dirs-only-"));
+  const coordinate = "com.example:remote-dirs-only:2.0.0";
+  const binaryPath = "/com/example/remote-dirs-only/2.0.0/remote-dirs-only-2.0.0.jar";
+  const binaryUrlA = `${REPO_A}${binaryPath}`;
+  const binaryUrlB = `${REPO_B}${binaryPath}`;
+
+  const dirsOnlyFixture = join(root, "dirs-only.jar");
+  await createJar(dirsOnlyFixture, { "com/": "", "com/example/": "" });
+  const dirsOnlyBytes = await readFile(dirsOnlyFixture);
+
+  const realFixture = join(root, "real-binary.jar");
+  await createJar(realFixture, { "com/example/RemoteDirsOnly.class": CLASS_FILE_MAGIC });
+  const realJarBytes = await readFile(realFixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === binaryUrlA) {
+      return new Response(dirsOnlyBytes, { status: 200 });
+    }
+    if (url === binaryUrlB) {
+      return new Response(realJarBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
+  const failovers: RecordedFailover[] = [];
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: coordinate },
+        {
+          allowDecompile: true,
+          onRepoFailover: (event) => failovers.push(event as RecordedFailover)
+        },
+        config
+      )
+    )
+  );
+
+  // The download leg is where a refusal costs the most: the body is deleted
+  // from an immutable cache slot and the repository behind it is blamed. A
+  // publisher's placeholder jar must not trigger any of that.
+  assert.equal(resolved.repoUrl, binaryUrlA, "the first repository's body is accepted");
+  assert.equal(resolved.binaryJarPath, defaultDownloadPath(config.cacheDir, binaryUrlA));
+  assert.equal(
+    existsSync(defaultDownloadPath(config.cacheDir, binaryUrlA)),
+    true,
+    "and it stays in the cache instead of being discarded as poison"
+  );
+  assert.deepEqual(
+    failovers.filter((event) => event.stage === "binary").map((event) => event.repoUrl),
+    [],
+    "no repository is failed over, and none is blamed"
+  );
+  assert.deepEqual(resolved.qualityFlags, [NO_CLASSES_FLAG]);
+});
+
+test("resolveSourceTarget(targetKind=coordinate) treats a ZERO-LENGTH entry as a file, never as a directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-zero-length-"));
+  // Size is not a directory signal. A zero-length `.class` entry is still a
+  // class the decompiler will be handed, and a zero-length marker file
+  // (META-INF/services entries, `.keep` files) is still a file - so an
+  // implementation that read "empty" as "directory" would report this jar as
+  // having nothing in it to decompile, which is a lie about a jar that has a
+  // class in it.
+  const binaryJarPath = join(root, "m2", "com", "example", "zero-length", "1.0", "zero-length-1.0.jar");
+  await createJar(binaryJarPath, {
+    "META-INF/MANIFEST.MF": "Manifest-Version: 1.0\n",
+    "META-INF/services/com.example.Provider": "",
+    "com/example/ZeroLength.class": ""
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+
+  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:zero-length:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.deepEqual(
+    resolved.qualityFlags ?? [],
+    [],
+    "a zero-length .class entry is a class, so there is nothing to explain"
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) reads a directory record stored WITHOUT a trailing slash as a file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-slashless-dir-"));
+  // The trailing slash is the only directory signal available at this layer -
+  // the reader exposes a name and a size, not the external attributes some zip
+  // writers use instead - so a directory record written without one is
+  // indistinguishable from a file and is read as one. That is the fail-open
+  // direction on both sides of the question, and both sides are pinned here:
+  // such a record can never make a jar unusable, and a `.class`-named one is
+  // counted as a class rather than silently discounted.
+  const dirsOnlyJarPath = join(root, "m2", "com", "example", "slashless", "1.0", "slashless-1.0.jar");
+  await createJar(dirsOnlyJarPath, {
+    "META-INF": "",
+    "com": "",
+    "com/example": ""
+  });
+  const classRecordJarPath = join(root, "m2", "com", "example", "slashless-class", "1.0", "slashless-class-1.0.jar");
+  await createJar(classRecordJarPath, {
+    "META-INF": "",
+    "com/example/Slashless.class": ""
+  });
+
+  const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+
+  const dirsOnly = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:slashless:1.0" },
+        { allowDecompile: true },
+        config
+      )
+    )
+  );
+  assert.equal(dirsOnly.binaryJarPath, dirsOnlyJarPath, "slashless records keep the jar usable");
+  assert.deepEqual(dirsOnly.qualityFlags, [NO_CLASSES_FLAG]);
+
+  const classRecord = await withGradleHome(join(root, "gradle-home"), () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:slashless-class:1.0" },
+        { allowDecompile: true },
+        config
+      )
+    )
+  );
+  assert.equal(classRecord.binaryJarPath, classRecordJarPath);
+  assert.deepEqual(
+    classRecord.qualityFlags ?? [],
+    [],
+    "only the trailing slash decides, so a slashless .class record counts as a class"
+  );
+});
+
+test("resolveSourceTarget(targetKind=jar) flags a caller-named jar that carries no class entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-no-classes-"));
+  // The decompile branch for a jar the caller NAMED - the same branch
+  // target.kind="version" is rewritten into. It returned any source-free
+  // readable zip without ever looking for class content, so the one target
+  // shape a caller is most likely to name directly was the one shape that
+  // never got the flag.
+  const classFreeJarPath = join(root, "resource-only.jar");
+  await createJar(classFreeJarPath, {
+    "fabric.mod.json": JSON.stringify({ schemaVersion: 1, id: "resource_only", version: "1.0" }),
+    "assets/resource_only/lang/en_us.json": "{}"
+  });
+
+  const resolved = await resolveSourceTarget(
+    { kind: "jar", value: classFreeJarPath },
+    { allowDecompile: true },
+    buildTestConfig(root)
+  );
+
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(resolved.binaryJarPath, classFreeJarPath);
+  assert.deepEqual(
+    resolved.qualityFlags,
+    [NO_CLASSES_FLAG],
+    "an empty decompile of a named jar must arrive with its reason attached too"
+  );
+
+  const withClassesJarPath = join(root, "with-classes.jar");
+  await createJar(withClassesJarPath, {
+    "com/example/Named.class": CLASS_FILE_MAGIC
+  });
+  const withClasses = await resolveSourceTarget(
+    { kind: "jar", value: withClassesJarPath },
+    { allowDecompile: true },
+    buildTestConfig(root)
+  );
+  assert.equal(withClasses.origin, "decompiled");
+  assert.deepEqual(
+    withClasses.qualityFlags ?? [],
+    [],
+    "and an ordinary jar on the same branch is still handed back unannotated"
+  );
+});

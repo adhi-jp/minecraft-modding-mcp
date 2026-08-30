@@ -1988,7 +1988,17 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     resolved.requestedMapping = effectiveMapping;
     resolved.mappingApplied = mappingDecision.mappingApplied;
     resolved.provenance = provenance;
-    resolved.qualityFlags = [...mappingDecision.qualityFlags];
+    // MERGE, never assign. The mapping pipeline builds its list from an empty
+    // array and knows only what mapping did, so anything the resolver already
+    // observed about the artifact itself - "binary-jar-no-classes" is the first
+    // such flag - is invisible to it. Overwriting the list here would drop those
+    // observations before dedupe, before indexing, and before the response is
+    // built, so the caller would never learn what the resolver saw. Same shape
+    // as the binary-fallback path above.
+    resolved.qualityFlags = dedupeQualityFlags([
+      ...(resolved.qualityFlags ?? []),
+      ...mappingDecision.qualityFlags
+    ]);
     if (versionSourceDiscovery?.candidateArtifacts.length) {
       resolved.qualityFlags.push("source-jar-found");
     }

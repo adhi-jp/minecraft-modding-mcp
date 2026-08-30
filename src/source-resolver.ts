@@ -122,7 +122,7 @@ async function hasJavaSources(jarPath: string): Promise<boolean> {
  * Letting the throw escape means one truncated `-sources.jar` in `~/.m2`
  * aborts `resolveSourceTarget` outright, and the caller is told the artifact
  * could not be resolved while it sits one candidate away. Mirrors
- * `isReadableJarArchive`, which already draws this line on the binary side.
+ * `inspectBinaryJarArchive`, which already draws this line on the binary side.
  *
  * The catch is deliberately blanket, and it is worth naming what that covers
  * beyond invalid zip data: EACCES on a jar the process may not read, EMFILE
@@ -309,20 +309,147 @@ function resolveLocalCoordinateBinaryCandidates(
 }
 
 /**
- * Whether a jar on disk can actually be opened as an archive.
+ * Quality flag for a binary jar that opened cleanly and held no `.class` entry
+ * at all.
+ *
+ * It OBSERVES; it never refuses. A caller whose decompile comes back empty
+ * otherwise has no way to tell "the decompiler failed" from "there was nothing
+ * to decompile", and the archive was already opened to prove it is a jar, so
+ * the answer is free.
+ *
+ * Deliberately not a rejection predicate. Class-free jars are a legitimate,
+ * shipped shape: `net.fabricmc:yarn:<v>:v2` and `net.fabricmc:intermediary:<v>:v2`
+ * carry `mappings/mappings.tiny` plus `META-INF/` and nothing else, and
+ * resource/data-only Fabric mods carry `fabric.mod.json` plus `assets/`.
+ * Refusing either would break resolution for artifacts that are exactly what
+ * their publisher intended - a worse outcome than the empty decompile this flag
+ * explains. The same reasoning covers the emptiest shape of all, a jar of
+ * nothing but directory entries: `jar --create --no-manifest <empty-directory>`
+ * emits exactly that, and so does a jar carrying only `META-INF/`. Both are
+ * observed here, never refused.
+ */
+export const BINARY_JAR_NO_CLASSES_FLAG = "binary-jar-no-classes";
+
+/**
+ * Case-SENSITIVE, matching every other `.class` test in this repository
+ * (`src/mod-analyzer.ts`, `src/version-diff-service.ts`, `src/source/nested-jars.ts`,
+ * `detectFabricLikeInputNamespace`) rather than the case-INSENSITIVE
+ * `hasJavaSourceExtension` beside it. Two reasons: the JVM and every decompiler
+ * we hand a jar to look up `Foo.class` exactly, so a `Foo.CLASS` entry produces
+ * no decompiled output either way and the flag would be lying if it counted it;
+ * and this feeds an observation, never a refusal, so the strictest reading can
+ * only ever add a flag - it can never cost a caller an artifact.
+ *
+ * The other call sites are deliberately left alone; unifying them is a separate
+ * change with its own risk.
+ *
+ * The name is the whole input, and that settles the two directory questions
+ * this module used to answer separately. A directory record stored WITH its
+ * conventional trailing slash (`com/example/Foo.class/`) fails the test on the
+ * slash and is not counted; one stored WITHOUT it is counted as a file, which
+ * is the fail-open direction - the worst it can do is withhold a flag and leave
+ * behaviour exactly as it was before the flag existed. Size is never consulted:
+ * a zero-byte entry is a file, because marker files are real and a zero-byte
+ * `Foo.class` is still what the decompiler will be handed.
+ */
+function hasClassFileExtension(entryPath: string): boolean {
+  return entryPath.endsWith(".class");
+}
+
+/**
+ * What one candidate jar turned out to be, or `undefined` when it is not usable
+ * as a jar at all.
+ */
+interface BinaryJarArchive {
+  jarPath: string;
+  /** Whether the archive holds at least one `.class` entry. */
+  hasClassEntries: boolean;
+}
+
+/**
+ * Opens a jar once and reports both things the binary cascade needs to know
+ * about it: that it is a usable archive, and whether there is anything in it to
+ * decompile. Archive errors PROPAGATE; the candidate wrapper below is where
+ * they become "not usable".
  *
  * `hasExistingJar` only proves that a file is present: an interrupted Gradle or
  * Maven copy leaves a 0-byte or truncated jar behind that passes that check and
  * then throws inside the decompiler on every call. Every sources branch of the
  * cascade already proves its candidate by opening the zip; a binary branch that
  * suppresses a remote download owes the caller the same proof.
+ *
+ * USABLE means openable with at least one entry the reader will admit - exactly
+ * the bar the openability check has always set, and deliberately no higher. The
+ * two shapes it refuses are a zip with no entries at all and a zip whose every
+ * entry is traversal-named; both run the walk to its end without a match. A jar
+ * of nothing but directory entries is NOT one of them: `jar --create
+ * --no-manifest <empty-directory>` publishes exactly that shape, so refusing it
+ * would skip a real local artifact and discard a real downloaded one, and
+ * refusing a legitimate artifact is worse than the empty decompile that would
+ * follow. It needs no rejection either, because it reaches the caller already
+ * described: a jar of nothing but directories holds no `.class` entry, so it
+ * carries {@link BINARY_JAR_NO_CLASSES_FLAG} like every other class-free
+ * archive, and that observation says everything a refusal would have said.
+ *
+ * COST: one zip open, and one lazy walk of the central directory - the same
+ * walk the openability check always did, now with a predicate that keeps
+ * scanning until it meets a `.class` entry. That first `.class` entry settles
+ * both questions at once and stops the scan, so a jar that stores its classes
+ * early reads a handful of entries. Two shapes are walked to the end instead: a
+ * jar that genuinely has no classes, and a jar whose only `.class` entry
+ * happens to be stored last. The bound is therefore O(entries) worst case, on
+ * metadata alone - no entry is opened, read or inflated at any point.
  */
-async function isReadableJarArchive(jarPath: string): Promise<boolean> {
+async function inspectJarArchive(jarPath: string): Promise<BinaryJarArchive | undefined> {
+  let sawEntry = false;
+  let sawClassEntry = false;
+  await hasAnyJarEntry(jarPath, (entryPath) => {
+    sawEntry = true;
+    if (!hasClassFileExtension(entryPath)) {
+      return false;
+    }
+    sawClassEntry = true;
+    // Both observations are settled and nothing later can unsettle them, so
+    // returning true here is a short-circuit, not a verdict: the boolean
+    // `hasAnyJarEntry` answers with is discarded.
+    return true;
+  });
+
+  return sawEntry ? { jarPath, hasClassEntries: sawClassEntry } : undefined;
+}
+
+/**
+ * The same inspection for a CANDIDATE, where an unopenable archive answers "not
+ * usable" instead of throwing - the binary-side twin of
+ * `candidateHasJavaSources`, and for the same reason: a candidate is one guess
+ * among several and the legs behind it are the repair path, so one truncated
+ * jar in `~/.m2` must not abort the whole resolve.
+ */
+async function inspectBinaryJarArchive(jarPath: string): Promise<BinaryJarArchive | undefined> {
   try {
-    return await hasAnyJarEntry(jarPath, () => true);
+    return await inspectJarArchive(jarPath);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * The same inspection for the jar the caller NAMED, mirroring `hasJavaSources`
+ * on both counts that matter.
+ *
+ * An absent file answers `undefined` without opening anything, so the branch
+ * behaves exactly as it did before this observation existed. An archive that is
+ * present but cannot be READ propagates, and that is the point: this runs on
+ * the subject jar, one line after `hasJavaSources` deliberately propagated the
+ * same failure, and swallowing it here would let an unreadable jar be reported
+ * as one with no classes in it - a claim about content, made about an archive
+ * whose content was never seen.
+ */
+async function inspectSubjectJarArchive(jarPath: string): Promise<BinaryJarArchive | undefined> {
+  if (!hasExistingJar(jarPath)) {
+    return undefined;
+  }
+  return await inspectJarArchive(jarPath);
 }
 
 /**
@@ -334,10 +461,13 @@ async function isReadableJarArchive(jarPath: string): Promise<boolean> {
  * behind it. Each candidate is proved before the next is considered, and the
  * archives are opened lazily, so the usual case still opens exactly one zip.
  */
-async function firstReadableJarArchive(candidates: string[]): Promise<string | undefined> {
+async function firstReadableJarArchive(
+  candidates: string[]
+): Promise<BinaryJarArchive | undefined> {
   for (const candidate of candidates) {
-    if (await isReadableJarArchive(candidate)) {
-      return candidate;
+    const archive = await inspectBinaryJarArchive(candidate);
+    if (archive) {
+      return archive;
     }
   }
   return undefined;
@@ -458,6 +588,12 @@ interface CoordinateArtifactSpec {
   binaryJarPath?: string;
   repoUrl?: string;
   mappingVariant?: MappingVariant;
+  /**
+   * Observations the cascade made while proving this artifact. Omitted from the
+   * result entirely when empty, so an artifact nobody had anything to say about
+   * keeps the shape it always had.
+   */
+  qualityFlags?: string[];
 }
 
 /** Shared shape for every artifact the coordinate cascade can return. */
@@ -476,8 +612,20 @@ function coordinateArtifact(spec: CoordinateArtifactSpec): ResolvedSourceArtifac
     coordinate: spec.coordinate,
     repoUrl: spec.repoUrl,
     isDecompiled: spec.isDecompiled,
+    ...(spec.qualityFlags?.length ? { qualityFlags: spec.qualityFlags } : {}),
     resolvedAt: resolvedAtNow()
   };
+}
+
+/**
+ * The flags a jar about to be decompiled earns from its own shape.
+ *
+ * Kept as a helper so the three branches that hand a binary to the decompiler -
+ * local-binary, remote-binary, and the jar the caller named - cannot drift
+ * apart on what an empty decompile is allowed to look like.
+ */
+function binaryJarQualityFlags(archive: BinaryJarArchive): string[] {
+  return archive.hasClassEntries ? [] : [BINARY_JAR_NO_CLASSES_FLAG];
 }
 
 export interface ResolveSourceTargetOptions {
@@ -672,6 +820,16 @@ export async function resolveSourceTarget(
       });
     }
 
+    // The same observation the coordinate cascade makes about the binary it
+    // picked, made here about the binary the caller named. This branch is the
+    // one `target.kind="version"` is rewritten into, so it covers version
+    // targets too, and reaching it means no sources were found and this jar is
+    // about to be handed to the decompiler - exactly when "there is nothing in
+    // it to decompile" is worth saying. It is the first look INSIDE this
+    // archive for class content: the branch above proved only that the jar has
+    // no `.java` entries.
+    const subjectArchive = await inspectSubjectJarArchive(resolvedJarPath);
+    const subjectQualityFlags = subjectArchive ? binaryJarQualityFlags(subjectArchive) : [];
     return {
       artifactId: artifactIdForJar(
         "jar",
@@ -685,6 +843,7 @@ export async function resolveSourceTarget(
       binaryJarPath: resolvedJarPath,
       adjacentSourceCandidates: maybeAdjacentSourceCandidates,
       isDecompiled: true,
+      ...(subjectQualityFlags.length ? { qualityFlags: subjectQualityFlags } : {}),
       resolvedAt: resolvedAtNow()
     };
   }
@@ -857,7 +1016,10 @@ export async function resolveSourceTarget(
         signature,
         origin: "remote-repo",
         sourceJarPath: download.path,
-        binaryJarPath: await firstReadableJarArchive(localBinaryJarCandidates),
+        // Only the path is taken. This jar rides along beside a sources jar
+        // that already carries the caller's source, so an observation about its
+        // class content would describe something nobody is decompiling.
+        binaryJarPath: (await firstReadableJarArchive(localBinaryJarCandidates))?.jarPath,
         repoUrl: sourceUrl,
         isDecompiled: false
       });
@@ -902,19 +1064,18 @@ export async function resolveSourceTarget(
   // failing. The zips are opened here and only here - nothing upstream has looked
   // inside these jars, and control only reaches this point when the branch is
   // about to be taken.
-  const localDecompilableBinaryJarPath = await firstReadableJarArchive(
-    localDecompilableBinaryCandidates
-  );
-  if (localDecompilableBinaryJarPath) {
-    const signature = await contentSignature(localDecompilableBinaryJarPath);
+  const localDecompilableBinary = await firstReadableJarArchive(localDecompilableBinaryCandidates);
+  if (localDecompilableBinary) {
+    const signature = await contentSignature(localDecompilableBinary.jarPath);
     return coordinateArtifact({
       coordinate,
       idSource: "local-binary",
       signature,
       origin: "local-m2",
-      binaryJarPath: localDecompilableBinaryJarPath,
+      binaryJarPath: localDecompilableBinary.jarPath,
       isDecompiled: true,
-      mappingVariant: options.mappingVariant ?? "pass"
+      mappingVariant: options.mappingVariant ?? "pass",
+      qualityFlags: binaryJarQualityFlags(localDecompilableBinary)
     });
   }
 
@@ -959,7 +1120,8 @@ export async function resolveSourceTarget(
       // that has the real thing - with the failure surfacing much later, inside
       // the decompiler. The sources leg has always proved its download by opening
       // it; this one owes the caller the same proof.
-      if (!(await isReadableJarArchive(downloaded.path))) {
+      const downloadedArchive = await inspectBinaryJarArchive(downloaded.path);
+      if (!downloadedArchive) {
         // And the body must not survive as a cache entry: this url is immutable
         // for every non-SNAPSHOT coordinate, so the next run would be served the
         // same poison with no request made at all. Named by digest: the check
@@ -1001,7 +1163,8 @@ export async function resolveSourceTarget(
         binaryJarPath: downloaded.path,
         repoUrl: binaryUrl,
         isDecompiled: true,
-        mappingVariant: options.mappingVariant ?? "pass"
+        mappingVariant: options.mappingVariant ?? "pass",
+        qualityFlags: binaryJarQualityFlags(downloadedArchive)
       });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;

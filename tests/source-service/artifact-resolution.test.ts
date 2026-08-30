@@ -485,3 +485,79 @@ test("SourceService changes artifactId when source jar signature changes", async
   });
   assert.notEqual(first.artifactId, second.artifactId);
 });
+
+test("resolve-artifact keeps the resolver's own quality flags, not just the mapping pipeline's", async () => {
+  // The resolver and the mapping pipeline observe DIFFERENT things, and both
+  // observations belong in the one `qualityFlags` list the caller is handed.
+  // The pipeline reports what mapping did; the resolver reports what the
+  // artifact turned out to be - here, a binary jar holding no `.class` entry at
+  // all, which is why nothing decompiles out of it. The pipeline builds its list
+  // from empty and knows nothing about that, so `resolveArtifact` must MERGE the
+  // two rather than overwrite with the pipeline's.
+  //
+  // The whole stack runs: ingestion is NOT stubbed, so the flag is asserted on
+  // the object the tool actually answers with, after the indexer has had its
+  // turn at it. Stubbing `ingestIfNeeded` here would remove the only layer
+  // between the resolver and the response and prove nothing about the caller.
+  //
+  // The fixture is a Jar-in-Jar shell: class-free like every other artifact
+  // this flag describes, and the one class-free shape ingestion can currently
+  // carry to a response, because it short-circuits before the decompiler.
+  // A class-free jar that is NOT a shell - a mapping jar, a resource-only mod -
+  // still dead-ends in ERR_DECOMPILER_FAILED inside `buildRebuiltArtifactData`
+  // rather than arriving flagged; that gap lives in the indexer's decompile
+  // branch, not here, and is pinned as current behaviour by
+  // tests/mod/nested-jar-shell.test.ts ("resolveArtifact still fails for a
+  // classless jar that is not a shell").
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { DEFAULT_DETAIL_BY_TOOL, projectByDetail } = await import("../../src/response-utils.ts");
+  const { buildInnerJarBytes, createShellJar } = await import("../helpers/nested-jar.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-coordinate-no-classes-"));
+  // A readable, well-formed, entirely legitimate jar reached through the
+  // ordinary local-m2 coordinate cascade.
+  const binaryJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "no-classes",
+    "1.0.0",
+    "no-classes-1.0.0.jar"
+  );
+  await createShellJar(binaryJarPath, {
+    "META-INF/jars/inner-api-1.0.0.jar": await buildInnerJarBytes({
+      "com/example/inner/Api.class": buildClassFile({ internalName: "com/example/inner/Api" })
+    })
+  });
+
+  // A decompiler path that cannot exist: if anything on this path tried to
+  // decompile, the resolve would fail instead of answering.
+  const service = new SourceService(
+    buildTestConfig(root, { vineflowerJarPath: join(root, "vineflower-missing.jar") })
+  );
+
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    service.resolveArtifact({
+      target: { kind: "coordinate", value: "com.example:no-classes:1.0.0" },
+      mapping: "obfuscated"
+    })
+  );
+
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.binaryJarPath, binaryJarPath);
+  assert.deepEqual(
+    resolved.qualityFlags,
+    ["binary-jar-no-classes", "decompiled", "shell-jar"],
+    "the resolver's observation, the mapping pipeline's and the indexer's must ALL survive"
+  );
+
+  // And it survives the default projection the tool applies before answering,
+  // so this is what a caller of `resolve-artifact` actually receives.
+  const projected = projectByDetail(
+    "resolve-artifact",
+    resolved as unknown as Record<string, unknown>,
+    DEFAULT_DETAIL_BY_TOOL["resolve-artifact"] ?? "summary",
+    new Set<string>()
+  );
+  assert.deepEqual(projected.qualityFlags, ["binary-jar-no-classes", "decompiled", "shell-jar"]);
+});
