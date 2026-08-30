@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
@@ -619,10 +619,12 @@ test("MinecraftExplorerService reports unknown minecraftVersion for a dependency
   const service = createService(root);
   const fqn = "net.fabricmc.fabric.api.gametest.v1.FabricGameTest";
 
-  // Guard the premise: without the flag the path heuristic still fires, and
-  // what it produces is exactly the garbage this flag exists to suppress.
+  // The path read now declines this Gradle-cache path on its own, so the flag is
+  // no longer the only thing standing between the caller and the "2.1" layout
+  // constant. It still has to hold independently, which is what the rest of this
+  // test pins; the store-shaped path is covered directly further down.
   const unflagged = await service.getSignature({ jarPath, fqn });
-  assert.equal(unflagged.context.minecraftVersion, "2.1");
+  assert.equal(unflagged.context.minecraftVersion, "unknown");
 
   const flagged = await service.getSignature({ jarPath, fqn, dependencyOrigin: true });
   assert.equal(flagged.context.minecraftVersion, "unknown");
@@ -632,4 +634,264 @@ test("MinecraftExplorerService reports unknown minecraftVersion for a dependency
   const cachedHit = await service.getSignature({ jarPath, fqn, dependencyOrigin: true });
   assert.equal(cachedHit.context.minecraftVersion, "unknown");
   assert.equal(cachedHit.context.mappingNamespace, "obfuscated");
+});
+
+// A jar named directly by path carries no coordinate, so nothing but the path
+// itself can say whether its numbers are Minecraft's. Gradle's dependency cache
+// and a local Maven repository both serve third-party jars from a layout whose
+// leading number belongs to the layout ("files-2.1") or to the library, so a
+// version read out of either is a plausible-looking wrong answer. The three
+// tests below pin the refusal and, just as importantly, the two shapes it must
+// NOT refuse.
+async function signatureVersionForJarPath(
+  root: string,
+  jarPath: string,
+  internalName: string
+): Promise<string> {
+  await mkdir(dirname(jarPath), { recursive: true });
+  await createJar(jarPath, {
+    [`${internalName}.class`]: buildClassFile({
+      internalName,
+      methods: [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const signature = await createService(root).getSignature({
+    jarPath,
+    fqn: internalName.replace(/\//g, ".")
+  });
+  return signature.context.minecraftVersion;
+}
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a jar named directly out of the Gradle dependency cache", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-gradle-cache-path-"));
+  const jarPath = join(
+    root,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "net.fabricmc.fabric-api",
+    "fabric-gametest-api-v1",
+    "4.0.21+4a7fa0819e",
+    "0123456789abcdef",
+    "fabric-gametest-api-v1-4.0.21+4a7fa0819e.jar"
+  );
+
+  const version = await signatureVersionForJarPath(
+    root,
+    jarPath,
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest"
+  );
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "2.1", "the cache layout constant is not a Minecraft version");
+  assert.notEqual(version, "4.0.21", "the library's own release number is not one either");
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a jar named directly out of a local Maven repository", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-local-m2-path-"));
+  const jarPath = join(
+    root,
+    ".m2",
+    "repository",
+    "org",
+    "jetbrains",
+    "annotations",
+    "26.0.2",
+    "annotations-26.0.2.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "org/jetbrains/annotations/NotNull");
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "26.0.2", "the library's own release number is not a Minecraft version");
+});
+
+test("MinecraftExplorerService still reports a Minecraft version for a Minecraft jar staged inside a dependency store", async () => {
+  // The safety control for the two tests above. Loom stages Minecraft into
+  // maven-shaped local stores and Gradle caches what it resolves from them, so
+  // both of these paths are real vanilla layouts sitting inside a dependency
+  // store. Refusing them would blank out a version the tool genuinely knows.
+  const root = await mkdtemp(join(tmpdir(), "explorer-minecraft-in-store-"));
+
+  const m2Version = await signatureVersionForJarPath(
+    root,
+    join(root, ".m2", "repository", "net", "minecraft", "client", "1.21.10", "client-1.21.10.jar"),
+    "net/minecraft/client/Minecraft"
+  );
+  assert.equal(m2Version, "1.21.10");
+
+  const loomVersion = await signatureVersionForJarPath(
+    root,
+    join(
+      root,
+      "caches",
+      "modules-2",
+      "files-2.1",
+      "net.minecraft",
+      "minecraft-merged",
+      "1.21.10",
+      "0123456789abcdef",
+      "minecraft-merged-1.21.10.jar"
+    ),
+    "net/minecraft/world/item/Item"
+  );
+  assert.equal(
+    loomVersion,
+    "1.21.10",
+    "a Loom-staged Minecraft jar reports its own version, not the cache layout's \"2.1\""
+  );
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a net.minecraft library named directly out of a local Maven repository", async () => {
+  // Mojang publishes ordinary libraries under Minecraft's own group, and
+  // `net.minecraft:launchwrapper:1.12` is the standing example. The group
+  // directory alone therefore cannot rescue a store path from the refusal: read
+  // that way, the library's own release number is served as a Minecraft version.
+  const root = await mkdtemp(join(tmpdir(), "explorer-m2-mc-group-library-"));
+  const jarPath = join(
+    root,
+    ".m2",
+    "repository",
+    "net",
+    "minecraft",
+    "launchwrapper",
+    "1.12",
+    "launchwrapper-1.12.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "net/minecraft/launchwrapper/Launch");
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "1.12", "the library's own release number is not a Minecraft version");
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a net.minecraft library named directly out of the Gradle dependency cache", async () => {
+  // The same library as above in the other store layout, where the group is one
+  // dotted directory rather than nested ones.
+  const root = await mkdtemp(join(tmpdir(), "explorer-gradle-mc-group-library-"));
+  const jarPath = join(
+    root,
+    "caches",
+    "modules-2",
+    "files-2.1",
+    "net.minecraft",
+    "launchwrapper",
+    "1.12",
+    "0123456789abcdef",
+    "launchwrapper-1.12.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "net/minecraft/launchwrapper/Launch");
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "1.12", "the library's own release number is not a Minecraft version");
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a net.minecraft library in a store nested under a Minecraft-named directory", async () => {
+  // Directories ABOVE the store root are the user's own layout and say nothing
+  // about the jar the store serves. Judged over the whole path, a checkout named
+  // `minecraft-client` vouched for `net.minecraft:launchwrapper` and the
+  // library's own release number came back as a Minecraft version.
+  const root = await mkdtemp(join(tmpdir(), "explorer-minecraft-client-project-"));
+  const jarPath = join(
+    root,
+    ".m2",
+    "repository",
+    "net",
+    "minecraft",
+    "launchwrapper",
+    "1.12",
+    "launchwrapper-1.12.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "net/minecraft/launchwrapper/Launch");
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "1.12", "an ancestor directory's name cannot vouch for a jar a store serves");
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a store jar whose group merely ends in net.minecraft", async () => {
+  // `com.acme.net.minecraft:client` is a third-party coordinate that happens to
+  // end in Minecraft's group. Its `net/minecraft` directories sit below
+  // `com/acme/`, not where a store layout puts a group, so nothing here names
+  // the runtime; read as Minecraft's group they served the library's release.
+  const root = await mkdtemp(join(tmpdir(), "explorer-m2-nested-group-"));
+  const jarPath = join(
+    root,
+    ".m2",
+    "repository",
+    "com",
+    "acme",
+    "net",
+    "minecraft",
+    "client",
+    "9.9",
+    "acme-9.9.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "com/acme/client/AcmeClient");
+
+  assert.equal(version, "unknown");
+  assert.notEqual(version, "9.9", "the library's own release number is not a Minecraft version");
+});
+
+// A local Maven repository's root directory name is configurable, so the group read
+// must recognise the root by its position, not by the default name `repository`.
+// Pinned to that literal, a Minecraft jar under `~/.m2/repo` fell through to the
+// name-only fallback and lost its version — a conservative miss, but still a real
+// version the tool knew and stopped reporting.
+test("MinecraftExplorerService reports a Minecraft version from a local Maven repository with a non-default root name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-m2-alt-root-"));
+  const jarPath = join(
+    root,
+    ".m2",
+    "repo",
+    "net",
+    "minecraft",
+    "client",
+    "1.21.10",
+    "client-1.21.10.jar"
+  );
+
+  const version = await signatureVersionForJarPath(root, jarPath, "net/minecraft/client/Minecraft");
+
+  assert.equal(version, "1.21.10");
+  assert.notEqual(version, "unknown", "the runtime artifact is still recognised under a renamed root");
+});
+
+test("MinecraftExplorerService still reports a Minecraft version for a vanilla jar under a version-numbered path", async () => {
+  // The plain vanilla control: nothing about this path resembles a dependency
+  // store, so the refusal must not reach it.
+  const root = await mkdtemp(join(tmpdir(), "explorer-vanilla-path-"));
+  const version = await signatureVersionForJarPath(
+    root,
+    join(root, "versions", "1.21.10", "1.21.10.jar"),
+    "net/minecraft/client/Minecraft"
+  );
+
+  assert.equal(version, "1.21.10");
+});
+
+test("MinecraftExplorerService reports unknown minecraftVersion for a dependency-origin jar outside any dependency store", async () => {
+  // The dependencyOrigin flag and the path refusal cover different jars: this
+  // one sits in a plain directory named after the library's own release, which
+  // no path shape can distinguish from a Minecraft version. Only the caller's
+  // knowledge that this is a dependency can suppress it.
+  const root = await mkdtemp(join(tmpdir(), "explorer-dep-origin-flat-"));
+  const jarPath = join(root, "libs", "fabric-gametest-api-v1", "4.0.21", "fabric-gametest-api-v1.jar");
+  await mkdir(join(root, "libs", "fabric-gametest-api-v1", "4.0.21"), { recursive: true });
+  const fqn = "net.fabricmc.fabric.api.gametest.v1.FabricGameTest";
+  await createJar(jarPath, {
+    "net/fabricmc/fabric/api/gametest/v1/FabricGameTest.class": buildClassFile({
+      internalName: "net/fabricmc/fabric/api/gametest/v1/FabricGameTest",
+      methods: [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const service = createService(root);
+
+  const unflagged = await service.getSignature({ jarPath, fqn });
+  assert.equal(unflagged.context.minecraftVersion, "4.0.21");
+
+  const flagged = await service.getSignature({ jarPath, fqn, dependencyOrigin: true });
+  assert.equal(flagged.context.minecraftVersion, "unknown");
 });

@@ -171,7 +171,10 @@ function shouldSuggestObfuscatedMapping(
   return isObfuscatedNamespaceHintTrue({
     mappingApplied: artifact.mappingApplied,
     qualityFlags: artifact.qualityFlags,
-    nativeDependency: artifact.provenance?.dependencyResolution != null,
+    nativeDependency: artifactResolver.isDependencyLikeArtifact({
+      provenance: artifact.provenance,
+      coordinate: artifact.coordinate
+    }),
     className
   });
 }
@@ -357,8 +360,8 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
    */
   callerSuppliedMapping?: SourceMapping;
   /**
-   * Whether the REQUESTED artifact is a native dependency, i.e. its provenance
-   * carries `dependencyResolution`. Such artifacts are handed
+   * Whether the REQUESTED artifact is a native dependency, as decided by
+   * `isDependencyLikeArtifact`. Such artifacts are handed
    * `mappingApplied: "obfuscated"` by substitution rather than by being an
    * obfuscated index, which the obfuscated namespace hint must not mistake for
    * a missing mapping argument.
@@ -1057,7 +1060,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       requestedMapping,
       qualityFlags,
       callerSuppliedMapping: input.mapping,
-      nativeDependency: provenance?.dependencyResolution != null,
+      nativeDependency: artifactResolver.isDependencyLikeArtifact({ provenance, coordinate }),
       attemptedBinaryFallback,
       targetKind: input.target?.kind,
       targetValue:
@@ -1104,7 +1107,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       requestedMapping,
       qualityFlags,
       callerSuppliedMapping: input.mapping,
-      nativeDependency: provenance?.dependencyResolution != null,
+      nativeDependency: artifactResolver.isDependencyLikeArtifact({ provenance, coordinate }),
       attemptedBinaryFallback,
       filePath,
       targetKind: input.target?.kind,
@@ -1400,7 +1403,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   // likewise that coordinate version. Every minecraftVersion source available on
   // this path is therefore wrong for such an artifact, so all of them are gated
   // below and the response reports the "unknown" sentinel instead.
-  const dependencyOrigin = provenance?.dependencyResolution != null;
+  const dependencyOrigin = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate });
   const fetchSignature = (jarPath: string) =>
     svc.explorerService.getSignature({
       fqn: lookupClassName,
@@ -1477,7 +1480,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         requestedMapping,
         qualityFlags,
         callerSuppliedMapping: input.mapping,
-        nativeDependency: provenance?.dependencyResolution != null,
+        nativeDependency: artifactResolver.isDependencyLikeArtifact({ provenance, coordinate }),
         attemptedBinaryFallback: true,
         targetKind: input.target?.kind,
         targetValue:

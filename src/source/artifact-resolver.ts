@@ -60,12 +60,128 @@ type VersionSourceCandidate = {
 
 /**
  * The Maven group under which the Minecraft runtime artifact itself is published
- * (`net.minecraft:client`, `net.minecraft:server`, the Loom merged jars). A
- * coordinate in this group carries a real Minecraft version in its version
- * segment; a coordinate in any other group carries a third-party library's own
- * release number, which says nothing about Minecraft.
+ * (`net.minecraft:client`, `net.minecraft:server`, the Loom merged jars).
+ *
+ * The group is necessary but NOT sufficient: Mojang also publishes ordinary
+ * libraries here, `net.minecraft:launchwrapper:1.12` being the long-standing one.
+ * Use `coordinateNamesMinecraftRuntime` rather than comparing against this
+ * constant directly.
  */
 const MINECRAFT_ARTIFACT_GROUP_ID = "net.minecraft";
+
+/**
+ * ArtifactIds under MINECRAFT_ARTIFACT_GROUP_ID that name the runtime itself, as
+ * opposed to a library that merely shares the group. `client` and `server` are the
+ * published runtime jars; every Loom-staged jar this codebase recognizes elsewhere
+ * (`minecraft-merged`, `minecraft-common`, `minecraft-clientonly`,
+ * `minecraft-client`, `minecraft-server` — see `looksLikeMinecraftArtifactPath`)
+ * starts with `minecraft`, so that prefix covers them without having to enumerate
+ * Loom's naming.
+ */
+const MINECRAFT_RUNTIME_ARTIFACT_IDS = new Set(["client", "server"]);
+
+/**
+ * Does this artifactId, on its own, name the Minecraft runtime rather than a
+ * library that merely shares Minecraft's group?
+ *
+ * This is the rule itself, held in one place so the two ways an artifact can be
+ * named cannot drift apart. `coordinateNamesMinecraftRuntime` applies it to a
+ * parsed Maven coordinate; `extractVersionFromPath` in
+ * `minecraft-explorer-service.ts` applies it to the artifactId DIRECTORY of a jar
+ * sitting in a dependency store, which is all a `kind:"jar"` target ever offers.
+ * When those two disagreed, `net.minecraft:launchwrapper:1.12` was a library on
+ * the coordinate route and the Minecraft runtime on the path route.
+ */
+export function artifactIdNamesMinecraftRuntime(artifactId: string): boolean {
+  const normalized = artifactId.trim().toLowerCase();
+  return MINECRAFT_RUNTIME_ARTIFACT_IDS.has(normalized) || normalized.startsWith("minecraft");
+}
+
+/**
+ * Does this Maven coordinate name the Minecraft runtime itself?
+ *
+ * Only then does its version segment carry a real Minecraft version, and only then
+ * may a version or namespace derived from the artifact be read as Minecraft's.
+ * `net.minecraft:launchwrapper:1.12` is a real library Mojang publishes on
+ * libraries.minecraft.net: judging by group alone read it as the runtime, so its
+ * own release number was reported as a Minecraft version and a class miss inside it
+ * was blamed on Minecraft obfuscation.
+ *
+ * A coordinate that cannot be parsed is not shown to name the runtime, so it
+ * answers `false`. That matches what both call sites did with a parse failure
+ * before this helper existed: the resolver left its group unread and fell through
+ * to "not Minecraft", and `isDependencyLikeArtifact` treated it as a library.
+ */
+export function coordinateNamesMinecraftRuntime(coordinate: string): boolean {
+  let parsed;
+  try {
+    parsed = parseCoordinate(coordinate);
+  } catch {
+    return false;
+  }
+  if (parsed.groupId !== MINECRAFT_ARTIFACT_GROUP_ID) {
+    return false;
+  }
+  return artifactIdNamesMinecraftRuntime(parsed.artifactId);
+}
+
+/**
+ * Does this artifact hold a third-party library rather than the Minecraft runtime?
+ *
+ * Callers use this to decide whether any Minecraft version derived from the
+ * artifact's jar path or resolver metadata may be believed, and whether a
+ * class-not-found miss may be blamed on Minecraft obfuscation.
+ *
+ * `provenance.dependencyResolution` alone cannot answer it. That marker is written
+ * only when the same `resolveArtifact` call handled a `kind:"dependency"` target,
+ * yet `synthesizeDependencyTarget` rewrites such a target into `{kind:"coordinate"}`
+ * BEFORE `buildProvenance` runs — so a dependency-route artifact and one reached by
+ * naming the same Maven coordinate directly persist an identical `target` and
+ * `resolvedFrom.coordinate`. Keyed off the marker, the question "is this a
+ * dependency?" was really answering "was it reached by a dependency target in this
+ * very call?", and a coordinate target — or a later reuse of the stored artifact by
+ * `artifactId` — got the vanilla answer for a dependency jar.
+ *
+ * The coordinate is route-invariant, so it decides instead, through the same
+ * `coordinateNamesMinecraftRuntime` the resolver's own obfuscation gate uses: a
+ * coordinate that does not name the Minecraft runtime names a library whose paths
+ * and version segment say nothing about Minecraft. Sharing the one helper is
+ * deliberate — the two questions are the same question asked in opposite polarity,
+ * and answering them differently is how `net.minecraft:launchwrapper` came to be
+ * read as the runtime on one side while being a library on the other.
+ *
+ * One limit remains, and it predates this predicate: an artifact reached by
+ * `kind:"jar"` records no coordinate at all, so it falls to the absent case and
+ * keeps the path-derived behaviour it has always had. The absent case is vanilla
+ * because that is the pre-existing default for the routes that record no coordinate
+ * — not because a vanilla artifact necessarily lacks one; resolving
+ * `net.minecraft:client:26.1` by coordinate does store it, and the runtime-name
+ * check is what classifies it. (`extractVersionFromPath` in
+ * `minecraft-explorer-service.ts` refuses on its own for a jar served out of a
+ * dependency cache, which is what covers the no-coordinate dependency jar.)
+ */
+export function isDependencyLikeArtifact(input: {
+  provenance?: ArtifactProvenance;
+  coordinate?: string;
+}): boolean {
+  if (input.provenance?.dependencyResolution != null) {
+    return true;
+  }
+
+  const coordinate =
+    normalizeOptionalString(input.coordinate) ??
+    normalizeOptionalString(input.provenance?.resolvedFrom?.coordinate);
+  if (!coordinate) {
+    return false;
+  }
+
+  // Polarity: this predicate is TRUE for a library, so it is the negation of the
+  // runtime test. An unparseable coordinate answers `false` there and therefore
+  // `true` here — it cannot be shown to name the Minecraft runtime, so treat it as
+  // a dependency and suppress a Minecraft version we could not justify, rather than
+  // asserting one on the strength of a string we failed to read.
+  return !coordinateNamesMinecraftRuntime(coordinate);
+}
 
 export type VersionSourceDiscovery = {
   searchedPaths: string[];
@@ -127,11 +243,16 @@ function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
-function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: boolean): boolean {
-  if (hasMinecraftNamespace) {
-    return true;
-  }
-
+/**
+ * Does this jar path look like it holds Minecraft itself?
+ *
+ * Loom stages Minecraft into maven-shaped local stores — its own `minecraftMaven`
+ * repository, and from there Gradle's dependency cache — so a path alone cannot be
+ * dismissed as a third-party dependency just because it sits in one. This is the
+ * override that keeps such a jar's version readable; see `extractVersionFromPath`
+ * in `minecraft-explorer-service.ts`.
+ */
+export function looksLikeMinecraftArtifactPath(path: string): boolean {
   const normalizedPath = normalizePathStyle(path).toLowerCase();
   return (
     normalizedPath.includes("/minecraftmaven/") ||
@@ -143,6 +264,10 @@ function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: b
     normalizedPath.includes("minecraft-client") ||
     normalizedPath.includes("minecraft-server")
   );
+}
+
+function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: boolean): boolean {
+  return hasMinecraftNamespace || looksLikeMinecraftArtifactPath(path);
 }
 
 export function hasExactVersionToken(path: string, version: string): boolean {
@@ -1632,15 +1757,16 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       };
       warnings.push(`Resolved Minecraft ${versionJar.version} from ${versionJar.clientJarUrl}.`);
     }
-    let coordinateGroupId: string | undefined;
+    let coordinateIsMinecraftRuntime = false;
     if (kind === "coordinate") {
       try {
-        const parsed = parseCoordinate(value);
-        resolvedVersion = parsed.version;
-        coordinateGroupId = parsed.groupId;
+        resolvedVersion = parseCoordinate(value).version;
       } catch {
         // coordinate validity is validated by resolver
       }
+      // Swallows its own parse failure and answers false, which is what the
+      // unread group left behind here before.
+      coordinateIsMinecraftRuntime = coordinateNamesMinecraftRuntime(value);
     }
 
     // `isUnobfuscatedVersion` answers "does this MINECRAFT version ship unobfuscated
@@ -1648,16 +1774,19 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     // a Minecraft version. A kind="version" target always carries one. A coordinate
     // carries one only when it names the Minecraft runtime artifact itself
     // (net.minecraft:client:26.1); for any other coordinate the version segment is a
-    // third-party library's own release number. Without this gate a dependency such as
-    // org.jetbrains:annotations:26.0.2 parses as an "unobfuscated Minecraft version"
-    // and short-circuits applyMappingPipeline into reporting mappingApplied="mojang"
-    // with no remap performed, no verification, and no dependency-mapping-unverified
-    // warning. A kind="dependency" target is excluded outright regardless of its group,
+    // third-party library's own release number — including a library published under
+    // Minecraft's own group, such as net.minecraft:launchwrapper, which is why the
+    // group alone cannot answer this and `coordinateNamesMinecraftRuntime` checks the
+    // artifactId too. Without this gate a dependency such as org.jetbrains:annotations:26.0.2
+    // parses as an "unobfuscated Minecraft version" and short-circuits
+    // applyMappingPipeline into reporting mappingApplied="mojang" with no remap
+    // performed, no verification, and no dependency-mapping-unverified warning.
+    // A kind="dependency" target is excluded outright regardless of its group,
     // because binary remap is force-disabled for it (see forceBinaryRemapDisabled
     // below), so its mapping is never actually enforced either way.
     const versionNamesMinecraft =
       kind === "version" ||
-      (kind === "coordinate" && !dependencyOrigin && coordinateGroupId === MINECRAFT_ARTIFACT_GROUP_ID);
+      (kind === "coordinate" && !dependencyOrigin && coordinateIsMinecraftRuntime);
     const minecraftVersion = versionNamesMinecraft ? resolvedVersion : undefined;
     const runtimeNamesUnobfuscated =
       minecraftVersion !== undefined && isUnobfuscatedVersion(minecraftVersion);
