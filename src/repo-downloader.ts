@@ -6,6 +6,7 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  truncateSync,
   unlinkSync,
   writeFileSync
 } from "node:fs";
@@ -466,6 +467,24 @@ function retireDownloadSidecar(destinationPath: string): boolean {
 }
 
 /**
+ * Whether the bytes at `destinationPath` are still the ones `expected`
+ * describes, as far as the record beside them can tell.
+ *
+ * An absent record answers yes, not no: see {@link discardCachedDownload}.
+ * `readDownloadSidecar` only returns a record that still matches the file's
+ * size and mtime, so a digest that comes back at all is a digest of the bytes
+ * currently on disk - an existence check, a small JSON read and a stat of the
+ * file itself, never a re-hash.
+ */
+function cachedBytesStillMatch(
+  destinationPath: string,
+  expected: { url: string; contentSha256: string }
+): boolean {
+  const sidecar = readDownloadSidecar(destinationPath, expected.url);
+  return sidecar === undefined || sidecar.contentSha256 === expected.contentSha256;
+}
+
+/**
  * Evict a cached download and its identity record.
  *
  * For a caller that got its bytes and then found them unusable - a 200 carrying
@@ -474,17 +493,65 @@ function retireDownloadSidecar(destinationPath: string): boolean {
  * entry would otherwise be served straight back on every later run with no
  * request made at all: the poison would outlive the outage that produced it.
  *
+ * `expected` identifies the bytes the caller is rejecting, and eviction is
+ * skipped when the record on disk describes different ones. The downloads cache
+ * is shared, and a caller can only find a body unusable by opening it as an
+ * archive - the zip has to be opened and its central directory read before
+ * anything can be said about it, not an instant check - so a concurrent resolve
+ * of the same url has room to install a perfectly good jar at this path while
+ * that check runs. Deleting unconditionally destroys the winner's bytes on the
+ * strength of a verdict passed on somebody else's. The comparison narrows that
+ * window from an archive open down to the record read
+ * {@link cachedBytesStillMatch} makes; it does not close it, since another
+ * process can still replace the file between the comparison and the unlink
+ * below.
+ *
+ * Omitting `expected` keeps the unconditional eviction, and so does a caller
+ * that supplies it when no record can be read: both mean the identity cannot be
+ * proved, and refusing to delete what cannot be identified would pin every
+ * sidecar-less entry - including the ones a build predating this eviction
+ * poisoned - in the cache forever.
+ *
  * Record first, bytes second, matching {@link writeDownloadSidecar}'s ordering
- * in reverse: no window ever holds a record describing bytes that are gone. Both
- * steps are best-effort - a file we could not remove is at worst re-validated
- * and re-evicted next time.
+ * in reverse: no window ever holds a record describing bytes that are gone.
  */
-export function discardCachedDownload(destinationPath: string): void {
+export function discardCachedDownload(
+  destinationPath: string,
+  expected?: { url: string; contentSha256: string }
+): void {
+  if (expected !== undefined && !cachedBytesStillMatch(destinationPath, expected)) {
+    return;
+  }
+
   retireDownloadSidecar(destinationPath);
   try {
     unlinkSync(destinationPath);
   } catch {
-    // best-effort eviction
+    // The unlink lost - a read-only cache directory, a mode this process does
+    // not satisfy, a lock. What survives is served straight back on the next
+    // resolve of this immutable url and rejected there all over again, in
+    // whichever of two shapes the failure leaves behind.
+    //
+    // The retire above may have succeeded, leaving a sidecar-less file, and that
+    // is the one shape the read path *adopts*: the next resolve re-hashes it,
+    // writes a fresh record and returns it as a hit. Or it may have failed for
+    // the very reason the unlink did - a read-only directory refuses to remove
+    // either name - leaving the record in place, still matching the file's size
+    // and mtime, so the bytes come back as a hit with no re-hash at all.
+    //
+    // Either way the entry is handed back and re-rejected on every later
+    // resolve, forever, because this module's own eviction failed.
+    //
+    // Truncating instead reuses the invariant {@link cachedByteCount} already
+    // owns: a zero-byte file is reported exactly like a missing one, precisely
+    // so the next transfer replaces it instead of pinning it. And it asks for
+    // write permission on the FILE rather than on its directory, which is what
+    // an unlink defeated by a directory mode still has.
+    try {
+      truncateSync(destinationPath, 0);
+    } catch {
+      // best-effort eviction, as everywhere else in this module
+    }
   }
 }
 

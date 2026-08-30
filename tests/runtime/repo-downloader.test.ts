@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import {
   defaultDownloadPath,
+  discardCachedDownload,
   downloadSidecarPath,
   downloadToCache,
   isDownloadSidecarPath,
@@ -1460,6 +1461,198 @@ test("resolveCachedDownload(immutable) surfaces an unreadable cache entry instea
     0,
     "and never a cache miss: reported as one, this url would transfer on every call forever while the one actionable error stayed hidden behind whatever the network did next"
   );
+});
+
+test("discardCachedDownload keeps bytes whose record says a concurrent resolve replaced them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-discard-winner-"));
+  const destination = join(root, "contested.jar");
+  const url = "https://repo.example.com/contested.jar";
+  // The slot now holds the winner's bytes and the winner's record. What the
+  // evicting caller holds is the identity of the body IT downloaded and then
+  // found unusable - bytes that are no longer here.
+  await writeFile(destination, "winner-bytes");
+  await writeSidecarFor(destination, { url, contentSha256: sha256Of("winner-bytes") });
+
+  discardCachedDownload(destination, { url, contentSha256: sha256Of("rejected-bytes") });
+
+  assert.equal(
+    existsSync(destination),
+    true,
+    "a verdict passed on one body must not delete a different one"
+  );
+  assert.equal(await readFile(destination, "utf8"), "winner-bytes");
+  assert.equal(
+    existsSync(downloadSidecarPath(destination)),
+    true,
+    "and the winner's record has to survive with the bytes it describes"
+  );
+});
+
+test("discardCachedDownload evicts an entry no record can identify", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-discard-unidentified-"));
+  const destination = join(root, "legacy-poison.jar");
+  const url = "https://repo.example.com/legacy-poison.jar";
+  // No sidecar: written by a build that predates the record, or by one whose
+  // sidecar write failed. The identity cannot be proved either way, and refusing
+  // to delete what cannot be proved would pin every already-poisoned entry in
+  // the cache forever - an immutable url never asks the network again.
+  await writeFile(destination, "<html>502 Bad Gateway</html>");
+
+  discardCachedDownload(destination, { url, contentSha256: sha256Of("anything-at-all") });
+
+  assert.equal(
+    existsSync(destination),
+    false,
+    "an unidentifiable entry is exactly the one a poisoned cache heals by dropping"
+  );
+});
+
+test("discardCachedDownload evicts an entry whose record is present but says nothing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-discard-unreadable-record-"));
+  const destination = join(root, "corrupt-record.jar");
+  const url = "https://repo.example.com/corrupt-record.jar";
+  // The other half of "cannot be identified", and the half a guard is likely to
+  // get wrong: the record is right there, it just cannot be believed - a sidecar
+  // write killed partway, a schema this build no longer reads, a truncated JSON
+  // object. `readDownloadSidecar` reports every one of those as absent, and
+  // absent evicts. What calls the eviction off is a record that PARSES and names
+  // other bytes; a file merely being present next to the jar proves nothing and
+  // must not be allowed to vouch for it.
+  await writeFile(destination, "<html>502 Bad Gateway</html>");
+  await writeFile(downloadSidecarPath(destination), '{"version": 2, "url": "https://re');
+
+  discardCachedDownload(destination, { url, contentSha256: sha256Of("anything-at-all") });
+
+  assert.equal(
+    existsSync(destination),
+    false,
+    "an unreadable record cannot identify these bytes, and sparing what cannot be identified pins every entry an older build poisoned in the cache forever"
+  );
+  assert.equal(
+    existsSync(downloadSidecarPath(destination)),
+    false,
+    "and the unreadable record goes with the bytes it failed to describe"
+  );
+});
+
+test("discardCachedDownload empties an entry it cannot unlink so the next resolve transfers instead of adopting it", {
+  // A directory mode is what makes the unlink fail here, and root is not subject
+  // to one - nor is Windows, where these bits do not mean this. Neither can
+  // stage the failure, so neither can test the recovery from it.
+  skip:
+    process.platform === "win32"
+      ? "directory permission bits do not gate unlink here"
+      : process.getuid?.() === 0
+        ? "root is not subject to the directory mode this stages"
+        : false
+}, async () => {
+  // Regression: the unlink was best-effort and nothing followed it. A failed
+  // unlink left a non-zero file behind, and the read path hands that straight
+  // back on every later resolve of an immutable url. Under this fixture's mode
+  // the record survives too - a read-only directory refuses to remove the
+  // sidecar's name for exactly the reason it refuses the jar's - so the entry
+  // came back as a hit on the strength of a record that still matched it. Where
+  // the retire does succeed the survivor is sidecar-less instead, which the read
+  // path *adopts*: re-hash, fresh record, hit. Either shape is a hit the caller
+  // rejects again, and a failover, on every resolve forever, because this
+  // module's own eviction lost.
+  const root = await mkdtemp(join(tmpdir(), "downloader-discard-undeletable-"));
+  const cacheDir = join(root, "downloads");
+  await mkdir(cacheDir);
+  const destination = join(cacheDir, "undeletable.jar");
+  const url = "https://repo.example.com/undeletable.jar";
+  await writeFile(destination, "<html>502 Bad Gateway</html>");
+  await writeSidecarFor(destination, {
+    url,
+    contentSha256: sha256Of("<html>502 Bad Gateway</html>")
+  });
+
+  // Removing a name needs write permission on the DIRECTORY; emptying the file
+  // needs it on the file. This mode is the difference between them, and it is
+  // the one an eviction actually loses to.
+  await chmod(cacheDir, 0o555);
+  try {
+    discardCachedDownload(destination, {
+      url,
+      contentSha256: sha256Of("<html>502 Bad Gateway</html>")
+    });
+
+    assert.equal(existsSync(destination), true, "the unlink was supposed to lose here");
+    assert.equal(
+      (await stat(destination)).size,
+      0,
+      "an entry that could not be removed has to stop being an entry: a zero-byte file is not a cache hit"
+    );
+  } finally {
+    await chmod(cacheDir, 0o755);
+  }
+
+  let calls = 0;
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    return new Response(Buffer.from("the real jar"), { status: 200 });
+  }) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(calls, 1, "the poison must not be adopted back as a cache hit, immutable url or not");
+  assert.equal(result.ok, true);
+  assert.equal(await readFile(destination, "utf8"), "the real jar");
+});
+
+test("discardCachedDownload gives up quietly when it can neither unlink nor empty an entry", {
+  // Same staging constraint as the case above, plus a file mode this time: root
+  // is subject to neither, and Windows is not a platform this project's CI runs,
+  // so nothing here can say what these calls do there.
+  skip:
+    process.platform === "win32"
+      ? "unverified on Windows: this project's CI does not run there"
+      : process.getuid?.() === 0
+        ? "root is subject to neither mode this stages"
+        : false
+}, async () => {
+  // The truncation is a fallback, not a promise. Eviction is best-effort at
+  // every step in this module, and the caller reaching it is already in the
+  // middle of failing over to another repository - letting an EACCES out of here
+  // would convert a cache this process happens not to own into the resolve's own
+  // error, and lose a perfectly good failover to it.
+  const root = await mkdtemp(join(tmpdir(), "downloader-discard-sealed-"));
+  const cacheDir = join(root, "downloads");
+  await mkdir(cacheDir);
+  const destination = join(cacheDir, "sealed.jar");
+  const url = "https://repo.example.com/sealed.jar";
+  const poison = "<html>502 Bad Gateway</html>";
+  await writeFile(destination, poison);
+  await writeSidecarFor(destination, { url, contentSha256: sha256Of(poison) });
+
+  // Two modes, because the two steps answer to different ones: removing a name
+  // needs write permission on the DIRECTORY, and emptying a file needs it on the
+  // FILE - truncation has to open for writing, and 0o444 refuses. The case above
+  // denies only the first, which is why it can never reach this catch.
+  await chmod(destination, 0o444);
+  await chmod(cacheDir, 0o555);
+  try {
+    assert.doesNotThrow(
+      () => {
+        discardCachedDownload(destination, { url, contentSha256: sha256Of(poison) });
+      },
+      "an eviction that cannot touch the cache is still an eviction that returns"
+    );
+
+    assert.equal(
+      (await stat(destination)).size,
+      poison.length,
+      "both steps were supposed to lose here - a survivor that got emptied would prove nothing about the catch around the truncation"
+    );
+  } finally {
+    await chmod(cacheDir, 0o755);
+    await chmod(destination, 0o644);
+  }
 });
 
 test("isDownloadSidecarPath recognises the leftover of an interrupted sidecar write", async () => {

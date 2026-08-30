@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
-import { defaultDownloadPath } from "../../src/repo-downloader.ts";
+import { defaultDownloadPath, downloadSidecarPath } from "../../src/repo-downloader.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
@@ -1161,6 +1162,175 @@ test("resolveSourceTarget(targetKind=coordinate) refuses a remote sources downlo
       .map((event) => ({ repoUrl: event.repoUrl, statusCode: event.statusCode })),
     [{ repoUrl: sourcesUrlA, statusCode: 200 }]
   );
+});
+
+/**
+ * Stage the concurrent-resolve race deterministically: replace `jarPath` at the
+ * moment the archive check has opened it, and before the check gets its file
+ * descriptor back.
+ *
+ * The window the eviction above lives in is real. A poisoned body is only ever
+ * found unusable by *opening* it as an archive - a file open plus a read of the
+ * zip's central directory, all of it I/O against a shared cache slot that
+ * another resolve of the same immutable url may be finishing a perfectly good
+ * jar into. Racing two real resolves would pin nothing, because whichever
+ * happened to finish first would decide the run; hooking the reader's own
+ * `fs.open` puts the replacement inside the window every time.
+ *
+ * Which open, though, matters: the transfer opens the same path first, to digest
+ * the bytes it just wrote, and a replacement staged there would be overwritten
+ * by the record that transfer goes on to write. The identity record is exactly
+ * what separates the two - it does not exist until the transfer has finished
+ * with the file - so the hook stays disarmed until one is there.
+ *
+ * The swap is a rename, which is how the downloader installs bytes as well, so
+ * the descriptor the reader already holds keeps pointing at the poison: it still
+ * parses, and still rejects, the body this call downloaded, while the path now
+ * holds somebody else's good jar. That is exactly the state the eviction has to
+ * recognise.
+ *
+ * `installed` is reported back so a caller can refuse to pass on a run where the
+ * hook never fired - a reader that stopped going through `fs.open`, or a
+ * transfer that stopped recording what it wrote, would otherwise quietly turn
+ * this into a test of nothing.
+ */
+async function withWinnerInstalledDuringArchiveCheck<T>(
+  jarPath: string,
+  installWinner: () => void,
+  body: () => Promise<T>
+): Promise<{ result: T; installed: number }> {
+  // yauzl reads `open` off the CommonJS `fs` module object at call time, so this
+  // is the reader's own open rather than a copy of it.
+  const fsModule = createRequire(import.meta.url)("fs") as typeof import("node:fs");
+  const realOpen = fsModule.open as unknown as (...args: unknown[]) => unknown;
+  let installed = 0;
+
+  (fsModule as unknown as Record<string, unknown>).open = function patchedOpen(
+    this: unknown,
+    ...args: unknown[]
+  ): unknown {
+    const callback = args[args.length - 1];
+    const armed =
+      args[0] === jarPath && installed === 0 && existsSync(downloadSidecarPath(jarPath));
+    if (!armed || typeof callback !== "function") {
+      return realOpen.apply(this, args);
+    }
+    return realOpen.call(this, ...args.slice(0, -1), (...openResult: unknown[]) => {
+      installed += 1;
+      installWinner();
+      (callback as (...cbArgs: unknown[]) => void)(...openResult);
+    });
+  };
+
+  try {
+    return { result: await body(), installed };
+  } finally {
+    (fsModule as unknown as Record<string, unknown>).open = realOpen;
+  }
+}
+
+test("resolveSourceTarget(targetKind=coordinate) leaves a concurrent winner's jar alone when evicting the body it rejected", {
+  // Renaming over a file the archive check still holds open is what POSIX
+  // guarantees, and POSIX is what CI runs on. Whether the same interleaving is
+  // reachable on Windows is not a question anything here can answer: this
+  // project's CI is Ubuntu-only, so nobody would ever see this fixture stage
+  // the race there, stage a different one, or fail to stage one at all.
+  // Skipped as unverified on that platform - no claim either way.
+  skip:
+    process.platform === "win32"
+      ? "unverified on Windows: this project's CI does not run there"
+      : false
+}, async () => {
+  // Regression: eviction deleted the destination path unconditionally. Between
+  // the download and the verdict on it sits an archive open, and the downloads
+  // cache is keyed by url and shared, so the bytes being deleted were
+  // not necessarily the bytes being rejected - a concurrent resolve that won the
+  // slot lost its good jar to somebody else's failed check, and the caller that
+  // was about to hand that jar back found nothing there.
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-binary-evict-winner-"));
+  const coordinate = "com.example:evict-winner:4.0.0";
+  const binaryPath = "/com/example/evict-winner/4.0.0/evict-winner-4.0.0.jar";
+  const binaryUrlA = `${REPO_A}${binaryPath}`;
+  const binaryUrlB = `${REPO_B}${binaryPath}`;
+
+  const winnerFixture = join(root, "winner-binary.jar");
+  await createJar(winnerFixture, {
+    "com/example/EvictWinner.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const winnerBytes = await readFile(winnerFixture);
+  const repoBFixture = join(root, "repo-b-binary.jar");
+  await createJar(repoBFixture, {
+    "com/example/EvictWinnerFromB.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  const repoBBytes = await readFile(repoBFixture);
+
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    if (url === binaryUrlA) {
+      // A 200 with a perfectly plausible body that is not a jar at all.
+      return new Response("<html><body>502 Bad Gateway</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }
+    if (url === binaryUrlB) {
+      return new Response(repoBBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
+  const poisonedSlot = defaultDownloadPath(config.cacheDir, binaryUrlA);
+  const winnerStaging = join(root, "winner-staged.jar");
+  await writeFile(winnerStaging, winnerBytes);
+
+  // What the winning resolve leaves behind: its bytes, then the record
+  // describing them, in that order - see writeDownloadSidecar.
+  const installWinner = (): void => {
+    renameSync(winnerStaging, poisonedSlot);
+    const stats = statSync(poisonedSlot);
+    writeFileSync(
+      downloadSidecarPath(poisonedSlot),
+      JSON.stringify({
+        version: 2,
+        url: binaryUrlA,
+        contentSha256: createHash("sha256").update(winnerBytes).digest("hex"),
+        contentLength: stats.size,
+        contentMtimeMs: stats.mtimeMs
+      })
+    );
+  };
+
+  const { result: resolved, installed } = await withWinnerInstalledDuringArchiveCheck(
+    poisonedSlot,
+    installWinner,
+    () =>
+      withGradleHome(join(root, "gradle-home"), () =>
+        withFetch(fetchStub, () =>
+          resolveSourceTarget(
+            { kind: "coordinate", value: coordinate },
+            { allowDecompile: true },
+            config
+          )
+        )
+      )
+  );
+
+  assert.equal(installed, 1, "the race this pins never happened - the assertions below prove nothing");
+  assert.equal(
+    existsSync(poisonedSlot),
+    true,
+    "the winner's jar was deleted by a verdict passed on the bytes it replaced"
+  );
+  assert.deepEqual(
+    await readFile(poisonedSlot),
+    winnerBytes,
+    "the slot must still hold the winner's bytes, untouched"
+  );
+  // The rejecting call still fails over, exactly as before: it is only the
+  // *deletion* that the winner's record calls off, not the verdict.
+  assert.equal(resolved.origin, "decompiled");
+  assert.equal(resolved.binaryJarPath, defaultDownloadPath(config.cacheDir, binaryUrlB));
 });
 
 test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary companion for the readable Gradle cache one when a remote sources jar is found", async () => {

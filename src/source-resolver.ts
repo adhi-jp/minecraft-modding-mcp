@@ -566,8 +566,17 @@ export async function resolveSourceTarget(
         // guards against below. Evict it now: this url is immutable for every
         // non-SNAPSHOT coordinate, so a future call would otherwise be served
         // the same poison with no request made at all.
+        //
+        // Named by digest, because the archive check above just opened this
+        // file and read its central directory, and the download cache is
+        // shared: a concurrent resolve that finished a real jar into the same
+        // slot meanwhile owns those bytes, and this verdict does not apply to
+        // them.
         if (download.ok) {
-          discardCachedDownload(download.path);
+          discardCachedDownload(download.path, {
+            url: sourceUrl,
+            contentSha256: download.contentSha256
+          });
         }
         sourceJarHasJavaSources = false;
       }
@@ -703,8 +712,15 @@ export async function resolveSourceTarget(
       if (!(await isReadableJarArchive(downloaded.path))) {
         // And the body must not survive as a cache entry: this url is immutable
         // for every non-SNAPSHOT coordinate, so the next run would be served the
-        // same poison with no request made at all.
-        discardCachedDownload(downloaded.path);
+        // same poison with no request made at all. Named by digest: the check
+        // above opens the zip and reads its central directory, and the download
+        // cache is shared, so a concurrent resolve can have finished a real jar
+        // into this same slot while it ran - bytes this verdict says nothing
+        // about.
+        discardCachedDownload(downloaded.path, {
+          url: binaryUrl,
+          contentSha256: downloaded.contentSha256
+        });
         if (hasNextAttempt) {
           options.onRepoFailover?.({
             stage: "binary",
