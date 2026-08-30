@@ -110,6 +110,7 @@ export class ArtifactsRepo {
   private readonly getStmt;
   private readonly touchStmt;
   private readonly setAliasStmt;
+  private readonly updateBinaryJarPathStmt;
   private readonly deleteStmt;
   private readonly listStmt;
   private readonly countStmt;
@@ -179,6 +180,17 @@ export class ArtifactsRepo {
       SET alias = ?
       WHERE artifact_id = ?
         AND (alias IS NULL OR alias <> ?)
+    `);
+
+    // Persists binary_jar_path on cache-hit paths where upsertArtifact would
+    // otherwise be skipped. Conditional WHERE keeps it idempotent and avoids a
+    // pointless write when the column already names the same jar. Never writes
+    // NULL: the setter only runs with a jar the resolver just proved usable.
+    this.updateBinaryJarPathStmt = this.db.prepare(`
+      UPDATE artifacts
+      SET binary_jar_path = ?
+      WHERE artifact_id = ?
+        AND (binary_jar_path IS NULL OR binary_jar_path <> ?)
     `);
 
     this.deleteStmt = this.db.prepare(`DELETE FROM artifacts WHERE artifact_id = ?`);
@@ -276,6 +288,18 @@ export class ArtifactsRepo {
   // caller just received in the response.
   setAlias(artifactId: string, alias: string): void {
     this.setAliasStmt.run([alias, artifactId, alias]);
+  }
+
+  // Backfills or repoints the binary jar for an existing row. Used by warm-cache
+  // resolveArtifact paths where upsertArtifact is skipped, so a binary companion
+  // that only appeared after the row was written - or a remap output reconciled
+  // on the cache-hit path - still reaches the DB and stays in sync with the
+  // binaryJarPath the caller just received in the response. Callers pass the jar
+  // a binary consumer should open right now, matching what upsertArtifact stores
+  // on the cold path. `updated_at` is deliberately left alone: the one warm path
+  // that calls this already runs touchArtifact with its own LRU timestamp.
+  updateBinaryJarPath(artifactId: string, binaryJarPath: string): void {
+    this.updateBinaryJarPathStmt.run([binaryJarPath, artifactId, binaryJarPath]);
   }
 
   deleteArtifact(artifactId: string): void {

@@ -492,6 +492,20 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
         resolved.binaryJarPath = reconciledBinaryJarPath;
       }
     }
+    // The row's binary_jar_path tracks whatever the resolver just proved usable.
+    // Every warm resolve re-walks the filesystem cascade from scratch, so a
+    // binary companion that only landed on disk after this row was written is
+    // found again here - as is the remapped jar the block above just reconciled
+    // - and both reach the resolveArtifact response while the persisted column
+    // keeps whatever it had. That is the contradiction this write prevents:
+    // resolve-artifact reporting a binaryJarPath, and get-class-members on the
+    // same artifactId reading the column and failing ERR_CONTEXT_UNRESOLVED
+    // because the row says the artifact has no binary jar. One comparison covers
+    // both cases. It never clears a value: a resolve that found nothing is not
+    // evidence the persisted jar is gone, only that this cascade did not reach it.
+    if (resolved.binaryJarPath && existing.binaryJarPath !== resolved.binaryJarPath) {
+      svc.artifactsRepo.updateBinaryJarPath(resolved.artifactId, resolved.binaryJarPath);
+    }
     // Backfill / rotate alias on the warm-cache path. Without this, schema-v4
     // migrated rows (alias=NULL) and rows whose alias parameters changed since
     // the last upsert would return an artifactAlias from resolveArtifact that
