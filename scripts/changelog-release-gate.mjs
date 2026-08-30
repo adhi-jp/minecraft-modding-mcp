@@ -3,11 +3,18 @@
  *
  * `CHANGELOG.md` is an end-user document (AGENTS.md → CHANGELOG Content Rules). While work
  * is in flight, `## [Unreleased]` is allowed to carry work-log detail; the release cut is
- * where that detail MUST be rewritten for a reader with no access to this repository. This
- * module audits exactly that boundary: a DATED release section, never `## [Unreleased]`.
+ * where that detail MUST be rewritten for a reader with no access to this repository. The
+ * RELEASE-MATURITY audit below (`auditChangelog`) polices exactly that boundary and runs on a
+ * DATED release section only — the content rules it enforces are meaningless before the cut.
  *
- * It is a floor, not a reviewer. It detects the two failure shapes that are mechanically
- * decidable and that this repository has actually shipped:
+ * A second, narrower audit (`auditUnreleased`) covers `## [Unreleased]`. It applies only the
+ * three structural checks that hold regardless of maturity — `duplicate-section`,
+ * `unattributed-text`, `empty-entry` — and shares this module's one parser with the dated
+ * audit so the two can never disagree about what a section contains. See
+ * `auditUnreleasedSection` for what it deliberately leaves out and why.
+ *
+ * The release-maturity audit is a floor, not a reviewer. It detects the two failure shapes
+ * that are mechanically decidable and that this repository has actually shipped:
  *
  *  1. INTERNAL REFERENCE — a released entry naming something only a contributor can resolve:
  *     a `tests/` or `src/` path, a `.test.ts` file, a fixture or golden, or a proof-of-work
@@ -153,6 +160,17 @@ export function renderedText(text) {
  * section and the gate would report a clean file because it could no longer see them. A fence
  * opened at column 0 is a top-level code block and keeps the standard behavior, so a sample
  * that legitimately shows a release heading is still treated as sample content.
+ *
+ * KNOWN LIMITATION, accepted rather than fixed: that deviation misreads one shape. An
+ * indented fence whose CONTENT is written at column 0 — the fence markers indented into a
+ * list item, the sample lines not — ends at the first sample line that looks like a heading,
+ * and the gate then audits that line as a real second section, reporting `duplicate-section`.
+ * Both audits inherit it, since both read this one parser; it is not specific to
+ * `## [Unreleased]`. Repairing it means giving up the column-0 escape above, and the failure
+ * that escape prevents — one stray fence blinding the gate to every later release section —
+ * is far worse than a false positive on a malformed sample. The correctly indented form
+ * (markers AND content indented to the item's content column) parses cleanly and is pinned by
+ * test; write samples that way.
  */
 function scanLines(markdown) {
   const raw = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -196,7 +214,9 @@ export function listReleaseVersions(markdown) {
 }
 
 /**
- * Locate the section for `version` and return its entries with 1-based source line numbers.
+ * Aggregate entries and unattributed text from the body of a section, starting after the
+ * heading line at `start`. Shared by every section extractor — per-version and Unreleased
+ * alike — because this is the subtle part and must exist exactly once.
  *
  * An entry is one top-level list item plus everything that belongs to it — continuation
  * lines, lazy continuations, later paragraphs of the same item, nested bullets at any depth,
@@ -215,26 +235,8 @@ export function listReleaseVersions(markdown) {
  * silently ignoring a line the parser does not understand is how a scanner becomes a rubber
  * stamp. Blocks that render nothing — link reference definitions, HTML comments — are not
  * visible text and are skipped.
- *
- * `## [Unreleased]` is never a target: callers pass a concrete version, and a caller that
- * passes `"Unreleased"` gets `found: false` like any other absent section.
  */
-export function extractReleaseSection(markdown, version) {
-  const lines = scanLines(markdown);
-  const headingLines = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i].fenced) continue;
-    const match = RELEASE_HEADING.exec(lines[i].text);
-    if (match && match.groups.version === version && version !== "Unreleased") headingLines.push(i);
-  }
-
-  if (headingLines.length === 0) return { found: false, version };
-
-  const start = headingLines[0];
-  const heading = lines[start].text;
-  const dated = DATED_HEADING_TAIL.test(RELEASE_HEADING.exec(heading).groups.rest);
-
+function collectSectionBody(lines, start) {
   const entries = [];
   const unattributed = [];
   let current = null;
@@ -295,6 +297,38 @@ export function extractReleaseSection(markdown, version) {
   }
   close();
 
+  return { entries, unattributed };
+}
+
+/** Locate every non-fenced `## [...]` heading line whose match satisfies `predicate`. */
+function locateHeadingLines(lines, predicate) {
+  const headingLines = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].fenced) continue;
+    const match = RELEASE_HEADING.exec(lines[i].text);
+    if (match && predicate(match)) headingLines.push(i);
+  }
+  return headingLines;
+}
+
+/**
+ * Locate the section for `version` and return its entries with 1-based source line numbers.
+ *
+ * `## [Unreleased]` is never a target: callers pass a concrete version, and a caller that
+ * passes `"Unreleased"` gets `found: false` like any other absent section. Use
+ * `extractUnreleasedSection` for that heading.
+ */
+export function extractReleaseSection(markdown, version) {
+  const lines = scanLines(markdown);
+  const headingLines = locateHeadingLines(lines, (match) => match.groups.version === version && version !== "Unreleased");
+
+  if (headingLines.length === 0) return { found: false, version };
+
+  const start = headingLines[0];
+  const heading = lines[start].text;
+  const dated = DATED_HEADING_TAIL.test(RELEASE_HEADING.exec(heading).groups.rest);
+  const { entries, unattributed } = collectSectionBody(lines, start);
+
   return {
     found: true,
     version,
@@ -304,6 +338,62 @@ export function extractReleaseSection(markdown, version) {
     dated,
     entries,
     unattributed,
+  };
+}
+
+/**
+ * Locate `## [Unreleased]` and return its entries the same way `extractReleaseSection` does
+ * for a dated version, sharing the same body-parsing helper so the two can never diverge.
+ * There is no `version` or `dated` field: Unreleased carries neither.
+ */
+export function extractUnreleasedSection(markdown) {
+  const lines = scanLines(markdown);
+  const headingLines = locateHeadingLines(lines, (match) => match.groups.version === "Unreleased");
+
+  if (headingLines.length === 0) return { found: false };
+
+  const start = headingLines[0];
+  const heading = lines[start].text;
+  const { entries, unattributed } = collectSectionBody(lines, start);
+
+  return {
+    found: true,
+    heading,
+    headingLine: start + 1,
+    duplicateHeadingLines: headingLines.slice(1).map((i) => i + 1),
+    entries,
+    unattributed,
+  };
+}
+
+/**
+ * Findings shared by every section audit, dated or not: a repeated heading and visible text
+ * that belongs to no entry are structural defects independent of release maturity.
+ */
+function duplicateHeadingFindings(duplicateHeadingLines, label) {
+  return duplicateHeadingLines.map((line) => ({
+    kind: "duplicate-section",
+    line,
+    detail: `"## [${label}]" appears more than once. Only the first is audited, so a second heading hides everything under it.`,
+  }));
+}
+
+function unattributedTextFindings(unattributed) {
+  return unattributed.map((line) => ({
+    kind: "unattributed-text",
+    line: line.line,
+    detail: `visible text that belongs to no entry: ${JSON.stringify(line.text.slice(0, 60))}. The gate audits entries, so text outside one would ship unchecked.`,
+  }));
+}
+
+/** An `empty-entry` finding for `entry`, or `null` when it has visible text. Shared for the same reason as above. */
+function emptyEntryFinding(entry) {
+  const rendered = renderedText(entry.text);
+  if (entry.text.trim() !== "" && rendered.trim() !== "") return null;
+  return {
+    kind: "empty-entry",
+    line: entry.line,
+    detail: "a list item with no visible text. An entry that says nothing to the reader does not belong in a release section.",
   };
 }
 
@@ -318,13 +408,7 @@ export function auditReleaseSection(section) {
 
   const findings = [];
 
-  for (const line of section.duplicateHeadingLines) {
-    findings.push({
-      kind: "duplicate-section",
-      line,
-      detail: `"## [${section.version}]" appears more than once. Only the first is audited, so a second heading hides everything under it.`,
-    });
-  }
+  findings.push(...duplicateHeadingFindings(section.duplicateHeadingLines, section.version));
 
   if (!section.dated) {
     findings.push({
@@ -334,13 +418,7 @@ export function auditReleaseSection(section) {
     });
   }
 
-  for (const line of section.unattributed) {
-    findings.push({
-      kind: "unattributed-text",
-      line: line.line,
-      detail: `visible text that belongs to no entry: ${JSON.stringify(line.text.slice(0, 60))}. The gate audits entries, so text outside one would ship unchecked.`,
-    });
-  }
+  findings.push(...unattributedTextFindings(section.unattributed));
 
   if (section.entries.length === 0) {
     findings.push({
@@ -351,17 +429,13 @@ export function auditReleaseSection(section) {
   }
 
   for (const entry of section.entries) {
-    const rendered = renderedText(entry.text);
-
-    if (entry.text.trim() === "" || rendered.trim() === "") {
-      findings.push({
-        kind: "empty-entry",
-        line: entry.line,
-        detail: "a list item with no visible text. An entry that says nothing to the reader does not belong in a release section.",
-      });
+    const emptyFinding = emptyEntryFinding(entry);
+    if (emptyFinding) {
+      findings.push(emptyFinding);
       continue;
     }
 
+    const rendered = renderedText(entry.text);
     for (const marker of FORBIDDEN_MARKERS) {
       const hit = marker.pattern.exec(entry.text) ?? marker.pattern.exec(rendered);
       if (!hit) continue;
@@ -398,6 +472,52 @@ export function auditChangelog(markdown, version) {
   };
 }
 
+/**
+ * Audit one extracted `## [Unreleased]` section for the checks that do not depend on
+ * release maturity: a duplicated heading, visible text belonging to no entry, and an entry
+ * with no visible text.
+ *
+ * Deliberately excluded, and this is the point of having a separate function rather than
+ * calling `auditReleaseSection`: `undated-section` (Unreleased is never dated), `empty-section`
+ * (Unreleased is legitimately empty right after a release cut), every `FORBIDDEN_MARKERS`
+ * check, and `oversized-entry`. Those four assume a section has already been rewritten for a
+ * reader with no access to this repository — a rule that applies only once a section is cut
+ * into a dated release (AGENTS.md → CHANGELOG Content Rules). Applying them here would fail
+ * on ordinary, legitimate work-log entries.
+ *
+ * A missing `## [Unreleased]` heading is not reported either, and that is a judgement call
+ * rather than an oversight. The heading is kept present and empty between releases by
+ * convention, so its absence is a real defect — but a `missing-section` finding is a NEW
+ * rule, not one of the three structural checks above, and adding a rule that can fail a
+ * release under cover of a refactor is how a gate acquires behavior nobody agreed to. If it
+ * is wanted, it should be added deliberately and with its own test, not inherited here.
+ */
+export function auditUnreleasedSection(section) {
+  if (!section.found) return [];
+
+  const findings = [];
+  findings.push(...duplicateHeadingFindings(section.duplicateHeadingLines, "Unreleased"));
+  findings.push(...unattributedTextFindings(section.unattributed));
+
+  for (const entry of section.entries) {
+    const emptyFinding = emptyEntryFinding(entry);
+    if (emptyFinding) findings.push(emptyFinding);
+  }
+
+  return findings;
+}
+
+/** Audit `markdown`'s `## [Unreleased]` section. `ok` is the gate verdict. */
+export function auditUnreleased(markdown) {
+  const section = extractUnreleasedSection(markdown);
+  const findings = auditUnreleasedSection(section);
+  return {
+    ok: findings.length === 0,
+    entryCount: section.found ? section.entries.length : 0,
+    findings,
+  };
+}
+
 /** Render an audit result as the text the author reads. */
 export function renderReport(result, { file = "CHANGELOG.md" } = {}) {
   if (result.ok) {
@@ -416,6 +536,30 @@ export function renderReport(result, { file = "CHANGELOG.md" } = {}) {
     const where = finding.line === undefined ? file : `${file}:${finding.line}`;
     const matched = finding.matched === undefined ? "" : ` (\`${finding.matched}\`)`;
     lines.push(`  ${where} — ${finding.kind}${matched}`);
+    lines.push(`    ${finding.detail}`);
+  }
+
+  return lines.join("\n");
+}
+
+/** Render an Unreleased audit result as the text the author reads. Same style as `renderReport`. */
+export function renderUnreleasedReport(result, { file = "CHANGELOG.md" } = {}) {
+  if (result.ok) {
+    return `changelog gate: ${file} "## [Unreleased]" passed (${result.entryCount} entries).`;
+  }
+
+  const lines = [
+    `changelog gate: ${file} "## [Unreleased]" FAILED with ${result.findings.length} finding(s).`,
+    "",
+    "These are structural defects, not release-maturity ones: Unreleased may carry work-log",
+    "detail freely, but a duplicated heading, text outside any entry, or an empty bullet is",
+    "wrong regardless of maturity.",
+    "",
+  ];
+
+  for (const finding of result.findings) {
+    const where = finding.line === undefined ? file : `${file}:${finding.line}`;
+    lines.push(`  ${where} — ${finding.kind}`);
     lines.push(`    ${finding.detail}`);
   }
 

@@ -2,10 +2,17 @@
 /**
  * Runner for the release CHANGELOG gate.
  *
- * Audits the dated `CHANGELOG.md` section matching the current `package.json` version — the
- * section a release commit has just cut — and exits non-zero on any finding. Policy and
- * rendering live in `scripts/changelog-release-gate.mjs`; this file owns I/O and the exit
- * code only.
+ * Runs two audits over `CHANGELOG.md` and exits non-zero on any finding from either:
+ *
+ *  1. The release-maturity audit of a DATED section — by default the one matching the current
+ *     `package.json` version, the section a release commit has just cut. The flags below
+ *     choose which dated sections it covers.
+ *  2. A structural audit of `## [Unreleased]` — duplicated heading, text outside any entry,
+ *     empty bullet — which runs on EVERY invocation and is not selectable by any flag, so no
+ *     mode can bypass it. The release-maturity checks are deliberately not applied there.
+ *
+ * Policy and rendering live in `scripts/changelog-release-gate.mjs`; this file owns I/O and
+ * the exit code only.
  *
  * Usage:
  *   node scripts/check-changelog.mjs                 # audit the current package version
@@ -17,7 +24,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { auditChangelog, listReleaseVersions, renderReport } from "./changelog-release-gate.mjs";
+import {
+  auditChangelog,
+  auditUnreleased,
+  listReleaseVersions,
+  renderReport,
+  renderUnreleasedReport
+} from "./changelog-release-gate.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const changelogPath = join(repoRoot, "CHANGELOG.md");
@@ -90,6 +103,15 @@ async function main(argv) {
 
   const markdown = await readFile(changelogPath, "utf8");
 
+  // Structural checks on `## [Unreleased]` — a duplicated heading, text outside any entry, an
+  // empty bullet — run on every invocation, in every mode below, so no caller can bypass them
+  // by picking a mode. Release-maturity checks (forbidden markers, length, undated/empty
+  // section) do not apply here; see auditUnreleasedSection in changelog-release-gate.mjs.
+  let failed = false;
+  const unreleasedResult = auditUnreleased(markdown);
+  if (!unreleasedResult.ok) failed = true;
+  console[unreleasedResult.ok ? "log" : "error"](renderUnreleasedReport(unreleasedResult));
+
   let versions;
   if (args.all) {
     versions = listReleaseVersions(markdown);
@@ -104,7 +126,6 @@ async function main(argv) {
     versions = [pkg.version];
   }
 
-  let failed = false;
   for (const version of versions) {
     const result = auditChangelog(markdown, version);
     if (!result.ok) failed = true;

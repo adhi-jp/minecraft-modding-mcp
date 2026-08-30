@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- The CHANGELOG gate now also audits `## [Unreleased]` for structural defects — a duplicated heading, visible text sitting outside any entry, an empty bullet — in every invocation mode of `check-changelog.mjs`. The release-maturity rules deliberately still do not apply there: an Unreleased entry may carry internal references and run past the length ceiling, because that detail is expected to survive only until the section is cut into a dated release. Previously nothing under `## [Unreleased]` was audited at all, so a structural defect stayed invisible to CI until release day.
+
 ### Fixed
 
 - `search-class-source`, `get-artifact-file`, `list-artifact-files`, and `index-artifact` now accept a top-level `projectPath` parameter, matching `find-class`. Previously, a `target.kind="workspace"` or unversioned `target.kind="dependency"` call to these 4 tools was rejected with an error asking the caller to supply `projectPath`, but the tools' schemas had no such field to pass it through, making the error's own advice impossible to follow.

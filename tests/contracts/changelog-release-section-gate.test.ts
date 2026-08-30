@@ -10,7 +10,9 @@ import {
   RELEASE_ENTRY_MAX_CHARS,
   auditChangelog,
   auditReleaseSection,
+  auditUnreleased,
   extractReleaseSection,
+  extractUnreleasedSection,
   listReleaseVersions,
   renderReport
 } from "../../scripts/changelog-release-gate.mjs";
@@ -404,4 +406,182 @@ test("both workflows run the gate, and the gate workflow watches the files that 
   for (const watched of ["scripts/**", ".github/workflows/**"]) {
     assert.ok(ci.includes(`'${watched}'`), `ci.yml must trigger on ${watched} so these tests stay reachable`);
   }
+});
+
+/**
+ * Contract for the Unreleased structural audit.
+ *
+ * `## [Unreleased]` is exempt from the release-maturity content rules (forbidden markers,
+ * the length ceiling, undated-section, empty-section) — see the "work-log detail under
+ * Unreleased is not audited" test above, which this audit must not disturb. But it is not
+ * exempt from structural defects that are independent of maturity: a duplicated heading, text
+ * that belongs to no entry, and an entry with no visible text break the document the same way
+ * regardless of which section they sit under.
+ */
+
+function unreleasedFixture(body: string): string {
+  return ["# Changelog", "", "## [Unreleased]", "", body, "", "## [9.9.9] - 2026-01-01", "", "- Older entry.", ""].join(
+    "\n"
+  );
+}
+
+test("the Unreleased audit fires on a duplicated '## [Unreleased]' heading", () => {
+  const markdown = ["# Changelog", "", "## [Unreleased]", "", "- ok", "", "## [Unreleased]", "", "- also ok", ""].join(
+    "\n"
+  );
+
+  const result = auditUnreleased(markdown);
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some((finding) => finding.kind === "duplicate-section"));
+});
+
+test("the Unreleased audit fires on visible text that belongs to no entry", () => {
+  const result = auditUnreleased(unreleasedFixture("This paragraph belongs to no entry."));
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some((finding) => finding.kind === "unattributed-text"));
+});
+
+test("the Unreleased audit fires on an empty bullet", () => {
+  const result = auditUnreleased(unreleasedFixture("-"));
+  assert.equal(result.ok, false);
+  assert.ok(result.findings.some((finding) => finding.kind === "empty-entry"));
+});
+
+test("the Unreleased audit does not fire on a long, internal-reference-laden entry", () => {
+  // Regression guard: this is exactly the shape that would fail the release-maturity checks
+  // (oversized-entry, internal-reference) if they were mistakenly applied to Unreleased.
+  const longEntry = `- Root cause in \`src/storage/sqlite.ts\`. Verification: \`tests/storage/sqlite.test.ts\`. ${"a".repeat(
+    RELEASE_ENTRY_MAX_CHARS + 200
+  )}`;
+  assert.ok(longEntry.length > RELEASE_ENTRY_MAX_CHARS);
+
+  const result = auditUnreleased(unreleasedFixture(longEntry));
+  assert.deepEqual(result.findings, []);
+  assert.equal(result.ok, true);
+});
+
+test("the repository's real CHANGELOG.md Unreleased section passes the new audit", async () => {
+  const markdown = await readFile(CHANGELOG_PATH, "utf8");
+
+  const result = auditUnreleased(markdown);
+
+  assert.equal(result.ok, true, JSON.stringify(result.findings));
+});
+
+test("check-changelog.mjs audits Unreleased in every invocation mode, not only one", async () => {
+  const run = async (args: string[]) => {
+    try {
+      const { stdout } = await execFileAsync("node", ["scripts/check-changelog.mjs", ...args], { cwd: REPO_ROOT });
+      return { code: 0, output: stdout };
+    } catch (error) {
+      const failure = error as { code?: number; stdout?: string; stderr?: string };
+      return { code: failure.code ?? 1, output: `${failure.stdout ?? ""}${failure.stderr ?? ""}` };
+    }
+  };
+
+  for (const args of [[], ["--version", "6.3.0"], ["--all"]]) {
+    const result = await run(args);
+    assert.match(
+      result.output,
+      /"## \[Unreleased\]"/,
+      `${args.join(" ") || "(default)"} did not report on the Unreleased audit`
+    );
+  }
+});
+
+test("extractUnreleasedSection never targets a dated version, only the literal heading", () => {
+  const markdown = unreleasedFixture("- ok");
+  assert.equal(extractUnreleasedSection(markdown).found, true);
+  assert.equal(extractReleaseSection(markdown, "Unreleased").found, false);
+});
+
+/**
+ * Run the REAL runner script against a synthetic CHANGELOG.
+ *
+ * The runner resolves its CHANGELOG and package.json from its own location, so the only way
+ * to feed it a fixture is to stand up a throwaway repository around a copy of it. Copying —
+ * rather than re-implementing the wiring in the test — is what makes the exit status below
+ * evidence about the shipped script.
+ */
+async function runGateOnFixture(changelog: string, args: string[]): Promise<{ code: number; output: string }> {
+  const { copyFile, mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const root = await mkdtemp(join(tmpdir(), "changelog-gate-fixture-"));
+  await mkdir(join(root, "scripts"));
+  for (const script of ["check-changelog.mjs", "changelog-release-gate.mjs"]) {
+    await copyFile(join(REPO_ROOT, "scripts", script), join(root, "scripts", script));
+  }
+  await writeFile(join(root, "CHANGELOG.md"), changelog);
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "changelog-gate-fixture", version: "9.9.9" }));
+
+  const script = join(root, "scripts", "check-changelog.mjs");
+  try {
+    const { stdout, stderr } = await execFileAsync("node", [script, ...args]);
+    return { code: 0, output: `${stdout}${stderr}` };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: failure.code ?? 1, output: `${failure.stdout ?? ""}${failure.stderr ?? ""}` };
+  }
+}
+
+/**
+ * The test above proves the Unreleased audit is REPORTED in every mode. Reporting is not
+ * gating: delete the one line in the runner that folds the Unreleased verdict into the
+ * failure state and that test stays green while every mode goes non-blocking — the whole
+ * feature silently bypassed. This one pins the exit status instead, so that deletion fails.
+ */
+test("check-changelog.mjs exits non-zero when the only defect is in Unreleased", async () => {
+  const dated = ["## [9.9.9] - 2026-01-01", "", "- Fixed a thing users can see.", ""];
+  const clean = ["# Changelog", "", "## [Unreleased]", "", "- A fine entry.", "", ...dated].join("\n");
+  const defective = ["# Changelog", "", "## [Unreleased]", "", "-", "", "- A fine entry.", "", ...dated].join("\n");
+
+  // Control: the same fixture minus the empty bullet must PASS. Without it a non-zero exit
+  // below would prove only that the fixture was broken somewhere, not that Unreleased gates.
+  const control = await runGateOnFixture(clean, []);
+  assert.equal(control.code, 0, `the control fixture must pass:\n${control.output}`);
+
+  for (const args of [[], ["--version", "9.9.9"], ["--all"]]) {
+    const result = await runGateOnFixture(defective, args);
+    assert.equal(
+      result.code,
+      1,
+      `${args.join(" ") || "(default)"} must FAIL on an Unreleased-only defect, not merely report it:\n${result.output}`
+    );
+    assert.match(result.output, /empty-entry/, "the failure must be the Unreleased finding, not something else");
+  }
+});
+
+/**
+ * The parser reads one shared `scanLines`, so a fenced sample of a release heading must stay
+ * sample content for BOTH audits. Pinned because the alternative — a sample line read as a
+ * real heading — reports a `duplicate-section` the author cannot act on, and because the
+ * fence rule carries a known false positive on the MALFORMED variant (content at column 0
+ * under indented markers; see `scanLines`). This is the correct, common form, and it is the
+ * one that must never drift.
+ */
+test("a correctly indented fenced sample of a release heading stays sample content in both audits", () => {
+  const markdown = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "- Documented the heading shape a release cut produces:",
+    "",
+    "  ```md",
+    "  ## [Unreleased]",
+    "  ## [9.9.9] - 2026-01-01",
+    "  ```",
+    "",
+    "## [9.9.9] - 2026-01-01",
+    "",
+    "- Fixed a thing users can see.",
+    ""
+  ].join("\n");
+
+  assert.deepEqual(auditUnreleased(markdown).findings, []);
+  assert.deepEqual(auditChangelog(markdown, "9.9.9").findings, []);
+  // The fenced headings must not register as sections either, or `--all` would audit one.
+  assert.deepEqual(listReleaseVersions(markdown), ["9.9.9"]);
 });
