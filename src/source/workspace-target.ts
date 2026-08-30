@@ -10,7 +10,7 @@ import type {
   WorkspaceResolutionProvenance,
   WorkspaceTargetInput
 } from "../types.js";
-import { isSafeMavenVersionToken } from "../workspace-mapping-service.js";
+import { describeSafeMavenSegmentRule, isSafeMavenSegment } from "../maven-token.js";
 import type { WorkspaceContext } from "../workspace-context-cache.js";
 import type { ResolveArtifactInput } from "../source-service.js";
 import { normalizeMapping } from "./shared-utils.js";
@@ -199,27 +199,44 @@ export async function synthesizeDependencyTarget(
       }
     });
   }
-  if (
-    group.includes("/") ||
-    group.includes("\\") ||
-    group.includes("..") ||
-    group.includes("\0") ||
-    name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("..") ||
-    name.includes("\0")
-  ) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: 'target.kind="dependency" group/name must not contain path traversal characters.',
-      details: {
-        fieldErrors: [{ path: "target", message: "group and name must not contain '/', '\\', '..', or NUL." }]
-      }
-    });
+  // The chokepoint for this route is HERE, not at the coordinate synthesised
+  // further down, because a dependency without an explicit version reaches a
+  // filesystem sink first: `detectDependencyVersion` builds
+  // `<gradle-home>/caches/modules-2/files-2.1/<group>/<name>` and reads it, and
+  // the entry names it finds come back to the caller in `candidatesSeen`. A
+  // later coordinate rejection cannot undo a directory that has already been
+  // listed.
+  //
+  // The character list this check used to carry - `/`, `\`, `..`, NUL - is not
+  // enough for that sink. `group="D:"` with `name="."` contains none of them,
+  // yet `path.resolve(gradleRoot, ..., "D:", ".")` is drive-relative on Windows
+  // and lands outside the Gradle cache root entirely. The shared segment rule
+  // is an allowlist, so it refuses `D:` for the colon and `.` for the leading
+  // dot, and it does so on every platform - which matters here because this
+  // project's CI never runs on the one platform where that path shape bites.
+  const identifierSegments = [
+    ["groupId", "target.group", "group", group],
+    ["artifactId", "target.name", "name", name]
+  ] as const;
+  for (const [component, path, label, value] of identifierSegments) {
+    if (!isSafeMavenSegment(value, component)) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: 'target.kind="dependency" group and name must be safe Maven coordinate segments.',
+        details: {
+          fieldErrors: [{ path, message: describeSafeMavenSegmentRule(component, label) }]
+        }
+      });
+    }
   }
 
   if (dep.version) {
-    if (!isSafeMavenVersionToken(dep.version)) {
+    // Trimmed BEFORE it is validated, exactly as `parseCoordinate` trims each
+    // segment before checking it. Validating first made `" 1.0 "` an error on
+    // this route and a resolvable coordinate on the other one, for the same
+    // artifact.
+    const version = dep.version.trim();
+    if (!isSafeMavenSegment(version, "version")) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
         message: 'target.kind="dependency" version must be a safe Maven coordinate segment.',
@@ -227,14 +244,13 @@ export async function synthesizeDependencyTarget(
           fieldErrors: [
             {
               path: "target.version",
-              message:
-                "version must contain only [A-Za-z0-9._+-] characters, must not start with '.', and must not include '..'."
+              message: describeSafeMavenSegmentRule("version")
             }
           ]
         }
       });
     }
-    const coordinate = `${group}:${name}:${dep.version}`;
+    const coordinate = `${group}:${name}:${version}`;
     return {
       target: { kind: "coordinate", value: coordinate },
       requestedMapping: input.mapping ? normalizeMapping(input.mapping) : undefined,
@@ -242,7 +258,7 @@ export async function synthesizeDependencyTarget(
       provenance: {
         group,
         name,
-        resolvedVersion: dep.version,
+        resolvedVersion: version,
         source: "explicit",
         cacheHit: false
       }

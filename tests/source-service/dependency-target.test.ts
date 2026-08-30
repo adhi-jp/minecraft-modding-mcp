@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
+import { parseCoordinate } from "../../src/maven-resolver.ts";
 import { SourceService } from "../../src/source-service.ts";
 import { createWorkspaceContextCache } from "../../src/workspace-context-cache.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
@@ -945,4 +946,119 @@ test("get-class-members reports unknown minecraftVersion for a dependency jar na
   assert.equal(result.context.minecraftVersion, "unknown");
   assert.notEqual(result.context.minecraftVersion, "2.1");
   assert.ok(result.counts.total > 0, "expected members to be read from the dependency jar");
+});
+
+// --- group/name validation runs before the version probe ---------------------
+
+type ProbeSpyService = AnySourceService & {
+  workspaceMappingService: {
+    detectDependencyVersion: (projectPath: string, group: string, name: string) => Promise<unknown>;
+  };
+};
+
+test("synthesizeDependencyTarget refuses an unsafe group/name BEFORE the version probe runs", async () => {
+  // The finding this pins: a `dependency` target without an explicit version
+  // reaches `detectDependencyVersion` - which builds
+  // `<gradle-home>/caches/modules-2/files-2.1/<group>/<name>` and lists it -
+  // BEFORE the coordinate it will synthesise is ever parsed. Rejecting the
+  // coordinate afterwards cannot un-read a directory, and the entry names that
+  // listing found travel back to the caller in `candidatesSeen`.
+  //
+  // So the assertion is not "an error was raised" but "the probe was never
+  // called". The stub below is the only thing on this route that touches the
+  // filesystem for the cache, so a call count of zero is the absence of the
+  // read itself.
+  const host = await makeHost();
+  const project = await mkdtemp(join(tmpdir(), "dep-target-probe-order-"));
+  const service = new SourceService(
+    buildTestConfig(host),
+    undefined,
+    { workspaceContextCache: createWorkspaceContextCache() }
+  ) as unknown as ProbeSpyService;
+
+  let probes: Array<[string, string]> = [];
+  service.workspaceMappingService = {
+    detectDependencyVersion: async (_projectPath: string, group: string, name: string) => {
+      probes.push([group, name]);
+      return { resolved: true, version: "1.0.0", source: "stub", candidatesSeen: [], attempts: [] };
+    }
+  };
+
+  // Control first: a well-formed dependency DOES reach the probe, so a count of
+  // zero below means the guard stopped it and not that the route never probes.
+  await service.synthesizeDependencyTarget(
+    { target: { kind: "dependency" }, projectPath: project },
+    { kind: "dependency", group: "dev.architectury", name: "architectury" }
+  );
+  assert.deepEqual(probes, [["dev.architectury", "architectury"]], "control: the probe must run for a valid dependency");
+
+  probes = [];
+  const hostile: ReadonlyArray<readonly [string, string]> = [
+    // Neither of these carries '/', '\\', '..' or NUL - the exact characters
+    // the old blocklist named - yet `path.resolve(root, ..., "D:", ".")` is
+    // drive-relative on Windows and lands off the cache root.
+    ["D:", "."],
+    ["C:", "lib"],
+    ["g.example", "."],
+    [".hidden", "lib"],
+    ["g.example", ".config"],
+    // A colon would also break the `group:name:version` coordinate this route
+    // synthesises, so it was never a usable input either way.
+    ["g:x", "lib"],
+    ["g example", "lib"],
+    ["g.example", "lib name"],
+    ["g x", "lib"],
+    ["../etc", "passwd"]
+  ];
+
+  for (const [group, name] of hostile) {
+    await assert.rejects(
+      () =>
+        service.synthesizeDependencyTarget(
+          { target: { kind: "dependency" }, projectPath: project },
+          { kind: "dependency", group, name }
+        ),
+      (err: Error & { code?: string; details?: { fieldErrors?: Array<{ path?: string }> } }) => {
+        assert.equal(err.code, ERROR_CODES.INVALID_INPUT);
+        assert.ok(
+          ["target.group", "target.name"].includes(err.details?.fieldErrors?.[0]?.path ?? ""),
+          `the error must name the offending field for ${JSON.stringify([group, name])}`
+        );
+        return true;
+      },
+      `expected reject for ${JSON.stringify([group, name])}`
+    );
+  }
+
+  assert.deepEqual(probes, [], "no filesystem probe may run on behalf of a rejected group/name");
+});
+
+test("synthesizeDependencyTarget trims an explicit version before validating it", async () => {
+  // The routes disagreed here: `parseCoordinate` trims each segment and then
+  // checks it, while this route checked first, so `" 1.0 "` named the same
+  // artifact on one route and was an error on the other.
+  const host = await makeHost();
+  const service = new SourceService(buildTestConfig(host)) as unknown as AnySourceService;
+
+  const padded = (await service.synthesizeDependencyTarget(
+    { target: { kind: "dependency" } },
+    { kind: "dependency", group: "dev.architectury", name: "architectury", version: "  13.0.0  " }
+  )) as { target: { value: string }; provenance: { resolvedVersion: string } };
+
+  assert.equal(padded.target.value, "dev.architectury:architectury:13.0.0");
+  assert.equal(padded.provenance.resolvedVersion, "13.0.0");
+
+  // And the space allowance is shared with the coordinate route, so a published
+  // Yarn pre-release build resolves from either direction.
+  const spaced = (await service.synthesizeDependencyTarget(
+    { target: { kind: "dependency" } },
+    { kind: "dependency", group: "net.fabricmc", name: "yarn", version: "1.14 Pre-Release 1+build.10" }
+  )) as { target: { value: string } };
+
+  assert.equal(spaced.target.value, "net.fabricmc:yarn:1.14 Pre-Release 1+build.10");
+  assert.equal(
+    parseCoordinate(spaced.target.value).version,
+    "1.14 Pre-Release 1+build.10",
+    "the coordinate this route synthesises must survive the parser it is handed to"
+  );
 });

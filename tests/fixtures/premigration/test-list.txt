@@ -970,7 +970,7 @@
 0	ok	getRequestContext returns undefined outside a request context
 0	ok	getSignature opens the jar once for the whole inheritance hierarchy
 0	ok	getSignature throw is captured into status, not propagated
-0	ok	groupToPath collapses empty segments in groupId (a..b → a/b)
+0	ok	parseCoordinate rejects a..b as a groupId, and groupToPath still collapses empty segments
 0	ok	hasExistingJar returns true only for existing regular files
 0	ok	headerless garbage exceeding the frame limit is rejected and the reader recovers
 0	ok	ignores blank and whitespace-only keys instead of creating map entries

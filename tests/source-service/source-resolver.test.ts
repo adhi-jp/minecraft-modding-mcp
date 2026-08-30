@@ -4,12 +4,16 @@ import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES, isAppError } from "../../src/errors.ts";
+import type { MavenCoordinate } from "../../src/maven-resolver.ts";
 import { defaultDownloadPath, downloadSidecarPath } from "../../src/repo-downloader.ts";
-import { resolveSourceTarget } from "../../src/source-resolver.ts";
+import {
+  localM2CoordinateCandidatePaths,
+  resolveSourceTarget
+} from "../../src/source-resolver.ts";
 import { mapErrorToProblem } from "../../src/tool-guidance.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
@@ -1699,4 +1703,246 @@ test("resolveSourceTarget keeps the most recent failure when none of them is act
   const problem = mapErrorToProblem(caught, "req-download-recency");
   assert.equal(problem.hints, undefined);
   assert.equal(problem.context?.repoFailureCode, undefined);
+});
+
+test("localM2CoordinateCandidatePaths keeps every candidate under the local repository root", () => {
+  // Driven with a hand-built coordinate, deliberately BYPASSING parseCoordinate:
+  // the point is that the path builder is safe on its own, not that the input
+  // filter in front of it happens to catch these shapes. A groupId of `.`, `..`
+  // or `.a` converted the naive way (`replace(/\./g, "/")`) yields `/`, `//` and
+  // `/a` - absolute paths, which `path.resolve` honours by throwing the
+  // repository root away.
+  //
+  // `MavenCoordinate` is a structural type with no runtime brand, so being
+  // exported makes this a deep-import surface that cannot assume its argument
+  // was parsed. Every one of the four segments is therefore driven hostile
+  // here, not just the group: the artifactId and version become directory
+  // components, and all three of artifactId, version and classifier are
+  // concatenated into the file name, so `../` in any of them is an escape.
+  const localM2Path = resolvePath("/tmp/mcp-containment-fixture/m2");
+  const escapes = ["..", "../..", "../../etc", "a/../..", "/etc", ".", ".a", "a..b", "a/b", "a\\b"];
+
+  const hostileCoordinates: MavenCoordinate[] = [];
+  for (const value of escapes) {
+    hostileCoordinates.push(
+      { groupId: value, artifactId: "art", version: "1.0" },
+      { groupId: value, artifactId: "art", version: "1.0", classifier: "client" },
+      { groupId: "g", artifactId: value, version: "1.0" },
+      { groupId: "g", artifactId: value, version: "1.0", classifier: "client" },
+      { groupId: "g", artifactId: "art", version: value },
+      { groupId: "g", artifactId: "art", version: value, classifier: "client" },
+      { groupId: "g", artifactId: "art", version: "1.0", classifier: value }
+    );
+  }
+
+  let contained = 0;
+  let refused = 0;
+  for (const parsed of hostileCoordinates) {
+    const label = JSON.stringify(parsed);
+    let built: ReturnType<typeof localM2CoordinateCandidatePaths>;
+    try {
+      built = localM2CoordinateCandidatePaths(localM2Path, parsed);
+    } catch (error) {
+      // Failing closed is the other acceptable answer: what must never happen
+      // is a path outside the root coming BACK, because the caller would then
+      // stat and open it.
+      assert.equal((error as { code?: string }).code, ERROR_CODES.INVALID_INPUT, label);
+      refused += 1;
+      continue;
+    }
+
+    const produced = [
+      ...built.sourceJarPaths,
+      built.exactBinaryJarPath,
+      ...built.fallbackBinaryJarPaths
+    ];
+    assert.ok(produced.length >= 3, `every leg must contribute a candidate to check: ${label}`);
+    for (const candidate of produced) {
+      assert.ok(
+        candidate.startsWith(`${localM2Path}${sep}`),
+        `${label} escaped the repository root: ${candidate}`
+      );
+    }
+    contained += 1;
+  }
+
+  // Both outcomes must actually occur, or this test could pass by never
+  // exercising one of the two branches.
+  assert.ok(contained > 0, "some hostile shapes must still build contained paths");
+  assert.ok(refused > 0, "some hostile shapes must be refused outright");
+
+  // A sibling directory whose name merely starts with the root's is not a
+  // child, and the containment check must not be fooled into calling it one.
+  assert.throws(
+    () =>
+      localM2CoordinateCandidatePaths(localM2Path, {
+        groupId: "g",
+        artifactId: "..",
+        version: `..${sep}m2-evil`
+      }),
+    (error: any) => {
+      assert.equal(error.code, ERROR_CODES.INVALID_INPUT);
+      return true;
+    }
+  );
+
+  // The well-formed case is unaffected: it still lands exactly where the ~/.m2
+  // layout says it should.
+  const ok = localM2CoordinateCandidatePaths(localM2Path, {
+    groupId: "net.fabricmc",
+    artifactId: "yarn",
+    version: "1.14 Pre-Release 1+build.10",
+    classifier: "v2"
+  });
+  assert.equal(
+    ok.sourceJarPaths[0],
+    resolvePath(
+      localM2Path,
+      "net/fabricmc/yarn/1.14 Pre-Release 1+build.10",
+      "yarn-1.14 Pre-Release 1+build.10-v2-sources.jar"
+    )
+  );
+});
+
+test("resolveSourceTarget(targetKind=coordinate) skips a corrupt ~/.m2 sources jar for the readable Gradle cache one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-m2-sources-corrupt-"));
+  const gradleUserHome = join(root, "gradle-home");
+
+  // ~/.m2 is consulted first. Before the candidate sites were guarded, the throw
+  // from opening this file escaped resolveSourceTarget entirely, so the Gradle
+  // cache, the remote legs and the decompile branch were never reached.
+  const corruptM2SourcesJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "rescued",
+    "1.0",
+    "rescued-1.0-sources.jar"
+  );
+  await writeUnreadableJar(corruptM2SourcesJarPath, Buffer.from("this is not a zip archive", "utf8"));
+
+  const gradleSourcesJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "rescued",
+    "1.0",
+    "rescued-1.0-sources.jar"
+  );
+  await createJar(gradleSourcesJarPath, {
+    "com/example/Rescued.java": ["package com.example;", "public class Rescued {}"].join("\n")
+  });
+
+  let remoteFetches = 0;
+  const fetchStub: typeof fetch = (async () => {
+    remoteFetches += 1;
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:rescued:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(resolved.origin, "local-m2");
+  assert.equal(resolved.isDecompiled, false);
+  assert.equal(
+    resolved.sourceJarPath,
+    gradleSourcesJarPath,
+    "a corrupt ~/.m2 sources jar must not veto the Gradle cache candidate behind it"
+  );
+  assert.equal(remoteFetches, 0, "a good local candidate makes the remote legs unnecessary");
+});
+
+test("resolveSourceTarget(targetKind=coordinate) reaches the remote sources leg when both local sources candidates are corrupt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-both-sources-corrupt-"));
+  const gradleUserHome = join(root, "gradle-home");
+
+  const corruptM2SourcesJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "twice-broken",
+    "1.0",
+    "twice-broken-1.0-sources.jar"
+  );
+  await writeUnreadableJar(corruptM2SourcesJarPath, Buffer.alloc(0));
+
+  const corruptGradleSourcesJarPath = gradleCacheJarPath(
+    gradleUserHome,
+    "com.example",
+    "twice-broken",
+    "1.0",
+    "twice-broken-1.0-sources.jar"
+  );
+  await writeUnreadableJar(
+    corruptGradleSourcesJarPath,
+    Buffer.from("this is not a zip archive either", "utf8")
+  );
+
+  const remoteSourcesFixture = join(root, "remote-sources.jar");
+  await createJar(remoteSourcesFixture, {
+    "com/example/TwiceBroken.java": ["package com.example;", "public class TwiceBroken {}"].join("\n")
+  });
+  const remoteSourcesBytes = await readFile(remoteSourcesFixture);
+
+  const sourcesUrl = "https://repo.example.test/com/example/twice-broken/1.0/twice-broken-1.0-sources.jar";
+  let remoteSourceFetches = 0;
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    if (requestUrlOf(input) === sourcesUrl) {
+      remoteSourceFetches += 1;
+      return new Response(remoteSourcesBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const resolved = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, () =>
+      resolveSourceTarget(
+        { kind: "coordinate", value: "com.example:twice-broken:1.0" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      )
+    )
+  );
+
+  assert.equal(remoteSourceFetches, 1, "two corrupt local candidates must not abort the cascade");
+  assert.equal(resolved.origin, "remote-repo");
+  assert.equal(resolved.repoUrl, sourcesUrl);
+  assert.equal(resolved.isDecompiled, false);
+});
+
+test("resolveSourceTarget(targetKind=jar) propagates an unreadable SUBJECT jar instead of calling it source-free", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-subject-unreadable-"));
+  const subjectJarPath = join(root, "subject.jar");
+  const siblingSourcesJarPath = join(root, "subject-sources.jar");
+
+  // The subject jar is the one the caller named. The reader's refusal to open it
+  // is the fail-closed verdict itself, so it must NOT be laundered into "this
+  // archive has no sources" - which would hand back the perfectly readable
+  // sibling below as if the request had been satisfied.
+  await writeUnreadableJar(subjectJarPath, Buffer.from("this is not a zip archive", "utf8"));
+  await createJar(siblingSourcesJarPath, {
+    "com/example/Subject.java": ["package com.example;", "public class Subject {}"].join("\n")
+  });
+
+  await assert.rejects(
+    () =>
+      resolveSourceTarget(
+        { kind: "jar", value: subjectJarPath },
+        { allowDecompile: true },
+        buildTestConfig(root)
+      ),
+    (error: unknown) => {
+      assert.match(String((error as { message?: string }).message), /Failed to read jar/);
+      assert.notEqual((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
+      return true;
+    }
+  );
 });

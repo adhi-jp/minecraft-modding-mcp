@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { basename, dirname, join, resolve as resolvePath } from "node:path";
+import { basename, dirname, join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 
 import fastGlob from "fast-glob";
@@ -15,10 +15,12 @@ import type {
 import {
   buildRemoteBinaryUrls,
   buildRemoteSourceUrls,
+  groupToPath,
   hasExistingJar,
   isMutableMavenCoordinate,
   parseCoordinate,
-  normalizedCoordinateValue
+  normalizedCoordinateValue,
+  type MavenCoordinate
 } from "./maven-resolver.js";
 import {
   defaultDownloadPath,
@@ -82,17 +84,70 @@ async function contentSignature(jarPath: string): Promise<string> {
   return contentSha256;
 }
 
+/**
+ * Whether a jar contains java sources, with archive errors deliberately
+ * propagating.
+ *
+ * This is the check for a jar that IS the subject of the request - the
+ * `input.kind === "jar"` branch of `resolveSourceTarget` calling it on
+ * `resolvedJarPath`. What propagates is the reader's refusal to OPEN the
+ * archive: a truncated file, a non-zip file, an unreadable central directory,
+ * an I/O failure. On the subject jar that refusal is the verdict itself, and
+ * swallowing it would downgrade "this archive could not be read" into "this
+ * archive has no sources" - handing back a sibling `-sources.jar` as if the
+ * request had been satisfied.
+ *
+ * Note what this is NOT: `hasAnyJarEntry` does not reject an archive over a
+ * traversal-named entry, it `continue`s past that entry and keeps scanning. A
+ * zip-slip name inside an otherwise readable jar is skipped, not fatal, so it
+ * is not among the errors this propagates.
+ *
+ * A jar the cascade merely *considered* is the opposite case: see
+ * `candidateHasJavaSources`.
+ */
 async function hasJavaSources(jarPath: string): Promise<boolean> {
   if (!hasExistingJar(jarPath)) {
     return false;
   }
-  // Archive errors deliberately propagate. This runs on the jar-target path
-  // (:336) where the jar IS the subject, and the reader's rejection of an
-  // unsafe archive - a traversal-named entry, for one - is the fail-closed
-  // refusal itself. Swallowing it here would downgrade "this archive is not
-  // safe to open" into "this archive has no sources" and let resolution
-  // continue past a jar it had already refused.
   return await hasAnyJarEntry(jarPath, hasJavaSourceExtension);
+}
+
+/**
+ * The same check for a CANDIDATE, where an unopenable archive answers "no"
+ * instead of throwing.
+ *
+ * The distinction is who the jar is. A candidate is one guess among several,
+ * and the cascade behind it - the Gradle cache, the remote repositories, the
+ * local-binary decompile branch - is exactly the repair path for a bad guess.
+ * Letting the throw escape means one truncated `-sources.jar` in `~/.m2`
+ * aborts `resolveSourceTarget` outright, and the caller is told the artifact
+ * could not be resolved while it sits one candidate away. Mirrors
+ * `isReadableJarArchive`, which already draws this line on the binary side.
+ *
+ * The catch is deliberately blanket, and it is worth naming what that covers
+ * beyond invalid zip data: EACCES on a jar the process may not read, EMFILE
+ * when descriptors run out, and a programming error in the reader itself - a
+ * TypeError, a bad assertion - all become `false` here. That breadth is the
+ * right call for this position, because every one of them means the same thing
+ * to the cascade: this guess is unusable, take the next one. A candidate is a
+ * guess, and narrowing the catch would turn a transient EMFILE into a failed
+ * resolve for an artifact that is sitting in the Gradle cache.
+ *
+ * The accepted risk, stated plainly: a genuine bug in the jar reader would
+ * surface as "no sources found" rather than as itself, and the cascade would
+ * quietly fall through to a remote fetch or a decompile instead of reporting
+ * it. That is bounded here in a way it is not elsewhere - the cost is one
+ * skipped candidate per call, not repeated work or a poisoned cache entry -
+ * which is why the download path's guard was narrowed and this one was not.
+ * The subject-jar check above is the counterweight: a reader bug on the jar the
+ * caller actually named still propagates.
+ */
+async function candidateHasJavaSources(jarPath: string): Promise<boolean> {
+  try {
+    return await hasJavaSources(jarPath);
+  } catch {
+    return false;
+  }
 }
 
 function resolveExactJarSourceCandidate(inputJarPath: string): string {
@@ -132,19 +187,89 @@ async function listAdjacentJarSourceCandidates(inputJarPath: string): Promise<st
   return [...candidates];
 }
 
-function resolveLocalCoordinateCandidates(localM2Path: string, coordinate: string): string[] {
-  const parsed = parseCoordinate(coordinate);
-  const groupPath = parsed.groupId.replace(/\./g, "/");
-  const baseDir = resolvePath(localM2Path, groupPath, parsed.artifactId, parsed.version);
+/**
+ * Refuses a path that is not strictly under `root`, and returns it otherwise.
+ *
+ * `resolvePath` is happy to walk out of the directory it was given - an
+ * absolute-looking component discards the root, and `..` climbs out of it - so
+ * "the root plus a caller-derived component" is a containment claim only once
+ * something checks it. This is that check, and it fails closed: the caller gets
+ * an error rather than a path outside the repository it named.
+ *
+ * The prefix comparison uses `${root}${sep}` rather than `root`, so a sibling
+ * directory whose name merely starts with the root's (`/m2-evil` against
+ * `/m2`) is not mistaken for a child.
+ */
+function assertUnderRoot(root: string, candidate: string, component: string): string {
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  if (!candidate.startsWith(prefix)) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Refusing a local repository path outside "${root}".`,
+      details: { root, candidate, component }
+    });
+  }
+  return candidate;
+}
+
+/**
+ * Every `~/.m2` path a coordinate could name, before any of them is checked
+ * against the filesystem.
+ *
+ * One builder for both the sources and the binary leg, and it takes an
+ * already-parsed coordinate rather than the string: the two legs must never
+ * disagree about where a coordinate lives, and `groupToPath` - not a naive
+ * `replace(/\./g, "/")` - is what keeps the directory under `localM2Path` for a
+ * groupId like `.`, `..` or `.a`, whose naive conversion is an absolute path
+ * that `resolvePath` would honour.
+ *
+ * `MavenCoordinate` is a structural type with no runtime brand, so being an
+ * exported deep-import surface, this function cannot assume its argument came
+ * from `parseCoordinate`: a hand-built `artifactId`, `version` or `classifier`
+ * carrying `../`, or a slash-bearing groupId, would otherwise escape through
+ * `resolvePath` exactly as a validated one would not. Every path it returns is
+ * therefore checked against `localM2Path` before it leaves - safe by
+ * construction, not by the discipline of its callers. Production callers all
+ * parse first and never trip this; the check is what makes that a belt rather
+ * than the only strap.
+ */
+export function localM2CoordinateCandidatePaths(
+  localM2Path: string,
+  parsed: MavenCoordinate
+): {
+  sourceJarPaths: string[];
+  exactBinaryJarPath: string;
+  fallbackBinaryJarPaths: string[];
+} {
+  const root = resolvePath(localM2Path);
+  const baseDir = assertUnderRoot(
+    root,
+    resolvePath(root, groupToPath(parsed.groupId), parsed.artifactId, parsed.version),
+    "baseDir"
+  );
   const base = `${parsed.artifactId}-${parsed.version}`;
   const classifierSuffix = parsed.classifier ? `-${parsed.classifier}` : "";
+  const under = (fileName: string, component: string): string =>
+    assertUnderRoot(root, resolvePath(baseDir, fileName), component);
 
-  const direct = resolvePath(baseDir, `${base}${classifierSuffix}-sources.jar`);
-  const fallback = resolvePath(baseDir, `${base}-sources.jar`);
-  const candidates = [direct, fallback];
+  return {
+    sourceJarPaths: [
+      under(`${base}${classifierSuffix}-sources.jar`, "sourceJar"),
+      under(`${base}-sources.jar`, "sourceJarFallback")
+    ],
+    exactBinaryJarPath: under(`${base}${classifierSuffix}.jar`, "binaryJar"),
+    fallbackBinaryJarPaths: classifierSuffix ? [under(`${base}.jar`, "binaryJarFallback")] : []
+  };
+}
+
+function resolveLocalCoordinateCandidates(localM2Path: string, coordinate: string): string[] {
+  const { sourceJarPaths } = localM2CoordinateCandidatePaths(
+    localM2Path,
+    parseCoordinate(coordinate)
+  );
 
   const existing = new Set<string>();
-  for (const candidate of candidates) {
+  for (const candidate of sourceJarPaths) {
     if (hasExistingJar(candidate)) {
       existing.add(candidate);
     }
@@ -172,17 +297,13 @@ function resolveLocalCoordinateBinaryCandidates(
   localM2Path: string,
   coordinate: string
 ): LocalBinaryJarCandidates {
-  const parsed = parseCoordinate(coordinate);
-  const groupPath = parsed.groupId.replace(/\./g, "/");
-  const baseDir = resolvePath(localM2Path, groupPath, parsed.artifactId, parsed.version);
-  const base = `${parsed.artifactId}-${parsed.version}`;
-  const classifierSuffix = parsed.classifier ? `-${parsed.classifier}` : "";
+  const { exactBinaryJarPath, fallbackBinaryJarPaths } = localM2CoordinateCandidatePaths(
+    localM2Path,
+    parseCoordinate(coordinate)
+  );
 
-  const exactCandidate = resolvePath(baseDir, `${base}${classifierSuffix}.jar`);
-  const fallbackCandidates = classifierSuffix ? [resolvePath(baseDir, `${base}.jar`)] : [];
-
-  const exact = hasExistingJar(exactCandidate) ? exactCandidate : undefined;
-  const companion = exact ?? fallbackCandidates.find((candidate) => hasExistingJar(candidate));
+  const exact = hasExistingJar(exactBinaryJarPath) ? exactBinaryJarPath : undefined;
+  const companion = exact ?? fallbackBinaryJarPaths.find((candidate) => hasExistingJar(candidate));
 
   return { exact, companion };
 }
@@ -526,7 +647,7 @@ export async function resolveSourceTarget(
       };
     }
 
-    if (!preferBinaryOnly && await hasJavaSources(exactSourceJarPath)) {
+    if (!preferBinaryOnly && await candidateHasJavaSources(exactSourceJarPath)) {
       const sourceSignature = readStatsSignature(exactSourceJarPath);
       return {
         artifactId: artifactIdForJar("jar", exactSourceJarPath, sourceSignature),
@@ -591,7 +712,7 @@ export async function resolveSourceTarget(
   const localM2BinaryJarPath = localM2Binary.companion;
 
   for (const candidate of resolveLocalCoordinateCandidates(explicitConfig.localM2Path, coordinate)) {
-    if (await hasJavaSources(candidate)) {
+    if (await candidateHasJavaSources(candidate)) {
       const signature = await contentSignature(candidate);
       return coordinateArtifact({
         coordinate,
@@ -606,7 +727,10 @@ export async function resolveSourceTarget(
   }
 
   const gradleCacheCandidate = await resolveGradleCacheCoordinateCandidate(coordinate);
-  if (gradleCacheCandidate?.sourceJarPath && (await hasJavaSources(gradleCacheCandidate.sourceJarPath))) {
+  if (
+    gradleCacheCandidate?.sourceJarPath &&
+    (await candidateHasJavaSources(gradleCacheCandidate.sourceJarPath))
+  ) {
     const signature = await contentSignature(gradleCacheCandidate.sourceJarPath);
     return coordinateArtifact({
       coordinate,

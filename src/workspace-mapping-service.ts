@@ -6,6 +6,7 @@ import fastGlob from "fast-glob";
 
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
+import { isSafeMavenSegment, isSafeMavenVersionToken } from "./maven-token.js";
 import type { SourceMapping } from "./types.js";
 
 const WORKSPACE_FILE_READ_CONCURRENCY = 4;
@@ -315,21 +316,13 @@ function compareSemverDescending(left: string, right: string): number {
   return 0;
 }
 
-function isPathTraversalToken(token: string): boolean {
-  return token.length === 0 || token.includes("/") || token.includes("\\") || token.includes("..") || token.includes("\0");
-}
-
-const SAFE_VERSION_TOKEN_RE = /^[A-Za-z0-9._+-]+$/;
-
-export function isSafeMavenVersionToken(token: string): boolean {
-  if (typeof token !== "string" || token.length === 0 || token.length > 200) {
-    return false;
-  }
-  if (token.startsWith(".") || token.includes("..")) {
-    return false;
-  }
-  return SAFE_VERSION_TOKEN_RE.test(token);
-}
+/**
+ * The rule itself now lives in `maven-token.js`, a leaf module the coordinate
+ * parser can also import without pulling this service's dependencies in with
+ * it. Re-exported here so the callers that already knew it by this module keep
+ * working; there is still exactly one definition.
+ */
+export { isSafeMavenVersionToken };
 
 function resolveGradleUserHome(): string {
   const configured = process.env.GRADLE_USER_HOME?.trim();
@@ -479,12 +472,26 @@ export class WorkspaceMappingService {
     name: string,
     opts?: DependencyVersionOptions
   ): Promise<DependencyVersionResolution> {
-    if (isPathTraversalToken(group) || isPathTraversalToken(name)) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Dependency group and name must not contain path traversal characters.",
-        details: { group, name }
-      });
+    // This method IS the filesystem sink - it builds
+    // `<gradle-home>/caches/modules-2/files-2.1/<group>/<name>` and lists it -
+    // so it holds `group` and `name` to the same allowlist the coordinate route
+    // holds a groupId and an artifactId to. The blocklist that used to stand
+    // here (`/`, `\`, `..`, NUL) passed `group="D:"` and `name="."`, which
+    // `path.resolve` treats as drive-relative on Windows and resolves outside
+    // the cache root. `synthesizeDependencyTarget` checks the same rule before
+    // it ever calls this; the check is repeated here because this method is
+    // exported and reachable on its own.
+    for (const [component, value] of [
+      ["groupId", group],
+      ["artifactId", name]
+    ] as const) {
+      if (!isSafeMavenSegment(value, component)) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: "Dependency group and name must be safe Maven coordinate segments.",
+          details: { group, name }
+        });
+      }
     }
 
     const includeSnapshots = opts?.includeSnapshots === true;
