@@ -7,7 +7,7 @@ import {
   problemClassification,
   extractAllowlistedContext,
   extractDidYouMean,
-  extractNestedJars
+  extractNestedJarsField
 } from "./error-mapping.js";
 import {
   toHints,
@@ -126,7 +126,11 @@ export function errorResource(
   const fieldErrors = extractFieldErrorsFromDetails(details);
   const context = extractAllowlistedContext(details);
   const didYouMean = extractDidYouMean(details);
-  const nestedJars = extractNestedJars(details);
+  // The field-returning form, so a SHORTENED inventory says so here too. The
+  // inventory-only view would publish a trimmed list indistinguishable from a
+  // complete one, and a caller reading it would conclude the class is bundled
+  // in none of the inner jars.
+  const nestedJarsField = extractNestedJarsField(details);
   return {
     // ProblemDetails-read cache override (adopted policy): STRUCTURAL
     // identification — this constructor IS the error-resource path, so the
@@ -161,7 +165,7 @@ export function errorResource(
             ...(suggestedCall ? { suggestedCall } : {}),
             ...(exampleCalls ? { exampleCalls } : {}),
             ...(didYouMean ? { didYouMean } : {}),
-            ...(nestedJars ? { nestedJars } : {}),
+            ...nestedJarsField,
             ...(context ? { context } : {})
           },
           meta: { uri }

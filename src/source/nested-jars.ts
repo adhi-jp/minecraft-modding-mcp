@@ -7,6 +7,7 @@ import { ERROR_CODES, createError } from "../errors.js";
 import { collectNestedJars } from "../mod-analyzer.js";
 import { isSecureJarEntryPath } from "../path-resolver.js";
 import {
+  EntryTooLargeError,
   listJarEntries,
   readJarEntryAsBuffer,
   readJarEntryAsUtf8
@@ -20,6 +21,42 @@ import {
 export const SHELL_JAR_MAX_OUTER_CLASSES = 8;
 
 export const NESTED_JAR_CACHE_DIRNAME = "nested-jars";
+
+/** Environment variable that overrides {@link loadMaxNestedJarEntryBytes}. */
+export const MAX_NESTED_JAR_ENTRY_BYTES_ENV = "MCP_MAX_NESTED_JAR_ENTRY_BYTES";
+
+/**
+ * Ceiling on ONE nested jar entry's uncompressed size, because extraction
+ * materializes the whole entry in the server process before writing it out.
+ *
+ * 64 MiB is far above anything real: across a full Gradle cache the largest
+ * `META-INF/jars/*.jar` entry measured 727,805 bytes (~0.7 MB), and the largest
+ * library a mod plausibly shades whole (fastutil, ~22.86 MB) still fits with
+ * room to spare. The cap therefore only ever refuses an entry that no genuine
+ * Jar-in-Jar shell produces.
+ */
+const DEFAULT_MAX_NESTED_JAR_ENTRY_BYTES = 64 * 1024 * 1024;
+/** Floor for the override: below 1 MiB the cap would start refusing real nested jars. */
+const MIN_MAX_NESTED_JAR_ENTRY_BYTES = 1024 * 1024;
+
+/**
+ * Resolves the per-entry extraction ceiling from the environment, mirroring
+ * `loadMaxFrameBytes`: strict ASCII decimal only, safe integers only, anything
+ * else falls back to the default, and the floor is applied last so an override
+ * can raise the cap but never lower it into a range that breaks real shells.
+ */
+export function loadMaxNestedJarEntryBytes(
+  value = process.env[MAX_NESTED_JAR_ENTRY_BYTES_ENV]
+): number {
+  if (!/^[0-9]+$/.test(value ?? "")) {
+    return DEFAULT_MAX_NESTED_JAR_ENTRY_BYTES;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    return DEFAULT_MAX_NESTED_JAR_ENTRY_BYTES;
+  }
+  return Math.max(parsed, MIN_MAX_NESTED_JAR_ENTRY_BYTES);
+}
 
 export interface NestedJarMatch {
   entryName: string;
@@ -67,6 +104,9 @@ async function loadNestedJarClassSet(args: {
       args.entryName
     );
   } catch {
+    // One unusable nested jar (unreadable, or refused by the per-entry size
+    // cap) must not fail the whole shell: the caller keeps scanning the rest
+    // of the inventory and still resolves classes from the other nested jars.
     return undefined;
   }
 
@@ -221,12 +261,19 @@ export function nestedJarCachePath(
  * present). Entry-name safety is enforced by readJarEntryAsBuffer, and the
  * on-disk name is the digest — never derived from the entry name — so a
  * hostile entry name cannot escape the cache directory.
+ *
+ * The entry is materialized in the server process, so its size is capped (see
+ * {@link loadMaxNestedJarEntryBytes}); `maxEntryBytes` overrides that ceiling
+ * for callers that already know a tighter budget. An oversized entry fails this
+ * one extraction with ERR_LIMIT_EXCEEDED — `loadNestedJarClassSet` swallows it
+ * and keeps resolving the shell's other nested jars.
  */
 export async function extractNestedJar(
   cacheDir: string,
   outerJarPath: string,
   outerSignature: string,
-  entryName: string
+  entryName: string,
+  maxEntryBytes?: number
 ): Promise<string> {
   const finalPath = nestedJarCachePath(cacheDir, outerJarPath, outerSignature, entryName);
   try {
@@ -235,7 +282,30 @@ export async function extractNestedJar(
   } catch {
     // fall through to extraction
   }
-  const bytes = await readJarEntryAsBuffer(outerJarPath, entryName);
+  const limit = maxEntryBytes ?? loadMaxNestedJarEntryBytes();
+  let bytes: Buffer;
+  try {
+    bytes = await readJarEntryAsBuffer(outerJarPath, entryName, limit);
+  } catch (error) {
+    if (error instanceof EntryTooLargeError) {
+      throw createError({
+        code: ERROR_CODES.LIMIT_EXCEEDED,
+        message:
+          error.size?.source === "observed"
+            ? `Nested jar entry "${entryName}" ran past the ${limit}-byte extraction limit after ${error.size.bytes} bytes; refusing to extract it.`
+            : `Nested jar entry "${entryName}" declares ${error.size?.bytes ?? "an unknown number of"} uncompressed bytes, above the ${limit}-byte extraction limit; refusing to extract it.`,
+        details: {
+          entryName,
+          jarPath: outerJarPath,
+          actual: error.size?.bytes,
+          sizeSource: error.size?.source,
+          limit,
+          nextAction: `Raise ${MAX_NESTED_JAR_ENTRY_BYTES_ENV} above this entry's size to extract it, or resolve that nested jar as its own artifact instead.`
+        }
+      });
+    }
+    throw error;
+  }
   await mkdir(dirname(finalPath), { recursive: true });
   const tempPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}`;
   await writeFile(tempPath, bytes);

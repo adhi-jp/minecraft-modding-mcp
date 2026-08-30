@@ -1,21 +1,27 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import {
   collectMatchedJarEntriesAsBuffers,
   collectMatchedJarEntriesAsUtf8,
   detectFabricLikeInputNamespace,
+  EntryTooLargeError,
   hasAnyJarEntry,
   iterateJavaEntriesAsUtf8,
   listJarEntries,
   listJavaEntries,
   openZipFile,
   readAllJavaEntriesAsUtf8,
-  readJarEntryAsUtf8
+  readJarEntryAsBuffer,
+  readJarEntryAsUtf8,
+  type ZipFile
 } from "../../src/source-jar-reader.ts";
+import { createCraftedJar } from "../helpers/zip-crafted.ts";
 import { createJar } from "../helpers/zip.ts";
 
 test("sourceJarReader lists entries and filters java sources", async () => {
@@ -323,4 +329,149 @@ test("sourceJarReader: readJarEntryAsUtf8 still resolves safe entries from the s
   });
   const text = await readJarEntryAsUtf8(jarPath, "com/example/Safe.java");
   assert.match(text, /class Safe/);
+});
+
+test("sourceJarReader: readJarEntryAsBuffer refuses an entry whose DECLARED size exceeds maxBytes without reading its bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-declared-cap-"));
+  const jarPath = join(root, "over-declared.jar");
+  // 1 KiB of payload, headers declaring 100 MiB. The declared size is available
+  // from the central directory before openReadStream is reached, so a guard that
+  // consults it costs zero bytes read.
+  await createCraftedJar(jarPath, [
+    {
+      name: "META-INF/jars/over-declared.jar",
+      data: Buffer.alloc(1024, 0x41),
+      method: "deflate",
+      declaredUncompressedSize: 100 * 1024 * 1024
+    }
+  ]);
+
+  const rejection = await readJarEntryAsBuffer(
+    jarPath,
+    "META-INF/jars/over-declared.jar",
+    1024 * 1024
+  ).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  assert.ok(
+    rejection instanceof EntryTooLargeError,
+    `expected EntryTooLargeError, got ${String(rejection)}`
+  );
+  assert.deepEqual(rejection.size, { bytes: 100 * 1024 * 1024, source: "declared" });
+  assert.match(rejection.message, /exceeds size limit of 1048576 bytes/);
+
+  // The bytes really were never streamed: reading the same entry with no budget
+  // does run the stream, and fails yauzl's end-of-stream size assertion instead.
+  await assert.rejects(
+    () => readJarEntryAsBuffer(jarPath, "META-INF/jars/over-declared.jar"),
+    /not enough bytes in the stream/
+  );
+});
+
+test("sourceJarReader: readJarEntryAsBuffer refuses a compressible entry that is tiny on disk but expands past maxBytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-expansion-cap-"));
+  const jarPath = join(root, "compressible.jar");
+  const expandedBytes = 4 * 1024 * 1024;
+  await createCraftedJar(jarPath, [
+    { name: "META-INF/jars/zeros.jar", data: Buffer.alloc(expandedBytes), method: "deflate" }
+  ]);
+  const onDiskBytes = (await stat(jarPath)).size;
+  assert.ok(
+    onDiskBytes < 64 * 1024,
+    `a compression-ratio attack is cheap on disk; got ${onDiskBytes} bytes`
+  );
+
+  const rejection = await readJarEntryAsBuffer(jarPath, "META-INF/jars/zeros.jar", 64 * 1024).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+  assert.ok(
+    rejection instanceof EntryTooLargeError,
+    `expected EntryTooLargeError, got ${String(rejection)}`
+  );
+  assert.deepEqual(rejection.size, { bytes: expandedBytes, source: "declared" });
+
+  // Same entry, no budget: the full expansion lands in memory. That is the
+  // behavior the cap exists to prevent, so it is pinned rather than assumed.
+  const unbounded = await readJarEntryAsBuffer(jarPath, "META-INF/jars/zeros.jar");
+  assert.equal(unbounded.length, expandedBytes);
+});
+
+test("sourceJarReader: readJarEntryAsBuffer's streaming counter stops an entry that outruns its declared size", async () => {
+  // yauzl rejects an entry that over-runs its declared size, so this lie cannot
+  // be written into a real archive — the injected zip file stands in for any
+  // source whose declared size is not trustworthy. It proves the budget is
+  // forwarded into the stream instead of resting on the declared-size check.
+  const entry = { fileName: "META-INF/jars/lying.jar", uncompressedSize: 8 };
+  const chunkBytes = 16 * 1024;
+  const maxChunks = 64;
+  let servedChunks = 0;
+  let streamDestroyed = false;
+  const emitter = new EventEmitter();
+  let served = false;
+
+  const fakeZipFile = {
+    readEntry(): void {
+      if (served) {
+        emitter.emit("end");
+        return;
+      }
+      served = true;
+      emitter.emit("entry", entry);
+    },
+    close(): void {},
+    once(event: string, listener: (...args: unknown[]) => void) {
+      emitter.once(event, listener);
+      return this;
+    },
+    removeListener(event: string, listener: (...args: unknown[]) => void) {
+      emitter.removeListener(event, listener);
+      return this;
+    },
+    openReadStream(
+      _entry: unknown,
+      callback: (error: Error | null, stream: Readable | null) => void
+    ): void {
+      const stream = new Readable({
+        read(): void {
+          if (servedChunks >= maxChunks) {
+            this.push(null);
+            return;
+          }
+          servedChunks += 1;
+          this.push(Buffer.alloc(chunkBytes, 0x42));
+        }
+      });
+      stream.once("close", () => {
+        streamDestroyed = stream.destroyed;
+      });
+      callback(null, stream);
+    }
+  } as unknown as ZipFile;
+
+  const rejection = await readJarEntryAsBuffer(
+    "/synthetic/lying.jar",
+    "META-INF/jars/lying.jar",
+    64 * 1024,
+    { openZipFile: async () => fakeZipFile }
+  ).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+
+  assert.ok(
+    rejection instanceof EntryTooLargeError,
+    `expected EntryTooLargeError, got ${String(rejection)}`
+  );
+  assert.equal(rejection.size?.source, "observed");
+  assert.ok(
+    (rejection.size?.bytes ?? 0) > 64 * 1024,
+    "the counter must report the running total that broke the budget"
+  );
+  assert.ok(streamDestroyed, "the oversized stream must be destroyed, not drained");
+  assert.ok(
+    servedChunks < maxChunks,
+    `the read must stop early; served ${servedChunks} of ${maxChunks} chunks`
+  );
 });

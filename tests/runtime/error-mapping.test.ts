@@ -9,6 +9,7 @@ import {
   errorToBatchEntryProblem,
   extractAllowlistedContext,
   extractNestedJars,
+  extractNestedJarsField,
   issueOriginForErrorCode,
   problemClassification,
   retryClassForErrorCode,
@@ -155,6 +156,148 @@ test("extractNestedJars returns undefined for a missing or malformed field", () 
   assert.equal(extractNestedJars({}), undefined);
   assert.equal(extractNestedJars(undefined), undefined);
   assert.equal(extractNestedJars({ nestedJars: "not-an-array" }), undefined);
+});
+
+// An implausibly long entry name is not evidence that the rest of the inventory
+// is untrustworthy, so it is excluded on its own — dropping the whole array
+// would let one hostile name suppress every usable recovery target.
+test("extractNestedJars excludes an over-long entry instead of dropping the array, and flags the truncation", () => {
+  const overLong = `META-INF/jars/${"x".repeat(300)}.jar`;
+  const field = extractNestedJarsField({
+    nestedJars: ["META-INF/jars/a.jar", overLong, "META-INF/jars/b.jar"]
+  });
+
+  assert.deepEqual(field.nestedJars, ["META-INF/jars/a.jar", "META-INF/jars/b.jar"]);
+  assert.equal(field.nestedJarsTruncated, true);
+});
+
+test("extractNestedJars still drops the whole array for a malformed element beside an over-long one", () => {
+  const overLong = `META-INF/jars/${"x".repeat(300)}.jar`;
+  assert.deepEqual(extractNestedJarsField({ nestedJars: [overLong, 42] }), {});
+  assert.deepEqual(extractNestedJarsField({ nestedJars: ["META-INF/jars/a.jar", ""] }), {});
+  // The malformed element is found even when it sits past the entry caps: the
+  // scan does not stop early, so the drop contract is unchanged by the caps.
+  const past = [...Array.from({ length: 80 }, (_, i) => `META-INF/jars/jar-${i}.jar`), null];
+  assert.equal(extractNestedJars({ nestedJars: past }), undefined);
+});
+
+// The flag only does its job where an agent can see it. It was published by the
+// batch builder alone, so on the ordinary tool-error path - and on an mc://
+// resource read - a shortened inventory was indistinguishable from a complete
+// one, and a caller could conclude the class is bundled in none of the shell's
+// inner jars when it is simply in one of the entries that was dropped.
+test("a shortened nested-jar inventory is flagged on every publication path, not only the batch one", () => {
+  const oversized = Array.from({ length: 70 }, (_, index) => `META-INF/jars/jar-${index}.jar`);
+  const truncatedError = createError({
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    message: 'class "net.example.Foo" was not found',
+    details: { nestedJars: oversized }
+  });
+
+  const publications = [
+    ["tool", mapErrorToProblem(truncatedError, "req-nested-jars-truncated") as Record<string, unknown>],
+    ["batch", errorToBatchEntryProblem(truncatedError, "req-nested-jars-truncated") as unknown as Record<string, unknown>],
+    ["resource", resourceProblem(truncatedError)]
+  ] as const;
+
+  for (const [label, problem] of publications) {
+    assert.equal(
+      (problem.nestedJars as string[] | undefined)?.length,
+      64,
+      `${label}: the inventory is capped at 64 entries`
+    );
+    assert.equal(
+      problem.nestedJarsTruncated,
+      true,
+      `${label}: a shortened inventory must say that it is shortened`
+    );
+  }
+
+  // Omitted, never `false`, when the inventory is whole - a caller reading the
+  // absence of the key must be able to treat it as "complete".
+  const completeError = createError({
+    code: ERROR_CODES.CLASS_NOT_FOUND,
+    message: 'class "net.example.Foo" was not found',
+    details: { nestedJars: ["META-INF/jars/a.jar", "META-INF/jars/b.jar"] }
+  });
+
+  const complete = [
+    ["tool", mapErrorToProblem(completeError, "req-nested-jars-complete") as Record<string, unknown>],
+    ["batch", errorToBatchEntryProblem(completeError, "req-nested-jars-complete") as unknown as Record<string, unknown>],
+    ["resource", resourceProblem(completeError)]
+  ] as const;
+
+  for (const [label, problem] of complete) {
+    assert.deepEqual(problem.nestedJars, ["META-INF/jars/a.jar", "META-INF/jars/b.jar"], label);
+    assert.ok(
+      !("nestedJarsTruncated" in problem),
+      `${label}: the flag must be absent, not false, for a complete inventory`
+    );
+  }
+});
+
+test("extractNestedJars stops at the total byte budget and flags the truncation", () => {
+  // 200 bytes per entry ("META-INF/jars/" + 182 + ".jar"), 50 entries = 10,000
+  // bytes, above the 8 KiB budget and below the 64-entry count cap.
+  const entries = Array.from(
+    { length: 50 },
+    (_, index) => `META-INF/jars/${String(index).padStart(182, "a")}.jar`
+  );
+  assert.equal(Buffer.byteLength(entries[0]!, "utf8"), 200);
+
+  const field = extractNestedJarsField({ nestedJars: entries });
+  assert.equal(field.nestedJars?.length, 40);
+  assert.deepEqual(field.nestedJars, entries.slice(0, 40));
+  assert.ok(
+    field.nestedJars!.reduce((sum, entry) => sum + Buffer.byteLength(entry, "utf8"), 0) <= 8 * 1024
+  );
+  assert.equal(field.nestedJarsTruncated, true);
+});
+
+test("extractNestedJars leaves the truncation flag unset for a complete inventory", () => {
+  const complete = extractNestedJarsField({
+    nestedJars: ["META-INF/jars/a.jar", "META-INF/jars/b.jar"]
+  });
+  assert.deepEqual(complete.nestedJars, ["META-INF/jars/a.jar", "META-INF/jars/b.jar"]);
+  assert.equal(complete.nestedJarsTruncated, undefined);
+  assert.equal("nestedJarsTruncated" in complete, false);
+
+  // The count cap is truncation too, so the flag separates the two cases.
+  const capped = extractNestedJarsField({
+    nestedJars: Array.from({ length: 70 }, (_, i) => `META-INF/jars/jar-${i}.jar`)
+  });
+  assert.equal(capped.nestedJars?.length, 64);
+  assert.equal(capped.nestedJarsTruncated, true);
+});
+
+test("errorToBatchEntryProblem publishes nestedJarsTruncated only when the inventory was shortened", () => {
+  const truncated = errorToBatchEntryProblem(
+    createError({
+      code: ERROR_CODES.CLASS_NOT_FOUND,
+      message: "class not found in shell",
+      details: {
+        nestedJars: Array.from({ length: 70 }, (_, i) => `META-INF/jars/jar-${i}.jar`)
+      }
+    }),
+    "test-nested-truncated"
+  );
+  assert.equal(truncated.nestedJars?.length, 64);
+  assert.equal(truncated.nestedJarsTruncated, true);
+
+  const complete = errorToBatchEntryProblem(
+    createError({
+      code: ERROR_CODES.CLASS_NOT_FOUND,
+      message: "class not found in shell",
+      details: { nestedJars: ["META-INF/jars/a.jar"] }
+    }),
+    "test-nested-complete"
+  );
+  assert.deepEqual(complete.nestedJars, ["META-INF/jars/a.jar"]);
+  assert.equal(
+    Object.hasOwn(complete, "nestedJarsTruncated"),
+    false,
+    "a complete inventory must not carry the flag at all"
+  );
 });
 
 test("extractAllowlistedContext drops unknown and non-primitive fields", () => {

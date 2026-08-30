@@ -73,6 +73,15 @@ export type ProblemDetails = {
    * dedicated typed field: `context` is primitive-only and can never carry it.
    */
   nestedJars?: string[];
+  /**
+   * True when `nestedJars` is a SHORTENED view of the shell's inventory —
+   * entries were dropped by the count cap, the per-entry length cap, or the
+   * total-bytes cap. Without it a caller cannot tell a complete inventory from
+   * a trimmed one and may conclude a class is bundled nowhere. Additive and
+   * omitted entirely when the published list is complete, matching the
+   * `candidatesTruncated` precedent.
+   */
+  nestedJarsTruncated?: boolean;
   failedStage?: string;
   context?: Record<string, string | number | boolean>;
 };
@@ -119,28 +128,103 @@ export function extractDidYouMean(details: unknown): DidYouMeanCandidate[] | und
 // bounds a pathological inventory, it is not an expected truncation point.
 const MAX_NESTED_JAR_ENTRIES = 64;
 
+// Per-entry length ceiling, in UTF-8 bytes. Real entries are jar-relative paths
+// like "META-INF/jars/fabric-screen-handler-api-v1-2.0.5.jar" (~52 bytes); the
+// zip format itself allows a 65535-byte name, so an entry name is attacker-sized
+// unless bounded here. 256 bytes is ~5x the longest realistic entry and still
+// leaves any genuine name intact.
+const MAX_NESTED_JAR_ENTRY_BYTES = 256;
+
+// Total ceiling for the published list, in UTF-8 bytes. A full fabric-api-style
+// inventory (64 entries at ~52 bytes) is ~3.3 KiB, so 8 KiB carries every real
+// inventory whole while bounding the worst case this field can add to an error
+// payload — which matters because nothing else in this project bounds an
+// outbound response (MCP_MAX_FRAME_BYTES governs inbound decoding only).
+const MAX_NESTED_JARS_TOTAL_BYTES = 8 * 1024;
+
+/**
+ * The `nestedJars` pair as published: the inventory plus the additive flag that
+ * says whether it is complete. Both keys are omitted when there is nothing to
+ * publish, so the object spreads directly into a ProblemDetails.
+ */
+export type NestedJarsField = {
+  nestedJars?: string[];
+  nestedJarsTruncated?: boolean;
+};
+
 /**
  * Validates and extracts a `nestedJars` inventory from error details.
  * `buildClassSourceNotFoundError` records it whenever the lookup ran against a
  * shell jar, but `context` is primitive-only, so without this the inventory
- * never left the process. Malformed payloads are dropped whole rather than
- * partially published, matching {@link extractDidYouMean}. An empty inventory
- * is dropped too: the producing site omits the key entirely in that case, so an
- * empty array carries no information a caller could act on.
+ * never left the process.
+ *
+ * Two distinct dispositions, deliberately not conflated:
+ *  - MALFORMED (a non-string or empty-string element, anywhere in the array):
+ *    the whole array is dropped, matching {@link extractDidYouMean}. The scan
+ *    deliberately continues past the caps so a malformed element beyond them is
+ *    still found — the upstream array is a real jar's own entry list, bounded by
+ *    the archive, so the full scan is not an exposure.
+ *  - OVERSIZED (an entry longer than {@link MAX_NESTED_JAR_ENTRY_BYTES}, an
+ *    entry past the count cap, or one that would push the list past the total
+ *    byte budget): that ENTRY alone is excluded and `nestedJarsTruncated` is
+ *    set. An implausible name is not evidence that the rest of the inventory is
+ *    untrustworthy, so it must not drop the array.
+ *
+ * An empty inventory is dropped as before: the producing site omits the key
+ * entirely in that case, so an empty array carries no information a caller could
+ * act on. If the caps leave nothing publishable, both keys are omitted rather
+ * than publishing a truncation flag with no list beside it.
  */
-export function extractNestedJars(details: unknown): string[] | undefined {
+export function extractNestedJarsField(details: unknown): NestedJarsField {
   const raw = (details as { nestedJars?: unknown } | undefined)?.nestedJars;
   if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
+    return {};
   }
   const cleaned: string[] = [];
+  let truncated = false;
+  let totalBytes = 0;
+  let budgetExhausted = false;
   for (const entry of raw) {
     if (typeof entry !== "string" || !entry) {
-      return undefined;
+      return {};
     }
+    if (budgetExhausted || cleaned.length >= MAX_NESTED_JAR_ENTRIES) {
+      truncated = true;
+      continue;
+    }
+    const entryBytes = Buffer.byteLength(entry, "utf8");
+    if (entryBytes > MAX_NESTED_JAR_ENTRY_BYTES) {
+      truncated = true;
+      continue;
+    }
+    if (totalBytes + entryBytes > MAX_NESTED_JARS_TOTAL_BYTES) {
+      // Keep the published list a prefix of the surviving entries: once the
+      // budget is spent, stop admitting rather than cherry-picking short names
+      // from the tail.
+      truncated = true;
+      budgetExhausted = true;
+      continue;
+    }
+    totalBytes += entryBytes;
     cleaned.push(entry);
   }
-  return cleaned.slice(0, MAX_NESTED_JAR_ENTRIES);
+  if (cleaned.length === 0) {
+    return {};
+  }
+  return { nestedJars: cleaned, ...(truncated ? { nestedJarsTruncated: true } : {}) };
+}
+
+/**
+ * Inventory-only view of {@link extractNestedJarsField}.
+ *
+ * NOT for an emission site. All three - the tool envelope, the batch entry, the
+ * error resource - publish the field pair, because dropping the flag makes a
+ * shortened inventory indistinguishable from a complete one. This remains for
+ * callers that want the list alone (tests pinning the validation and capping
+ * rules), and a new publisher should reach for the field-returning form.
+ */
+export function extractNestedJars(details: unknown): string[] | undefined {
+  return extractNestedJarsField(details).nestedJars;
 }
 
 const ISSUE_ORIGIN_VALUES = new Set<string>([
@@ -439,7 +523,14 @@ const CONTEXT_ALLOWLIST = new Set<string>([
   "maxMembers",
   "candidateCount",
   "candidatesSeen",
-  "ambiguous"
+  "ambiguous",
+  // Why a repository cascade gave up, as the failing leg's own error code (e.g.
+  // "ERR_LIMIT_EXCEEDED"). The terminal ERR_REPO_FETCH_FAILED says only that
+  // repositories were unstable, which is wrong for a configuration-driven
+  // refusal; the underlying code is the machine-readable half of that
+  // correction, beside the human-readable `nextAction` hint. A bare code string
+  // - no url, no path, no message - which is why it can travel here at all.
+  "repoFailureCode"
 ]);
 
 /**
@@ -505,7 +596,7 @@ export function errorToBatchEntryProblem(
     const fieldErrors = extractFieldErrors(caughtError.details);
     const context = extractAllowlistedContext(caughtError.details);
     const didYouMean = extractDidYouMean(caughtError.details);
-    const nestedJars = extractNestedJars(caughtError.details);
+    const nestedJarsField = extractNestedJarsField(caughtError.details);
     return {
       type: `https://minecraft-modding-mcp.dev/problems/${caughtError.code.toLowerCase()}`,
       title: "Tool execution error",
@@ -518,7 +609,7 @@ export function errorToBatchEntryProblem(
       ...(baseHints ? { hints: baseHints } : {}),
       ...(options?.suggestedCall ? { suggestedCall: options.suggestedCall } : {}),
       ...(didYouMean ? { didYouMean } : {}),
-      ...(nestedJars ? { nestedJars } : {}),
+      ...nestedJarsField,
       ...(context ? { context } : {})
     };
   }

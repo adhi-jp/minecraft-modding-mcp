@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 
 import fastGlob from "fast-glob";
 
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import type {
   Config,
   MappingVariant,
@@ -380,6 +380,62 @@ export interface ResolveSourceTargetOptions {
   }) => void;
 }
 
+/**
+ * Why one remote repository attempt was abandoned, kept so the terminal error
+ * can say something more useful than "unstable".
+ *
+ * The failover CALLBACK fires only when another repository is left to try, so
+ * on the last one the reason was discarded outright - and the terminal
+ * ERR_REPO_FETCH_FAILED then blamed "unstable repository responses" for
+ * failures that were nothing of the sort. A download refused by the size
+ * ceiling is the case that made this untenable: every repository trips it
+ * identically, the user is told their repositories are unstable, and
+ * `MCP_MAX_DOWNLOAD_BYTES` - the one thing that would fix it - is never
+ * mentioned anywhere in the response.
+ */
+interface RepoAttemptFailure {
+  stage: "source" | "binary";
+  repoUrl: string;
+  statusCode?: number;
+  reason: string;
+  /**
+   * The failing error's own code, when it carried one (e.g. ERR_LIMIT_EXCEEDED).
+   * Republished on the terminal error as the top-level `repoFailureCode`, which
+   * is what actually reaches a caller - see `terminalDetails`.
+   */
+  code?: string;
+  /**
+   * The failing error's own recovery hint, lifted to the terminal error's
+   * top-level `details.nextAction` where `toHints` will actually surface it.
+   */
+  nextAction?: string;
+}
+
+/**
+ * Read an error thrown out of the download layer into a failover record.
+ * `AppError` details are the only structured source available here; anything
+ * else contributes its message alone.
+ */
+function describeThrownRepoFailure(
+  stage: "source" | "binary",
+  repoUrl: string,
+  caughtError: unknown
+): RepoAttemptFailure {
+  const failure: RepoAttemptFailure = {
+    stage,
+    repoUrl,
+    reason: caughtError instanceof Error ? caughtError.message : "download-error"
+  };
+  if (isAppError(caughtError)) {
+    failure.code = caughtError.code;
+    const nextAction = caughtError.details?.nextAction;
+    if (typeof nextAction === "string" && nextAction.trim()) {
+      failure.nextAction = nextAction.trim();
+    }
+  }
+  return failure;
+}
+
 export async function resolveSourceTarget(
   input: SourceTargetInput,
   options: ResolveSourceTargetOptions,
@@ -387,6 +443,62 @@ export async function resolveSourceTarget(
 ): Promise<ResolvedSourceArtifact> {
   const repos = options.preferredRepos?.length ? options.preferredRepos : explicitConfig.sourceRepos;
   let sawRemoteRepoFailure = false;
+  let keptRepoFailure: RepoAttemptFailure | undefined;
+
+  /**
+   * Record one repository attempt's failure, keeping the one the caller can act
+   * on.
+   *
+   * RULE: the FIRST failure carrying a `nextAction` wins and is never
+   * overwritten; with none, the MOST RECENT failure is kept.
+   *
+   * Plain recency was wrong. A `nextAction` marks a configuration-driven
+   * refusal - the download size ceiling is the case in hand - which names the
+   * setting that fixes it. Every ordinary repository outcome (a 404, a 503, a
+   * body that is not an archive) carries none, so under recency a single later
+   * 404 on the binary leg erased the one failure with a repair in it and the
+   * terminal error went back to saying only "unstable". FIRST rather than last
+   * among the actionable ones because the earliest is the failure that was
+   * still on the artifact the caller actually asked for: the source leg here
+   * runs before the binary one, and the later stages are already consequences
+   * of the first refusal. Actionable failures do not compete in practice - one
+   * misconfigured ceiling trips every repository identically - so the tie-break
+   * only decides which of several identical hints is quoted.
+   */
+  const recordRepoFailure = (failure: RepoAttemptFailure): void => {
+    if (keptRepoFailure?.nextAction) {
+      return;
+    }
+    keptRepoFailure = failure;
+  };
+
+  /**
+   * Details for a terminal resolution error, carrying the kept repository
+   * failure when there was one.
+   *
+   * Two fields are hoisted OUT of `lastRepoFailure` and onto the top level,
+   * because that object is internal: `ProblemDetails` has no `details`
+   * passthrough, and the public envelope serialises only selected fields, so
+   * anything nested here never leaves the process.
+   *  - `nextAction` is the one channel from a throw site to a caller's `hints`
+   *    (`toHints` reads this key and nothing else).
+   *  - `repoFailureCode` names the underlying cause as a primitive, so it can
+   *    pass the primitive-only `context` allowlist and give a machine-readable
+   *    counterpart to the human-readable hint.
+   * `lastRepoFailure` itself stays for server-side logs and tests.
+   */
+  const terminalDetails = (coordinateValue: string): Record<string, unknown> => {
+    if (!keptRepoFailure) {
+      return { coordinate: coordinateValue };
+    }
+    const { nextAction, ...failure } = keptRepoFailure;
+    return {
+      coordinate: coordinateValue,
+      lastRepoFailure: failure,
+      ...(failure.code ? { repoFailureCode: failure.code } : {}),
+      ...(nextAction ? { nextAction } : {})
+    };
+  };
 
   if (input.kind === "jar") {
     const resolvedJarPath = normalizeJarPath(input.value);
@@ -587,6 +699,12 @@ export async function resolveSourceTarget(
         // repository does not publish it" stays a plain not-found.
         const transient = !download.ok && isTransientFailure(download.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
+        recordRepoFailure({
+          stage: "source",
+          repoUrl: sourceUrl,
+          statusCode: download.statusCode,
+          reason: download.ok ? "downloaded-no-sources" : "download-failed"
+        });
         // Moving off this repository is reportable however it happened. A
         // withdrawn artifact reaches here as an ordinary failure now that the
         // downloader refuses to launder a 404 into a stale success, and leaving
@@ -621,11 +739,13 @@ export async function resolveSourceTarget(
       });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
+      const failure = describeThrownRepoFailure("source", sourceUrl, caughtError);
+      recordRepoFailure(failure);
       if (hasNextAttempt) {
         options.onRepoFailover?.({
           stage: "source",
           repoUrl: sourceUrl,
-          reason: caughtError instanceof Error ? caughtError.message : "download-error",
+          reason: failure.reason,
           attempt: index + 1,
           totalAttempts: remoteSourceUrls.length
         });
@@ -639,7 +759,7 @@ export async function resolveSourceTarget(
       message: sawRemoteRepoFailure
         ? `No source jar was found for "${coordinate}" and repository fetches were unstable.`
         : `No source jar was found for "${coordinate}" and decompile is disabled.`,
-      details: { coordinate }
+      details: terminalDetails(coordinate)
     });
   }
 
@@ -689,6 +809,12 @@ export async function resolveSourceTarget(
       if (!downloaded.ok) {
         const transient = isTransientFailure(downloaded.statusCode);
         sawRemoteRepoFailure = sawRemoteRepoFailure || transient;
+        recordRepoFailure({
+          stage: "binary",
+          repoUrl: binaryUrl,
+          statusCode: downloaded.statusCode,
+          reason: "download-failed"
+        });
         if (hasNextAttempt) {
           options.onRepoFailover?.({
             stage: "binary",
@@ -721,6 +847,12 @@ export async function resolveSourceTarget(
           url: binaryUrl,
           contentSha256: downloaded.contentSha256
         });
+        recordRepoFailure({
+          stage: "binary",
+          repoUrl: binaryUrl,
+          statusCode: downloaded.statusCode,
+          reason: "downloaded-not-an-archive"
+        });
         if (hasNextAttempt) {
           options.onRepoFailover?.({
             stage: "binary",
@@ -749,11 +881,13 @@ export async function resolveSourceTarget(
       });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
+      const failure = describeThrownRepoFailure("binary", binaryUrl, caughtError);
+      recordRepoFailure(failure);
       if (hasNextAttempt) {
         options.onRepoFailover?.({
           stage: "binary",
           repoUrl: binaryUrl,
-          reason: caughtError instanceof Error ? caughtError.message : "download-error",
+          reason: failure.reason,
           attempt: index + 1,
           totalAttempts: binaryCandidates.length
         });
@@ -766,6 +900,6 @@ export async function resolveSourceTarget(
     message: sawRemoteRepoFailure
       ? `No source or binary artifact was found for "${coordinate}" due to unstable repository responses.`
       : `No source or binary artifact was found for "${coordinate}".`,
-    details: { coordinate }
+    details: terminalDetails(coordinate)
   });
 }

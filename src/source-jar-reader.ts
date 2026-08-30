@@ -97,8 +97,12 @@ export function openZipFile(jarPath: string): Promise<ZipFile> {
   });
 }
 
-async function withZipFile<T>(jarPath: string, action: (zipFile: ZipFile) => Promise<T>): Promise<T> {
-  const zipFile = await openZipFile(jarPath);
+async function withZipFile<T>(
+  jarPath: string,
+  action: (zipFile: ZipFile) => Promise<T>,
+  deps: JarReaderOpenDeps = {}
+): Promise<T> {
+  const zipFile = await (deps.openZipFile ?? openZipFile)(jarPath);
   try {
     return await action(zipFile);
   } finally {
@@ -133,10 +137,35 @@ function readNextEntry(zipFile: ZipFile): Promise<ZipEntry | undefined> {
   });
 }
 
+/**
+ * Which guard refused an oversized entry, and the size it saw:
+ * - `declared`: the zip metadata's `uncompressedSize`, read before any byte of
+ *   the entry was streamed, so nothing was inflated or buffered.
+ * - `observed`: the running total of bytes actually received, i.e. the entry
+ *   ran past the budget mid-stream (its declared size was absent or a lie).
+ */
+export type EntryTooLargeSize = {
+  bytes: number;
+  source: "declared" | "observed";
+};
+
 export class EntryTooLargeError extends Error {
-  constructor(entryPath: string, jarPath: string, maxBytes: number) {
-    super(`Entry "${entryPath}" in "${jarPath}" exceeds size limit of ${maxBytes} bytes`);
+  readonly entryPath: string;
+  readonly jarPath: string;
+  readonly maxBytes: number;
+  /** Size that tripped the limit, when the throwing guard knew one. */
+  readonly size?: EntryTooLargeSize;
+
+  constructor(entryPath: string, jarPath: string, maxBytes: number, size?: EntryTooLargeSize) {
+    super(
+      `Entry "${entryPath}" in "${jarPath}" exceeds size limit of ${maxBytes} bytes` +
+        (size ? ` (${size.source} size ${size.bytes} bytes)` : "")
+    );
     this.name = "EntryTooLargeError";
+    this.entryPath = entryPath;
+    this.jarPath = jarPath;
+    this.maxBytes = maxBytes;
+    this.size = size;
   }
 }
 
@@ -164,7 +193,12 @@ function readEntryStream(
         if (maxBytes !== undefined && totalBytes > maxBytes) {
           settled = true;
           stream.destroy();
-          reject(new EntryTooLargeError(entry.fileName, jarPath, maxBytes));
+          reject(
+            new EntryTooLargeError(entry.fileName, jarPath, maxBytes, {
+              bytes: totalBytes,
+              source: "observed"
+            })
+          );
           return;
         }
         chunks.push(buf);
@@ -243,7 +277,24 @@ export async function readJarEntryAsUtf8(jarPath: string, entryPath: string): Pr
   return decodeUtf8OrThrow(contentBuffer, jarPath, entryPath);
 }
 
-export async function readJarEntryAsBuffer(jarPath: string, entryPath: string): Promise<Buffer> {
+/**
+ * Reads one entry fully into memory. `maxBytes` bounds that materialization and
+ * is enforced TWICE, because the two guards catch different lies:
+ *  - before `openReadStream` is reached at all, against the zip metadata's
+ *    declared `uncompressedSize` — an accurately-declared huge entry is refused
+ *    without inflating or buffering a single byte of it;
+ *  - while streaming, by {@link readEntryStream}'s running counter — the
+ *    backstop for an entry whose declared size understates what it actually
+ *    produces.
+ * Both reject with {@link EntryTooLargeError}. Omitting `maxBytes` keeps the
+ * historical unbounded behavior for callers that have their own bound.
+ */
+export async function readJarEntryAsBuffer(
+  jarPath: string,
+  entryPath: string,
+  maxBytes?: number,
+  deps: JarReaderOpenDeps = {}
+): Promise<Buffer> {
   const normalizedTargetPath = entryPath.replaceAll("\\", "/");
   if (!isSecureJarEntryPath(normalizedTargetPath)) {
     throw createError({
@@ -269,9 +320,15 @@ export async function readJarEntryAsBuffer(jarPath: string, entryPath: string): 
       if (entry.fileName !== normalizedTargetPath) {
         continue;
       }
-      return readEntryStream(zipFile, entry, jarPath);
+      if (maxBytes !== undefined && entry.uncompressedSize > maxBytes) {
+        throw new EntryTooLargeError(entry.fileName, jarPath, maxBytes, {
+          bytes: entry.uncompressedSize,
+          source: "declared"
+        });
+      }
+      return readEntryStream(zipFile, entry, jarPath, maxBytes);
     }
-  });
+  }, deps);
 }
 
 export interface CappedJarEntry {

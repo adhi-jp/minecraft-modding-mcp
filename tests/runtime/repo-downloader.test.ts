@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { isAppError } from "../../src/errors.ts";
 import {
   defaultDownloadPath,
   discardCachedDownload,
   downloadSidecarPath,
   downloadToCache,
   isDownloadSidecarPath,
-  resolveCachedDownload
+  loadMaxDownloadBytes,
+  resolveCachedDownload,
+  resolveRetryAfterMs
 } from "../../src/repo-downloader.ts";
 
 function sha256Of(value: string): string {
@@ -1272,16 +1275,18 @@ test("resolveCachedDownload(immutable) answers vanished bytes with a transfer or
       status: 200,
       headers: { etag: "etag-doomed" }
     });
-    // Reading a response header is the first thing the transfer does after
-    // renaming the bytes into place, and the resolver hashes them immediately
-    // after that. Pruning from inside the header read therefore lands squarely
-    // in the rename-to-hash window, with no timing assumption to go stale.
+    // The etag read is the first thing the transfer does after renaming the
+    // bytes into place, and the resolver hashes them immediately after that.
+    // Pruning from inside that specific read therefore lands squarely in the
+    // rename-to-hash window. Trapping the FIRST header read of any name would
+    // not: the size cap reads content-length before a byte is transferred, so
+    // the prune would fire before the destination file exists.
     const headerValue = response.headers.get.bind(response.headers);
     let pruned = false;
     Object.defineProperty(response.headers, "get", {
       configurable: true,
       value: (name: string): string | null => {
-        if (!pruned) {
+        if (!pruned && name.toLowerCase() === "etag") {
           pruned = true;
           rmSync(prunedDestination);
         }
@@ -1653,6 +1658,606 @@ test("discardCachedDownload gives up quietly when it can neither unlink nor empt
     await chmod(cacheDir, 0o755);
     await chmod(destination, 0o644);
   }
+});
+
+/**
+ * The production cap on a honoured `Retry-After`, pinned here rather than read
+ * from source so a regression toward trusting the header whole fails loudly.
+ * Deliberately the same literal the older cap test above uses.
+ */
+const MAX_RETRY_AFTER_MS = 30_000;
+
+test("resolveRetryAfterMs reads both RFC 9110 forms and refuses the Date.parse year trap", () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+  // delay-seconds. Every bare digit string below is one Date.parse reads as a
+  // YEAR - "12" is year 2001, "120" is year 0119, "10000" is year 9999, "0" is
+  // year 1999. Three of the four are in the PAST relative to `now`, so a year
+  // reading would return undefined for them; seconds is the only reading that
+  // yields these numbers.
+  assert.equal(resolveRetryAfterMs("12", now), 12_000);
+  assert.equal(
+    resolveRetryAfterMs("120", now),
+    MAX_RETRY_AFTER_MS,
+    "120 is 120 seconds clamped to the cap, not year 0119"
+  );
+  assert.equal(resolveRetryAfterMs("10000", now), MAX_RETRY_AFTER_MS);
+  // Header values arrive without surrounding whitespace through fetch, but the
+  // trim has to happen BEFORE the digit guard: " 120 " failing the guard would
+  // hand the year-0119 reading a value the seconds arm owns.
+  assert.equal(resolveRetryAfterMs(" 120 ", now), MAX_RETRY_AFTER_MS);
+
+  // Retry-After: 0 has never bought a pause. It must not start now.
+  assert.equal(resolveRetryAfterMs("0", now), undefined);
+
+  // Number.parseInt read this as 12 seconds - a guess about a malformed header
+  // rather than a reading of it. Date.parse says NaN, so it goes to backoff.
+  assert.equal(
+    resolveRetryAfterMs("12abc", now),
+    undefined,
+    "trailing garbage is a malformed header, not 12 seconds"
+  );
+  assert.equal(resolveRetryAfterMs("-5", now), undefined);
+  assert.equal(resolveRetryAfterMs("soon", now), undefined);
+  assert.equal(resolveRetryAfterMs("", now), undefined);
+  assert.equal(resolveRetryAfterMs("   ", now), undefined);
+  assert.equal(resolveRetryAfterMs(null, now), undefined);
+
+  // Only the whitespace RFC 9110 allows around a field value - space and
+  // horizontal tab - may be stripped. String.prototype.trim also eats CR, LF,
+  // form feed and every Unicode space separator, which turned values no HTTP
+  // parser accepts into honoured pauses: the strict digit guard is there to
+  // REFUSE a malformed header, not to be handed a repaired one.
+  assert.equal(resolveRetryAfterMs("\t12\t", now), 12_000, "a horizontal tab is OWS");
+  assert.equal(
+    resolveRetryAfterMs("\u00a012", now),
+    undefined,
+    "a non-breaking space is not OWS: the value stays malformed"
+  );
+  assert.equal(resolveRetryAfterMs("12\n", now), undefined, "a trailing newline is not OWS");
+  assert.equal(resolveRetryAfterMs("\r\n12", now), undefined);
+  assert.equal(resolveRetryAfterMs("\f12", now), undefined);
+  assert.equal(resolveRetryAfterMs("\u200912", now), undefined);
+
+  // HTTP-date - the form that used to parse as NaN and buy a ~200ms pause from
+  // a server that had asked for far longer.
+  assert.equal(resolveRetryAfterMs("Thu, 01 Jan 2026 00:00:10 GMT", now), 10_000);
+  assert.equal(
+    resolveRetryAfterMs("Fri, 28 Aug 2026 12:00:00 GMT", now),
+    MAX_RETRY_AFTER_MS,
+    "a far-future date is clamped by the same cap as a far-future delay-seconds"
+  );
+  // A date already gone behaves exactly like Retry-After: 0.
+  assert.equal(resolveRetryAfterMs("Thu, 01 Jan 2026 00:00:00 GMT", now), undefined);
+  assert.equal(resolveRetryAfterMs("Wed, 31 Dec 2025 23:59:50 GMT", now), undefined);
+});
+
+test("downloadToCache honors a retry-after given as an HTTP-date", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const root = await mkdtemp(join(tmpdir(), "downloader-retry-after-date-"));
+  const destination = join(root, "file.jar");
+  let calls = 0;
+
+  // Date.now() is NOT mocked (only setTimeout is), so the header is a real
+  // wall-clock offset. HTTP-date has one-second granularity, so the honoured
+  // delay lands somewhere in (4000, 5000].
+  const retryAt = new Date(Date.now() + 5_000).toUTCString();
+
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("", { status: 429, headers: { "retry-after": retryAt } });
+    }
+    return new Response(Buffer.from("ok-bytes"), { status: 200 });
+  }) as typeof fetch;
+
+  const resultPromise = downloadToCache("https://repo.example.com/a.jar", destination, {
+    retries: 1,
+    timeoutMs: 60_000,
+    fetchFn
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // The exponential backoff this header used to fall through to is ~200-328ms.
+  // Still holding at 3.9s is what proves the date was read as a date.
+  t.mock.timers.tick(3_900);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1, "an HTTP-date retry-after must not collapse to the ~200ms backoff");
+
+  t.mock.timers.tick(1_200);
+  const result = await resultPromise;
+
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+});
+
+test("downloadToCache caps a far-future HTTP-date retry-after at the same ceiling", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const root = await mkdtemp(join(tmpdir(), "downloader-retry-after-date-cap-"));
+  const destination = join(root, "file.jar");
+  let calls = 0;
+
+  // Ten days out. A server clock running wildly ahead of ours is the realistic
+  // shape of this, and it must not suspend the caller for ten days.
+  const retryAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1_000).toUTCString();
+
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("", { status: 429, headers: { "retry-after": retryAt } });
+    }
+    return new Response(Buffer.from("ok-bytes"), { status: 200 });
+  }) as typeof fetch;
+
+  const resultPromise = downloadToCache("https://repo.example.com/a.jar", destination, {
+    retries: 1,
+    timeoutMs: 60_000,
+    fetchFn
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  t.mock.timers.tick(MAX_RETRY_AFTER_MS - 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1, "must not retry before the capped delay elapses");
+
+  t.mock.timers.tick(2);
+  const result = await resultPromise;
+
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+});
+
+test("downloadToCache falls back to exponential backoff for a retry-after date already past", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const root = await mkdtemp(join(tmpdir(), "downloader-retry-after-date-past-"));
+  const destination = join(root, "file.jar");
+  let calls = 0;
+
+  const retryAt = new Date(Date.now() - 60_000).toUTCString();
+
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("", { status: 429, headers: { "retry-after": retryAt } });
+    }
+    return new Response(Buffer.from("ok-bytes"), { status: 200 });
+  }) as typeof fetch;
+
+  const resultPromise = downloadToCache("https://repo.example.com/a.jar", destination, {
+    retries: 1,
+    timeoutMs: 60_000,
+    fetchFn
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // A past date must behave exactly like `Retry-After: 0`: no honoured pause,
+  // backoff instead. Backoff's first delay is 200-328ms, so still holding at
+  // 150ms is what separates "fell back to backoff" from "honoured a negative
+  // delay", which would have retried on the very first tick.
+  t.mock.timers.tick(150);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1, "a past date must not be honoured as an immediate (negative) pause");
+
+  t.mock.timers.tick(400);
+  const result = await resultPromise;
+
+  assert.equal(calls, 2);
+  assert.equal(result.ok, true);
+});
+
+test("loadMaxDownloadBytes accepts only a strict byte count and clamps to the floor", () => {
+  const DEFAULT_MAX_DOWNLOAD_BYTES = 536_870_912;
+  const MIN_MAX_DOWNLOAD_BYTES = 1_048_576;
+
+  assert.equal(loadMaxDownloadBytes(undefined), DEFAULT_MAX_DOWNLOAD_BYTES);
+  // An UNSET variable expands to the empty string, which is not a digit string
+  // and takes the default - the floor has nothing to do with it. What arrives
+  // as "0" was written deliberately by something (a config template with an
+  // unfilled slot, a shell arithmetic default), and it would refuse every
+  // download, so it is raised to the floor rather than honoured.
+  assert.equal(loadMaxDownloadBytes(""), DEFAULT_MAX_DOWNLOAD_BYTES);
+  assert.equal(loadMaxDownloadBytes("0"), MIN_MAX_DOWNLOAD_BYTES);
+  assert.equal(loadMaxDownloadBytes("abc"), DEFAULT_MAX_DOWNLOAD_BYTES);
+  // Number.parseInt would read this as 12. The strict guard does not.
+  assert.equal(loadMaxDownloadBytes("12abc"), DEFAULT_MAX_DOWNLOAD_BYTES);
+  assert.equal(loadMaxDownloadBytes("1073741824"), 1_073_741_824);
+  // Past Number.MAX_SAFE_INTEGER the value no longer round-trips, so it is not
+  // a limit anything can be compared against.
+  assert.equal(loadMaxDownloadBytes("9007199254740993"), DEFAULT_MAX_DOWNLOAD_BYTES);
+});
+
+/**
+ * A body whose bytes are only produced when something actually reads them, and
+ * which records how many it produced.
+ *
+ * `highWaterMark: 0` is the point: with the default of 1 the stream pulls one
+ * chunk eagerly at construction, and a "was the body read" assertion would be
+ * answered by the stream's own pre-buffering rather than by production code.
+ *
+ * `bytesProduced` is what separates a guard that tears the transfer down AT the
+ * breach from one that lets the whole body land and checks the size afterwards:
+ * both end with an error and an empty directory, and only the byte count tells
+ * them apart.
+ */
+function countingBody(chunks: Uint8Array[]): {
+  body: ReadableStream<Uint8Array>;
+  state: { pulls: number; bytesProduced: number; cancelled: boolean };
+} {
+  const state = { pulls: 0, bytesProduced: 0, cancelled: false };
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        state.pulls += 1;
+        if (index >= chunks.length) {
+          controller.close();
+          return;
+        }
+        state.bytesProduced += chunks[index]!.byteLength;
+        controller.enqueue(chunks[index]);
+        index += 1;
+      },
+      cancel() {
+        state.cancelled = true;
+      }
+    },
+    { highWaterMark: 0 }
+  );
+  return { body, state };
+}
+
+test("downloadToCache refuses an over-cap Content-Length before reading the body", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-declared-"));
+  const destination = join(root, "file.jar");
+  const { body, state } = countingBody([new Uint8Array(64)]);
+
+  const fetchFn: typeof fetch = (async () =>
+    new Response(body, {
+      status: 200,
+      headers: { "content-length": "64" }
+    })) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      downloadToCache("https://repo.example.com/big.jar", destination, {
+        retries: 0,
+        timeoutMs: 5_000,
+        maxBytes: 16,
+        fetchFn
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+      assert.equal(error.details?.stage, "content-length");
+      assert.equal(error.details?.actual, 64);
+      assert.equal(error.details?.limit, 16);
+      assert.match(String(error.details?.nextAction), /MCP_MAX_DOWNLOAD_BYTES/);
+      return true;
+    }
+  );
+
+  assert.equal(state.pulls, 0, "the declared size must be refused before a byte is transferred");
+  assert.equal(state.cancelled, true, "the untouched body must be released, not left holding the socket");
+  assert.deepEqual(await readdir(root), [], "no destination and no temp file may be left behind");
+});
+
+test("downloadToCache refuses a chunked body that outgrows the cap mid-stream", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-stream-"));
+  const destination = join(root, "file.jar");
+  // No content-length at all, exactly as a chunked response arrives: the
+  // pre-check has nothing to look at and the counting guard is the only thing
+  // standing between a runaway body and the disk.
+  //
+  // Sized so the body is far larger than the cap and the breach lands on a
+  // known chunk: 64 KiB chunks against a 100 KiB cap breach on the SECOND one,
+  // with 30 more behind it that must never be asked for.
+  const CHUNK_BYTES = 64 * 1024;
+  const CHUNK_COUNT = 32;
+  const BODY_BYTES = CHUNK_BYTES * CHUNK_COUNT;
+  const MAX_BYTES = 100 * 1024;
+  const { body, state } = countingBody(
+    Array.from({ length: CHUNK_COUNT }, () => new Uint8Array(CHUNK_BYTES))
+  );
+
+  const fetchFn: typeof fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      downloadToCache("https://repo.example.com/chunked.jar", destination, {
+        retries: 0,
+        timeoutMs: 5_000,
+        maxBytes: MAX_BYTES,
+        fetchFn
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+      assert.equal(error.details?.stage, "stream");
+      assert.equal(error.details?.limit, MAX_BYTES);
+      assert.equal(
+        error.details?.actual,
+        2 * CHUNK_BYTES,
+        "the reported count is the running total at the chunk that broke the cap"
+      );
+      assert.match(String(error.details?.nextAction), /MCP_MAX_DOWNLOAD_BYTES/);
+      return true;
+    }
+  );
+
+  // THE POINT OF THIS TEST. An implementation that transfers the whole body and
+  // stats the file afterwards - then deletes it - ends in exactly the same
+  // error with exactly the same empty directory, and would pass every other
+  // assertion here. What it cannot do is stop pulling: it would have produced
+  // all 2 MiB. The cap exists to save bandwidth, so "was the transfer torn down
+  // at the breach" is the behaviour under test, and the body's own byte counter
+  // is the only witness to it.
+  assert.ok(
+    state.bytesProduced < BODY_BYTES,
+    `the body must not be drained after the breach: produced ${state.bytesProduced} of ${BODY_BYTES} bytes`
+  );
+  assert.ok(
+    state.bytesProduced <= 4 * CHUNK_BYTES,
+    `the breach is on chunk 2, so at most a chunk or two of stream read-ahead may follow it: produced ${state.bytesProduced} bytes`
+  );
+
+  assert.deepEqual(
+    await readdir(root),
+    [],
+    "the partial write must not survive the refusal - no destination, no .tmp"
+  );
+});
+
+test("downloadToCache does not retry a size refusal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-noretry-"));
+
+  // BOTH refusal stages, because they leave the loop by different routes: the
+  // declared-length check throws before the body is touched, while the
+  // streaming guard throws from inside a pipeline stage and is re-wrapped by
+  // the temp-file cleanup on the way out. A no-retry rule that only covered the
+  // first would still turn one runaway chunked transfer into three.
+  const stages: Array<{
+    label: string;
+    stage: string;
+    headers: Record<string, string>;
+  }> = [
+    { label: "declared", stage: "content-length", headers: { "content-length": "64" } },
+    { label: "streamed", stage: "stream", headers: {} }
+  ];
+
+  for (const { label, stage, headers } of stages) {
+    const destination = join(root, `${label}.jar`);
+    let calls = 0;
+
+    const fetchFn: typeof fetch = (async () => {
+      calls += 1;
+      return new Response(countingBody([new Uint8Array(64)]).body, { status: 200, headers });
+    }) as typeof fetch;
+
+    await assert.rejects(
+      () =>
+        downloadToCache("https://repo.example.com/big.jar", destination, {
+          // Retries deliberately ON. A breach is deterministic, so retrying it
+          // turns one oversized transfer into three.
+          retries: 2,
+          timeoutMs: 5_000,
+          maxBytes: 16,
+          fetchFn
+        }),
+      (error: unknown) => {
+        assert.ok(isAppError(error));
+        assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+        assert.equal(error.details?.stage, stage, `the ${label} refusal must come from the ${stage} check`);
+        return true;
+      }
+    );
+
+    assert.equal(
+      calls,
+      1,
+      `a ${label} size refusal is a verdict, not a passing fault: it must not be retried`
+    );
+  }
+});
+
+test("downloadToCache still retries an ordinary failure when a size cap is configured", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-retry-others-"));
+  const destination = join(root, "file.jar");
+  let calls = 0;
+
+  // The other direction of the no-retry rule, and the one a too-broad guard
+  // breaks silently: suppressing retries for everything would also pass a test
+  // that only proves a breach is not retried. A dropped connection is exactly
+  // the passing fault the retry loop exists for, and configuring a cap must not
+  // cost the caller that recovery.
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error("socket hang up");
+    }
+    return new Response(Buffer.from("ok-bytes"), { status: 200 });
+  }) as typeof fetch;
+
+  const result = await downloadToCache("https://repo.example.com/a.jar", destination, {
+    retries: 2,
+    timeoutMs: 5_000,
+    maxBytes: 1024,
+    fetchFn
+  });
+
+  assert.equal(calls, 2, "a network fault under a configured cap must still be retried");
+  assert.equal(result.ok, true);
+  assert.equal(await readFile(destination, "utf8"), "ok-bytes");
+});
+
+test("downloadToCache refuses a body one byte over the cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-over-"));
+
+  // The boundary from the other side. "Accepts exactly the cap" alone is passed
+  // by a guard that never refuses anything at all; cap+1 is what proves the
+  // comparison is `>` rather than absent, on both checks.
+  const cases: Array<{ label: string; stage: string; headers: Record<string, string> }> = [
+    { label: "declared", stage: "content-length", headers: { "content-length": "9" } },
+    { label: "streamed", stage: "stream", headers: {} }
+  ];
+
+  for (const { label, stage, headers } of cases) {
+    const destination = join(root, `${label}.jar`);
+    const fetchFn: typeof fetch = (async () =>
+      new Response(Buffer.from("123456789"), { status: 200, headers })) as typeof fetch;
+
+    await assert.rejects(
+      () =>
+        downloadToCache("https://repo.example.com/over.jar", destination, {
+          retries: 0,
+          timeoutMs: 5_000,
+          maxBytes: 8,
+          fetchFn
+        }),
+      (error: unknown) => {
+        assert.ok(isAppError(error));
+        assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+        assert.equal(error.details?.stage, stage);
+        assert.equal(error.details?.actual, 9);
+        assert.equal(error.details?.limit, 8);
+        return true;
+      }
+    );
+
+    assert.equal(existsSync(destination), false, `the ${label} refusal must leave no artifact`);
+  }
+});
+
+test("downloadToCache treats a malformed Content-Length as absent rather than as a breach", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-malformed-cl-"));
+
+  // Number.parseInt reads "536870913abc" as 536870913 and refuses a transfer
+  // that declared nothing of the sort - a FALSE refusal, the one failure mode a
+  // deliberately generous ceiling exists to avoid. A header this cannot read is
+  // not evidence of size in either direction, so it is ignored and the transfer
+  // proceeds under the streaming guard.
+  const acceptedDestination = join(root, "small.jar");
+  const acceptFetch: typeof fetch = (async () =>
+    new Response(Buffer.from("ok-bytes"), {
+      status: 200,
+      headers: { "content-length": "536870913abc" }
+    })) as typeof fetch;
+
+  const result = await downloadToCache("https://repo.example.com/small.jar", acceptedDestination, {
+    retries: 0,
+    timeoutMs: 5_000,
+    maxBytes: 16,
+    fetchFn: acceptFetch
+  });
+
+  assert.equal(result.ok, true, "a garbled header must not refuse a body that is well under the cap");
+  assert.equal(result.contentLength, 8);
+
+  // And ignoring the header costs nothing, because the streaming guard still
+  // counts what actually arrives.
+  const refusedDestination = join(root, "big.jar");
+  const refuseFetch: typeof fetch = (async () =>
+    new Response(Buffer.from("123456789"), {
+      status: 200,
+      headers: { "content-length": "not-a-number" }
+    })) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      downloadToCache("https://repo.example.com/big.jar", refusedDestination, {
+        retries: 0,
+        timeoutMs: 5_000,
+        maxBytes: 8,
+        fetchFn: refuseFetch
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+      assert.equal(error.details?.stage, "stream", "an unreadable header leaves the verdict to the byte count");
+      return true;
+    }
+  );
+});
+
+test("resolveCachedDownload(revalidate) refuses the stale fallback for a size breach instead of hiding it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-stale-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
+
+  // A SNAPSHOT that grew past the ceiling. Stale-if-error exists for TRANSIENT
+  // faults - an outage, a 5xx, a reset - where the cached bytes are the best
+  // available answer and the next call may confirm them. A cap breach is none
+  // of those: it is deterministic and configuration-driven, so absorbing it
+  // reports success, hides the reason, suppresses failover, and pins the
+  // coordinate to its old bytes on every future call, invisibly and forever.
+  const fetchFn: typeof fetch = (async () =>
+    new Response(Buffer.from("x"), {
+      status: 200,
+      headers: { "content-length": "4096", etag: "etag-v2" }
+    })) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      resolveCachedDownload(url, destination, {
+        freshness: "revalidate",
+        retries: 0,
+        timeoutMs: 2_000,
+        maxBytes: 1024,
+        fetchFn
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_LIMIT_EXCEEDED");
+      assert.equal(error.details?.stage, "content-length");
+      assert.match(
+        String(error.details?.nextAction),
+        /MCP_MAX_DOWNLOAD_BYTES/,
+        "the refusal has to keep carrying the variable that lifts it"
+      );
+      return true;
+    }
+  );
+
+  // Refusing is not evicting: the bytes already held are still there, still
+  // identified, and still the answer for any caller that asks with a ceiling
+  // they can meet.
+  assert.equal(await readFile(destination, "utf8"), "snapshot-bytes-v1");
+  const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
+  assert.equal(
+    sidecar.contentSha256,
+    sha256Of("snapshot-bytes-v1"),
+    "the retired record must go back with the bytes it describes, as on every other keep-the-bytes leg"
+  );
+  assert.equal(sidecar.etag, "etag-v1");
+});
+
+test("downloadToCache accepts a body exactly at the cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-maxbytes-exact-"));
+  const destination = join(root, "file.jar");
+  const payload = Buffer.from("ok-bytes");
+  assert.equal(payload.length, 8);
+
+  const fetchFn: typeof fetch = (async () =>
+    new Response(payload, { status: 200, headers: { "content-length": "8" } })) as typeof fetch;
+
+  const result = await downloadToCache("https://repo.example.com/exact.jar", destination, {
+    retries: 0,
+    timeoutMs: 5_000,
+    maxBytes: 8,
+    fetchFn
+  });
+
+  // The ceiling is inclusive on both checks. An off-by-one here would refuse a
+  // legitimate artifact that happens to land on the limit.
+  assert.equal(result.ok, true);
+  assert.equal(result.contentLength, 8);
+  assert.equal(await readFile(destination, "utf8"), "ok-bytes");
 });
 
 test("isDownloadSidecarPath recognises the leftover of an interrupted sidecar write", async () => {

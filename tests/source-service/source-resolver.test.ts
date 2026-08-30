@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { ERROR_CODES } from "../../src/errors.ts";
+import { ERROR_CODES, isAppError } from "../../src/errors.ts";
 import { defaultDownloadPath, downloadSidecarPath } from "../../src/repo-downloader.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
+import { mapErrorToProblem } from "../../src/tool-guidance.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -1529,4 +1530,173 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   );
   assert.equal(second.artifactSignature, first.artifactSignature);
   assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget publishes the download size cap to the CALLER, even behind a later unrelated failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-download-cap-"));
+  const gradleUserHome = join(root, "gradle-home");
+  await mkdir(gradleUserHome, { recursive: true });
+
+  // The floor loadMaxDownloadBytes clamps to, so the declared length below only
+  // has to clear 1 MiB - no multi-hundred-megabyte fixture required.
+  const previousMaxDownloadBytes = process.env.MCP_MAX_DOWNLOAD_BYTES;
+  process.env.MCP_MAX_DOWNLOAD_BYTES = "1048576";
+
+  // A MIXED cascade, which is what makes this a test rather than a tautology.
+  // The sources leg trips the ceiling - the actionable failure, the only one
+  // that names a setting the user can change - and the binary leg that runs
+  // after it fails differently and blandly. Under plain "keep the last
+  // failure", that 503 erased the cap and the caller was told only that
+  // repositories were unstable.
+  const sourceUrl = "https://repo.example.test/com/example/oversized/1.0/oversized-1.0-sources.jar";
+  const binaryUrl = "https://repo.example.test/com/example/oversized/1.0/oversized-1.0.jar";
+  const requested: string[] = [];
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    requested.push(url);
+    if (url === sourceUrl) {
+      // A declared size above the ceiling. The body is never read - the
+      // Content-Length pre-check refuses the transfer first - so it stays tiny.
+      return new Response(Buffer.from("x"), {
+        status: 200,
+        headers: { "content-length": "2097152" }
+      });
+    }
+    return new Response("upstream unavailable", { status: 503 });
+  }) as typeof fetch;
+
+  try {
+    const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+
+    const caught = await withGradleHome(gradleUserHome, () =>
+      withFetch(fetchStub, async () => {
+        try {
+          await resolveSourceTarget(
+            { kind: "coordinate", value: "com.example:oversized:1.0" },
+            { allowDecompile: true },
+            config
+          );
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      })
+    );
+
+    assert.ok(caught, "an artifact that cannot be downloaded must not resolve");
+    assert.ok(isAppError(caught));
+    // The failover behaviour is unchanged on purpose: one oversized mirror must
+    // not break resolution, so every repository is still tried and the terminal
+    // code is still the transient one.
+    assert.equal(caught.code, ERROR_CODES.REPO_FETCH_FAILED);
+    assert.deepEqual(
+      requested,
+      [sourceUrl, binaryUrl],
+      "both legs must have run, in order, for the overwrite this guards against to be possible at all"
+    );
+
+    // The message alone has always said "unstable", which is exactly the dead
+    // end this test exists to close: a configurable ceiling is not instability,
+    // and a user told their repositories are unstable has no route to the knob.
+    assert.match(caught.message, /unstable repository responses/);
+
+    // THROUGH THE PUBLIC MAPPING, NOT THE AppError. `ProblemDetails` has no
+    // `details` passthrough and the envelope serialises only selected fields,
+    // so an assertion on `caught.details` proves nothing about what a caller
+    // receives - which is precisely how the earlier version of this feature
+    // passed its tests while shipping an unreachable reason.
+    const problem = mapErrorToProblem(caught, "req-download-cap");
+
+    assert.equal(problem.code, ERROR_CODES.REPO_FETCH_FAILED);
+    assert.ok(problem.hints, "the terminal error must publish hints at all");
+    assert.ok(
+      problem.hints.some((hint) => hint.includes("MCP_MAX_DOWNLOAD_BYTES")),
+      `the variable that lifts the ceiling must reach the caller; hints were ${JSON.stringify(problem.hints)}`
+    );
+    assert.equal(
+      problem.context?.repoFailureCode,
+      ERROR_CODES.LIMIT_EXCEEDED,
+      "the machine-readable half: a caller branching on the cause must not have to parse the hint"
+    );
+
+    // And the internal record is exactly that - internal. Asserting its absence
+    // from the published envelope keeps the next reader from re-adding an
+    // assertion on it and re-declaring victory.
+    assert.equal(
+      (problem as Record<string, unknown>).lastRepoFailure,
+      undefined,
+      "lastRepoFailure is an internal object; nothing serialises it"
+    );
+    assert.ok(
+      !JSON.stringify(problem).includes("lastRepoFailure"),
+      "no part of the published envelope may claim to carry the internal failure record"
+    );
+
+    // The internal record still exists for logs, and still describes the leg
+    // that actually earned the hint rather than the 503 that followed it.
+    const lastRepoFailure = (caught.details as Record<string, unknown> | undefined)
+      ?.lastRepoFailure as Record<string, unknown> | undefined;
+    assert.ok(lastRepoFailure, "the kept repository failure must survive into the terminal error");
+    assert.equal(lastRepoFailure.code, ERROR_CODES.LIMIT_EXCEEDED);
+    assert.equal(
+      lastRepoFailure.repoUrl,
+      sourceUrl,
+      "the actionable failure is kept; the later 503 must not overwrite it"
+    );
+  } finally {
+    if (previousMaxDownloadBytes === undefined) {
+      delete process.env.MCP_MAX_DOWNLOAD_BYTES;
+    } else {
+      process.env.MCP_MAX_DOWNLOAD_BYTES = previousMaxDownloadBytes;
+    }
+  }
+});
+
+test("resolveSourceTarget keeps the most recent failure when none of them is actionable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-download-recency-"));
+  const gradleUserHome = join(root, "gradle-home");
+  await mkdir(gradleUserHome, { recursive: true });
+
+  // The other half of the retention rule. "First actionable wins" must not
+  // become "first wins": with no `nextAction` anywhere in the cascade, the
+  // record is still the most recent failure, so the terminal error describes
+  // where the search actually gave up.
+  const sourceUrl = "https://repo.example.test/com/example/plain/1.0/plain-1.0-sources.jar";
+  const binaryUrl = "https://repo.example.test/com/example/plain/1.0/plain-1.0.jar";
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
+    const url = requestUrlOf(input);
+    return new Response("upstream unavailable", { status: url === sourceUrl ? 500 : 503 });
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+
+  const caught = await withGradleHome(gradleUserHome, () =>
+    withFetch(fetchStub, async () => {
+      try {
+        await resolveSourceTarget(
+          { kind: "coordinate", value: "com.example:plain:1.0" },
+          { allowDecompile: true },
+          config
+        );
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    })
+  );
+
+  assert.ok(caught);
+  assert.ok(isAppError(caught));
+  assert.equal(caught.code, ERROR_CODES.REPO_FETCH_FAILED);
+
+  const lastRepoFailure = (caught.details as Record<string, unknown> | undefined)
+    ?.lastRepoFailure as Record<string, unknown> | undefined;
+  assert.ok(lastRepoFailure);
+  assert.equal(lastRepoFailure.repoUrl, binaryUrl, "the last leg tried is the one reported");
+  assert.equal(lastRepoFailure.statusCode, 503);
+
+  // Nothing actionable happened, so nothing is invented: no hint, no cause code.
+  const problem = mapErrorToProblem(caught, "req-download-recency");
+  assert.equal(problem.hints, undefined);
+  assert.equal(problem.context?.repoFailureCode, undefined);
 });

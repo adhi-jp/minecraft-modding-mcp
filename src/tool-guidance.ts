@@ -9,7 +9,7 @@ import {
 import {
   extractAllowlistedContext,
   extractDidYouMean,
-  extractNestedJars,
+  extractNestedJarsField,
   problemClassification,
   statusForErrorCode,
   type ExampleCall,
@@ -1380,7 +1380,10 @@ export function mapErrorToProblem(
     const effectiveExampleCalls = invalidInputGuidance?.exampleCalls ?? exampleCalls;
     const sanitizedContext = extractAllowlistedContext(caughtError.details);
     const extractedDidYouMean = extractDidYouMean(caughtError.details);
-    const extractedNestedJars = extractNestedJars(caughtError.details);
+    // The field-returning form: the main tool-error path owes a caller the same
+    // truncation signal the batch path publishes, or a shortened inventory
+    // reads as a complete one.
+    const nestedJarsField = extractNestedJarsField(caughtError.details);
     let failedStage = extractFailedStageFromDetails(caughtError.details);
     if (
       !failedStage
@@ -1414,7 +1417,7 @@ export function mapErrorToProblem(
       ...(effectiveSuggestedCall ? { suggestedCall: effectiveSuggestedCall } : {}),
       ...(effectiveExampleCalls ? { exampleCalls: effectiveExampleCalls } : {}),
       ...(extractedDidYouMean ? { didYouMean: extractedDidYouMean } : {}),
-      ...(extractedNestedJars ? { nestedJars: extractedNestedJars } : {}),
+      ...nestedJarsField,
       ...(failedStage ? { failedStage } : {}),
       ...(sanitizedContext ? { context: sanitizedContext } : {})
     };

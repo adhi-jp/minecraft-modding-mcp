@@ -14,7 +14,7 @@ import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 
 /**
  * Identity versus freshness.
@@ -67,6 +67,14 @@ export interface DownloadOptions {
    * it alone knows whether the bytes they describe are still on disk.
    */
   requestHeaders?: Record<string, string>;
+  /**
+   * Ceiling on the bytes a single transfer may write, defaulting to
+   * {@link loadMaxDownloadBytes}. Exceeding it throws `ERR_LIMIT_EXCEEDED`
+   * rather than returning a failed result, because a breach is a refusal to
+   * transfer rather than an answer from the repository - and it is never
+   * retried.
+   */
+  maxBytes?: number;
 }
 
 /**
@@ -259,6 +267,192 @@ function retryDelay(baseMs: number, attempt: number): number {
 
 /** Upper bound on how long a repository-supplied `Retry-After` may pause a retry. */
 const MAX_RETRY_AFTER_MS = 30_000;
+
+/**
+ * Strip only the whitespace RFC 9110 permits around a field value - ASCII space
+ * and horizontal tab, the grammar's OWS.
+ *
+ * `String.prototype.trim` strips far more: CR, LF, form feed, and every Unicode
+ * space separator, U+00A0 included. That is the wrong tool for a header, because
+ * the strict digit guards below exist precisely to REFUSE a value no HTTP parser
+ * would accept - and a JavaScript trim quietly repairs one into a value they
+ * accept. `" 12"` reaching the seconds arm as `12` is the same class of
+ * guess `Number.parseInt("12abc")` was.
+ */
+function trimOptionalWhitespace(value: string): string {
+  return value.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+}
+
+/**
+ * A `Retry-After` header as milliseconds to wait, or undefined when the header
+ * gives no usable pause and exponential backoff should decide instead.
+ *
+ * RFC 9110 permits two forms and this accepts both: `delay-seconds`, and an
+ * HTTP-date. The date form used to parse as NaN here and fall through to the
+ * ~200ms first backoff, so a repository that asked for a long pause got hammered
+ * instead.
+ *
+ * ORDER IS LOAD-BEARING. `Date.parse` reads a bare digit string as a YEAR -
+ * `Date.parse("120")` is year 0119, `Date.parse("0")` is year 1999 - so the
+ * numeric arm must be tried first, and it must be STRICT. `Number.parseInt`
+ * is not: it read `12abc` as 12 seconds, which is a guess about a malformed
+ * header rather than a reading of it. The `/^\d+$/` guard here is the same
+ * one `loadMaxFrameBytes` uses in json-rpc-framing.ts; anything the guard
+ * rejects goes to `Date.parse`, and anything `Date.parse` rejects goes to
+ * backoff. The surrounding whitespace is stripped by
+ * {@link trimOptionalWhitespace} rather than `String.prototype.trim`, so a
+ * non-OWS character cannot smuggle a value past the guard.
+ *
+ * A non-positive result is rejected in BOTH arms, so a date already in the past
+ * behaves exactly like `Retry-After: 0` has always behaved: no honoured pause,
+ * exponential backoff instead. The survivor is clamped by the same
+ * {@link MAX_RETRY_AFTER_MS} the numeric form has always been clamped by, which
+ * bounds clock skew in both directions - a date far in the future cannot stall
+ * the caller past the cap.
+ *
+ * DELIBERATE OMISSION: the delta is measured against `nowMs` (the caller passes
+ * `Date.now()`), not against the response's own `Date` header. A server whose
+ * clock runs ahead of ours therefore buys at most the cap, which is the whole
+ * damage the cap exists to bound; correlating two clocks to shave a bounded
+ * wait is not worth the extra failure mode.
+ */
+export function resolveRetryAfterMs(
+  headerValue: string | null,
+  nowMs: number
+): number | undefined {
+  const raw = trimOptionalWhitespace(headerValue ?? "");
+  if (raw === "") {
+    return undefined;
+  }
+
+  let delayMs: number;
+  if (/^\d+$/.test(raw)) {
+    delayMs = Number(raw) * 1000;
+  } else {
+    const parsedDate = Date.parse(raw);
+    if (Number.isNaN(parsedDate)) {
+      return undefined;
+    }
+    delayMs = parsedDate - nowMs;
+  }
+
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return undefined;
+  }
+  return Math.min(delayMs, MAX_RETRY_AFTER_MS);
+}
+
+/**
+ * Ceiling on the bytes a single transfer may write, before it is refused.
+ *
+ * 512 MiB. The largest artifact this project has ever downloaded is a 58.07 MB
+ * Minecraft server jar, and the largest jar in a real Gradle cache measured
+ * alongside it is 22.86 MB, so this is ~8.8x the largest observed artifact. The
+ * generosity is the point: Minecraft server jars have grown steadily across
+ * versions, and a ceiling that trips on a legitimate artifact is a self-inflicted
+ * outage, while one that only trips on a runaway response costs nothing.
+ */
+const DEFAULT_MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Floor on a configured ceiling. A value below this is raised to it rather than
+ * honoured.
+ *
+ * `MCP_MAX_DOWNLOAD_BYTES=0` would refuse every transfer, which disables this
+ * server rather than tuning it - and nothing here could tell the operator that
+ * is what they asked for, because the refusal names the same variable they
+ * already set. An UNSET variable is not this case: it expands to nothing, fails
+ * the digit guard, and takes the default. What reaches here as `"0"` is a value
+ * something wrote deliberately - a config template with an unfilled numeric
+ * slot, a shell arithmetic default, an orchestrator serializing "no value" as a
+ * zero - none of which is a request to stop downloading. Raising it keeps the
+ * server working, and an operator who genuinely wants no network has
+ * repository configuration for that.
+ */
+const MIN_MAX_DOWNLOAD_BYTES = 1024 * 1024;
+
+/**
+ * The configured download ceiling, mirroring `loadMaxFrameBytes` in
+ * json-rpc-framing.ts: strict ASCII digits, a safe integer, clamped to a floor,
+ * and the default for anything else. Deliberately module-local rather than a
+ * `Config` field - this module takes no `Config` object today, and threading one
+ * through nine call sites to carry a single number would be the larger change.
+ */
+export function loadMaxDownloadBytes(value = process.env.MCP_MAX_DOWNLOAD_BYTES): number {
+  if (!/^[0-9]+$/.test(value ?? "")) {
+    return DEFAULT_MAX_DOWNLOAD_BYTES;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    return DEFAULT_MAX_DOWNLOAD_BYTES;
+  }
+  return Math.max(parsed, MIN_MAX_DOWNLOAD_BYTES);
+}
+
+/**
+ * The body size a response declares, or undefined when it declares none this
+ * module is willing to read.
+ *
+ * Strict for the reason `resolveRetryAfterMs` is strict: `Number.parseInt` reads
+ * `"536870913abc"` as 536870913, so a garbled header could refuse a transfer
+ * that never declared a size at all - a false refusal, which is the one failure
+ * mode a generous ceiling exists to avoid. A header this cannot read is treated
+ * as ABSENT rather than as a breach, which costs nothing: the streaming guard
+ * counts the bytes that actually arrive and bounds the transfer either way.
+ * A value past `Number.MAX_SAFE_INTEGER` takes the same route - it no longer
+ * round-trips, so it is not a number the comparison below can trust.
+ */
+function declaredContentLength(headerValue: string | null): number | undefined {
+  const raw = trimOptionalWhitespace(headerValue ?? "");
+  if (!/^[0-9]+$/.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/** Which of the two size checks refused the transfer. */
+export type DownloadLimitStage = "content-length" | "stream";
+
+/**
+ * Refuse an oversized transfer, in the shape `src/nbt/pipeline.ts` established
+ * for a limit breach: `ERR_LIMIT_EXCEEDED` (already a 413-shaped status) with
+ * the stage, the observed value, the limit, and a `nextAction` naming the
+ * environment variable that raises it. Without the variable named here, a caller
+ * who hits the ceiling has no route to it.
+ */
+function limitExceeded(
+  stage: DownloadLimitStage,
+  url: string,
+  actual: number,
+  limit: number
+): never {
+  throw createError({
+    code: ERROR_CODES.LIMIT_EXCEEDED,
+    message:
+      stage === "content-length"
+        ? `Download declares ${actual} bytes, above the ${limit}-byte download limit.`
+        : `Download exceeded the ${limit}-byte download limit mid-stream.`,
+    details: {
+      stage,
+      url,
+      actual,
+      limit,
+      nextAction: `Raise MCP_MAX_DOWNLOAD_BYTES above ${actual} to allow this download.`
+    }
+  });
+}
+
+/**
+ * Whether an error is this module's size refusal.
+ *
+ * The retry loop consults this: a breach is deterministic, so retrying it turns
+ * one oversized transfer into three and wastes the bandwidth the ceiling exists
+ * to save.
+ */
+function isDownloadLimitError(error: unknown): boolean {
+  return isAppError(error) && error.code === ERROR_CODES.LIMIT_EXCEEDED;
+}
 
 /** Stream the file through sha256 so a multi-hundred-megabyte jar never lands in memory. */
 export async function digestFile(filePath: string): Promise<{ contentSha256: string; contentLength: number }> {
@@ -688,7 +882,10 @@ function cachedByteCount(filePath: string): number {
  * unconditional "file exists -> reuse it" behaviour - but they are reported as
  * `cacheStatus: "stale"`, never as a confirmed hit. A definitive rejection
  * ({@link DEFINITIVE_REJECTION_STATUS_CODES}) is reported as the failure it is,
- * so the caller can fail over to another repository.
+ * so the caller can fail over to another repository. A download refused by the
+ * size ceiling propagates for the same reason: it is a verdict on the response,
+ * not a passing fault, so standing the old bytes in for it would hide a
+ * configuration problem behind permanent, silent staleness.
  *
  * A zero-byte answer is refused rather than cached: see {@link cachedByteCount}.
  *
@@ -816,6 +1013,22 @@ export async function resolveCachedDownload(
   try {
     downloaded = await performTransfer(freshness === "revalidate");
   } catch (caughtError) {
+    // A size refusal is not a fault the stale copy can stand in for. Everything
+    // else this catch answers is TRANSIENT - an outage, a reset, a timeout -
+    // where the bytes on disk are the best available answer and the next call
+    // may well confirm them. A breach is a deterministic, configuration-driven
+    // verdict: the same response is refused at the same byte on every call, and
+    // the only thing that changes it is the operator raising
+    // MCP_MAX_DOWNLOAD_BYTES. Serving stale here would report success, hide the
+    // reason, suppress failover to a repository that might serve a smaller
+    // artifact, and leave a SNAPSHOT that outgrew the ceiling pinned to its old
+    // bytes forever - invisibly, since nothing in the result says why. The old
+    // bytes are still on disk and still valid; the record goes back with them,
+    // exactly as on the legs below that keep them.
+    if (isDownloadLimitError(caughtError)) {
+      restoreRetiredSidecar();
+      throw caughtError;
+    }
     // Stale-if-error: a byte-exact copy of what the repository handed out before
     // beats failing outright, as long as the caller is told it is unconfirmed.
     const stale = await serveCachedBytes("stale");
@@ -984,6 +1197,7 @@ export async function downloadToCache(
   const timeoutMs = opts.timeoutMs ?? 15000;
   const maxRetries = opts.retries ?? 2;
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
+  const maxBytes = opts.maxBytes ?? loadMaxDownloadBytes();
 
   requireHttpUrl(url);
 
@@ -1024,14 +1238,13 @@ export async function downloadToCache(
           return { ok: false, statusCode: status };
         }
 
-        const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
         // A repository-supplied Retry-After is a hint, not a mandate: an
         // unreasonable value (or a hostile one) must not stall the caller far
         // past what a retry is worth, so it is capped rather than trusted whole.
+        // Both RFC 9110 forms are read; see resolveRetryAfterMs.
         const waitMs =
-          Number.isFinite(retryAfter) && retryAfter > 0
-            ? Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS)
-            : retryDelay(200, attempt);
+          resolveRetryAfterMs(response.headers.get("retry-after"), Date.now()) ??
+          retryDelay(200, attempt);
         await sleep(waitMs);
         attempt += 1;
         continue;
@@ -1047,13 +1260,51 @@ export async function downloadToCache(
         };
       }
 
+      // First of two size checks. A declared Content-Length above the ceiling is
+      // refused before a single byte is transferred, so the common case costs no
+      // bandwidth and no disk at all. It is only the FIRST check because the
+      // header is optional (a chunked response carries none), unverified (a
+      // wrong one is not a protocol violation the client can rely on catching),
+      // and read strictly (see declaredContentLength: a header this cannot parse
+      // is treated as absent, never as a breach); the streaming guard below is
+      // what actually bounds the bytes written.
+      const declaredLength = declaredContentLength(response.headers.get("content-length"));
+      if (declaredLength !== undefined && declaredLength > maxBytes) {
+        // Nothing here reads the body, so release it rather than leaving the
+        // socket held open until GC gets to it.
+        void response.body?.cancel().catch(() => {
+          // best-effort release
+        });
+        limitExceeded("content-length", url, declaredLength, maxBytes);
+      }
+
       const tempPath = `${destinationPath}.${randomBytes(4).toString("hex")}.tmp`;
       try {
         if (!response.body) {
           writeFileSync(tempPath, Buffer.alloc(0));
         } else {
           const readable = Readable.fromWeb(response.body as unknown as any);
-          await pipeline(readable, createWriteStream(tempPath), { signal: timeout.signal });
+          // Second size check, and the one that is load-bearing: it counts the
+          // bytes actually delivered, so it holds when Content-Length is absent
+          // or lies. Placed as a pipeline stage rather than a post-hoc stat so
+          // the transfer is torn down at the breach instead of after the whole
+          // oversized body has landed on disk. The catch below unlinks the temp
+          // file, so the partial write does not survive the refusal.
+          const limitBytes = async function* (
+            source: AsyncIterable<Buffer>
+          ): AsyncGenerator<Buffer> {
+            let received = 0;
+            for await (const chunk of source) {
+              received += chunk.length;
+              if (received > maxBytes) {
+                limitExceeded("stream", url, received, maxBytes);
+              }
+              yield chunk;
+            }
+          };
+          await pipeline(readable, limitBytes, createWriteStream(tempPath), {
+            signal: timeout.signal
+          });
         }
 
         const contentLength = statSync(tempPath).size;
@@ -1098,7 +1349,11 @@ export async function downloadToCache(
         throw streamError instanceof Error ? streamError : new Error(String(streamError));
       }
     } catch (caughtError) {
-      if (attempt >= maxRetries) {
+      // A size refusal is a verdict on the response, not a passing network
+      // fault: the next attempt fetches the same oversized body and is refused
+      // at the same byte. Retrying it would triple the bandwidth the ceiling
+      // exists to save, so it leaves the loop immediately.
+      if (isDownloadLimitError(caughtError) || attempt >= maxRetries) {
         throw caughtError instanceof Error ? caughtError : new Error(String(caughtError));
       }
 
