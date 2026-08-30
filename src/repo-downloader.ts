@@ -56,7 +56,15 @@ export interface DownloadOptions {
   timeoutMs?: number;
   retries?: number;
   fetchFn?: typeof fetch;
-  /** Extra request headers, e.g. the conditional validators of a revalidation. */
+  /**
+   * Extra request headers, e.g. the conditional validators of a revalidation.
+   *
+   * With one exception, both entry points send these exactly as given.
+   * {@link downloadToCache} holds no cache state, so a conditional validator
+   * here is the caller's to decide. {@link resolveCachedDownload} drops them
+   * (see `withoutConditionalHeaders`): it derives its own from the sidecar, and
+   * it alone knows whether the bytes they describe are still on disk.
+   */
   requestHeaders?: Record<string, string>;
 }
 
@@ -286,6 +294,55 @@ async function describeFile(filePath: string): Promise<FileIdentity> {
 }
 
 /**
+ * Whether `error` says there is no file at the path, as opposed to saying the
+ * file is there and could not be read.
+ *
+ * ENOENT is the path itself being gone; ENOTDIR is a parent component of it
+ * having been replaced by a file, which is the same answer arriving one level
+ * up. Nothing else belongs here: EACCES, EISDIR and EIO all describe bytes that
+ * exist.
+ */
+function isMissingFileError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * The identity of the file at `filePath`, or undefined when there is no longer
+ * a file there.
+ *
+ * The downloads cache is shared. Another resolve of the same coordinate, or a
+ * cache prune, can delete these bytes between the stat that found them and the
+ * hash that describes them - and either half of {@link describeFile} fails when
+ * it does. That is a cache *miss*, not an error: the caller re-transfers instead
+ * of turning a raced eviction into a failure whose reason ("ENOENT: no such file
+ * or directory") names a cache path the caller can do nothing with.
+ *
+ * Only the not-found family is a miss (see {@link isMissingFileError}). A
+ * persistent EACCES, EISDIR or EIO is a cache entry that is *there* and
+ * unreadable: reporting it as a miss would make an immutable url transfer over
+ * the network on every call, forever, while the one actionable error stayed
+ * invisible behind whatever the network did next - so those propagate.
+ *
+ * That is a deliberate divergence from `serveCachedBytes` inside
+ * {@link resolveCachedDownload}, which swallows everything. Its blanket catch is
+ * right for a different reason: it runs only on a path that has already failed,
+ * where a second failure must not replace the reason the call failed with a less
+ * informative one. The two are not an inconsistency to reconcile - do not copy
+ * either one onto the other.
+ */
+async function describeFileIfPresent(filePath: string): Promise<FileIdentity | undefined> {
+  try {
+    return await describeFile(filePath);
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
  * Whether `sidecar`'s recorded identity still matches the bytes currently at
  * `destinationPath`. `sidecar` is always read before the network request that
  * motivated the caller to ask, so a concurrent resolve of the same mutable
@@ -445,13 +502,61 @@ function conditionalHeadersFor(sidecar: DownloadSidecar | undefined): Record<str
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-/** Reuse the bytes already on disk, deriving (and persisting) the digest if needed. */
+/**
+ * The request headers that make a request conditional (RFC 9110 section 13.1),
+ * lowercased.
+ *
+ * Lowercased because HTTP header names are case-insensitive: a caller writes
+ * `If-None-Match`, `if-none-match` or `IF-NONE-MATCH` as it pleases, and a
+ * name check that recognises one of the three is not a check.
+ */
+const CONDITIONAL_REQUEST_HEADER_NAMES: ReadonlySet<string> = new Set([
+  "if-match",
+  "if-none-match",
+  "if-modified-since",
+  "if-unmodified-since",
+  "if-range"
+]);
+
+/**
+ * `headers` with every conditional validator dropped, whatever its casing, and
+ * every other header left exactly as the caller wrote it.
+ *
+ * {@link resolveCachedDownload} owns the validators for a url it caches: they
+ * come out of the sidecar, and only this module knows whether the bytes they
+ * describe are still on disk. A caller-supplied one is dropped on both legs.
+ * On the conditional leg it would either collide with ours under a different
+ * casing - two entries the `Headers` constructor joins into one comma-separated
+ * value, asking about two sets of bytes at once - or ask about bytes this
+ * module never checked. On the unconditional leg it is precisely what that leg
+ * exists to avoid.
+ */
+function withoutConditionalHeaders(
+  headers: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const kept = Object.entries(headers).filter(
+    ([name]) => !CONDITIONAL_REQUEST_HEADER_NAMES.has(name.toLowerCase())
+  );
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+}
+
+/**
+ * Reuse the bytes already on disk, deriving (and persisting) the digest if
+ * needed.
+ *
+ * Undefined means the bytes were gone by the time they were read - a cache
+ * miss for the caller to answer with a transfer, never a failure. See
+ * {@link describeFileIfPresent}.
+ */
 async function cachedBytesResult(
   url: string,
   destinationPath: string,
   sidecar: DownloadSidecar | undefined,
   cacheStatus: DownloadCacheStatus
-): Promise<CachedDownloadSuccess> {
+): Promise<CachedDownloadSuccess | undefined> {
   if (sidecar) {
     return {
       ok: true,
@@ -468,7 +573,10 @@ async function cachedBytesResult(
   // none at all, or one this build refuses. Hash it once and record the result
   // so every later hit is free. No freshness data is carried out of here: a
   // rejected record's validators are exactly as untrustworthy as its digest.
-  const identity = await describeFile(destinationPath);
+  const identity = await describeFileIfPresent(destinationPath);
+  if (!identity) {
+    return undefined;
+  }
   writeDownloadSidecar(destinationPath, {
     version: DOWNLOAD_SIDECAR_VERSION,
     url,
@@ -517,6 +625,12 @@ function cachedByteCount(filePath: string): number {
  *
  * A zero-byte answer is refused rather than cached: see {@link cachedByteCount}.
  *
+ * The downloads cache is shared, so bytes can vanish under a call already in
+ * flight. Cached bytes that do are the cache miss they look like and are
+ * transferred again; bytes *this call* transferred and then lost before it could
+ * identify them are reported as an ordinary failure, so no leg of this function
+ * ever hands the caller a raw filesystem error naming a cache path.
+ *
  * @param url - The artifact URL; also the identity the sidecar is bound to.
  * @param destinationPath - Where the bytes live; the sidecar sits next to it.
  * @param options - Download options plus the required freshness policy.
@@ -535,11 +649,43 @@ export async function resolveCachedDownload(
   const sidecar = hasCachedBytes ? readDownloadSidecar(destinationPath, url) : undefined;
 
   if (hasCachedBytes && freshness === "immutable") {
-    return await cachedBytesResult(url, destinationPath, sidecar, "hit");
+    const hit = await cachedBytesResult(url, destinationPath, sidecar, "hit");
+    if (hit) {
+      return hit;
+    }
+    // The bytes were pruned or replaced between the stat that found them and
+    // the hash that would have described them. An entry that is not there is a
+    // cache miss, so fall through to the transfer below - failing here would
+    // hand the caller's repository loop an ENOENT as its reason to fail over.
   }
 
-  const conditional = freshness === "revalidate" ? conditionalHeadersFor(sidecar) : undefined;
-  const mergedHeaders = { ...(requestHeaders ?? {}), ...(conditional ?? {}) };
+  const conditionalHeaders = freshness === "revalidate" ? conditionalHeadersFor(sidecar) : undefined;
+
+  /**
+   * Run the transfer, carrying the cached copy's validators only when asked.
+   *
+   * `conditional: false` is not merely "no 304 wanted": it is the only honest
+   * request once the cached bytes are gone, because a validator describes bytes
+   * nobody holds any more and a 304 answering for one would confirm a cache
+   * entry that no longer exists. That has to hold for validators from *every*
+   * source, so the caller's headers are stripped of them as well:
+   * `requestHeaders` is a public field, and a caller-supplied `If-None-Match`
+   * surviving into this leg would earn the same useless 304 and leave the call
+   * with no bytes to show for it. Which names count, under which casing, is
+   * {@link withoutConditionalHeaders}'s business - it strips them on the
+   * conditional leg too, where ours are the only validators that describe bytes
+   * this module has checked.
+   */
+  const performTransfer = async (conditional: boolean): Promise<DownloadResult> => {
+    const headers = {
+      ...(withoutConditionalHeaders(requestHeaders) ?? {}),
+      ...((conditional ? conditionalHeaders : undefined) ?? {})
+    };
+    return await downloadToCache(url, destinationPath, {
+      ...downloadOptions,
+      requestHeaders: Object.keys(headers).length > 0 ? headers : undefined
+    });
+  };
 
   // The 200 leg below renames replacement bytes over `destinationPath`, and
   // digesting a multi-hundred-megabyte jar afterwards is not instant. Retire the
@@ -552,13 +698,34 @@ export async function resolveCachedDownload(
   const retiredSidecar = hasCachedBytes ? retireDownloadSidecar(destinationPath) : false;
 
   /**
-   * Reuse the bytes already on disk, restoring the retired record first.
+   * Put the retired record back - and report it - only while it still describes
+   * the bytes on disk.
    *
-   * `sidecar` was read before the transfer attempt went out, so a concurrent
-   * resolve of the same mutable coordinate can have replaced `destinationPath`
-   * while this request was in flight - trust `sidecar`'s identity only if the
-   * file still matches it, the same check the notModified branch below
-   * applies, otherwise re-derive from whatever bytes are actually there.
+   * Every leg that keeps the old bytes goes through here, the
+   * definitive-rejection refusal below included. `sidecar` was read before the
+   * request went out, so a concurrent resolve of the same mutable coordinate can
+   * have replaced `destinationPath` while it was in flight; writing the
+   * pre-request record back over the winner's would describe bytes nobody holds
+   * any more. That `readDownloadSidecar` re-checks size and mtime and would
+   * reject it on the next read is a safety net, not a licence to skip the check
+   * on one branch: a single unchecked restore is how a future editor learns the
+   * check is optional.
+   *
+   * The undefined return means "no record you may trust for these bytes", which
+   * is a caller's cue to re-derive the identity from whatever is actually there.
+   */
+  const restoreRetiredSidecar = (): DownloadSidecar | undefined => {
+    if (sidecar === undefined || !sidecarStillCurrent(destinationPath, sidecar)) {
+      return undefined;
+    }
+    if (retiredSidecar) {
+      writeDownloadSidecar(destinationPath, sidecar);
+    }
+    return sidecar;
+  };
+
+  /**
+   * Reuse the bytes already on disk, restoring the retired record first.
    *
    * Returns undefined instead of throwing: every caller of this is already on a
    * failure path, and a second failure here (the file was pruned between the
@@ -572,11 +739,7 @@ export async function resolveCachedDownload(
       return undefined;
     }
     try {
-      const usable = sidecarStillCurrent(destinationPath, sidecar) ? sidecar : undefined;
-      if (retiredSidecar && usable) {
-        writeDownloadSidecar(destinationPath, usable);
-      }
-      return await cachedBytesResult(url, destinationPath, usable, cacheStatus);
+      return await cachedBytesResult(url, destinationPath, restoreRetiredSidecar(), cacheStatus);
     } catch {
       return undefined;
     }
@@ -584,10 +747,7 @@ export async function resolveCachedDownload(
 
   let downloaded: DownloadResult;
   try {
-    downloaded = await downloadToCache(url, destinationPath, {
-      ...downloadOptions,
-      requestHeaders: Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined
-    });
+    downloaded = await performTransfer(freshness === "revalidate");
   } catch (caughtError) {
     // Stale-if-error: a byte-exact copy of what the repository handed out before
     // beats failing outright, as long as the caller is told it is unconfirmed.
@@ -600,35 +760,45 @@ export async function resolveCachedDownload(
 
   if (downloaded.notModified && hasCachedBytes) {
     // `sidecar` was read before the conditional request went out, so a
-    // concurrent resolve of the same mutable coordinate can have replaced
-    // `destinationPath` while this request was in flight - the 304 we just
-    // got answers for the OLD bytes. Trust `sidecar`'s identity only if the
-    // file still matches it; otherwise re-derive from what's actually there,
-    // the same stat-then-digest check readDownloadSidecar applies on read.
-    const identity: DownloadSidecar =
-      sidecar !== undefined && sidecarStillCurrent(destinationPath, sidecar)
-        ? sidecar
-        : {
-            version: DOWNLOAD_SIDECAR_VERSION,
-            url,
-            ...(await describeFile(destinationPath))
-          };
-    const refreshed: DownloadSidecar = {
-      ...identity,
-      etag: downloaded.etag ?? identity.etag,
-      lastModified: downloaded.lastModified ?? identity.lastModified
-    };
-    writeDownloadSidecar(destinationPath, refreshed);
-    return {
-      ok: true,
-      cacheStatus: "revalidated",
-      statusCode: downloaded.statusCode,
-      path: destinationPath,
-      contentLength: refreshed.contentLength,
-      contentSha256: refreshed.contentSha256,
-      etag: refreshed.etag,
-      lastModified: refreshed.lastModified
-    };
+    // concurrent resolve of the same mutable coordinate can have replaced - or
+    // pruned - `destinationPath` while this request was in flight, and the 304
+    // we just got answers for the OLD bytes. Trust `sidecar`'s identity only
+    // while the file still matches it; otherwise re-derive from what's actually
+    // there, the same stat-then-digest check readDownloadSidecar applies on read.
+    let identity: DownloadSidecar | undefined = restoreRetiredSidecar();
+    if (identity === undefined) {
+      const current = await describeFileIfPresent(destinationPath);
+      if (current !== undefined) {
+        identity = { version: DOWNLOAD_SIDECAR_VERSION, url, ...current };
+      }
+    }
+
+    if (identity === undefined) {
+      // Nothing is left to revalidate: the bytes this 304 confirms are gone, so
+      // the conditional request that earned it was answering for a cache entry
+      // that no longer exists. Transfer again, and unconditionally - sending the
+      // dead entry's validators would only earn another 304 for the same
+      // nothing. Reporting a "revalidated" success over a missing file, or
+      // failing the call outright, are both worse than simply fetching it.
+      downloaded = await performTransfer(false);
+    } else {
+      const refreshed: DownloadSidecar = {
+        ...identity,
+        etag: downloaded.etag ?? identity.etag,
+        lastModified: downloaded.lastModified ?? identity.lastModified
+      };
+      writeDownloadSidecar(destinationPath, refreshed);
+      return {
+        ok: true,
+        cacheStatus: "revalidated",
+        statusCode: downloaded.statusCode,
+        path: destinationPath,
+        contentLength: refreshed.contentLength,
+        contentSha256: refreshed.contentSha256,
+        etag: refreshed.etag,
+        lastModified: refreshed.lastModified
+      };
+    }
   }
 
   if (!downloaded.ok || !downloaded.path) {
@@ -640,9 +810,7 @@ export async function resolveCachedDownload(
       // nothing. The bytes stay on disk - evicting the last copy in reach is not
       // this module's call - and the record goes back with them, so a later
       // revalidation that finds the artifact restored still has its validators.
-      if (retiredSidecar && sidecar) {
-        writeDownloadSidecar(destinationPath, sidecar);
-      }
+      restoreRetiredSidecar();
       return {
         ok: false,
         statusCode: downloaded.statusCode,
@@ -669,7 +837,31 @@ export async function resolveCachedDownload(
   }
 
   // Bytes first, sidecar second - see writeDownloadSidecar.
-  const digest = await describeFile(downloaded.path);
+  const digest = await describeFileIfPresent(downloaded.path);
+  if (digest === undefined) {
+    // The bytes this call just wrote are already gone. `downloaded.path` is the
+    // destination, not the temp path the transfer held privately, so a
+    // concurrent resolve or a cache sweep can still reach them between the
+    // rename and this hash - the same shared-cache race the legs above answer,
+    // arriving on the one leg that has no cached copy to fall back on.
+    //
+    // Report it as the failed leg it is, exactly like the empty-body case
+    // below: there is no identity to hand back and nothing on disk to hand it
+    // back for, and the caller's repository loop fails over on a result it
+    // understands instead of on a raw ENOENT naming a cache path it can do
+    // nothing with. The next call finds no entry and transfers again.
+    //
+    // Deliberately not retried here: an artifact something is actively pruning
+    // is as likely to be pruned on a second transfer as on the first, and the
+    // retry would pay a multi-hundred-megabyte re-download to find that out.
+    return {
+      ok: false,
+      statusCode: downloaded.statusCode,
+      etag: downloaded.etag,
+      lastModified: downloaded.lastModified,
+      contentLength: downloaded.contentLength
+    };
+  }
   if (digest.contentLength === 0) {
     // A 200 with no body is a failed transfer that happened to answer success.
     // Recording it would park an empty artifact under this url - permanently, if

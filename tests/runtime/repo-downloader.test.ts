@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { existsSync, rmSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,6 +25,29 @@ function sha256Of(value: string): string {
  * obviously foreign.
  */
 const CURRENT_SIDECAR_VERSION = 2;
+
+/**
+ * The conditional validators in `headers`, matched the way HTTP matches header
+ * names: case-insensitively.
+ *
+ * Asserting on one exact spelling is how a validator sneaks through - a caller
+ * writes `if-none-match`, the assertion looks for `If-None-Match`, and a request
+ * that is still conditional reads as unconditional. The full RFC 9110 set is
+ * listed here rather than just the two this module sends, because the property
+ * under test is "no validator from any source", not "not the one we know about".
+ */
+function conditionalHeadersIn(headers: Record<string, string>): Record<string, string> {
+  const conditional = new Set([
+    "if-match",
+    "if-none-match",
+    "if-modified-since",
+    "if-unmodified-since",
+    "if-range"
+  ]);
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => conditional.has(name.toLowerCase()))
+  );
+}
 
 /** A fetch stub that fails the test if it is ever called. */
 function forbiddenFetch(seen: { calls: number }): typeof fetch {
@@ -1170,6 +1193,273 @@ test("resolveCachedDownload(revalidate) serves the cached bytes as stale instead
   );
   const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
   assert.equal(sidecar.contentSha256, sha256Of("snapshot-bytes-v1"));
+});
+
+// ---------------------------------------------------------------------------
+// Bytes that disappear under a call already in flight. The downloads cache is
+// shared, so a prune or a concurrent resolve of the same coordinate can delete
+// or replace a file between the stat that found it and the read that describes
+// it - on the cache hit, on the 304, and on the transfer's own bytes. None of it
+// reaches the caller as a filesystem error: an entry that is not there is a
+// cache miss and the answer to a miss is a transfer, and where there is nothing
+// left to transfer into, the answer is an ordinary failure result.
+//
+// Bytes that are *there* and unreadable are the opposite case and are reported,
+// not swallowed - the last test in this section pins that boundary.
+// ---------------------------------------------------------------------------
+
+test("resolveCachedDownload(immutable) answers vanished bytes with a transfer or a failure, whichever half of the read finds them gone", async () => {
+  // --- The read half, on the cache hit. ---
+  const root = await mkdtemp(join(tmpdir(), "downloader-hit-vanished-"));
+  const destination = join(root, "vanishing.jar");
+  const url = "https://repo.example.com/vanishing.jar";
+  // No sidecar, so the immutable hit has to hash the file - and that hash is the
+  // window a concurrent eviction lands in.
+  await writeFile(destination, "bytes-about-to-vanish");
+
+  let calls = 0;
+  const fetchFn: typeof fetch = (async () => {
+    calls += 1;
+    return new Response(Buffer.from("re-downloaded-bytes"), {
+      status: 200,
+      headers: { etag: "etag-fresh" }
+    });
+  }) as typeof fetch;
+
+  // Stages the cross-process race deterministically: the resolver stats the file
+  // synchronously and only opens its read stream on the next tick, so a deletion
+  // queued here runs first and the *open* is the half that fails. A guard around
+  // the stat alone would let this one through.
+  process.nextTick(() => {
+    rmSync(destination);
+  });
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(calls, 1, "bytes that are gone are a cache miss, and a miss is answered by transferring");
+  assert.equal(result.ok, true, "a raced eviction must not surface as a raw ENOENT the caller cannot act on");
+  assert.equal(result.cacheStatus, "downloaded");
+  assert.equal(result.contentSha256, sha256Of("re-downloaded-bytes"));
+  assert.equal(await readFile(destination, "utf8"), "re-downloaded-bytes");
+  const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
+  assert.equal(sidecar.contentSha256, sha256Of("re-downloaded-bytes"), "and the replacement gets its own record");
+
+  // --- The stat half, on the transfer. ---
+  //
+  // The cache hit above cannot reach this half: nothing runs between the stat
+  // that decides there are cached bytes and the stat inside the hash, they are
+  // one synchronous block, so no deletion can land between them in-process. The
+  // transfer leg can - and it is the leg that matters, because `downloaded.path`
+  // is the destination, not the private temp the transfer streamed into, so a
+  // prune reaches the bytes this call has just written. A guard that covers only
+  // the stream open fails right here, with the raw ENOENT this whole section
+  // exists to keep out of the caller's hands.
+  const prunedRoot = await mkdtemp(join(tmpdir(), "downloader-transfer-pruned-"));
+  const prunedDestination = join(prunedRoot, "pruned.jar");
+  const prunedUrl = "https://repo.example.com/pruned.jar";
+  const prunedBytes = "bytes-pruned-before-hashing";
+
+  let prunedCalls = 0;
+  const pruningFetch: typeof fetch = (async () => {
+    prunedCalls += 1;
+    const response = new Response(Buffer.from(prunedBytes), {
+      status: 200,
+      headers: { etag: "etag-doomed" }
+    });
+    // Reading a response header is the first thing the transfer does after
+    // renaming the bytes into place, and the resolver hashes them immediately
+    // after that. Pruning from inside the header read therefore lands squarely
+    // in the rename-to-hash window, with no timing assumption to go stale.
+    const headerValue = response.headers.get.bind(response.headers);
+    let pruned = false;
+    Object.defineProperty(response.headers, "get", {
+      configurable: true,
+      value: (name: string): string | null => {
+        if (!pruned) {
+          pruned = true;
+          rmSync(prunedDestination);
+        }
+        return headerValue(name);
+      }
+    });
+    return response;
+  }) as typeof fetch;
+
+  const prunedResult = await resolveCachedDownload(prunedUrl, prunedDestination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn: pruningFetch
+  });
+
+  assert.equal(existsSync(prunedDestination), false, "the prune landed: there are no bytes left to identify");
+  assert.equal(
+    prunedResult.ok,
+    false,
+    "no identity to report and nothing on disk to report it for - a failed leg, not a thrown ENOENT"
+  );
+  assert.equal(prunedResult.statusCode, 200, "the repository answered; it is the bytes that did not survive");
+  assert.equal(
+    prunedResult.contentLength,
+    prunedBytes.length,
+    "and the failure still reports what the exchange achieved"
+  );
+  assert.equal(
+    prunedCalls,
+    1,
+    "one transfer only: re-fetching an artifact something is actively pruning buys another prune"
+  );
+  assert.equal(
+    existsSync(downloadSidecarPath(prunedDestination)),
+    false,
+    "and no record is left behind describing bytes nobody holds"
+  );
+});
+
+test("resolveCachedDownload(revalidate) re-downloads when a 304 answers for bytes a concurrent resolve deleted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-304-vanished-"));
+  const destination = join(root, "snapshot.jar");
+  const url = "https://repo.example.com/snapshot.jar";
+  await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
+
+  const sentHeaders: Array<Record<string, string>> = [];
+  let calls = 0;
+  const fetchFn: typeof fetch = (async (_input: unknown, init?: RequestInit) => {
+    calls += 1;
+    sentHeaders.push({ ...((init?.headers ?? {}) as Record<string, string>) });
+    if (calls === 1) {
+      // A concurrent eviction (a cache prune, discardCachedDownload) removes the
+      // bytes this conditional request is asking about while it is in flight.
+      await rm(destination);
+      return new Response(null, { status: 304, headers: { etag: "etag-v1" } });
+    }
+    return new Response(Buffer.from("snapshot-bytes-v2"), {
+      status: 200,
+      headers: { etag: "etag-v2" }
+    });
+  }) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "revalidate",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn,
+    // A caller's own headers ride along on both legs. One of them is a
+    // conditional validator, written in the casing a caller is free to choose:
+    // "unconditional" has to mean unconditional whatever the source, or the
+    // retry earns a second 304 and the call ends with no bytes at all.
+    requestHeaders: {
+      "if-none-match": '"caller-supplied-etag"',
+      authorization: "Bearer caller-token"
+    }
+  });
+
+  assert.equal(calls, 2, "a 304 confirming bytes that are gone confirms nothing - the transfer still has to happen");
+  assert.deepEqual(
+    conditionalHeadersIn(sentHeaders[0] ?? {}),
+    { "If-None-Match": "etag-v1" },
+    "the revalidation asks about the bytes this module actually holds, under its own validator and no other"
+  );
+  assert.deepEqual(
+    conditionalHeadersIn(sentHeaders[1] ?? {}),
+    {},
+    "and the retry carries no validator from any source: they all describe bytes nobody holds any more"
+  );
+  assert.equal(
+    sentHeaders[1]?.["authorization"],
+    "Bearer caller-token",
+    "while everything else the caller sent survives - only the validators are this module's to decide"
+  );
+  assert.equal(sentHeaders[0]?.["authorization"], "Bearer caller-token");
+  assert.equal(result.ok, true, "a raced eviction must not surface as a raw ENOENT the caller cannot act on");
+  assert.equal(result.cacheStatus, "downloaded");
+  assert.equal(result.contentSha256, sha256Of("snapshot-bytes-v2"));
+  assert.equal(await readFile(destination, "utf8"), "snapshot-bytes-v2");
+});
+
+test("resolveCachedDownload(revalidate) leaves a concurrent winner's record alone when the repository refuses the artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-definitive-race-"));
+  const destination = join(root, "gone.jar");
+  const url = "https://repo.example.com/gone.jar";
+  // Byte-identical before and after, deliberately. A winner that changes the
+  // bytes is caught by any currency check at all - even one comparing sizes, or
+  // digests - so it proves only that *some* check runs. What has to be pinned is
+  // the harder case: the winner re-fetched the same bytes and got fresher
+  // validators for them (a CDN swap, a snapshot republished unchanged), so the
+  // only thing our retired record gets wrong is the freshness data. Restoring it
+  // there is a silent downgrade, and nothing in the digest would show it.
+  const bytes = "snapshot-bytes-v1";
+  await seedCachedDownload(destination, url, bytes, { etag: "etag-v1" });
+
+  const fetchFn: typeof fetch = (async () => {
+    // A concurrent resolve of the same mutable coordinate revalidates this url
+    // while our request is in flight, and lands its own record. This call
+    // retired the v1 record before its own request went out, so what sits on
+    // disk now is the winner's, not ours.
+    await writeFile(destination, bytes);
+    // Pin the mtime instead of trusting two writes to land in different
+    // filesystem ticks: mtime is half of what binds a record to a set of bytes,
+    // and a race the test cannot reproduce on demand proves nothing.
+    const rewrittenAt = new Date(Date.now() + 5_000);
+    await utimes(destination, rewrittenAt, rewrittenAt);
+    await writeSidecarFor(destination, { url, contentSha256: sha256Of(bytes), etag: "etag-v2" });
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const result = await resolveCachedDownload(url, destination, {
+    freshness: "revalidate",
+    retries: 0,
+    timeoutMs: 2_000,
+    fetchFn
+  });
+
+  assert.equal(result.ok, false, "a definitive rejection is still the failure the caller fails over on");
+  assert.equal(result.statusCode, 404);
+  // The same property the stale-if-error path already pins, for the branch that
+  // was skipping the check: the pre-request record describes a moment that has
+  // passed, and putting it back over the winner's replaces confirmed freshness
+  // with our own stale copy of it.
+  const sidecar = JSON.parse(await readFile(downloadSidecarPath(destination), "utf8"));
+  assert.equal(sidecar.etag, "etag-v2", "the winner's fresher validator survives our refusal");
+  assert.equal(
+    sidecar.contentMtimeMs,
+    (await stat(destination)).mtimeMs,
+    "and the record on disk still describes the bytes on disk, not the ones we found there"
+  );
+  assert.equal(sidecar.contentSha256, sha256Of(bytes));
+  assert.equal(await readFile(destination, "utf8"), bytes, "the bytes themselves stay put either way");
+});
+
+test("resolveCachedDownload(immutable) surfaces an unreadable cache entry instead of transferring around it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-unreadable-"));
+  // A directory where the cached jar should be. Whatever put it there - a
+  // half-finished manual cleanup, another tool writing into the cache - the read
+  // fails with EISDIR, and it will fail that way on every later call too.
+  const destination = join(root, "unreadable.jar");
+  await mkdir(destination);
+  const url = "https://repo.example.com/unreadable.jar";
+
+  const seen = { calls: 0 };
+  await assert.rejects(
+    resolveCachedDownload(url, destination, {
+      freshness: "immutable",
+      retries: 0,
+      timeoutMs: 2_000,
+      fetchFn: forbiddenFetch(seen)
+    }),
+    (error: NodeJS.ErrnoException) => error.code === "EISDIR",
+    "an entry that is there and unreadable is an error to report, not a digest to shrug off"
+  );
+  assert.equal(
+    seen.calls,
+    0,
+    "and never a cache miss: reported as one, this url would transfer on every call forever while the one actionable error stayed hidden behind whatever the network did next"
+  );
 });
 
 test("isDownloadSidecarPath recognises the leftover of an interrupted sidecar write", async () => {
