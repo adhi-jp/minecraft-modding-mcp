@@ -836,6 +836,158 @@ test("a members lookup on a caller-named artifact with no binary jar stays a cod
   );
 });
 
+// The third arm of the same decision, frozen here for the first time. The two
+// tests above pin a TOOL-resolved coordinate target and a caller-supplied
+// `artifactId`; a `kind:"jar"` target is the remaining caller-named shape and
+// was only ever covered through the other operand of the same boolean. Naming a
+// jar that carries no binary companion is the caller's own input to change, so
+// it must keep the code-keyed `code_issue` default.
+test("a members lookup on a caller-named jar target with no binary jar stays a code issue", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-jar-target-"));
+  const sourceJarPath = join(root, "demo-jar-target-1.0.0-sources.jar");
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: {
+      target: { kind: "jar"; value: string };
+      className: string;
+    }) => Promise<unknown>;
+  })
+    .getClassMembers({ target: { kind: "jar", value: sourceJarPath }, className: "com.example.Demo" })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-jar-target-req") as {
+    issueOrigin: string;
+  };
+  assert.equal(
+    problem.issueOrigin,
+    "code_issue",
+    "the caller named this jar themselves, so its lack of a binary companion is their input to fix"
+  );
+});
+
+// The two tests below pin the EXPLICIT signal that replaces the inference for
+// callers that resolve an artifact on the user's behalf. Deciding "did the
+// caller name this artifact?" from the presence of `artifactId` reads an
+// INTERNAL call shape: a caller like batch-class-members, whose own target
+// cannot even express an artifact, resolves one itself and then dispatches by
+// its id -- and every failure came back blaming an input that was never at
+// fault. `artifactSelectedBy` lets such a caller state the answer instead of
+// having it guessed, and when set it wins over the inference in BOTH
+// directions.
+test("an explicit tool-selected signal makes a members lookup on an artifactId a tool issue", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-selected-by-tool-"));
+  const sourceJarPath = join(root, "source-only-tool-selected.jar");
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "tool-selected-artifact",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    sourceJarPath,
+    files: [{ filePath: "com/example/Demo.java", content: "package com.example;\npublic class Demo {}" }],
+    symbols: []
+  });
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: {
+      artifactId: string;
+      className: string;
+      artifactSelectedBy: "caller" | "tool";
+    }) => Promise<unknown>;
+  })
+    .getClassMembers({
+      artifactId: "tool-selected-artifact",
+      className: "com.example.Demo",
+      artifactSelectedBy: "tool"
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-selected-by-tool-req") as {
+    issueOrigin: string;
+  };
+  assert.equal(
+    problem.issueOrigin,
+    "tool_issue",
+    "the artifactId came from an artifact the TOOL picked, so the caller's request cannot fix it"
+  );
+});
+
+test("an explicit caller-selected signal keeps a members lookup on a coordinate target a code issue", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-selected-by-caller-"));
+  const coordinate = "com.example:demo-caller-selected:1.0.0";
+  const sourceJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "demo-caller-selected",
+    "1.0.0",
+    "demo-caller-selected-1.0.0-sources.jar"
+  );
+  await mkdir(join(root, "m2", "com", "example", "demo-caller-selected", "1.0.0"), {
+    recursive: true
+  });
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: {
+      target: { kind: "coordinate"; value: string };
+      className: string;
+      artifactSelectedBy: "caller" | "tool";
+    }) => Promise<unknown>;
+  })
+    .getClassMembers({
+      target: { kind: "coordinate", value: coordinate },
+      className: "com.example.Demo",
+      artifactSelectedBy: "caller"
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-selected-by-caller-req") as {
+    issueOrigin: string;
+  };
+  assert.equal(
+    problem.issueOrigin,
+    "code_issue",
+    "an explicit caller-selected signal overrides the tool-resolved inference a coordinate target would otherwise draw"
+  );
+});
+
 test("SourceService getClassMembers delegates to explorer and returns member payload", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-members-delegate-"));

@@ -238,6 +238,10 @@ export type InspectMinecraftDeps = {
     strictVersion?: boolean;
     maxMembers?: number;
     includeDescriptors?: boolean;
+    /** Who chose the artifact: see `GetClassMembersInput.artifactSelectedBy`.
+     * This tool always collapses its subject to an artifactId before calling,
+     * so without it every failure would be attributed to the caller. */
+    artifactSelectedBy?: "caller" | "tool";
   }) => Promise<GetClassMembersOutput>;
   searchClassSource: (input: {
     artifactId: string;

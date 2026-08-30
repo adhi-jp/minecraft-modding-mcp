@@ -1358,7 +1358,22 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     // passed `artifactId` directly, or `target: { kind: "jar", ... }`, named
     // the exact artifact/jar themselves - having no binary companion is then
     // exactly the input they can change.
-    const artifactWasCallerNamed = Boolean(normalizedArtifactId) || input.target?.kind === "jar";
+    //
+    // Read off the call shape, though, that is only ever a GUESS about a
+    // question this function cannot see: "did the USER name this artifact?".
+    // It holds for a direct `get-class-members` call and fails for any caller
+    // that resolves an artifact on the user's behalf and then dispatches by its
+    // id - batch-class-members, whose own target schema cannot even express an
+    // artifact, and inspect-minecraft's class-members task. Both looked like a
+    // caller naming an artifactId, so both blamed a request that had no way to
+    // choose differently. Such callers state the answer through
+    // `artifactSelectedBy`, and when they do it WINS over the guess; unset, the
+    // inference stands exactly as before so the direct-call contract is
+    // untouched.
+    const artifactWasCallerNamed =
+      input.artifactSelectedBy != null
+        ? input.artifactSelectedBy === "caller"
+        : Boolean(normalizedArtifactId) || input.target?.kind === "jar";
     throw createError({
       code: ERROR_CODES.CONTEXT_UNRESOLVED,
       message: `Class members require a binary jar, but artifact "${artifactId}" has no binaryJarPath.`,

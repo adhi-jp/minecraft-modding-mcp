@@ -104,6 +104,14 @@ export class BatchClassMembersService {
         }
         const raw = (await this.deps.getClassMembers({
           artifactId: sharedArtifact.artifactId,
+          // This artifactId is OURS, not the caller's: the shared target was
+          // resolved above and every entry is dispatched by the result. Without
+          // saying so, get-class-members reads the bare presence of an
+          // artifactId as the caller having named the artifact, and reports a
+          // missing binary jar as their mistake - once per entry - though
+          // `target` here cannot name an artifact at all. Only a jar the caller
+          // named themselves is genuinely their choice.
+          artifactSelectedBy: input.target.kind === "jar" ? "caller" : "tool",
           className: entry.className,
           access: entry.access,
           includeSynthetic: entry.includeSynthetic,

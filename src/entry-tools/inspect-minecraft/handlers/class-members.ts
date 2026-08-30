@@ -1,5 +1,15 @@
 import { buildEntryToolResult, buildEntryToolMeta, createNextAction, createSummarySubject, createTruncationMeta, type DetailLevel, type Summary } from "../../response-contract.js";
-import { type Subject, buildClassSubject, resolveClassArtifactReference, invalidTaskSubjectError, type InspectMinecraftDeps } from "../internal.js";
+import { type ArtifactRef, type Subject, buildClassSubject, resolveClassArtifactReference, invalidTaskSubjectError, type InspectMinecraftDeps } from "../internal.js";
+
+function artifactSelectedByFor(ref: ArtifactRef | undefined): "caller" | "tool" {
+  if (!ref) {
+    return "tool";
+  }
+  if (ref.type === "resolved-id") {
+    return "caller";
+  }
+  return ref.target.kind === "jar" ? "caller" : "tool";
+}
 
 export async function handleClassMembers(
 deps: InspectMinecraftDeps,
@@ -16,6 +26,14 @@ deps: InspectMinecraftDeps,
   const members = await deps.getClassMembers({
     className: classSubject.className,
     artifactId: artifact.artifactId || undefined,
+    // The artifactId above is one WE produced - resolveClassArtifactReference
+    // collapses every subject shape to one, including the workspace
+    // auto-resolution that happens with no artifact reference at all. Only the
+    // caller's own reference says whether they picked the artifact: a
+    // resolved-id names it outright, and a jar target names the exact jar.
+    // Anything else (a version/coordinate target, or an omitted reference) is
+    // ours, so a missing binary jar is not their input to fix.
+    artifactSelectedBy: artifactSelectedByFor(classSubject.artifact),
     mapping: classSubject.mapping,
     scope: classSubject.scope,
     projectPath: classSubject.projectPath,

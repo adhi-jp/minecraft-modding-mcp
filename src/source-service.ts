@@ -409,6 +409,15 @@ export type GetClassMembersInput = {
   includeDescriptors?: boolean;
   /** Narrow the per-member fields returned: "names" | "signatures" | "full" (default "full"). */
   projection?: MemberProjection;
+  /**
+   * Who chose the artifact this call runs against — INTERNAL plumbing, absent
+   * from the `get-class-members` wire schema. Set it when the caller resolved an
+   * artifact on the user's behalf and is now dispatching by the resulting
+   * `artifactId`, so a failure is attributed to whoever could actually act on
+   * it. Left unset, the artifact's origin is inferred from the call shape
+   * instead (see `getClassMembers` in src/source/class-source.ts).
+   */
+  artifactSelectedBy?: "caller" | "tool";
 };
 
 export type DecompiledMember = {
