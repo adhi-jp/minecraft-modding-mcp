@@ -9,7 +9,7 @@ const EXPECTED_ORDINARY_TEST_FILES = 224;
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2097;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2103;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {

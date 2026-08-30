@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { callTool } from "../../helpers/mcp-tools-harness.ts";
+import { createJar } from "../../helpers/zip.ts";
 
 test("applyErrorMetaExtensions surfaces stageBudgetExhausted / budgetMs / elapsedMs on ERR_STAGE_BUDGET_PRE_PARSE", async () => {
   const { applyErrorMetaExtensions } = await import("../../../src/index.ts");
@@ -358,4 +362,82 @@ test("validate-project rejects top-level configPaths for direct access-widener v
   assert.ok(
     result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "configPaths")
   );
+});
+
+// The hop that made this classification drift, driven through the REAL entry
+// point. On the wire `get-class-members` has no top-level `artifactId`; it has
+// `target`, one arm of which is `{ kind: "artifact", artifactId }`.
+// `normalizeSourceLookupTarget` in src/index.ts flattens that arm to a bare
+// `artifactId` BEFORE the service runs, so by the time the no-binary-jar
+// classifier sees the input, the only trace of the caller's chosen kind is
+// whether `target` survived. Reading the flattened `artifactId` as "the caller
+// named this artifact" therefore classified the request SYNTAX, not blame - and
+// nothing covered the hop, so nothing caught it.
+//
+// Both calls below name the SAME artifact, so the artifact cannot be what moves
+// the verdict; only the wire kind can. A `kind: "jar"` caller picked the exact
+// jar and can pick another. A `kind: "artifact"` caller holds an opaque id that
+// cannot tell them whether it carries a binary jar, and `resolve-artifact` will
+// not even take an artifactId, so they cannot re-resolve it either.
+test("get-class-members no-binary-jar issueOrigin follows the wire target kind, not the flattened artifactId", async () => {
+  const root = await mkdtemp(join(tmpdir(), "members-issue-origin-wire-"));
+  // A sources-only jar resolves fine and carries no binary companion, which is
+  // exactly the artifact state under test.
+  const sourcesJarPath = join(root, "wire-kind-lib-1.0.0-sources.jar");
+  await createJar(sourcesJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: sourcesJarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId for a sources-only jar");
+
+  type MembersErrorEnvelope = {
+    isError?: boolean;
+    structuredContent?: {
+      error?: { code?: string; issueOrigin?: string; retryClass?: string; context?: { artifactId?: string } };
+    };
+  };
+
+  const byArtifact = await callTool("get-class-members", {
+    target: { kind: "artifact", artifactId },
+    className: "com.example.Demo"
+  }) as MembersErrorEnvelope;
+
+  const byJar = await callTool("get-class-members", {
+    target: { kind: "jar", value: sourcesJarPath },
+    className: "com.example.Demo"
+  }) as MembersErrorEnvelope;
+
+  assert.equal(byArtifact.structuredContent?.error?.code, "ERR_CONTEXT_UNRESOLVED");
+  assert.equal(byJar.structuredContent?.error?.code, "ERR_CONTEXT_UNRESOLVED");
+  // Same artifact both times: the only variable is the wire target kind.
+  assert.equal(
+    byArtifact.structuredContent?.error?.context?.artifactId,
+    artifactId,
+    "the artifact-kind call must fail on the artifact under test"
+  );
+  assert.equal(
+    byJar.structuredContent?.error?.context?.artifactId,
+    artifactId,
+    "the jar-kind call must fail on the very same artifact, so the artifact cannot explain the split"
+  );
+
+  assert.equal(
+    byArtifact.structuredContent?.error?.issueOrigin,
+    "tool_issue",
+    "an opaque artifactId gives the caller nothing to change, so the miss is the tool's"
+  );
+  assert.equal(
+    byJar.structuredContent?.error?.issueOrigin,
+    "code_issue",
+    "a caller who named the jar on the wire can name a different one"
+  );
+  // `retryClass` is code-keyed with no per-site seam, so it stays "input" on
+  // both arms - deliberately disagreeing with issueOrigin on the artifact arm.
+  assert.equal(byArtifact.structuredContent?.error?.retryClass, "input");
+  assert.equal(byJar.structuredContent?.error?.retryClass, "input");
 });

@@ -789,14 +789,22 @@ test("a members lookup on a tool-resolved artifact with no binary jar is publish
   assert.equal(problem.context?.issueOrigin, undefined);
 });
 
-// The sibling of the test above: when the CALLER named the artifact directly
-// (by artifactId, bypassing target resolution), a missing binary jar is their
-// own input to fix, so the override must NOT fire and the code-keyed
-// `code_issue` default must stand.
-test("a members lookup on a caller-named artifact with no binary jar stays a code issue", async () => {
+// The sibling of the test above, and previously the opposite verdict. A bare
+// `artifactId` used to read as "the caller named this artifact", so this arm
+// asserted `code_issue`. It is not a wire field at all: `get-class-members`
+// offers `target: { kind: "artifact", artifactId }`, which
+// `normalizeSourceLookupTarget` flattens to this shape before the service runs,
+// so its presence records a request SHAPE and never who chose the artifact. An
+// artifactId is an opaque handle whose holder cannot know whether it carries a
+// binary jar and - `resolveArtifactTargetSchema` taking no artifactId - cannot
+// re-resolve it either, so the failure is the tool's to own. `code_issue`
+// survives only where the request could genuinely have chosen otherwise: a
+// `kind:"jar"` target, or an explicit `artifactSelectedBy: "caller"`.
+test("a members lookup on an artifactId the request could not have vetted is a tool issue", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-caller-named-"));
+  const { issueOriginForErrorCode } = await import("../../src/error-mapping.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-artifact-id-"));
   const sourceJarPath = join(root, "source-only.jar");
   await createJar(sourceJarPath, {
     "com/example/Demo.java": "package com.example;\npublic class Demo {}"
@@ -825,23 +833,33 @@ test("a members lookup on a caller-named artifact with no binary jar stays a cod
 
   assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
 
-  const problem = mapErrorToProblem(caught, "members-no-binary-caller-named-req") as {
+  const problem = mapErrorToProblem(caught, "members-no-binary-artifact-id-req") as {
     code: string;
     issueOrigin: string;
+    context?: Record<string, unknown>;
   };
   assert.equal(
     problem.issueOrigin,
-    "code_issue",
-    "the caller picked this artifactId directly, so a missing binary jar is their input to fix"
+    "tool_issue",
+    "an opaque artifactId cannot tell its holder whether the artifact carries a binary jar, so the miss is not their input to fix"
   );
+  // Guard against this passing for the wrong reason: the verdict above must come
+  // from THIS site's per-throw override, not from the code-keyed default having
+  // drifted to `tool_issue` for every ERR_CONTEXT_UNRESOLVED.
+  assert.equal(
+    issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED),
+    "code_issue",
+    "the code-keyed default must stay code_issue so the override is what is being observed"
+  );
+  // The override key must not ride out in the public primitive context blob.
+  assert.equal(problem.context?.issueOrigin, undefined);
 });
 
-// The third arm of the same decision, frozen here for the first time. The two
-// tests above pin a TOOL-resolved coordinate target and a caller-supplied
-// `artifactId`; a `kind:"jar"` target is the remaining caller-named shape and
-// was only ever covered through the other operand of the same boolean. Naming a
-// jar that carries no binary companion is the caller's own input to change, so
-// it must keep the code-keyed `code_issue` default.
+// The one shape the inference still reads as caller-named, and the only arm of
+// this decision that keeps the code-keyed `code_issue` default. The two tests
+// above pin a TOOL-resolved coordinate target and a bare `artifactId`, both
+// `tool_issue`; a `kind:"jar"` target names the exact jar on the wire, so a
+// missing binary companion really is input the caller can change.
 test("a members lookup on a caller-named jar target with no binary jar stays a code issue", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
@@ -985,6 +1003,190 @@ test("an explicit caller-selected signal keeps a members lookup on a coordinate 
     problem.issueOrigin,
     "code_issue",
     "an explicit caller-selected signal overrides the tool-resolved inference a coordinate target would otherwise draw"
+  );
+});
+
+// A per-KIND matrix over `sourceLookupTargetSchema`, the wire target union for
+// `get-class-members`. The rows below are the whole classification contract for
+// a missing binary jar, and the coverage assertion fails the moment the schema
+// grows a kind that is not listed here - so a new target shape cannot quietly
+// inherit whichever verdict the fallthrough happens to give it.
+//
+// Only artifact RESOLUTION is stubbed: every row runs the real decision inside
+// getClassMembers. The `artifact` row deliberately carries no `target` at all,
+// because that is what a wire `target: { kind: "artifact", artifactId }` looks
+// like by the time the service sees it - `normalizeSourceLookupTarget` in
+// src/index.ts flattens it to a bare `artifactId` first.
+test("every sourceLookupTarget kind has a pinned no-binary-jar issueOrigin", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const { sourceLookupTargetSchema } = await import("../../src/tool-schemas.ts");
+
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-kind-matrix-"));
+  const sourceJarPath = join(root, "kind-matrix-1.0.0-sources.jar");
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "kind-matrix-artifact",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    version: "1.21.10",
+    sourceJarPath,
+    files: [{ filePath: "com/example/Demo.java", content: "package com.example;\npublic class Demo {}" }],
+    symbols: []
+  });
+  // Stand in for resolution only: every kind lands on the same source-only
+  // artifact, so the sole difference between rows is the target kind itself.
+  (service as unknown as { resolveArtifact: () => Promise<unknown> }).resolveArtifact = async () => ({
+    artifactId: "kind-matrix-artifact",
+    artifactAlias: "kind-matrix-artifact",
+    origin: "local-m2",
+    isDecompiled: false,
+    resolvedSourceJarPath: sourceJarPath,
+    version: "1.21.10",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    provenance: {},
+    qualityFlags: [],
+    artifactContents: {},
+    warnings: []
+  });
+
+  const cases: Array<{
+    kind: string;
+    input: Record<string, unknown>;
+    expected: "code_issue" | "tool_issue";
+    why: string;
+  }> = [
+    {
+      kind: "version",
+      input: { target: { kind: "version", value: "1.21.10" } },
+      expected: "tool_issue",
+      why: "a version names no jar; the tool picked the artifact behind it"
+    },
+    {
+      kind: "jar",
+      input: { target: { kind: "jar", value: sourceJarPath } },
+      expected: "code_issue",
+      why: "the caller named this exact jar, so its missing binary companion is their input to change"
+    },
+    {
+      kind: "coordinate",
+      input: { target: { kind: "coordinate", value: "com.example:kind-matrix:1.0.0" } },
+      expected: "tool_issue",
+      why: "a coordinate names no jar; the tool picked the artifact behind it"
+    },
+    {
+      kind: "workspace",
+      input: { target: { kind: "workspace" } },
+      expected: "tool_issue",
+      why: "the workspace shape leaves the artifact entirely to the tool"
+    },
+    {
+      kind: "dependency",
+      input: {
+        target: { kind: "dependency", group: "com.example", name: "kind-matrix", version: "1.0.0" }
+      },
+      expected: "tool_issue",
+      why: "a dependency coordinate names no jar; the tool picked the artifact behind it"
+    },
+    {
+      kind: "artifact",
+      // No `target`: this is the post-flattening shape of the wire
+      // `target: { kind: "artifact", artifactId }`.
+      input: { artifactId: "kind-matrix-artifact" },
+      expected: "tool_issue",
+      why: "an opaque artifactId cannot tell its holder whether the artifact carries a binary jar"
+    }
+  ];
+
+  const schemaKinds = sourceLookupTargetSchema.options.map(
+    (option) => ((option as { shape: { kind: { value: string } } }).shape.kind.value)
+  );
+  assert.deepEqual(
+    [...schemaKinds].sort(),
+    cases.map((testCase) => testCase.kind).sort(),
+    "every sourceLookupTarget kind needs a row here; a new kind must be classified deliberately, not by fallthrough"
+  );
+
+  for (const testCase of cases) {
+    await t.test(`target kind "${testCase.kind}" is ${testCase.expected}`, async () => {
+      const caught = await (service as unknown as {
+        getClassMembers: (input: Record<string, unknown>) => Promise<unknown>;
+      })
+        .getClassMembers({ ...testCase.input, className: "com.example.Demo" })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+      assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
+      const problem = mapErrorToProblem(caught, `members-kind-matrix-${testCase.kind}-req`) as {
+        issueOrigin: string;
+      };
+      assert.equal(problem.issueOrigin, testCase.expected, testCase.why);
+    });
+  }
+});
+
+// `retryClass` is keyed on the error CODE alone and has NO per-throw-site
+// override seam - narrowing what an existing code publishes would itself be a
+// wire-contract break, so that seam was deliberately not built. The artifact arm
+// therefore publishes `retryClass: "input"` beside `issueOrigin: "tool_issue"`,
+// and the two disagreeing is intentional: they are independent axes, and the
+// coordinate arm has read this way since the override was introduced. Pinned so
+// nobody "fixes" the apparent contradiction by reaching for retryClass.
+test("the members no-binary-jar error keeps retryClass \"input\" on the artifact arm", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
+  const { retryClassForErrorCode } = await import("../../src/error-mapping.ts");
+
+  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-retry-class-"));
+  const sourceJarPath = join(root, "retry-class-source-only.jar");
+  await createJar(sourceJarPath, {
+    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  seedIndexedArtifact(service, {
+    artifactId: "retry-class-artifact",
+    origin: "local-m2",
+    requestedMapping: "obfuscated",
+    mappingApplied: "obfuscated",
+    qualityFlags: [],
+    sourceJarPath,
+    files: [{ filePath: "com/example/Demo.java", content: "package com.example;\npublic class Demo {}" }],
+    symbols: []
+  });
+
+  const caught = await (service as unknown as {
+    getClassMembers: (input: { artifactId: string; className: string }) => Promise<unknown>;
+  })
+    .getClassMembers({ artifactId: "retry-class-artifact", className: "com.example.Demo" })
+    .then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+  const problem = mapErrorToProblem(caught, "members-no-binary-retry-class-req") as {
+    retryClass: string;
+    issueOrigin: string;
+  };
+  assert.equal(problem.issueOrigin, "tool_issue");
+  assert.equal(
+    problem.retryClass,
+    "input",
+    "retryClass has no per-site override and must keep the code-keyed value"
+  );
+  assert.equal(
+    retryClassForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED),
+    "input",
+    "the published retryClass must still be exactly what the code-keyed map returns"
   );
 });
 

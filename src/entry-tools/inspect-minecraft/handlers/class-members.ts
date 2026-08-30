@@ -5,10 +5,13 @@ function artifactSelectedByFor(ref: ArtifactRef | undefined): "caller" | "tool" 
   if (!ref) {
     return "tool";
   }
-  if (ref.type === "resolved-id") {
-    return "caller";
-  }
-  return ref.target.kind === "jar" ? "caller" : "tool";
+  // A `resolved-id` reference is NOT a caller choice, despite being written by
+  // the caller. The id is an opaque handle some earlier resolve produced: it
+  // says nothing about whether the artifact carries a binary jar, and it cannot
+  // be re-resolved into one that does. Only `target: { kind: "jar", ... }`
+  // names a jar the caller actually picked and can pick differently, which is
+  // the same line `get-class-members` draws for its own `artifact` target.
+  return ref.type === "resolve-target" && ref.target.kind === "jar" ? "caller" : "tool";
 }
 
 export async function handleClassMembers(
@@ -29,10 +32,11 @@ deps: InspectMinecraftDeps,
     // The artifactId above is one WE produced - resolveClassArtifactReference
     // collapses every subject shape to one, including the workspace
     // auto-resolution that happens with no artifact reference at all. Only the
-    // caller's own reference says whether they picked the artifact: a
-    // resolved-id names it outright, and a jar target names the exact jar.
-    // Anything else (a version/coordinate target, or an omitted reference) is
-    // ours, so a missing binary jar is not their input to fix.
+    // caller's own reference says whether they picked the artifact, and only a
+    // jar target does: it names an exact jar they can name differently.
+    // Anything else (a resolved-id handle, a version/coordinate target, or an
+    // omitted reference) leaves the artifact effectively ours, so a missing
+    // binary jar is not their input to fix.
     artifactSelectedBy: artifactSelectedByFor(classSubject.artifact),
     mapping: classSubject.mapping,
     scope: classSubject.scope,

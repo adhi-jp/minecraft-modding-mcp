@@ -1352,28 +1352,40 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   }
 
   if (!binaryJarPath) {
-    // The override below applies only when the TOOL picked this artifact
-    // without the caller expressing an opinion on it: a version/coordinate
-    // target, or falling through the workspace/dependency shapes. A caller who
-    // passed `artifactId` directly, or `target: { kind: "jar", ... }`, named
-    // the exact artifact/jar themselves - having no binary companion is then
-    // exactly the input they can change.
+    // The override below applies whenever the TOOL, not the caller, is
+    // answerable for this artifact carrying no binary jar.
     //
-    // Read off the call shape, though, that is only ever a GUESS about a
-    // question this function cannot see: "did the USER name this artifact?".
-    // It holds for a direct `get-class-members` call and fails for any caller
-    // that resolves an artifact on the user's behalf and then dispatches by its
-    // id - batch-class-members, whose own target schema cannot even express an
-    // artifact, and inspect-minecraft's class-members task. Both looked like a
-    // caller naming an artifactId, so both blamed a request that had no way to
-    // choose differently. Such callers state the answer through
-    // `artifactSelectedBy`, and when they do it WINS over the guess; unset, the
-    // inference stands exactly as before so the direct-call contract is
-    // untouched.
+    // The inference reads ONLY what the wire request could express. A caller
+    // who passed `target: { kind: "jar", ... }` named the exact jar, so its
+    // lack of a binary companion is input they can change. No other target
+    // kind gives them that: `version`, `coordinate`, `workspace` and
+    // `dependency` leave the choice of artifact to this tool outright, and
+    // `artifact` only looks like an exception - the caller does supply the id,
+    // but supplying one is not vetting it (see below), so they still had no
+    // way to choose differently.
+    //
+    // `artifactId` is deliberately NOT read here. It is not a wire field on
+    // `get-class-members` at all: the schema offers `target: { kind:
+    // "artifact", artifactId }`, and `normalizeSourceLookupTarget` flattens
+    // that to a bare `artifactId` one function before this one runs. So the
+    // presence of `artifactId` says only which request SHAPE was used, never
+    // who chose the artifact - an artifactId is an opaque handle whose holder
+    // cannot know whether it carries a binary jar, and `resolveArtifactTargetSchema`
+    // does not even accept one, so they cannot re-resolve it either. Blaming
+    // them for it invites an endless retry of an input that was never at
+    // fault. `batch-class-members` proved the point: it publishes a failed
+    // entry beside a `suggestedCall` naming the artifact IT resolved, whose
+    // verbatim replay used to return the identical failure relabelled
+    // `code_issue`.
+    //
+    // A caller that resolves an artifact on the user's behalf and then
+    // dispatches by its id - `batch-class-members`, `inspect-minecraft`'s
+    // class-members task - states the answer through `artifactSelectedBy`, and
+    // when set it WINS over the inference in both directions.
     const artifactWasCallerNamed =
       input.artifactSelectedBy != null
         ? input.artifactSelectedBy === "caller"
-        : Boolean(normalizedArtifactId) || input.target?.kind === "jar";
+        : input.target?.kind === "jar";
     throw createError({
       code: ERROR_CODES.CONTEXT_UNRESOLVED,
       message: `Class members require a binary jar, but artifact "${artifactId}" has no binaryJarPath.`,
@@ -1389,7 +1401,10 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
         // for the tool-resolved case only.
         issueOrigin: artifactWasCallerNamed ? undefined : "tool_issue",
         nextAction:
-          "Resolve with target: { kind: \"jar\" | \"version\", value: ... } or use an artifact that has a binary jar."
+          "Resolve with target: { kind: \"jar\" | \"version\", value: ... } or use an artifact that has a binary jar. " +
+          "To tell whether an artifact carries one, call manage-cache with action=\"inspect\", selector: { artifactId: ... } and include: [\"cacheEntries\"]: " +
+          "the cacheEntries block reports meta.binaryJarPath from the artifact's stored row - the same row this lookup reads - and omits it when the row has none. " +
+          "The include is required: manage-cache defaults to detail: \"summary\", which drops the cacheEntries block entirely (detail: \"standard\" or \"full\" opts it back in too)."
       }
     });
   }
