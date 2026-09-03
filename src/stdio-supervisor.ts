@@ -47,10 +47,28 @@ const PRESERVED_PATH_KEYS = new Set(["projectPath", "sourcePath", "mixinConfigPa
 const MAX_STRING_BYTES = 256;
 const MAX_ARRAY_LENGTH = 8;
 const MAX_OBJECT_KEYS = 16;
+/**
+ * Recursion ceiling for the argument redaction walk, and the sentinel that
+ * replaces the sub-graph below it.
+ *
+ * `arguments` is client-controlled and arbitrarily nestable: a ~3 KB frame can
+ * carry a container graph thousands of levels deep. The walk is recursive, so
+ * without a bound such a frame overflowed the JS stack at admission. No tool
+ * schema nests anywhere near this deep, so the bound never touches real calls.
+ */
+const MAX_REDACT_DEPTH = 32;
+const MAX_DEPTH_SENTINEL = "<max-depth>";
 const DEFAULT_VALIDATE_PROJECT_TIMEOUT_MS = 120_000;
 const MIN_VALIDATE_PROJECT_TIMEOUT_MS = 10_000;
 const MAX_VALIDATE_PROJECT_TIMEOUT_MS = 600_000;
 const MAX_WORKER_STARTUP_WATCHDOG_MS = 30_000;
+/**
+ * Ceiling on the PENDING (not yet newline-terminated) worker stderr fragment.
+ * Line reassembly is needed for the ready marker, but a worker or JVM that
+ * emits one very long newline-less line must not grow supervisor memory
+ * without bound. See handleWorkerStderr.
+ */
+const MAX_WORKER_STDERR_LINE_BYTES = 64 * 1024;
 const MAX_SUPERVISOR_QUEUE = 2;
 /**
  * Hard ceiling on retained response-finality tombstones (see
@@ -419,7 +437,12 @@ function isRedactKey(key: string): boolean {
 
 type RedactCounter = { modified: boolean };
 
-function redactValue(value: unknown, counter: RedactCounter, keyName?: string): unknown {
+function redactValue(
+  value: unknown,
+  counter: RedactCounter,
+  keyName?: string,
+  depth = 0
+): unknown {
   if (keyName !== undefined && !PRESERVED_PATH_KEYS.has(keyName) && isRedactKey(keyName)) {
     counter.modified = true;
     return "<redacted>";
@@ -448,16 +471,24 @@ function redactValue(value: unknown, counter: RedactCounter, keyName?: string): 
     return value;
   }
 
+  // Everything below recurses. Past the depth ceiling the sub-graph is
+  // replaced wholesale, which also sets `modified` so no `suggestedCall` is
+  // ever derived from a depth-truncated copy.
+  if (depth >= MAX_REDACT_DEPTH) {
+    counter.modified = true;
+    return MAX_DEPTH_SENTINEL;
+  }
+
   if (Array.isArray(value)) {
     if (value.length > MAX_ARRAY_LENGTH) {
       counter.modified = true;
       const head = value
         .slice(0, MAX_ARRAY_LENGTH)
-        .map((item) => redactValue(item, counter));
+        .map((item) => redactValue(item, counter, undefined, depth + 1));
       head.push(`<+${value.length - MAX_ARRAY_LENGTH} more>`);
       return head;
     }
-    return value.map((item) => redactValue(item, counter));
+    return value.map((item) => redactValue(item, counter, undefined, depth + 1));
   }
 
   if (valueType === "object") {
@@ -465,7 +496,7 @@ function redactValue(value: unknown, counter: RedactCounter, keyName?: string): 
     const limited = entries.slice(0, MAX_OBJECT_KEYS);
     const result: Record<string, unknown> = {};
     for (const [key, child] of limited) {
-      result[key] = redactValue(child, counter, key);
+      result[key] = redactValue(child, counter, key, depth + 1);
     }
     if (entries.length > MAX_OBJECT_KEYS) {
       counter.modified = true;
@@ -950,6 +981,12 @@ export class StdioSupervisor {
   private retryPaused = false;
   private workerStderrBuffer = "";
   /**
+   * `true` while the tail of an over-long stderr line is being discarded: the
+   * held prefix was already flushed, and everything up to the next newline
+   * belongs to that same line.
+   */
+  private workerStderrDroppingLine = false;
+  /**
    * Framing mode of the most recently detected inbound client frame. NOT used
    * for request-correlated writes (those use the originating request's
    * captured mode); this is only the documented fallback for client-bound
@@ -1141,7 +1178,131 @@ export class StdioSupervisor {
     });
   };
 
+  /**
+   * Admission entry point, wrapped so a fault can never make a request vanish.
+   *
+   * Anything thrown while classifying, queueing or forwarding a client frame
+   * propagates out of the frame reader's `onFrame`, where the reader swallows
+   * it as a parse error — the request then gets NO reply and the client waits
+   * on that id forever (and on a modern-era request the one-way era lock has
+   * already happened). Answering the id with -32603 keeps the
+   * exactly-one-response guarantee; id-less frames (notifications, malformed
+   * ids) have nothing to answer and are only logged.
+   */
   private handleClientMessage(message: JSONRPCMessage): void {
+    const admittedId = isRequest(message) ? getTrackedRequestId(message) : undefined;
+    // Snapshot BEFORE routing: whatever is already live at this id belongs to an
+    // EARLIER request instance and must survive a fault in this one.
+    const preexisting =
+      admittedId === undefined ? undefined : this.liveInstancesAt(requestKey(admittedId));
+    try {
+      this.routeClientMessage(message);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.eventWriter("error", "supervisor.admission_failed", {
+        id: "id" in message ? (message as { id?: unknown }).id : undefined,
+        method: "method" in message ? message.method : undefined,
+        message: detail
+      });
+      // Admission installs state before it can fault (see rollbackFailedAdmission),
+      // and the -32603 below is terminal for the id — so anything half-installed
+      // has to go before the reply, or it will answer the id a second time.
+      const rolledBack =
+        admittedId !== undefined &&
+        preexisting !== undefined &&
+        this.rollbackFailedAdmission(requestKey(admittedId), preexisting);
+      if (!isRequest(message)) return;
+      const id = getTrackedRequestId(message);
+      if (id === undefined) return;
+      this.writeToClient(
+        {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32603,
+            message: `MCP supervisor failed to admit the request: ${detail}`
+          }
+        } as JSONRPCResponse,
+        this.modeForMessage(message)
+      );
+      if (rolledBack) {
+        // The released entry may have been the last occupant of a dispatch
+        // barrier, and its cleared deadline was the timer that used to (much
+        // later) unblock the queue behind it. Drain now instead. A second fault
+        // must not escape: the client is already answered, and an escaping throw
+        // reaches the frame reader, which swallows it as a parse error.
+        try {
+          this.drainQueue();
+        } catch (drainError) {
+          this.eventWriter("error", "supervisor.admission_failed", {
+            id,
+            method: message.method,
+            message: drainError instanceof Error ? drainError.message : String(drainError)
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Every request INSTANCE live at `key` right now: the forwarded entry plus any
+   * queued ones. Captured before admission runs so a rollback can tell the state
+   * THIS admission installed from a pre-existing request that shares the id — a
+   * client may legally retry an id after a terminal reply, and the supervisor
+   * deliberately tolerates a client reusing a still-live one.
+   */
+  private liveInstancesAt(key: string): Set<PendingRequest> {
+    const instances = new Set<PendingRequest>();
+    const pending = this.pendingRequests.get(key);
+    if (pending) instances.add(pending);
+    for (const entry of this.queuedRequests) {
+      if (requestKey(entry.pending.id) === key) instances.add(entry.pending);
+    }
+    return instances;
+  }
+
+  /**
+   * Undoes the half-installed state a FAULTED admission left behind at `key`.
+   *
+   * Admission installs before it can fault: forwardRequest inserts the pending
+   * entry, takes the validate slot/barrier and only THEN writes to the worker's
+   * stdin, and its no-child fallback queues the request before scheduling a
+   * restart. A synchronous write or encode failure therefore used to leave a
+   * live entry whose armed deadline wrote a SECOND terminal reply for an id the
+   * client had already been answered on, while every request behind its barrier
+   * waited for that deadline.
+   *
+   * Only instances absent from `preexisting` are removed, so a request that was
+   * already live at the same id keeps its own exactly-one-response guarantee.
+   *
+   * Returns whether anything was rolled back.
+   */
+  private rollbackFailedAdmission(key: string, preexisting: Set<PendingRequest>): boolean {
+    let rolledBack = false;
+    for (let index = this.queuedRequests.length - 1; index >= 0; index -= 1) {
+      const entry = this.queuedRequests[index];
+      if (requestKey(entry.pending.id) !== key || preexisting.has(entry.pending)) continue;
+      this.queuedRequests.splice(index, 1);
+      if (index < this.initializePredecessorCount) this.initializePredecessorCount -= 1;
+      if (entry.pending.deadlineTimer) this.timerClearer(entry.pending.deadlineTimer);
+      entry.pending.deadlineTimer = undefined;
+      // A queued entry never owns runningValidateKey; the barrier it may have
+      // taken at admission is released exactly as a cancellation releases it.
+      // No finality tombstone: a never-forwarded id has no worker answer to
+      // discard (the same entitlement writeSyntheticReply applies).
+      if (this.validateBarrierKey === key && this.runningValidateKey !== key) {
+        this.validateBarrierKey = undefined;
+      }
+      rolledBack = true;
+    }
+    const pending = this.pendingRequests.get(key);
+    if (pending && !preexisting.has(pending) && this.releaseForwardedRequest(key, pending)) {
+      rolledBack = true;
+    }
+    return rolledBack;
+  }
+
+  private routeClientMessage(message: JSONRPCMessage): void {
     debugSupervisor("client_message", {
       hasMethod: "method" in message,
       method: "method" in message ? message.method : undefined,
@@ -1323,7 +1484,10 @@ export class StdioSupervisor {
       pending.timeoutPhase = "queue";
       const elapsedAtAdmission = Math.max(0, this.monotonicNow() - pending.startedAt);
       pending.deadlineTimer = this.timerScheduler(
-        () => this.handleValidateProjectDeadline(requestKey(pending.id)),
+        // The captured instance — not just its id — is what this deadline
+        // owns: a client may legally reuse a live id, and the timer must never
+        // settle whichever OTHER request happens to share the key.
+        () => this.handleValidateProjectDeadline(requestKey(pending.id), pending),
         Math.max(0, this.validateProjectTimeoutMs - elapsedAtAdmission)
       );
       pending.deadlineTimer.unref();
@@ -1690,6 +1854,27 @@ export class StdioSupervisor {
    * re-forwarding the id (a legal retry) clears it. The result is one
    * mechanism for "this request instance is over" rather than two.
    *
+   * Returns whether an entry was actually released.
+   */
+  private releaseCancelledRequest(key: string, pending: PendingRequest): boolean {
+    if (!this.releaseForwardedRequest(key, pending)) {
+      return false;
+    }
+    this.eventWriter("info", "supervisor.request_cancelled", {
+      id: pending.id,
+      method: pending.method,
+      toolName: pending.toolName
+    });
+    return true;
+  }
+
+  /**
+   * Terminal teardown of a forwarded pending entry, shared by cancellation and
+   * by admission rollback: clear the deadline, drop the entry, release the
+   * validate slot and barrier it owned, and record the finality tombstone that
+   * discards a late worker answer for the id. Emits no event — WHY the entry is
+   * going away belongs to the caller.
+   *
    * Carve-out: an in-flight `initialize` is NOT released. Its pending entry is
    * owned by the legacy handshake lifecycle (replay correlation,
    * isInitializationResponse, the preserved-key rule in
@@ -1700,7 +1885,7 @@ export class StdioSupervisor {
    *
    * Returns whether an entry was actually released.
    */
-  private releaseCancelledRequest(key: string, pending: PendingRequest): boolean {
+  private releaseForwardedRequest(key: string, pending: PendingRequest): boolean {
     if (pending.method === "initialize") {
       return false;
     }
@@ -1710,11 +1895,6 @@ export class StdioSupervisor {
     if (this.runningValidateKey === key) this.runningValidateKey = undefined;
     if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
     this.recordFinalityTombstone(key, pending.mode);
-    this.eventWriter("info", "supervisor.request_cancelled", {
-      id: pending.id,
-      method: pending.method,
-      toolName: pending.toolName
-    });
     return true;
   }
 
@@ -1755,15 +1935,33 @@ export class StdioSupervisor {
     return true;
   }
 
-  private handleValidateProjectDeadline(key: string): void {
-    const queuedIndex = this.queuedRequests.findIndex(
-      (entry) => requestKey(entry.pending.id) === key
+  /**
+   * Fires one armed validate-project deadline.
+   *
+   * `captured` is the exact `PendingRequest` the timer was armed for. It is
+   * required for correctness whenever a client reuses a live id: keyed only by
+   * id, a RUNNING validate-project's deadline matched an id-colliding QUEUED
+   * duplicate first, terminalized that innocent duplicate with a queue-phase
+   * timeout, and left the running request with no deadline and the validate
+   * barrier permanently raised — so everything behind the barrier waited
+   * forever whenever the worker never answered. The parameter stays optional
+   * for the key-only white-box call sites, where no collision exists.
+   */
+  private handleValidateProjectDeadline(key: string, captured?: PendingRequest): void {
+    const queuedIndex = this.queuedRequests.findIndex((entry) =>
+      captured === undefined
+        ? requestKey(entry.pending.id) === key
+        : entry.pending === captured
     );
     if (queuedIndex >= 0) {
       const [{ pending }] = this.queuedRequests.splice(queuedIndex, 1);
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       pending.deadlineTimer = undefined;
-      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+      // The barrier may be held by a DIFFERENT, running request that reuses
+      // this id; releasing it here would strand that request's answer.
+      if (this.validateBarrierKey === key && this.runningValidateKey !== key) {
+        this.validateBarrierKey = undefined;
+      }
       // A cancelled queued entry was spliced out of queuedRequests (and its
       // timer cleared) at cancellation, so anything still here is live.
       this.writeSyntheticReply(pending, buildValidateProjectTimeoutReply({
@@ -1779,6 +1977,10 @@ export class StdioSupervisor {
 
     const pending = this.pendingRequests.get(key);
     if (!pending || pending.toolName !== "validate-project") return;
+    // The live entry at this key may be a LATER request that reused the id
+    // after this timer's request was already settled; only the captured
+    // instance may be timed out here.
+    if (captured !== undefined && pending !== captured) return;
     pending.deadlineTimer = undefined;
     this.runningValidateKey = undefined;
     this.validateBarrierKey = undefined;
@@ -1858,6 +2060,7 @@ export class StdioSupervisor {
     this.childReadyAt = undefined;
     this.initializeSentToWorker = false;
     this.workerStderrBuffer = "";
+    this.workerStderrDroppingLine = false;
     this.clearStartupWatchdog();
     this.startupWatchdog = this.timerScheduler(() => {
       if (token !== this.attemptToken || child !== this.child || this.childReady) return;
@@ -1913,11 +2116,30 @@ export class StdioSupervisor {
     log("warn", "supervisor.worker_stdin_error", { message: error.message });
   }
 
+  /**
+   * Reassembles the worker's stderr into lines (the ready marker may be split
+   * across reads) and passes them through, with a ceiling on the PENDING
+   * fragment: a worker or JVM that emits one very long newline-less line would
+   * otherwise grow supervisor memory without bound until the next spawn. Past
+   * the ceiling the held prefix is flushed as one truncated line and the rest
+   * of that line is discarded; line assembly resumes at the next newline, so
+   * a later ready marker is still recognized.
+   */
   private handleWorkerStderr(child: ChildProcessWithoutNullStreams, chunk: Buffer | string): void {
     if (child !== this.child) return;
     this.workerStderrBuffer += chunk.toString();
     const lines = this.workerStderrBuffer.split(/\r?\n/);
     this.workerStderrBuffer = lines.pop() ?? "";
+
+    if (this.workerStderrDroppingLine) {
+      if (lines.length === 0) {
+        // Still inside the over-long line: the held fragment is more of it.
+        this.workerStderrBuffer = "";
+        return;
+      }
+      this.workerStderrDroppingLine = false;
+      lines.shift();
+    }
 
     for (const line of lines) {
       if (line === WORKER_READY_MARKER) {
@@ -1925,6 +2147,17 @@ export class StdioSupervisor {
         continue;
       }
       process.stderr.write(`${line}\n`);
+    }
+
+    if (byteLengthUtf8(this.workerStderrBuffer) > MAX_WORKER_STDERR_LINE_BYTES) {
+      this.eventWriter("warn", "supervisor.worker_stderr_line_truncated", {
+        pid: child.pid,
+        heldBytes: byteLengthUtf8(this.workerStderrBuffer),
+        limitBytes: MAX_WORKER_STDERR_LINE_BYTES
+      });
+      process.stderr.write(`${this.workerStderrBuffer}\n`);
+      this.workerStderrBuffer = "";
+      this.workerStderrDroppingLine = true;
     }
   }
 
