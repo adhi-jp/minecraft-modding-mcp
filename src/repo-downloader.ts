@@ -265,6 +265,26 @@ function retryDelay(baseMs: number, attempt: number): number {
   return Math.floor(baseMs * 2 ** attempt + Math.random() * 128);
 }
 
+/**
+ * Release a response body this call will never read.
+ *
+ * Every leg of {@link downloadToCache} that answers on headers alone - a 404, a
+ * 304, a retried 5xx, a refused Content-Length, any other non-OK status - leaves
+ * an unread body behind, and an unread body holds its connection open until GC
+ * gets to it. On a pooled agent that is a socket the next repository in the
+ * failover loop cannot have, and on the retry leg it stays pinned for the whole
+ * backoff, competing with the very retry it is delaying.
+ *
+ * Best-effort by design: a body that is absent (a 304 usually carries none) or
+ * already errored has nothing to release, and neither is a reason to fail a call
+ * that has otherwise finished.
+ */
+function releaseBody(response: Response): void {
+  void response.body?.cancel().catch(() => {
+    // best-effort release
+  });
+}
+
 /** Upper bound on how long a repository-supplied `Retry-After` may pause a retry. */
 const MAX_RETRY_AFTER_MS = 30_000;
 
@@ -322,6 +342,18 @@ export function resolveRetryAfterMs(
 ): number | undefined {
   const raw = trimOptionalWhitespace(headerValue ?? "");
   if (raw === "") {
+    return undefined;
+  }
+
+  // The OWS trim above is not enough on its own, because `Date.parse` strips
+  // more than it does: a leading newline, a form feed, a U+00A0 all vanish
+  // before it reads the date, so `"\nThu, 01 Jan 2026 00:00:10 GMT"` becomes an
+  // honoured ten-second pause. That is the same repair-a-malformed-header guess
+  // the strict digit guard exists to refuse, arriving through the other arm.
+  // Everything RFC 9110 allows in a field value is printable ASCII (the OWS it
+  // also allows is already gone), so anything outside that range means the value
+  // is malformed, not padded.
+  if (!/^[\u0020-\u007e]+$/.test(raw)) {
     return undefined;
   }
 
@@ -1047,6 +1079,29 @@ export async function resolveCachedDownload(
     // there, the same stat-then-digest check readDownloadSidecar applies on read.
     let identity: DownloadSidecar | undefined = restoreRetiredSidecar();
     if (identity === undefined) {
+      // Our record no longer describes the file, so a concurrent resolve replaced
+      // it - and it may have left its own record beside the bytes it wrote.
+      // readDownloadSidecar returns one only while it still matches the file, so
+      // a record that comes back describes exactly what is on disk now, and its
+      // validators were confirmed AFTER the ones this 304 answers for. Report it
+      // whole and write nothing: rebuilding it from our own etag would replace
+      // the winner's confirmed freshness with our stale copy of it, and nothing
+      // in the digest would show the downgrade. No extra transfer either - the
+      // bytes are here and their identity is known.
+      const winner = readDownloadSidecar(destinationPath, url);
+      if (winner !== undefined) {
+        return {
+          ok: true,
+          cacheStatus: "revalidated",
+          statusCode: downloaded.statusCode,
+          path: destinationPath,
+          contentLength: winner.contentLength,
+          contentSha256: winner.contentSha256,
+          etag: winner.etag,
+          lastModified: winner.lastModified
+        };
+      }
+
       const current = await describeFileIfPresent(destinationPath);
       if (current !== undefined) {
         identity = { version: DOWNLOAD_SIDECAR_VERSION, url, ...current };
@@ -1217,6 +1272,7 @@ export async function downloadToCache(
 
       const status = response.status;
       if (status === 404) {
+        releaseBody(response);
         return { ok: false, statusCode: status };
       }
 
@@ -1224,6 +1280,7 @@ export async function downloadToCache(
       // error: the caller already holds the bytes. `ok` stays false because this
       // call wrote none.
       if (status === 304) {
+        releaseBody(response);
         return {
           ok: false,
           statusCode: status,
@@ -1235,6 +1292,7 @@ export async function downloadToCache(
 
       if (status === 429 || (status >= 500 && status < 600)) {
         if (attempt >= maxRetries) {
+          releaseBody(response);
           return { ok: false, statusCode: status };
         }
 
@@ -1245,12 +1303,14 @@ export async function downloadToCache(
         const waitMs =
           resolveRetryAfterMs(response.headers.get("retry-after"), Date.now()) ??
           retryDelay(200, attempt);
+        releaseBody(response);
         await sleep(waitMs);
         attempt += 1;
         continue;
       }
 
       if (!response.ok) {
+        releaseBody(response);
         return {
           ok: false,
           statusCode: status,
@@ -1270,11 +1330,7 @@ export async function downloadToCache(
       // what actually bounds the bytes written.
       const declaredLength = declaredContentLength(response.headers.get("content-length"));
       if (declaredLength !== undefined && declaredLength > maxBytes) {
-        // Nothing here reads the body, so release it rather than leaving the
-        // socket held open until GC gets to it.
-        void response.body?.cancel().catch(() => {
-          // best-effort release
-        });
+        releaseBody(response);
         limitExceeded("content-length", url, declaredLength, maxBytes);
       }
 
