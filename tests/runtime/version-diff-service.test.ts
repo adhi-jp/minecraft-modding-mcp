@@ -442,3 +442,118 @@ test("compareVersions degrades to the obfuscated namespace with a warning when m
     `expected an explicit non-match warning, got: ${JSON.stringify(result.warnings)}`
   );
 });
+
+test("compareVersions keeps both sides in one namespace when only one version can be lifted", async () => {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "version-diff-onesided-"));
+  const fromJar = join(root, "from.jar");
+  const toJar = join(root, "to.jar");
+  await createJar(fromJar, { "dlp.class": "", "dlq.class": "" });
+  await createJar(toJar, { "dlp.class": "", "ije.class": "" });
+
+  const config = buildTestConfig(root);
+  // Only the TO version has cached official mappings; the FROM version cannot be
+  // lifted, so the diff must fall back to the namespace both jars share.
+  await mkdir(join(config.cacheDir, "mappings"), { recursive: true });
+  await writeFile(join(config.cacheDir, "mappings", "1.21.11-mojang-merged.tiny"), MOJANG_TINY_TO, "utf8");
+
+  const service = new VersionDiffService(
+    config,
+    {
+      async resolveVersionJar(version: string) {
+        return {
+          version,
+          jarPath: version === "1.21.10" ? fromJar : toJar,
+          source: "downloaded",
+          clientJarUrl: "https://example.invalid/client.jar"
+        };
+      },
+      async resolveVersionMappings() {
+        throw new Error("offline");
+      }
+    } as any,
+    {} as any
+  );
+
+  const result = await service.compareVersions({
+    fromVersion: "1.21.10",
+    toVersion: "1.21.11",
+    category: "classes"
+  });
+
+  assert.equal(result.classes?.namespace, "obfuscated");
+  // Pre-fix the mapped TO set was diffed against the obfuscated FROM set, so every
+  // class was reported as both added and removed with unchanged: 0.
+  assert.deepEqual(result.classes?.added, ["ije"]);
+  assert.deepEqual(result.classes?.removed, ["dlq"]);
+  assert.equal(result.classes?.unchanged, 1);
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("OBFUSCATED namespace")),
+    `expected a namespace-degradation warning, got: ${JSON.stringify(result.warnings)}`
+  );
+  // Both jars are obfuscated, so the raw fallback compares like with like; the
+  // cross-scheme warning belongs only to the obfuscated-vs-Mojang case below.
+  assert.ok(
+    !result.warnings.some((warning) => warning.includes("different class-naming schemes")),
+    `expected no naming-scheme mismatch warning, got: ${JSON.stringify(result.warnings)}`
+  );
+});
+
+test("compareVersions warns when the raw fallback compares an obfuscated jar against a Mojang-named one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "version-diff-scheme-"));
+  const fromJar = join(root, "from.jar");
+  const toJar = join(root, "to.jar");
+  // A 1.21.x-shaped jar: obfuscated default-package entries, with no mappings
+  // available to lift them.
+  await createJar(fromJar, { "dlp.class": "", "dlq.class": "" });
+  // A 26.1+-shaped jar: already ships Mojang names, so nothing has to be lifted
+  // and toMojangNames reports the "mojang" namespace without a class map.
+  await createJar(toJar, {
+    "net/minecraft/world/item/Item.class": "",
+    "net/minecraft/world/item/BlockItem.class": "",
+    "net/minecraft/world/item/PotionItem.class": ""
+  });
+
+  const service = new VersionDiffService(
+    buildTestConfig(root),
+    {
+      async resolveVersionJar(version: string) {
+        return {
+          version,
+          jarPath: version === "1.21.10" ? fromJar : toJar,
+          source: "downloaded",
+          clientJarUrl: "https://example.invalid/client.jar"
+        };
+      },
+      async resolveVersionMappings() {
+        throw new Error("offline");
+      }
+    } as any,
+    {} as any
+  );
+
+  const result = await service.compareVersions({
+    fromVersion: "1.21.10",
+    toVersion: "26.1",
+    category: "classes"
+  });
+
+  assert.equal(result.classes?.namespace, "obfuscated");
+  // The existing degradation warning still applies and must not be replaced.
+  assert.ok(
+    result.warnings.some((warning) => warning.includes("OBFUSCATED namespace")),
+    `expected the namespace-degradation warning, got: ${JSON.stringify(result.warnings)}`
+  );
+  // Pre-fix the response reported every class as both added and removed with no hint
+  // that the two sides are not even in the same naming scheme.
+  const schemeWarning = result.warnings.find((warning) =>
+    warning.includes("different class-naming schemes")
+  );
+  assert.ok(
+    schemeWarning,
+    `expected a naming-scheme mismatch warning, got: ${JSON.stringify(result.warnings)}`
+  );
+  assert.match(schemeWarning, /not meaningful/i);
+  assert.match(schemeWarning, /unchanged/i);
+  assert.ok(schemeWarning.includes("1.21.10") && schemeWarning.includes("26.1"));
+});

@@ -65,11 +65,13 @@ const WARNING_RULES: WarningRule[] = [
   },
   {
     // compare-versions could not lift the jars out of the obfuscated namespace.
+    // The cause is the version whose mappings would not load, so `version` leads;
+    // packageFilter follows because it is the field the fallback also invalidates.
     test: /compared in the OBFUSCATED namespace/i,
     code: "namespace_fallback",
     category: "mapping",
     severity: "warning",
-    affectedFields: ["packageFilter"]
+    affectedFields: ["version", "packageFilter"]
   },
   {
     test: /falling back to vanilla|resolution failed; falling back|sources jar\.?\s*Falling back|(?:does not include|excludes) net\.minecraft/i,

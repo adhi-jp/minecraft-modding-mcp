@@ -97,3 +97,18 @@ test("capWarningDetailsForSummary caps the structured companion only at summary 
   const few = classifyWarnings(["a", "b"]);
   assert.equal(capWarningDetailsForSummary(few, true), few);
 });
+
+test("classifyWarnings names version as a tunable field on the compare-versions namespace fallback", () => {
+  // The warning fires whenever the Mojang mappings for one of the two versions
+  // could not be loaded, with or without a packageFilter, so packageFilter alone
+  // misdirects the caller away from the field that actually caused it.
+  const [detail] = classifyWarnings([
+    'Official Mojang mappings could not be loaded for 1.21.10, so class names (and packageFilter) ' +
+      'are compared in the OBFUSCATED namespace. Deobfuscated prefixes such as ' +
+      '"net.minecraft.world.item" cannot match here.'
+  ]);
+
+  assert.equal(detail!.code, "namespace_fallback");
+  assert.equal(detail!.category, "mapping");
+  assert.deepEqual(detail!.affectedFields, ["version", "packageFilter"]);
+});

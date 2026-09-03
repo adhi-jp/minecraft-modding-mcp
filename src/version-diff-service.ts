@@ -380,9 +380,11 @@ export class VersionDiffService {
           // before anything is compared or filtered: a mojang packageFilter
           // against obfuscated jar entries matched nothing and reported a
           // silent all-zero diff that read as "no changes".
+          const fromJarClasses = extractClassEntries(fromEntries);
+          const toJarClasses = extractClassEntries(toEntries);
           const [fromNames, toNames] = await Promise.all([
-            this.toMojangNames(fromVersion, extractClassEntries(fromEntries)),
-            this.toMojangNames(toVersion, extractClassEntries(toEntries))
+            this.toMojangNames(fromVersion, fromJarClasses),
+            this.toMojangNames(toVersion, toJarClasses)
           ]);
           const namespace: ClassDiffNamespace =
             fromNames.namespace === "mojang" && toNames.namespace === "mojang"
@@ -394,10 +396,33 @@ export class VersionDiffService {
                 fromNames.namespace === "obfuscated" ? fromVersion : toVersion
               }, so class names (and packageFilter) are compared in the OBFUSCATED namespace. Deobfuscated prefixes such as "net.minecraft.world.item" cannot match here.`
             );
+            // Across Minecraft's move to unobfuscated names the two RAW sets are not in
+            // the same scheme at all: obfuscated short names on one side, Mojang names on
+            // the other. The fallback below still compares them, so say plainly that the
+            // resulting lists mean nothing rather than let them read as a real diff.
+            const fromLooksObfuscated = looksObfuscated(fromJarClasses);
+            const toLooksObfuscated = looksObfuscated(toJarClasses);
+            if (
+              fromJarClasses.size > 0 &&
+              toJarClasses.size > 0 &&
+              fromLooksObfuscated !== toLooksObfuscated
+            ) {
+              const obfuscatedSide = fromLooksObfuscated ? fromVersion : toVersion;
+              const namedSide = fromLooksObfuscated ? toVersion : fromVersion;
+              warnings.push(
+                `${fromVersion} and ${toVersion} use different class-naming schemes: ${obfuscatedSide} is obfuscated while ${namedSide} ships Mojang names. ` +
+                  `Because the mappings for ${obfuscatedSide} could not be loaded, the two class lists cannot be lined up — the added and removed lists below are NOT meaningful ` +
+                  `(nearly every class appears in both) and "unchanged" will be near zero.`
+              );
+            }
           }
 
-          const fromClasses = fromNames.classes;
-          const toClasses = toNames.classes;
+          // Only a diff whose BOTH sides were lifted may use the lifted names. When
+          // exactly one side maps, comparing the two sets compares two different
+          // namespaces, and every class reads as added AND removed with unchanged 0;
+          // fall back to the jars' own names, which is the namespace already reported.
+          const fromClasses = namespace === "mojang" ? fromNames.classes : fromJarClasses;
+          const toClasses = namespace === "mojang" ? toNames.classes : toJarClasses;
           const filteredFromClasses = input.packageFilter
             ? filterSetByPackage(fromClasses, input.packageFilter)
             : fromClasses;
