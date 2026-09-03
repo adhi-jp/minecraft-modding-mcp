@@ -37,9 +37,16 @@ export function resolveTinyIndexEntryBudget(
   value = process.env.MCP_LOOM_TINY_MAX_INDEX_ENTRIES,
   heapStats: { heap_size_limit: number; used_heap_size: number } = v8.getHeapStatistics()
 ): number {
-  const override = Number.parseInt(value ?? "", 10);
-  if (Number.isFinite(override) && override > 0) {
-    return override;
+  // Strict ASCII digits and safe integers only, mirroring `loadMaxFrameBytes` and
+  // `loadMaxDownloadBytes`. Number.parseInt stops at the first non-digit, so "1e9",
+  // "2_000_000", "10M" and "1.9" used to be accepted as 1, 2, 10 and 1 — a budget
+  // that truncates every real Loom load. No floor is applied: an explicit override
+  // is allowed to be small on purpose.
+  if (/^[0-9]+$/.test(value ?? "")) {
+    const override = Number(value);
+    if (Number.isSafeInteger(override) && override > 0) {
+      return override;
+    }
   }
   const free = Math.max(0, heapStats.heap_size_limit - heapStats.used_heap_size);
   const derived = Math.floor((free * HEAP_BUDGET_FRACTION) / HEAP_BYTES_PER_INDEX_ENTRY);

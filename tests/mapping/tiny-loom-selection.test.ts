@@ -354,3 +354,34 @@ test("readTinyFileCandidate classifies a file from its header alone and rejects 
     await rm(workspace.root, { recursive: true, force: true });
   }
 });
+
+test("resolveTinyIndexEntryBudget ignores an override that is not a plain integer instead of truncating it", () => {
+  const previous = process.env.MCP_LOOM_TINY_MAX_INDEX_ENTRIES;
+  delete process.env.MCP_LOOM_TINY_MAX_INDEX_ENTRIES;
+  try {
+    const heap = { heap_size_limit: 4_000_000_000, used_heap_size: 0 };
+    // floor(4_000_000_000 * 0.7 / 340), inside the 1M..64M clamp.
+    const derived = 8_235_294;
+    assert.equal(resolveTinyIndexEntryBudget(undefined, heap), derived);
+
+    // Number.parseInt would read these as 1, 2, 10 and 1 respectively, silently
+    // capping the index at a handful of entries and truncating every Loom load.
+    for (const malformed of ["1e9", "2_000_000", "10M", "1.9", " 250000", "-5", "0"]) {
+      assert.equal(
+        resolveTinyIndexEntryBudget(malformed, heap),
+        derived,
+        `"${malformed}" must fall back to the heap-derived budget`
+      );
+    }
+
+    // A plain integer is still honoured verbatim, with no floor applied.
+    assert.equal(resolveTinyIndexEntryBudget("250000", heap), 250_000);
+    assert.equal(resolveTinyIndexEntryBudget("1", heap), 1);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.MCP_LOOM_TINY_MAX_INDEX_ENTRIES;
+    } else {
+      process.env.MCP_LOOM_TINY_MAX_INDEX_ENTRIES = previous;
+    }
+  }
+});

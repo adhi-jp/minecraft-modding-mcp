@@ -718,7 +718,7 @@ Jars downloaded from the repositories in `MCP_SOURCE_REPOS` are cached under `MC
 | `MCP_MAX_SEARCH_HITS` | `200` | Maximum search result count |
 | `MCP_SEARCH_SCAN_PAGE_SIZE` | `250` | Page size used by literal scan fallbacks |
 | `MCP_SEARCH_SCAN_MAX_BYTES` | `67108864` | Maximum bytes read by literal scan fallbacks before the scan stops |
-| `MCP_LOOM_TINY_MAX_INDEX_ENTRIES` | derived from the live V8 heap limit | Hard cap on index slots one Loom `.tiny` load may accumulate before it stops and warns instead of exhausting the heap. Unset, the budget is derived from free heap (so raising `--max-old-space-size` raises it automatically) and clamped to 1,000,000–64,000,000 slots. |
+| `MCP_LOOM_TINY_MAX_INDEX_ENTRIES` | derived from the live V8 heap limit | Hard cap on index slots one Loom `.tiny` load may accumulate before it stops and warns instead of exhausting the heap. Unset, the budget is derived from free heap (so raising `--max-old-space-size` raises it automatically) and clamped to 1,000,000–64,000,000 slots. An override must be ASCII decimal digits: `1e9`, `2_000_000`, `10M` and `1.9` are ignored and fall back to the derived budget instead of being read as 1, 2, 10 and 1. An accepted override gets no floor — it may be deliberately small. |
 | `MCP_INDEX_INSERT_CHUNK_SIZE` | `200` | Batch size for SQLite index inserts |
 | `MCP_MAX_ARTIFACTS` | `200` | Maximum cached artifacts |
 | `MCP_MAX_CACHE_BYTES` | `2147483648` | Maximum total cache size in bytes |
