@@ -46,8 +46,29 @@ function readStatsSignature(filePath: string): string {
  * hashed once. The entry is only ever *reused*, never trusted on its own: a
  * mismatched mtime or size discards it, so the map cannot serve a digest for
  * bytes that have since been replaced.
+ *
+ * Bounded, like the helper caches in `src/source/artifact-resolver.ts`: this map
+ * is module-level and lives as long as the process, and a long-running server
+ * walks this cascade once per target-driven tool call, so an unbounded map grows
+ * with every distinct jar path the server has ever seen. Eviction costs at most
+ * one re-hash, which is exactly what a cache miss already costs.
  */
 const contentSignatureCache = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
+const MAX_CONTENT_SIGNATURE_CACHE = 512;
+
+/** Insert, dropping the oldest key first when the bound is reached. */
+function rememberContentSignature(
+  resolvedPath: string,
+  entry: { mtimeMs: number; size: number; sha256: string }
+): void {
+  if (!contentSignatureCache.has(resolvedPath) && contentSignatureCache.size >= MAX_CONTENT_SIGNATURE_CACHE) {
+    const oldestKey = contentSignatureCache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      contentSignatureCache.delete(oldestKey);
+    }
+  }
+  contentSignatureCache.set(resolvedPath, entry);
+}
 
 /**
  * The identity of a jar sitting on local disk: a sha256 of its bytes.
@@ -76,7 +97,7 @@ async function contentSignature(jarPath: string): Promise<string> {
   }
 
   const { contentSha256 } = await digestFile(resolvedPath);
-  contentSignatureCache.set(resolvedPath, {
+  rememberContentSignature(resolvedPath, {
     mtimeMs: stats.mtimeMs,
     size: stats.size,
     sha256: contentSha256
@@ -286,11 +307,17 @@ interface LocalBinaryJarCandidates {
    */
   exact?: string;
   /**
-   * First jar on disk that can ride along as a companion `binaryJarPath` next
-   * to a sources jar - the classifier-less jar included, because a classified
-   * coordinate's sources are routinely published against the common binary.
+   * Every jar on disk that can ride along as a companion `binaryJarPath` next
+   * to a sources jar, in preference order - the classifier-less jar included,
+   * because a classified coordinate's sources are routinely published against
+   * the common binary.
+   *
+   * A LIST rather than a pick, for the reason the rest of this cascade already
+   * keeps lists: existence is not readability, and choosing the most-preferred
+   * candidate before proving it lets one interrupted copy veto every good jar
+   * behind it.
    */
-  companion?: string;
+  companions: string[];
 }
 
 function resolveLocalCoordinateBinaryCandidates(
@@ -303,9 +330,11 @@ function resolveLocalCoordinateBinaryCandidates(
   );
 
   const exact = hasExistingJar(exactBinaryJarPath) ? exactBinaryJarPath : undefined;
-  const companion = exact ?? fallbackBinaryJarPaths.find((candidate) => hasExistingJar(candidate));
+  const companions = [exactBinaryJarPath, ...fallbackBinaryJarPaths].filter((candidate) =>
+    hasExistingJar(candidate)
+  );
 
-  return { exact, companion };
+  return { exact, companions };
 }
 
 /**
@@ -681,14 +710,31 @@ interface RepoAttemptFailure {
 }
 
 /**
+ * Errno codes that say a download cache entry is THERE and cannot be read.
+ *
+ * Exactly the family `describeFileIfPresent` refuses to launder into a cache
+ * miss: the entry exists, so re-transferring over it every time would hide the
+ * one problem the user can actually fix. The not-found family (ENOENT,
+ * ENOTDIR) is a miss and never arrives here as a throw.
+ */
+const UNREADABLE_CACHE_ENTRY_ERRNOS = new Set(["EACCES", "EISDIR", "EPERM", "EIO"]);
+
+/**
  * Read an error thrown out of the download layer into a failover record.
  * `AppError` details are the only structured source available here; anything
- * else contributes its message alone.
+ * else contributes its message alone - except the one unstructured throw that
+ * has a repair, below.
+ *
+ * `cacheEntryPath` is the url-keyed slot this attempt was reading, which is the
+ * file a caller would have to remove. The error rarely carries it: a directory
+ * read failure surfaces from the stream with `code` and `syscall` set and no
+ * `path` at all, so the slot has to be supplied by the caller.
  */
 function describeThrownRepoFailure(
   stage: "source" | "binary",
   repoUrl: string,
-  caughtError: unknown
+  caughtError: unknown,
+  cacheEntryPath: string
 ): RepoAttemptFailure {
   const failure: RepoAttemptFailure = {
     stage,
@@ -701,6 +747,21 @@ function describeThrownRepoFailure(
     if (typeof nextAction === "string" && nextAction.trim()) {
       failure.nextAction = nextAction.trim();
     }
+    return failure;
+  }
+
+  // An unreadable cache entry is not instability, and the terminal
+  // ERR_REPO_FETCH_FAILED says "unstable repository responses" - a dead end for
+  // a user whose repositories are fine and whose cache directory holds one
+  // unreadable file. `nextAction` is the only channel from here to a caller's
+  // hints, so the path and the errno travel on it.
+  const errno = (caughtError as NodeJS.ErrnoException | undefined)?.code;
+  if (typeof errno === "string" && UNREADABLE_CACHE_ENTRY_ERRNOS.has(errno)) {
+    const unreadablePath = (caughtError as NodeJS.ErrnoException).path ?? cacheEntryPath;
+    failure.nextAction =
+      `The download cache entry "${unreadablePath}" is present but could not be read (${errno}). `
+      + "Remove or repair that path - deleting it makes the next call re-download the artifact - "
+      + "and check that the cache directory is readable and writable by this process.";
   }
   return failure;
 }
@@ -868,37 +929,94 @@ export async function resolveSourceTarget(
     statusCode === undefined || statusCode >= 500 || statusCode === 429;
 
   const localM2Binary = resolveLocalCoordinateBinaryCandidates(explicitConfig.localM2Path, coordinate);
-  const localM2BinaryJarPath = localM2Binary.companion;
+
+  /**
+   * The Gradle module cache's entry for this coordinate, globbed at most once.
+   *
+   * Memoized because the ~/.m2 sources leg below may now need the Gradle binary
+   * companion before the Gradle sources leg runs, and neither may pay for the
+   * other's glob a second time. Still lazy: a ~/.m2 sources jar with a readable
+   * ~/.m2 companion beside it answers without the glob ever running.
+   */
+  let gradleCacheCandidateLookup:
+    | Promise<{ sourceJarPath?: string; binaryJarPath?: string; exactBinaryJarPath?: string } | undefined>
+    | undefined;
+  const gradleCacheCoordinateCandidate = (): Promise<
+    { sourceJarPath?: string; binaryJarPath?: string; exactBinaryJarPath?: string } | undefined
+  > => {
+    gradleCacheCandidateLookup ??= resolveGradleCacheCoordinateCandidate(coordinate);
+    return gradleCacheCandidateLookup;
+  };
+
+  /**
+   * The binary companion to hang beside a sources jar found on local disk.
+   *
+   * Both local sources legs used to take the first companion that EXISTED in
+   * their own store, which is the failure `firstReadableJarArchive` was written
+   * to prevent everywhere else in this cascade: an interrupted copy in one cache
+   * shadows a perfectly good jar in the other, and the truncated path is what
+   * gets persisted onto the artifact row. Proved candidates only, in preference
+   * order, the sources jar's own store first - and the archive that wins is
+   * returned rather than its path, so the caller can report what is inside it.
+   */
+  const readableLocalCompanion = async (
+    preferred: string[],
+    alternates: () => Promise<string[]>
+  ): Promise<BinaryJarArchive | undefined> => {
+    const fromPreferredStore = await firstReadableJarArchive(preferred);
+    if (fromPreferredStore) {
+      return fromPreferredStore;
+    }
+    return await firstReadableJarArchive(await alternates());
+  };
+
+  const gradleCacheBinaryCandidate = async (): Promise<string[]> => {
+    const binaryJarPath = (await gradleCacheCoordinateCandidate())?.binaryJarPath;
+    return binaryJarPath ? [binaryJarPath] : [];
+  };
 
   for (const candidate of resolveLocalCoordinateCandidates(explicitConfig.localM2Path, coordinate)) {
     if (await candidateHasJavaSources(candidate)) {
       const signature = await contentSignature(candidate);
+      const companion = await readableLocalCompanion(
+        localM2Binary.companions,
+        gradleCacheBinaryCandidate
+      );
       return coordinateArtifact({
         coordinate,
         idSource: "local-m2",
         signature,
         origin: "local-m2",
         sourceJarPath: candidate,
-        binaryJarPath: localM2BinaryJarPath,
-        isDecompiled: false
+        binaryJarPath: companion?.jarPath,
+        isDecompiled: false,
+        // The same observation every other leg that hands back a binary makes:
+        // a companion with nothing in it to decompile says so up front instead
+        // of surfacing as an unexplained empty result later.
+        qualityFlags: companion ? binaryJarQualityFlags(companion) : []
       });
     }
   }
 
-  const gradleCacheCandidate = await resolveGradleCacheCoordinateCandidate(coordinate);
+  const gradleCacheCandidate = await gradleCacheCoordinateCandidate();
   if (
     gradleCacheCandidate?.sourceJarPath &&
     (await candidateHasJavaSources(gradleCacheCandidate.sourceJarPath))
   ) {
     const signature = await contentSignature(gradleCacheCandidate.sourceJarPath);
+    const companion = await readableLocalCompanion(
+      gradleCacheCandidate.binaryJarPath ? [gradleCacheCandidate.binaryJarPath] : [],
+      async () => localM2Binary.companions
+    );
     return coordinateArtifact({
       coordinate,
       idSource: "local-m2",
       signature,
       origin: "local-m2",
       sourceJarPath: gradleCacheCandidate.sourceJarPath,
-      binaryJarPath: gradleCacheCandidate.binaryJarPath,
-      isDecompiled: false
+      binaryJarPath: companion?.jarPath,
+      isDecompiled: false,
+      qualityFlags: companion ? binaryJarQualityFlags(companion) : []
     });
   }
 
@@ -916,7 +1034,7 @@ export async function resolveSourceTarget(
   // jar has actually been found and this is known to be needed.
   const localBinaryJarCandidates = [
     ...new Set(
-      [localM2BinaryJarPath, gradleCacheCandidate?.binaryJarPath].filter(
+      [...localM2Binary.companions, gradleCacheCandidate?.binaryJarPath].filter(
         (candidate): candidate is string => candidate !== undefined
       )
     )
@@ -944,8 +1062,10 @@ export async function resolveSourceTarget(
   for (let index = 0; index < remoteSourceUrls.length; index++) {
     const sourceUrl = remoteSourceUrls[index];
     const hasNextAttempt = index < remoteSourceUrls.length - 1;
+    // Outside the try: a throw out of the transfer has to be able to name the
+    // cache slot it was reading.
+    const sourceDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, sourceUrl);
     try {
-      const sourceDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, sourceUrl);
       const download = await resolveCachedDownload(sourceUrl, sourceDestinationPath, {
         freshness: downloadFreshness,
         retries: explicitConfig.fetchRetries,
@@ -1025,7 +1145,7 @@ export async function resolveSourceTarget(
       });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
-      const failure = describeThrownRepoFailure("source", sourceUrl, caughtError);
+      const failure = describeThrownRepoFailure("source", sourceUrl, caughtError, sourceDestinationPath);
       recordRepoFailure(failure);
       if (hasNextAttempt) {
         options.onRepoFailover?.({
@@ -1083,8 +1203,8 @@ export async function resolveSourceTarget(
   for (let index = 0; index < binaryCandidates.length; index++) {
     const binaryUrl = binaryCandidates[index];
     const hasNextAttempt = index < binaryCandidates.length - 1;
+    const binaryDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, binaryUrl);
     try {
-      const binaryDestinationPath = defaultDownloadPath(explicitConfig.cacheDir, binaryUrl);
       const downloaded = await resolveCachedDownload(binaryUrl, binaryDestinationPath, {
         freshness: downloadFreshness,
         retries: explicitConfig.fetchRetries,
@@ -1168,7 +1288,7 @@ export async function resolveSourceTarget(
       });
     } catch (caughtError) {
       sawRemoteRepoFailure = true;
-      const failure = describeThrownRepoFailure("binary", binaryUrl, caughtError);
+      const failure = describeThrownRepoFailure("binary", binaryUrl, caughtError, binaryDestinationPath);
       recordRepoFailure(failure);
       if (hasNextAttempt) {
         options.onRepoFailover?.({
