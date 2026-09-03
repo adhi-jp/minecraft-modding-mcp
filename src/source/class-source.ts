@@ -906,7 +906,17 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     warnings
   });
 
-  mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+  // Only the Minecraft RUNTIME earns the unobfuscated relabel. `version` here
+  // falls back to the coordinate's own version segment, and a library's release
+  // number is not a Minecraft version: `org.jetbrains:annotations:26.0.2` parses
+  // as a modern Minecraft release and is nothing of the sort. The resolver has
+  // already ruled on such an artifact - it is served in its native namespace,
+  // reported `mappingApplied: "obfuscated"`, flagged `dependency-mapping-unverified`
+  // and warned about - so relabelling it here would contradict the flag and the
+  // warning travelling in the same payload.
+  if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
+    mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+  }
 
   let activeArtifactId = artifactId;
   let activeOrigin = origin;
@@ -1336,7 +1346,12 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     warnings
   });
 
-  mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+  // Gated on the same predicate as the source path above, and for the same
+  // reason: a dependency's `version` is its own coordinate version, so the
+  // unobfuscated-runtime relabel must not reach it.
+  if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
+    mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+  }
 
   if (requestedMapping !== "obfuscated" && !version) {
     throw createError({
