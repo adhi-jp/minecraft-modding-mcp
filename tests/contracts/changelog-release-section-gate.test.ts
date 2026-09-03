@@ -251,8 +251,17 @@ test("fenced code blocks are sample content, not structure", () => {
   );
   assert.ok(hidden.findings.some((finding) => finding.marker === "source-path"));
 
+  // A column-0 fence belongs to no entry, so its lines are reported as text outside one — but
+  // they are never audited as prose, which is what keeps a Java path in a code sample from
+  // reading as an `internal-reference`.
   const sample = auditChangelog(sectionFixture(["- ok\n\n```\n- src/main/java/Example.java\n```"]), "9.9.9");
-  assert.deepEqual(sample.findings, []);
+  assert.deepEqual(
+    sample.findings.map((finding) => finding.kind),
+    ["unattributed-text"]
+  );
+
+  // Indented into the item, the same sample is part of that item and contributes nothing.
+  assert.deepEqual(auditChangelog(sectionFixture(["- ok\n\n  ```\n  - Example.java\n  ```"]), "9.9.9").findings, []);
 
   assert.deepEqual(listReleaseVersions("## [1.0.0] - 2020-01-01\n\n```\n## [0.0.0] - 2019-01-01\n```\n"), ["1.0.0"]);
 });
@@ -269,8 +278,90 @@ test("a fence opens and closes only under CommonMark's conditions", () => {
     assert.equal(auditChangelog(sectionFixture([entry]), "9.9.9").ok, false, `treated as a fence: ${entry}`);
   }
 
+  // A run followed by text is not a closer. Structure proves it: a release heading written
+  // after the false closer is still sample content, not a second section.
+  assert.deepEqual(
+    listReleaseVersions("## [1.0.0] - 2020-01-01\n\n```\nsample\n```not-a-close\n## [0.0.0] - 2019-01-01\n```\n"),
+    ["1.0.0"],
+    "a run followed by text must not close the fence"
+  );
+
+  // Lines inside the block are reported as text belonging to no entry rather than dropped,
+  // and still never audited as prose: the marker checks do not run against a code sample.
   const notACloser = auditChangelog(sectionFixture(["- ok\n\n```\nVerification: sample\n```not-a-close\n"]), "9.9.9");
-  assert.deepEqual(notACloser.findings, [], "a run followed by text must not close the fence");
+  assert.ok(notACloser.findings.length > 0, "fenced text outside every entry must be reported");
+  assert.ok(
+    notACloser.findings.every((finding) => finding.kind === "unattributed-text"),
+    "a code sample must never be audited as prose"
+  );
+});
+
+test("a fenced block that belongs to no entry is reported, not dropped", () => {
+  // A fence opened at column 0 sits outside the item above it, so nothing in the section owned
+  // its lines and they were discarded: a work-log dump parked in a top-level code block shipped
+  // green. Fenced text outside every entry is visible text like any other.
+  const markdown = sectionFixture([
+    [
+      "- The artifact index recovers from a corrupt database instead of failing the call.",
+      "",
+      "```",
+      "Verification: full suite green.",
+      "Pinned by tests/contracts/foo.test.ts and scripts/check-changelog.mjs",
+      "```"
+    ].join("\n")
+  ]);
+
+  const result = auditChangelog(markdown, "9.9.9");
+
+  assert.equal(result.ok, false, "a fenced block outside every entry must fail the gate");
+  for (const quoted of [/Verification: full suite green\./, /Pinned by tests\/contracts\/foo\.test\.ts/]) {
+    assert.ok(
+      result.findings.some((finding) => finding.kind === "unattributed-text" && quoted.test(finding.detail)),
+      `no finding named the fenced text matching ${quoted}`
+    );
+  }
+
+  // The correctly indented form is untouched: a fence inside the item is part of that item.
+  assert.deepEqual(auditChangelog(sectionFixture(["- ok\n\n  ```\n  sample output\n  ```"]), "9.9.9").findings, []);
+});
+
+test("an unterminated fence cannot hide the release sections that follow it", () => {
+  // A fence with no closer runs to end of document under CommonMark, so one stray column-0 run
+  // swallowed every later heading and the gate reported a clean file because it could no longer
+  // see them. Recovery is bounded to that malformed case: a fence that IS closed keeps its
+  // sample content, a sample release heading included.
+  const markdown = [
+    "# Changelog",
+    "",
+    "## [Unreleased]",
+    "",
+    "## [9.9.9] - 2026-01-01",
+    "",
+    "- The artifact index recovers from a corrupt database instead of failing the call.",
+    "",
+    "```",
+    "",
+    "## [9.8.0] - 2025-12-01",
+    "",
+    "- Verification: tests/loader.test.ts green.",
+    ""
+  ].join("\n");
+
+  assert.deepEqual(listReleaseVersions(markdown), ["9.9.9", "9.8.0"]);
+
+  const result = auditChangelog(markdown, "9.8.0");
+  assert.ok(
+    !result.findings.some((finding) => finding.kind === "missing-section"),
+    "the swallowed section must be visible to the audit"
+  );
+  assert.ok(result.findings.some((finding) => finding.marker === "proof-marker"));
+  assert.ok(result.findings.some((finding) => finding.marker === "test-path"));
+
+  assert.deepEqual(
+    listReleaseVersions("## [1.0.0] - 2020-01-01\n\n```\n## [0.0.0] - 2019-01-01\n```\n"),
+    ["1.0.0"],
+    "a terminated fence still holds its sample heading as content"
+  );
 });
 
 test("CRLF input is audited, and the extractor and version listing agree on it", () => {

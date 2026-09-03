@@ -154,52 +154,70 @@ export function renderedText(text) {
  * fence would hide every violation after it, and a run followed by text is not a closer, so
  * accepting it would end the block early and audit sample content as prose.
  *
- * One deliberate deviation: an INDENTED fence — one opened inside a list item — is closed by
- * a release heading at column 0. Under CommonMark an unclosed fence runs to the end of the
- * document, so a single unterminated fence inside an item would swallow every later release
- * section and the gate would report a clean file because it could no longer see them. A fence
- * opened at column 0 is a top-level code block and keeps the standard behavior, so a sample
- * that legitimately shows a release heading is still treated as sample content.
+ * Two deliberate deviations, both aimed at the same failure: under CommonMark an unclosed
+ * fence runs to the end of the document, so one stray run would swallow every later release
+ * section and the gate would report a clean file because it could no longer see them.
  *
- * KNOWN LIMITATION, accepted rather than fixed: that deviation misreads one shape. An
- * indented fence whose CONTENT is written at column 0 — the fence markers indented into a
- * list item, the sample lines not — ends at the first sample line that looks like a heading,
- * and the gate then audits that line as a real second section, reporting `duplicate-section`.
- * Both audits inherit it, since both read this one parser; it is not specific to
- * `## [Unreleased]`. Repairing it means giving up the column-0 escape above, and the failure
- * that escape prevents — one stray fence blinding the gate to every later release section —
- * is far worse than a false positive on a malformed sample. The correctly indented form
- * (markers AND content indented to the item's content column) parses cleanly and is pinned by
- * test; write samples that way.
+ *  1. A fence that is NEVER CLOSED is terminated by a release heading at column 0, whatever
+ *     the fence's own indent. The lookahead for a closer is what keeps this bounded to a
+ *     malformed document: a fence that does have a closer keeps the standard behavior at
+ *     every indent, so a sample that legitimately shows a release heading is still sample
+ *     content — including one written at column 0 inside a column-0 block.
+ *  2. An INDENTED fence — one opened inside a list item — is terminated by a column-0 release
+ *     heading even when it is closed later. This predates the rule above and is kept: an item
+ *     that indents its markers indents its content too, so a column-0 heading under it is far
+ *     more likely to be a real section than a sample line.
+ *
+ * KNOWN LIMITATION of the second rule, accepted rather than fixed: an indented fence whose
+ * CONTENT is written at column 0 — the fence markers indented into a list item, the sample
+ * lines not — ends at the first sample line that looks like a heading, and the gate then
+ * audits that line as a real second section, reporting `duplicate-section`. Both audits
+ * inherit it, since both read this one parser; it is not specific to `## [Unreleased]`. The
+ * correctly indented form (markers AND content indented to the item's content column) parses
+ * cleanly and is pinned by test; write samples that way.
  */
 function scanLines(markdown) {
   const raw = markdown.replace(/\r\n/g, "\n").split("\n");
   const lines = [];
   let open = null;
 
-  for (const text of raw) {
-    if (open !== null && open.indent > 0 && RELEASE_HEADING.test(text)) open = null;
+  for (let i = 0; i < raw.length; i += 1) {
+    const text = raw[i];
+    if (open !== null && open.terminatedByHeading && RELEASE_HEADING.test(text)) open = null;
 
     if (open === null) {
       const opener = FENCE_OPEN.exec(text);
       const backtickInfo = opener && opener.groups.fence[0] === "`" && opener.groups.info.includes("`");
       if (opener && !backtickInfo) {
-        open = { fence: opener.groups.fence, indent: indentWidth(opener.groups.indent) };
-        lines.push({ text, fenced: true, fenceIndent: open.indent });
+        const fence = opener.groups.fence;
+        const indent = indentWidth(opener.groups.indent);
+        // Decided at the opener, not when a heading arrives: the recovery has to be in force
+        // while the lines between here and that heading are classified.
+        open = { fence, indent, terminatedByHeading: indent > 0 || !closerFollows(raw, i + 1, fence) };
+        lines.push({ text, fenced: true, fenceIndent: indent, fenceDelimiter: true });
         continue;
       }
-      lines.push({ text, fenced: false, fenceIndent: 0 });
+      lines.push({ text, fenced: false, fenceIndent: 0, fenceDelimiter: false });
       continue;
     }
 
-    lines.push({ text, fenced: true, fenceIndent: open.indent });
     const closer = FENCE_CLOSE.exec(text);
-    if (closer && closer.groups.fence[0] === open.fence[0] && closer.groups.fence.length >= open.fence.length) {
-      open = null;
-    }
+    const closes =
+      closer !== null && closer.groups.fence[0] === open.fence[0] && closer.groups.fence.length >= open.fence.length;
+    lines.push({ text, fenced: true, fenceIndent: open.indent, fenceDelimiter: closes });
+    if (closes) open = null;
   }
 
   return lines;
+}
+
+/** Whether a fence opened with `fence` has a closer at or after `from`, per CommonMark. */
+function closerFollows(raw, from, fence) {
+  for (let i = from; i < raw.length; i += 1) {
+    const closer = FENCE_CLOSE.exec(raw[i]);
+    if (closer && closer.groups.fence[0] === fence[0] && closer.groups.fence.length >= fence.length) return true;
+  }
+  return false;
 }
 
 /** List the dated release versions in document order. Fenced sample headings are ignored. */
@@ -233,8 +251,9 @@ export function listReleaseVersions(markdown) {
  *
  * Visible text inside the section that belongs to no item is reported rather than dropped;
  * silently ignoring a line the parser does not understand is how a scanner becomes a rubber
- * stamp. Blocks that render nothing — link reference definitions, HTML comments — are not
- * visible text and are skipped.
+ * stamp. That covers a fenced block as well: a reader sees a top-level code sample, so its
+ * lines are reported like any other text outside an entry. Blocks that render nothing — link
+ * reference definitions, HTML comments, a fence's own delimiter lines — are skipped.
  */
 function collectSectionBody(lines, start) {
   const entries = [];
@@ -247,7 +266,7 @@ function collectSectionBody(lines, start) {
   };
 
   for (let i = start + 1; i < lines.length; i += 1) {
-    const { text, fenced, fenceIndent } = lines[i];
+    const { text, fenced, fenceIndent, fenceDelimiter } = lines[i];
     if (!fenced && RELEASE_HEADING.test(text)) break;
 
     if (text.trim() === "") {
@@ -256,9 +275,15 @@ function collectSectionBody(lines, start) {
     }
 
     if (fenced) {
-      // A fence indented into the open item is part of it; one outside ends the list.
-      if (current && fenceIndent >= current.contentIndent) current.parts.push(text.trim());
-      else if (!current || fenceIndent < current.contentIndent) close();
+      // A fence indented into the open item is part of it. One outside ends the list and
+      // belongs to no entry, so its text is reported instead of discarded: dropping it let a
+      // work-log dump parked in a top-level code block ship unaudited.
+      if (current && fenceIndent >= current.contentIndent) {
+        current.parts.push(text.trim());
+      } else {
+        close();
+        if (!fenceDelimiter) unattributed.push({ line: i + 1, text: text.trim() });
+      }
       afterBlank = false;
       continue;
     }
