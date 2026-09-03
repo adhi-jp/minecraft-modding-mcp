@@ -201,6 +201,10 @@ export function parseTinyMappingsInto(
       for (const namespace of header.columns) {
         const value = columns[namespace.columnIndex]?.trim() ?? "";
         if (!value) {
+          // A class row that omits this namespace ends the previous class's name
+          // for it. Leaving the stale entry made the following field/method rows
+          // register under the PREVIOUS class as owner, at confidence 1.
+          currentClassNames.delete(namespace.mapping);
           continue;
         }
         currentClassNames.set(namespace.mapping, value);

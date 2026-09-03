@@ -3,13 +3,13 @@ import { readdir, readFile } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 240;
+const EXPECTED_ORDINARY_TEST_FILES = 241;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2212;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2213;
 const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
 
 async function collectRecursiveFiles(root: string): Promise<string[]> {
