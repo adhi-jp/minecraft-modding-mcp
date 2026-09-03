@@ -1,8 +1,11 @@
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+
 import { parseJSONRPCMessage, type JSONRPCMessage } from "@modelcontextprotocol/server";
 
 const DEFAULT_MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const MIN_MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_CONTENT_LENGTH_HEADER_BYTES = 8 * 1024;
+const DEFAULT_INCOMPLETE_FRAME_IDLE_MS = 30_000;
 
 export type FramingMode = "unknown" | "line" | "content-length";
 export type ConcreteFramingMode = Exclude<FramingMode, "unknown">;
@@ -12,18 +15,51 @@ export type ParsedJsonRpcFrame = {
   mode: ConcreteFramingMode;
 };
 
+/**
+ * The opaque handle a {@link JsonRpcFrameReader}'s idle-budget timer is
+ * identified by. Only the reader's own scheduler/clearer pair interprets it,
+ * so a test can substitute a plain object for a real timer.
+ */
+export type FrameIdleTimerHandle = unknown;
+export type FrameIdleTimerScheduler = (
+  callback: () => void,
+  delayMs: number
+) => FrameIdleTimerHandle;
+export type FrameIdleTimerClearer = (handle: FrameIdleTimerHandle) => void;
+
+const scheduleIdleTimer: FrameIdleTimerScheduler = (callback, delayMs) => {
+  const timer = setNodeTimeout(callback, delayMs);
+  // The budget must never be the reason a process stays alive: a reader parked
+  // on an incomplete body would otherwise hold the event loop open for the
+  // whole budget after every other handle had closed.
+  timer.unref();
+  return timer;
+};
+
+const clearIdleTimerHandle: FrameIdleTimerClearer = (handle) => {
+  clearNodeTimeout(handle as ReturnType<typeof setNodeTimeout>);
+};
+
 type HeaderBoundary = {
   index: number;
   delimiterBytes: number;
 };
 
+/**
+ * The FIRST header terminator in the buffer, whichever style it is.
+ *
+ * Preferring a CRLFCRLF found anywhere over an earlier LFLF mis-framed every
+ * LF-framed peer whose JSON body happened to contain a raw `\r\n\r\n` — legal
+ * inter-token whitespace — because the header block was then cut at a boundary
+ * inside the body, losing that frame and the next.
+ */
 function findHeaderBoundary(buffer: Buffer): HeaderBoundary | undefined {
   const crlfBoundary = buffer.indexOf("\r\n\r\n");
-  if (crlfBoundary !== -1) {
+  const lfBoundary = buffer.indexOf("\n\n");
+
+  if (crlfBoundary !== -1 && (lfBoundary === -1 || crlfBoundary < lfBoundary)) {
     return { index: crlfBoundary, delimiterBytes: 4 };
   }
-
-  const lfBoundary = buffer.indexOf("\n\n");
   if (lfBoundary !== -1) {
     return { index: lfBoundary, delimiterBytes: 2 };
   }
@@ -66,10 +102,15 @@ function asError(value: unknown): Error {
  *  - an oversized Content-Length whose declared body has NOT fully arrived
  *    (waiting on it is what let a single unanswerable header wedge the
  *    transport for the process lifetime),
+ *  - an UNDER-limit Content-Length whose declared body stops arriving for the
+ *    incomplete-frame idle budget — the same wedge, below the size check,
  *  - a Content-Length body that is not valid JSON — under-declaration,
  *    over-declaration and an honestly-framed bad body are indistinguishable,
  *    and the first two have already desynchronized the stream,
- *  - duplicate Content-Length headers — the body length is ambiguous,
+ *  - a header block that declared a body length and then contradicted it
+ *    (duplicate Content-Length headers, a non-numeric value alongside a
+ *    numeric one, junk after a good declaration) — bytes the peer counted as
+ *    body would otherwise be re-read as frames,
  *  - a Content-Length header block that never terminates within the header
  *    limit — there is no delimiter left to resynchronize on.
  */
@@ -118,15 +159,42 @@ export function encodeJsonRpcMessage(
 
 export class JsonRpcFrameReader {
   private readonly maxFrameBytes: number;
+  private readonly incompleteFrameIdleMs: number;
+  private readonly scheduleTimer: FrameIdleTimerScheduler;
+  private readonly clearTimer: FrameIdleTimerClearer;
   private mode: FramingMode = "unknown";
   private buffer = Buffer.alloc(0);
   private pendingChunks: Buffer[] = [];
   private pendingBytes = 0;
   private awaitedFrameEnd = -1;
+  private awaitedBodyStart = -1;
+  private idleTimer: FrameIdleTimerHandle | undefined;
   private fatal = false;
 
-  constructor(options: { maxFrameBytes?: number } = {}) {
+  /**
+   * @param options.maxFrameBytes Largest accepted frame; defaults to
+   *   {@link loadMaxFrameBytes}.
+   * @param options.incompleteFrameIdleMs How long a declared Content-Length
+   *   body may stop arriving before the session is terminated. This is IDLE
+   *   time, not total time: every arriving byte clears and re-arms it, so a
+   *   legitimately slow or very large body is never cut off. Defaults to
+   *   30 000 ms; a non-positive or non-finite value disables the budget.
+   * @param options.timerScheduler Schedules the idle budget; defaults to an
+   *   `unref()`'d `setTimeout`. Injectable so tests can drive it directly.
+   * @param options.timerClearer Cancels a handle from `timerScheduler`.
+   */
+  constructor(
+    options: {
+      maxFrameBytes?: number;
+      incompleteFrameIdleMs?: number;
+      timerScheduler?: FrameIdleTimerScheduler;
+      timerClearer?: FrameIdleTimerClearer;
+    } = {}
+  ) {
     this.maxFrameBytes = options.maxFrameBytes ?? loadMaxFrameBytes();
+    this.incompleteFrameIdleMs = options.incompleteFrameIdleMs ?? DEFAULT_INCOMPLETE_FRAME_IDLE_MS;
+    this.scheduleTimer = options.timerScheduler ?? scheduleIdleTimer;
+    this.clearTimer = options.timerClearer ?? clearIdleTimerHandle;
   }
 
   get currentMode(): FramingMode {
@@ -143,17 +211,21 @@ export class JsonRpcFrameReader {
   }
 
   reset(): void {
+    this.clearIdleTimer();
     this.mode = "unknown";
     this.awaitedFrameEnd = -1;
+    this.awaitedBodyStart = -1;
     this.fatal = false;
   }
 
   clear(): void {
+    this.clearIdleTimer();
     this.mode = "unknown";
     this.buffer = Buffer.alloc(0);
     this.pendingChunks = [];
     this.pendingBytes = 0;
     this.awaitedFrameEnd = -1;
+    this.awaitedBodyStart = -1;
     this.fatal = false;
   }
 
@@ -168,6 +240,23 @@ export class JsonRpcFrameReader {
       return;
     }
 
+    // Bytes arrived, so any pending idle budget is stale; it is re-armed below
+    // only if this chunk leaves a declared body still incomplete.
+    this.clearIdleTimer();
+    try {
+      this.drainChunk(chunk, handlers);
+    } finally {
+      this.armIdleTimer(handlers);
+    }
+  }
+
+  private drainChunk(
+    chunk: Buffer,
+    handlers: {
+      onFrame: (frame: ParsedJsonRpcFrame) => void;
+      onError: (error: Error) => void;
+    }
+  ): void {
     this.pendingChunks.push(chunk);
     this.pendingBytes += chunk.length;
     if (!this.canCompleteFrame(chunk)) {
@@ -204,14 +293,34 @@ export class JsonRpcFrameReader {
           return;
         }
 
-        handlers.onFrame({
-          message,
-          mode: this.mode
-        });
+        try {
+          handlers.onFrame({
+            message,
+            mode: this.mode
+          });
+        } catch (handlerError) {
+          // The frame HANDLER threw, not the framer. This frame's bytes are
+          // already consumed and the framing state describes the stream
+          // correctly, so it must survive untouched: sharing the framing
+          // try/catch turned a handler bug into a silent framing change (the
+          // compat transport picks its response framing from `currentMode`,
+          // so a reset here downgraded later replies to line framing) and left
+          // the offending request unanswered with no distinguishing signal.
+          // The failure is still surfaced through `onError` — the path every
+          // transport already handles — but as a plain Error, so a handler can
+          // never forge the framing-fatal signal that tears a session down.
+          const handlerFault = asError(handlerError);
+          handlers.onError(
+            new Error(`JSON-RPC frame handler failed: ${handlerFault.message}`, {
+              cause: handlerFault
+            })
+          );
+        }
       } catch (caughtError) {
         const error = asError(caughtError);
         this.mode = "unknown";
         this.awaitedFrameEnd = -1;
+        this.awaitedBodyStart = -1;
         if (error instanceof JsonRpcFramingFatalError) {
           // Terminal: drop everything buffered and refuse all further input so
           // no byte after the violation can be mistaken for a frame. The
@@ -226,6 +335,73 @@ export class JsonRpcFrameReader {
         handlers.onError(error);
       }
     }
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer === undefined) {
+      return;
+    }
+    const handle = this.idleTimer;
+    this.idleTimer = undefined;
+    this.clearTimer(handle);
+  }
+
+  /**
+   * Puts an incomplete declared body on an idle clock.
+   *
+   * A Content-Length UNDER the frame limit whose body never arrives was the
+   * one wedge the size check could not see: `readContentLengthMessage` armed
+   * `awaitedFrameEnd`, `canCompleteFrame` then refused to look at anything
+   * until that many bytes existed, and every later frame piled up behind a
+   * body that was never coming. The budget is idle time — the caller clears it
+   * on every arriving chunk and this re-arms it — so only a stream that has
+   * gone silent mid-body is terminated.
+   *
+   * `onError` belongs to a `processChunk` call, so the timer fires through the
+   * handlers of the MOST RECENT call rather than the one that armed it. Every
+   * caller in this repository passes a stable handler pair on every chunk, and
+   * a caller that does not still gets a live pair rather than a stale one.
+   */
+  private armIdleTimer(handlers: { onError: (error: Error) => void }): void {
+    if (this.fatal || this.awaitedFrameEnd < 0 || this.awaitedBodyStart < 0) {
+      return;
+    }
+    if (!Number.isFinite(this.incompleteFrameIdleMs) || this.incompleteFrameIdleMs <= 0) {
+      return;
+    }
+
+    let handle: FrameIdleTimerHandle;
+    const expire = (): void => {
+      if (this.idleTimer === handle) {
+        this.idleTimer = undefined;
+      }
+      if (this.fatal || this.awaitedFrameEnd < 0 || this.awaitedBodyStart < 0) {
+        // Cleared, completed or already terminated between scheduling and now.
+        return;
+      }
+
+      const declaredBytes = this.awaitedFrameEnd - this.awaitedBodyStart;
+      const arrivedBytes = Math.max(
+        0,
+        this.buffer.length + this.pendingBytes - this.awaitedBodyStart
+      );
+      this.fatal = true;
+      this.mode = "unknown";
+      this.buffer = Buffer.alloc(0);
+      this.pendingChunks = [];
+      this.pendingBytes = 0;
+      this.awaitedFrameEnd = -1;
+      this.awaitedBodyStart = -1;
+      handlers.onError(new JsonRpcFramingFatalError(
+        `Content-Length declared ${declaredBytes} body bytes but only ${arrivedBytes} arrived ` +
+        `within the ${this.incompleteFrameIdleMs} ms incomplete-frame idle budget; the reader ` +
+        "cannot resynchronize without trusting bytes that may never be sent, so the stdio " +
+        "session is terminated."
+      ));
+    };
+
+    handle = this.scheduleTimer(expire, this.incompleteFrameIdleMs);
+    this.idleTimer = handle;
   }
 
   private canCompleteFrame(chunk: Buffer): boolean {
@@ -302,6 +478,7 @@ export class JsonRpcFrameReader {
     if (BigInt(this.buffer.length) >= frameEnd) {
       this.buffer = this.buffer.subarray(Number(frameEnd));
       this.awaitedFrameEnd = -1;
+      this.awaitedBodyStart = -1;
       this.mode = "unknown";
       throw new Error(reason);
     }
@@ -394,6 +571,7 @@ export class JsonRpcFrameReader {
 
   private readContentLengthMessage(): JSONRPCMessage | undefined {
     this.awaitedFrameEnd = -1;
+    this.awaitedBodyStart = -1;
 
     // Skip blank separator lines between frames so the mid-stream mode check
     // below sees the first byte of the next frame.
@@ -448,42 +626,69 @@ export class JsonRpcFrameReader {
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
+    // The WHOLE block is inspected before anything is thrown. Throwing on the
+    // first bad line consumed only the header block, which left the body bytes
+    // an EARLIER Content-Length had already declared sitting in the buffer to
+    // be re-read as line frames — so `Content-Length: 5x` followed by
+    // `Content-Length: 44`, or a good declaration followed by junk, let the
+    // peer decide where the reader thought the frame ended.
     let contentLength: bigint | undefined;
+    let declaredValue: string | undefined;
+    let contentLengthLines = 0;
+    let headerFault: string | undefined;
     for (const headerLine of headerLines) {
       const separatorIndex = headerLine.indexOf(":");
       if (separatorIndex === -1) {
-        this.buffer = this.buffer.subarray(headerBoundary.index + headerBoundary.delimiterBytes);
-        throw new Error(`Malformed header line: ${headerLine}`);
+        headerFault ??= `Malformed header line: ${headerLine}`;
+        continue;
       }
 
       const headerName = headerLine.slice(0, separatorIndex).trim().toLowerCase();
       const headerValue = headerLine.slice(separatorIndex + 1).trim();
-
-      if (headerName === "content-length") {
-        if (contentLength !== undefined) {
-          // Two declarations, no way to tell which delimits the body: the
-          // classic frame-smuggling shape. Last-wins would hand an attacker
-          // the choice of where the reader thinks this frame ends.
-          throw new JsonRpcFramingFatalError(
-            `Duplicate Content-Length header (${contentLength.toString()} then ${headerValue}): the ` +
-            "declared body length is ambiguous, so the reader cannot determine where this frame " +
-            "ends; the stdio session is terminated."
-          );
-        }
-        if (!/^[0-9]+$/.test(headerValue)) {
-          this.buffer = this.buffer.subarray(headerBoundary.index + headerBoundary.delimiterBytes);
-          throw new Error(`Invalid Content-Length header value: ${headerValue}`);
-        }
-        contentLength = BigInt(headerValue);
+      if (headerName !== "content-length") {
+        continue;
       }
-    }
 
-    if (contentLength === undefined) {
-      this.buffer = this.buffer.subarray(headerBoundary.index + headerBoundary.delimiterBytes);
-      throw new Error("Missing Content-Length header.");
+      contentLengthLines += 1;
+      if (contentLengthLines > 1) {
+        // Two declarations, no way to tell which delimits the body: the
+        // classic frame-smuggling shape. Last-wins would hand an attacker
+        // the choice of where the reader thinks this frame ends.
+        headerFault ??=
+          `Duplicate Content-Length header (${declaredValue ?? ""} then ${headerValue})`;
+        continue;
+      }
+
+      declaredValue = headerValue;
+      if (!/^[0-9]+$/.test(headerValue)) {
+        headerFault ??= `Invalid Content-Length header value: ${headerValue}`;
+        continue;
+      }
+      contentLength = BigInt(headerValue);
     }
 
     const messageStart = headerBoundary.index + headerBoundary.delimiterBytes;
+    if (headerFault !== undefined) {
+      this.buffer = this.buffer.subarray(messageStart);
+      if (contentLength !== undefined || contentLengthLines > 1) {
+        // The block named a body length somewhere and then contradicted it, so
+        // bytes the peer counted as body may already be buffered. Consuming
+        // only the header block would re-dispatch them as frames.
+        throw new JsonRpcFramingFatalError(
+          `${headerFault}: the declared body length is ambiguous, so the reader cannot determine ` +
+          "where this frame ends; the stdio session is terminated."
+        );
+      }
+      // No usable length was ever declared, so the delimited header block is
+      // all there is to consume and the recovery is provable.
+      throw new Error(headerFault);
+    }
+
+    if (contentLength === undefined) {
+      this.buffer = this.buffer.subarray(messageStart);
+      throw new Error("Missing Content-Length header.");
+    }
+
     if (contentLength > BigInt(this.maxFrameBytes)) {
       this.rejectDeclaredBody(
         messageStart,
@@ -504,6 +709,7 @@ export class JsonRpcFrameReader {
     const frameEnd = messageStart + Number(contentLength);
     if (this.buffer.length < frameEnd) {
       this.awaitedFrameEnd = frameEnd;
+      this.awaitedBodyStart = messageStart;
       return undefined;
     }
 
