@@ -45,6 +45,22 @@ Comparing post-migration output: re-run the same harness and diff — the
 normalization is deterministic, so byte equality of normalized fixtures is the
 comparison contract (for `inputSchema`, byte equality of the verbatim subtree).
 
+## Post-capture edits
+
+These fixtures are otherwise verbatim captures; there is one deliberate
+exception. Four `tool-contracts/*.json` files — `search-class-source.json`,
+`get-artifact-file.json`, `list-artifact-files.json` and
+`index-artifact.json` — carry a top-level `projectPath` property added AFTER
+capture, by commit `6e45c3b` ("fix(tools): accept projectPath on the
+flat-artifactId tools"), mirroring the shape `find-class` already had at
+capture time. For that one property those four files are no longer a record
+of what the SDK v1 build advertised.
+
+`src/v1-parity-schemas.ts` was regenerated from the edited files (see its
+header), so the advertised `inputSchema` bytes and the parity baseline still
+agree with each other — but a byte comparison of those four against a fresh
+capture from the untouched v1 build would not match on `projectPath`.
+
 ## Fixture families
 
 ### `tools-list-order.<flag-config>.json`
