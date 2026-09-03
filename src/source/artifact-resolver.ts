@@ -334,23 +334,71 @@ export function inferRuntimeJarMinecraftVersion(path: string): string | undefine
 }
 
 /**
- * Loader a runtime jar belongs to, read from its path.
+ * Segment that opens a directory tree a BUILD TOOL wrote: a dot-directory
+ * (`.gradle`, `.gradle-user-home`, `.m2`), Gradle's `caches` root, or a project
+ * `build` directory. Everything below the deepest such segment was laid out by a
+ * tool and names what it holds; everything above it is the user's own directory
+ * names and names nothing.
+ */
+const RUNTIME_JAR_LAYOUT_ROOT_RE = /^(?:\.[^/]*|caches|build)$/;
+
+/**
+ * The part of a runtime jar path that a build tool wrote: everything below the
+ * deepest layout root, or the bare file name when the path never enters one.
+ *
+ * Judged over the WHOLE path, an ancestor directory decided the loader — a
+ * Fabric workspace checked out under `~/dev/forge/` was served "forge", and
+ * `moddev-notes` or `srg-test` anywhere above the jar was enough to name a
+ * loader for an artifact that names none.
+ */
+function runtimeJarLayoutRelativePath(path: string): string {
+  const segments = normalizePathStyle(path)
+    .toLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    if (RUNTIME_JAR_LAYOUT_ROOT_RE.test(segments[index] ?? "")) {
+      return segments.slice(index + 1).join("/");
+    }
+  }
+  return segments[segments.length - 1] ?? "";
+}
+
+/**
+ * Loader a runtime jar belongs to, read from the tool-written part of its path.
  *
  * A Loom cache holds NeoForge-patched jars under a `/neoforge/` segment
  * (`caches/fabric-loom/1.21.10/neoforge/21.10.50-beta/minecraft-merged-mojang-at-patched.jar`).
  * Serving one of those to a Fabric workspace silently validated a Fabric access
- * widener against NeoForge bytecode, so the loader has to travel with the jar.
+ * widener against NeoForge bytecode, so the loader has to travel with the jar —
+ * which is why NeoForge is still asked first and still wins inside a Loom cache.
+ *
+ * Fabric is asked before Forge because its markers name a specific tool
+ * (`fabric-loom`, `loom-cache`) while Forge's are a bare `forge` token and the
+ * three letters `srg`: inside a Loom cache the specific marker is the true one.
  */
 export function inferRuntimeJarLoader(path: string): RuntimeLoader {
-  const lower = normalizePathStyle(path).toLowerCase();
-  if (lower.includes("neoforge") || lower.includes("neoform") || lower.includes("moddev")) {
+  const layoutPath = runtimeJarLayoutRelativePath(path);
+  if (
+    layoutPath.includes("neoforge") ||
+    layoutPath.includes("neoform") ||
+    layoutPath.includes("moddev")
+  ) {
     return "neoforge";
   }
-  if (/(^|[/\-_])forge([/\-_.]|$)/.test(lower) || lower.includes("forge_gradle") || lower.includes("srg")) {
-    return "forge";
-  }
-  if (lower.includes("fabric-loom") || lower.includes("loom-cache") || lower.includes("intermediary")) {
+  if (
+    layoutPath.includes("fabric-loom") ||
+    layoutPath.includes("loom-cache") ||
+    layoutPath.includes("intermediary")
+  ) {
     return "fabric";
+  }
+  if (
+    /(^|[/\-_])forge([/\-_.]|$)/.test(layoutPath) ||
+    layoutPath.includes("forge_gradle") ||
+    layoutPath.includes("srg")
+  ) {
+    return "forge";
   }
   return "unknown";
 }

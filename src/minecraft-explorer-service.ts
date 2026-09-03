@@ -1,11 +1,10 @@
+import { realpathSync } from "node:fs";
+
 import { createError, ERROR_CODES } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
 import { createJarEntryReader } from "./source-jar-reader.js";
-import {
-  artifactIdNamesMinecraftRuntime,
-  looksLikeMinecraftArtifactPath
-} from "./source/artifact-resolver.js";
+import { artifactIdNamesMinecraftRuntime } from "./source/artifact-resolver.js";
 import { matchesMemberPattern } from "./source/member-pattern.js";
 import { normalizePathStyle } from "./source/shared-utils.js";
 import type { Config } from "./types.js";
@@ -276,6 +275,37 @@ function toInternalName(fqn: string): string {
 const DEPENDENCY_STORE_PATH_RE = /(?:^|\/)(?:modules-2|\.m2)\//;
 
 /**
+ * The configured local Maven repository as a store PREFIX, or undefined when it
+ * cannot serve as one.
+ *
+ * The two literal segments above only recognise a repository that still lives at
+ * `~/.m2`. `MCP_LOCAL_M2` moves it anywhere — `/data/maven-repo` is a store this
+ * server itself reads from, and unrecognised as one, a plain dependency under it
+ * reported its own release number (`26.0.2`) as a Minecraft version.
+ *
+ * Resolved through realpath because the jar path it is compared against already
+ * is (`normalizeJarPath`), so a symlinked root would otherwise never prefix-match.
+ * A root that does not exist yet stays usable as a literal path; `/` is refused,
+ * since a store root that matches every path is not a store.
+ */
+function dependencyStoreRootPrefix(localM2Path: string | undefined): string | undefined {
+  if (!localM2Path?.trim()) {
+    return undefined;
+  }
+  let resolved = localM2Path.trim();
+  try {
+    resolved = realpathSync(resolved);
+  } catch {
+    // Not created yet; the configured path is still what a jar under it carries.
+  }
+  const normalized = normalizePathStyle(resolved).toLowerCase().replace(/\/+$/, "");
+  if (!normalized || normalized === "." || /^[a-z]?:?$/.test(normalized)) {
+    return undefined;
+  }
+  return `${normalized}/`;
+}
+
+/**
  * Minecraft's group directory in a dependency store, plus the artifactId directory
  * that always follows it — ANCHORED to the start of the STORE-RELATIVE remainder,
  * with one optional repository-root segment allowed in front of it. That segment is
@@ -304,13 +334,21 @@ const DEPENDENCY_STORE_PATH_RE = /(?:^|\/)(?:modules-2|\.m2)\//;
 const MINECRAFT_GROUP_ARTIFACT_DIR_RE = /^(?:[^/]+\/)?net[./]minecraft\/([^/]+)\//;
 
 /**
- * A `net/minecraft` directory pair somewhere below the group position, which in a
- * store can only be the tail of a longer group. `looksLikeMinecraftArtifactPath`
- * reads any such pair as Minecraft's group — the single question the anchored
- * match above has already answered — so it is dropped before that predicate is
- * consulted about NAMES.
+ * A jar FILE NAME that NAMES the Minecraft runtime: it starts with `minecraft-`
+ * (`minecraft-merged-1.21.10.jar`, `minecraft-1.21.10-sources.jar`), or is the
+ * bare word `minecraft`. This is the rule `artifactIdNamesMinecraftRuntime`
+ * applies to an artifactId, held against a file name instead — which is the same
+ * question, because both store layouts build the file name from the artifactId
+ * (`<artifactId>-<version>[-classifier].jar`).
+ *
+ * Anchored to the START of the name, because a substring read let a third-party
+ * artifact borrow it: `com.acme:my-minecraft-client-helper` contains
+ * `minecraft-client`, so its store path was read as the runtime and the helper's
+ * own `9.9` came back as a Minecraft version. An artifact whose own name STARTS
+ * with `minecraft-` is still read as the runtime — that misread remains, because
+ * such a name is indistinguishable from `minecraft-merged` by name alone.
  */
-const NESTED_MINECRAFT_GROUP_DIR_RE = /(?:^|\/)net\/minecraft\//g;
+const MINECRAFT_RUNTIME_FILE_NAME_RE = /^minecraft(?:-|$)/i;
 
 /**
  * Does a jar path inside a dependency store name the Minecraft runtime?
@@ -324,9 +362,11 @@ const NESTED_MINECRAFT_GROUP_DIR_RE = /(?:^|\/)net\/minecraft\//g;
  * When the group directory sits where the layout puts it, the artifactId that
  * follows decides, through the same `artifactIdNamesMinecraftRuntime` the
  * coordinate route uses, and that decision is final. Otherwise the jar is under
- * some other group, where only a NAME can still make it Minecraft's, so the shared
- * predicate answers on its remaining name-bearing arms (`minecraft-merged` and its
- * siblings) with the already-settled group question taken out of the string.
+ * some other group, where only a NAME can still make it Minecraft's — and the one
+ * name allowed to answer is the FILE's, the single position both store layouts
+ * build out of the artifactId. Asked of every segment instead, a GROUP directory
+ * could answer for the artifact it merely contains: `com.minecraft-tools:annotations`
+ * was read as the runtime and served its own `26.0.2` as a Minecraft version.
  *
  * The narrowing lives here rather than inside `looksLikeMinecraftArtifactPath`
  * because that predicate also weights candidate ranking in version-source
@@ -337,9 +377,8 @@ function pathNamesMinecraftRuntime(storeRelativePath: string): boolean {
   if (groupMatch) {
     return artifactIdNamesMinecraftRuntime(groupMatch[1] ?? "");
   }
-  return looksLikeMinecraftArtifactPath(
-    storeRelativePath.replace(NESTED_MINECRAFT_GROUP_DIR_RE, "/")
-  );
+  const fileName = storeRelativePath.slice(storeRelativePath.lastIndexOf("/") + 1);
+  return MINECRAFT_RUNTIME_FILE_NAME_RE.test(fileName);
 }
 
 /**
@@ -371,25 +410,46 @@ const GRADLE_FILES_SEGMENT_RE = /^files-\d+\.\d+\//;
  * the naming one and the version read. What lies above the store root is the
  * user's directory layout, and letting it speak made a jar's reported version turn
  * on where the store happened to be checked out.
+ *
+ * `localM2Path` is the local Maven repository this server is configured to read.
+ * It is a dependency store wherever it has been moved to, so it counts alongside
+ * the two literal store segments.
  */
-function extractVersionFromPath(inputPath: string): string | undefined {
+function extractVersionFromPath(inputPath: string, localM2Path?: string): string | undefined {
   const normalizedPath = normalizePathStyle(inputPath).toLowerCase();
-  const store = DEPENDENCY_STORE_PATH_RE.exec(normalizedPath);
-  if (store) {
-    // The store's own numbers sit to the LEFT of the artifact's, and a first-match
-    // read returns those instead: Gradle writes `.../modules-2/files-2.1/<group>/`,
-    // so a Loom-staged merged jar reported the layout constant "2.1" as a Minecraft
-    // version. Read past the store root, and past Gradle's `files-N.N` segment
-    // when it follows.
-    const storeRelativePath = normalizedPath
-      .slice(store.index + store[0].length)
-      .replace(GRADLE_FILES_SEGMENT_RE, "");
+  const storeRelativePath = dependencyStoreRelativePath(normalizedPath, localM2Path);
+  if (storeRelativePath !== undefined) {
     if (!pathNamesMinecraftRuntime(storeRelativePath)) {
       return undefined;
     }
     return storeRelativePath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
   }
   return inputPath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
+}
+
+/**
+ * The part of a jar path that lies below a dependency store's root, or undefined
+ * when the jar is not inside one.
+ *
+ * The store's own numbers sit to the LEFT of the artifact's, and a first-match
+ * read returns those instead: Gradle writes `.../modules-2/files-2.1/<group>/`, so
+ * a Loom-staged merged jar reported the layout constant "2.1" as a Minecraft
+ * version. Read past the store root, and past Gradle's `files-N.N` segment when it
+ * follows.
+ */
+function dependencyStoreRelativePath(
+  normalizedPath: string,
+  localM2Path: string | undefined
+): string | undefined {
+  const store = DEPENDENCY_STORE_PATH_RE.exec(normalizedPath);
+  if (store) {
+    return normalizedPath.slice(store.index + store[0].length).replace(GRADLE_FILES_SEGMENT_RE, "");
+  }
+  const configuredRoot = dependencyStoreRootPrefix(localM2Path);
+  if (configuredRoot && normalizedPath.startsWith(configuredRoot)) {
+    return normalizedPath.slice(configuredRoot.length).replace(GRADLE_FILES_SEGMENT_RE, "");
+  }
+  return undefined;
 }
 
 // Super classes/interfaces from these packages are never inside a Minecraft
@@ -1129,7 +1189,9 @@ export class MinecraftExplorerService {
     // naming such a jar directly gets — no coordinate reaches this method to judge
     // by. This flag covers the rest: a dependency the CALLER identified, whose jar
     // may sit anywhere, including a plain directory named after its version.
-    const minecraftVersion = dependencyOrigin ? undefined : extractVersionFromPath(jarPath);
+    const minecraftVersion = dependencyOrigin
+      ? undefined
+      : extractVersionFromPath(jarPath, this.config.localM2Path);
     return {
       minecraftVersion: minecraftVersion ?? "unknown",
       mappingType: "unknown",
