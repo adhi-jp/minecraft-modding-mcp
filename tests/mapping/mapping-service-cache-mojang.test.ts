@@ -342,7 +342,9 @@ test("MappingService maps descriptor-qualified methods through tiny mappings", a
       })
     );
 
-    assert.equal(result.warnings.length, 0);
+    assert.deepEqual(result.warnings, [
+      'Minecraft version "1.21.10" does not expose client mappings URL.'
+    ]);
     assert.equal(result.candidates[0]?.symbol, "intermediary.pkg.InterClass.interMethod(I)V");
     assert.equal(result.candidates[0]?.kind, "method");
     assert.equal(result.candidates[0]?.owner, "intermediary.pkg.InterClass");

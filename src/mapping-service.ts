@@ -318,6 +318,10 @@ export class MappingService {
         candidates: [],
         candidateCount: 0,
         warnings: [
+          // A truncated Loom index (or a source that yielded nothing) is often WHY the
+          // path is missing, so the loader's own warnings lead the no-path sentence
+          // instead of being replaced by it.
+          ...graph.warnings,
           `No mapping path is available for ${sourceMapping} -> ${targetMapping} on version "${version}".`
         ]
       };
@@ -342,7 +346,10 @@ export class MappingService {
           ? projectLookupCandidateDescriptor(candidate, queryRecord.descriptor, projectedDescriptor)
           : candidate
       );
-    const warnings: string[] = [];
+    // Seeded from the graph so loader-level warnings (a truncated Loom index, a tiny
+    // source that yielded nothing) reach the caller. ensureMappingAvailable,
+    // getClassApiMatrix and checkSymbolExists already do this.
+    const warnings = [...graph.warnings];
     // signatureMode="exact" on kind=method must not return descriptorless fallback candidates
     // (lookupCandidates adds owner+name fallbacks by design for the loose path). Without this
     // filter a caller who supplied `foo(I)V` could be told `foo(Z)V` is the exact mapping,
@@ -601,12 +608,19 @@ export class MappingService {
         candidates: [],
         candidateCount: 0,
         warnings: [
+          // A truncated Loom index (or a source that yielded nothing) is often WHY the
+          // path is missing, so the loader's own warnings lead the no-path sentence
+          // instead of being replaced by it.
+          ...graph.warnings,
           `No mapping path is available for ${sourceMapping} -> ${targetMapping} on version "${version}".`
         ]
       };
     }
 
-    const warnings: string[] = [];
+    // Seeded from the graph so loader-level warnings (a truncated Loom index, a tiny
+    // source that yielded nothing) reach the caller. ensureMappingAvailable,
+    // getClassApiMatrix and checkSymbolExists already do this.
+    const warnings = [...graph.warnings];
     const descriptorProjection = this.projectMethodDescriptorToTarget(graph, path, descriptor);
     const projectedDescriptor =
       descriptorProjection.complete ? descriptorProjection.descriptor : undefined;
@@ -726,7 +740,14 @@ export class MappingService {
           `${method}${descriptor}. ${rejectedByOwner} candidate(s) with that name and descriptor ` +
           `are declared by other classes (${targetMapping}: ${ownerList}). An inherited or relocated ` +
           `member cannot resolve here — use find-mapping for an owner-agnostic lookup, or query the ` +
-          `declaring class directly.`
+          `declaring class directly.` +
+          // An owner with no package never projects along the mapping path (simple-name
+          // class matches are deliberately excluded), so it is rejected for its shape
+          // rather than for inheritance. Saying so stops the message misdirecting.
+          (owner.includes(".")
+            ? ""
+            : ` "${owner}" is also not fully qualified: an unqualified owner cannot be projected ` +
+              `into ${targetMapping} and can never match, so supply the fully-qualified owner.`)
       );
     }
 

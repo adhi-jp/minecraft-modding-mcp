@@ -116,7 +116,13 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
       assert.equal(result.resolvedSymbol?.name, "interMethod");
       assert.equal(result.resolvedSymbol?.owner, "intermediary.pkg.InterClass");
       assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
-      assert.equal(result.warnings.length, 0);
+      // resolveMethodMappingExact now reports the graph-level warnings that
+      // getClassApiMatrix and checkSymbolExists already did. The stub version service
+      // publishes no client mappings URL, so that notice is the whole list — nothing
+      // about the exact resolution itself is warned about.
+      assert.deepEqual(result.warnings, [
+        'Minecraft version "1.21.10" does not expose client mappings URL.'
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
