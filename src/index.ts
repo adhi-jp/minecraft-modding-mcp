@@ -333,7 +333,9 @@ const validateProjectService = new ValidateProjectService({
 const manageCacheService = new ManageCacheService({
   registry: createCacheRegistry({
     cacheDir: config.cacheDir,
-    sqlitePath: config.sqlitePath
+    sqlitePath: config.sqlitePath,
+    sqliteCacheKb: config.sqliteCacheKb,
+    sqliteMmapSize: config.sqliteMmapSize
   })
 });
 const verifyMixinTargetService = new VerifyMixinTargetService({

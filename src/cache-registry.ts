@@ -304,7 +304,11 @@ function openDb(config: CacheRegistryConfig): Database | undefined {
   if (!existsSync(config.sqlitePath)) {
     return undefined;
   }
-  return openDatabase(config).db;
+  return openDatabase({
+    sqlitePath: config.sqlitePath,
+    sqliteCacheKb: config.sqliteCacheKb,
+    sqliteMmapSize: config.sqliteMmapSize
+  }).db;
 }
 
 function candidatePathsForEntry(entry: CacheEntry): string[] {
@@ -722,6 +726,16 @@ async function directoryFileSizeBytes(root: string): Promise<number> {
 export type CacheRegistryConfig = {
   cacheDir: string;
   sqlitePath: string;
+  /**
+   * SQLite page-cache and memory-map tuning for the artifact index, as
+   * MCP_SQLITE_CACHE_KB and MCP_SQLITE_MMAP_SIZE resolve them. Optional because
+   * a caller with no opinion should get the same defaults `applyPragmas` gives
+   * every other reader of the index - but a caller that HAS one is the whole
+   * point: without these the registry opened the index on the built-in defaults,
+   * so the two variables tuned every consumer except manage-cache.
+   */
+  sqliteCacheKb?: number;
+  sqliteMmapSize?: number;
   pathRuntimeInfo?: PathRuntimeInfo;
   workspaceContextCache?: WorkspaceContextCache;
 };
