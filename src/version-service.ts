@@ -520,19 +520,35 @@ export class VersionService {
         });
       }
     } catch (error) {
-      // A typed status/JSON error is more precise than the timeout mapping even
-      // when the abort timer fired concurrently — never rewrite it.
-      if (isAppError(error) || !timeout.signal.aborted) {
+      // A typed status/JSON error is more precise than anything this catch could
+      // build, timeout mapping included — never rewrite it.
+      if (isAppError(error)) {
         throw error;
       }
 
+      if (timeout.signal.aborted) {
+        throw createError({
+          code: ERROR_CODES.REPO_FETCH_FAILED,
+          message: `Request timed out for "${url}" after ${this.config.fetchTimeoutMs}ms.`,
+          details: {
+            url,
+            timeoutMs: this.config.fetchTimeoutMs
+          }
+        });
+      }
+
+      // Everything left is a transport failure: DNS, a refused connection, a TLS
+      // handshake, all of which arrive as a bare `TypeError: fetch failed`. That
+      // is the same answer the status and JSON arms give — the repository could
+      // not be read — and letting it escape raw had the tool boundary classify it
+      // ERR_INTERNAL, telling the caller this server is broken when the network
+      // is. The underlying message is kept in `cause` so the actual fault is
+      // still legible.
+      const cause = error instanceof Error ? error.message : String(error);
       throw createError({
         code: ERROR_CODES.REPO_FETCH_FAILED,
-        message: `Request timed out for "${url}" after ${this.config.fetchTimeoutMs}ms.`,
-        details: {
-          url,
-          timeoutMs: this.config.fetchTimeoutMs
-        }
+        message: `Request failed for "${url}": ${cause}`,
+        details: { url, cause }
       });
     } finally {
       clearTimeout(timer);
