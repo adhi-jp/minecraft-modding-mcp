@@ -186,18 +186,40 @@ export function openDatabase(
         throw caughtError;
       }
 
-      const backupPath = backupCorruptedDb(config.sqlitePath);
-      logger.warn("SQLite database integrity check failed. Recreated database after backup", {
-        sqlitePath: config.sqlitePath,
-        backupPath
-      });
+      // The rebuild runs INSIDE the handler for the failure it is recovering
+      // from, so it needs a guard of its own: without one a throw from here left
+      // the handle it had already opened dangling and escaped untyped, while
+      // every other exit from this function is a typed ERR_DB_FAILURE the caller
+      // can classify. The original message is kept - it is the only account of
+      // what actually went wrong.
+      let rebuilt: SqliteDatabase | undefined;
+      try {
+        const backupPath = backupCorruptedDb(config.sqlitePath);
+        logger.warn("SQLite database integrity check failed. Recreated database after backup", {
+          sqlitePath: config.sqlitePath,
+          backupPath
+        });
 
-      const rebuilt = new Database(config.sqlitePath);
-      applyPragmas(rebuilt, config);
+        rebuilt = new Database(config.sqlitePath);
+        applyPragmas(rebuilt, config);
 
-      const schemaVersion = runMigrations(rebuilt);
-      runIntegrityCheck(rebuilt);
-      return { db: rebuilt, schemaVersion };
+        const schemaVersion = runMigrations(rebuilt);
+        runIntegrityCheck(rebuilt);
+        return { db: rebuilt, schemaVersion };
+      } catch (rebuildError) {
+        safeCloseDatabase(rebuilt);
+        const rebuildMessage =
+          rebuildError instanceof Error ? rebuildError.message : String(rebuildError);
+        logger.error("SQLite rebuild after corruption failed", {
+          path: config.sqlitePath,
+          reason: rebuildMessage
+        });
+        throw createError({
+          code: ERROR_CODES.DB_FAILURE,
+          message: `Failed to rebuild SQLite database at ${config.sqlitePath}: ${rebuildMessage}`,
+          details: { sqlitePath: config.sqlitePath, reason: "rebuild_failed" }
+        });
+      }
     }
 
     logger.error("SQLite initialization failed", {
