@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
@@ -57,6 +58,24 @@ test("package.json declares distribution entrypoints and include list", async ()
     "node --import tsx tests/manual/package-distribution-smoke.manual.ts"
   );
   assert.equal(packageJson.scripts?.["test:manual:mcp-use-smoke"], undefined);
+});
+
+test("every literal path in the package `files` allowlist exists in the repository", async () => {
+  // The list above pins the allowlist's TEXT. A document renamed or deleted without touching
+  // that text still matches it, and `npm pack` drops the entry in silence — the published
+  // tarball is simply missing a file the manifest promised. Only the literal entries are
+  // checked: the `dist/**` globs describe build output that does not exist in a checkout.
+  const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
+  const declared = Array.isArray(packageJson.files) ? (packageJson.files as string[]) : [];
+  const literal = declared.filter((entry) => !entry.includes("*"));
+
+  assert.ok(literal.length > 0, "package.json `files` must name at least one literal path");
+  for (const entry of literal) {
+    assert.ok(
+      existsSync(new URL(`../../${entry}`, import.meta.url)),
+      `package.json \`files\` names ${entry}, which is not in the repository: the published tarball would omit it`
+    );
+  }
 });
 
 test("package distribution smoke guards CLI startup when stdio pipes close immediately", async () => {

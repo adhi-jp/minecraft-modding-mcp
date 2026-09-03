@@ -67,4 +67,4 @@ jobs:
       # Node 22 bundles npm 10.x which lacks OIDC support for scoped packages.
       # Use npm 11.x for publish only. Remove once the runner bundles npm 11+.
       - name: Publish to npm
-        run: npm exec --yes --package=npm@~11.5.1 -- npm publish --no-git-checks --access public --tag ${{ steps.disttag.outputs.tag }}
+        run: npm exec --yes --package=npm@~11.5.1 -- npm publish --access public --tag ${{ steps.disttag.outputs.tag }}

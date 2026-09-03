@@ -10,6 +10,31 @@ async function readPublishWorkflow(): Promise<string> {
   return readFile(".github/workflows/publish.yml", "utf8");
 }
 
+async function readCiWorkflow(): Promise<string> {
+  return readFile(".github/workflows/ci.yml", "utf8");
+}
+
+/**
+ * The `version:` each `pnpm/action-setup` step pins, in file order.
+ *
+ * Read from the step rather than from the file as a whole: a bare `/version:\s*x/` match
+ * would be satisfied by any other action's pin and would keep passing after the pnpm step
+ * drifted away from `packageManager`.
+ */
+function pnpmActionVersions(workflow: string): string[] {
+  const lines = workflow.split("\n");
+  const versions: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes("pnpm/action-setup")) continue;
+    const pin = lines.slice(index + 1, index + 4).find((line) => /^\s*version:/.test(line)) ?? "";
+    assert.notEqual(pin, "", "a pnpm/action-setup step must pin a version");
+    versions.push(pin.trim().replace(/^version:\s*/, ""));
+  }
+
+  return versions;
+}
+
 /**
  * Lift one step's `run: |` block out of the real workflow, addressed by step name.
  *
@@ -92,7 +117,10 @@ function makeVersionFixture(version: string): string {
 test("publish workflow publishes scoped package with explicit public access", async () => {
   const workflow = await readPublishWorkflow();
   assert.match(workflow, /registry-url:\s*"https:\/\/registry\.npmjs\.org"/);
-  assert.match(workflow, /npm publish --no-git-checks --access public/);
+  // `--no-git-checks` is a pnpm flag: npm 11 rejects it as an unknown config and warns that
+  // it will stop working, so the publish step must not carry it.
+  assert.match(workflow, /npm publish --access public/);
+  assert.ok(!workflow.includes("--no-git-checks"), "publish.yml must not pass pnpm's --no-git-checks to npm");
 });
 
 test("publish workflow declares OIDC `id-token: write` and minimum `contents: read` permissions", async () => {
@@ -122,6 +150,41 @@ test("publish workflow pins Node 22, pnpm 10.30.1, and uses pnpm cache", async (
   assert.match(workflow, /node-version:\s*22/);
   assert.match(workflow, /version:\s*10\.30\.1/);
   assert.match(workflow, /cache:\s*pnpm/);
+});
+
+test("the publish and CI workflows pin the pnpm version package.json declares", async () => {
+  // `packageManager` is the source of truth (AGENTS.md). A literal pin asserted only against
+  // itself proves nothing: bump `packageManager` and both workflows would keep installing the
+  // old pnpm with the suite still green.
+  const pkg = JSON.parse(await readFile("package.json", "utf8")) as { packageManager?: string };
+  const expected = (/^pnpm@(\d+\.\d+\.\d+)$/.exec(pkg.packageManager ?? "") ?? [])[1] ?? "";
+  assert.notEqual(
+    expected,
+    "",
+    `package.json packageManager must pin an exact pnpm version, got ${String(pkg.packageManager)}`
+  );
+
+  for (const [name, workflow] of [
+    ["publish.yml", await readPublishWorkflow()],
+    ["ci.yml", await readCiWorkflow()]
+  ] as const) {
+    assert.deepEqual(
+      pnpmActionVersions(workflow),
+      [expected],
+      `${name} must set up pnpm ${expected}, the version package.json declares`
+    );
+  }
+});
+
+test("CI runs when the TypeScript compiler configuration changes", async () => {
+  // `pnpm check` type-checks against tsconfig.json, so a change to it alone can break the
+  // build. Without the path in both filters that change reaches main with no CI run at all.
+  const filters = (await readCiWorkflow()).split("\n").filter((line) => line.trim().startsWith("paths:"));
+
+  assert.equal(filters.length, 2, "ci.yml must filter both the push and the pull_request trigger");
+  for (const filter of filters) {
+    assert.ok(filter.includes("'tsconfig.json'"), `a compiler-config change must trigger CI: ${filter.trim()}`);
+  }
 });
 
 test("publish workflow uses npm 11.x for publish (OIDC for scoped packages)", async () => {
