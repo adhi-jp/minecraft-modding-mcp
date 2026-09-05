@@ -1536,6 +1536,61 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   assert.equal(second.artifactId, first.artifactId);
 });
 
+test("resolveSourceTarget(targetKind=jar) gives a touched jar a new artifactId, because a jar-path target is identified by path plus mtime and size", async () => {
+  // The documented counterpart to the coordinate-route tests above. Content
+  // addressing reaches the local stores only through a Maven coordinate; a jar
+  // the caller names by path keeps the stat signature it has always had, so a
+  // touch alone mints a new id even though not one byte moved. That is the
+  // contract, not an oversight - pin it so the next id change to the local
+  // routes cannot quietly take this one with it.
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-touch-"));
+  const sourceJarPath = join(root, "touched-by-path-sources.jar");
+  await createJar(sourceJarPath, {
+    "com/example/TouchedByPath.java": [
+      "package com.example;",
+      "public class TouchedByPath {}"
+    ].join("\n")
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "jar", value: sourceJarPath } as const;
+
+  // Control leg: resolve twice with the file left alone. A resolver that minted
+  // a fresh signature on every call would fail here, which is what makes the
+  // touch below the only variable in the comparison that follows.
+  const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+  const untouchedRepeat = await resolveSourceTarget(target, { allowDecompile: true }, config);
+  assert.equal(
+    untouchedRepeat.artifactSignature,
+    first.artifactSignature,
+    "an untouched jar must keep its signature across resolves, or the touch below proves nothing"
+  );
+  assert.equal(
+    untouchedRepeat.artifactId,
+    first.artifactId,
+    "an untouched jar must keep its artifactId across resolves, or the touch below proves nothing"
+  );
+
+  const bytesBeforeTouch = await sha256OfFile(sourceJarPath);
+  await touchWithoutRewriting(sourceJarPath);
+  const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+  assert.equal(first.origin, "local-jar");
+  assert.equal(untouchedRepeat.origin, "local-jar");
+  assert.equal(second.origin, "local-jar");
+  assert.equal(
+    await sha256OfFile(sourceJarPath),
+    bytesBeforeTouch,
+    "the touch must leave every byte in place, or this proves nothing"
+  );
+  assert.notEqual(
+    second.artifactSignature,
+    untouchedRepeat.artifactSignature,
+    "a jar-path target signs with mtime and size, so moving mtime must move the signature"
+  );
+  assert.notEqual(second.artifactId, untouchedRepeat.artifactId);
+});
+
 test("resolveSourceTarget publishes the download size cap to the CALLER, even behind a later unrelated failure", async () => {
   const root = await mkdtemp(join(tmpdir(), "resolver-download-cap-"));
   const gradleUserHome = join(root, "gradle-home");

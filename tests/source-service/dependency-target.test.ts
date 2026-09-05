@@ -1007,7 +1007,7 @@ test("synthesizeDependencyTarget refuses an unsafe group/name BEFORE the version
     ["g:x", "lib"],
     ["g example", "lib"],
     ["g.example", "lib name"],
-    ["g x", "lib"],
+    ["g\u0000x", "lib"],
     ["../etc", "passwd"]
   ];
 

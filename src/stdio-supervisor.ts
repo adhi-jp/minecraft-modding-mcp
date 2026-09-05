@@ -1815,7 +1815,12 @@ export class StdioSupervisor {
       }
       const [{ pending }] = this.queuedRequests.splice(queuedIndex, 1);
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
-      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+      // A queued entry never owns runningValidateKey. The barrier may be held
+      // by a DIFFERENT, RUNNING request that reuses this id; releasing it here
+      // would admit concurrent work alongside a live validate-project.
+      if (this.validateBarrierKey === key && this.runningValidateKey !== key) {
+        this.validateBarrierKey = undefined;
+      }
       this.drainQueue();
       return;
     }
