@@ -43,6 +43,11 @@
 - Cutting a release section is a rewrite for the end-user reader, not a copy of `## [Unreleased]`. See CHANGELOG Content Rules → Work-log detail and the release cut.
 - Before editing CHANGELOG release sections, verify commit/tag boundaries (`git log --oneline --decorate` and `git tag` with remote-tracking tags) so entries map to the correct release window.
 - Editing an already-tagged release section is allowed only with explicit user instruction and a documented history-rewrite/release-correction plan.
+- Once that instruction is given, a FACTUALLY FALSE statement in a tagged release section MUST be corrected in place. Do not leave the wrong text standing and annotate it only from a later section; the reader meets the claim where it was published, so that is where it MUST be right.
+- Mark each amended sentence with a trailing `(Corrected YYYY-MM-DD; see [Unreleased].)`, and record in `## [Unreleased]` which claim was wrong and what it now says.
+- This permission covers correcting false statements only. A statement that is merely incomplete is NOT grounds to edit a tagged section. Information the release did not carry stays barred by the rule above against recording new changes under a tagged heading; it belongs in `## [Unreleased]`.
+- Amended text lands inside a dated section and is bound by that section's content rules: end-user language, no repository-internal paths, no proof-of-work markers. See CHANGELOG Content Rules → Work-log detail and the release cut.
+- The published npm tarball for an already-released version cannot be amended. The `## [Unreleased]` record MUST state that a reader of the copy installed from npm still sees the original wording.
 
 ## Release Changelog Consistency Gate (MUST)
 - During release preparation, you MUST verify that every CHANGELOG bullet planned for the release exactly matches the current implementation state; treat this as a blocking gate.
