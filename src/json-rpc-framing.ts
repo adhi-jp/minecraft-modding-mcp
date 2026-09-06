@@ -46,25 +46,72 @@ type HeaderBoundary = {
 };
 
 /**
- * The FIRST header terminator in the buffer, whichever style it is.
+ * The end of the header block: the FIRST EMPTY LINE in the buffer.
  *
- * Preferring a CRLFCRLF found anywhere over an earlier LFLF mis-framed every
- * LF-framed peer whose JSON body happened to contain a raw `\r\n\r\n` — legal
- * inter-token whitespace — because the header block was then cut at a boundary
- * inside the body, losing that frame and the next.
+ * One rule generates every terminator style instead of a list of literals to
+ * match. A header line ends at an LF, and a CR immediately before that LF
+ * belongs to the terminator rather than to the line; the block ends at the
+ * first line that holds nothing but its own terminator. `index` is the first
+ * byte of that terminating sequence — so `buffer.slice(0, index)` is exactly
+ * the header text — and `delimiterBytes` spans through the empty line's LF, so
+ * the body opens at `index + delimiterBytes`. The four shapes a peer can
+ * produce are consequences, not cases:
+ *
+ *     "\r\n\r\n" → 4 bytes      "\r\n\n" → 3 bytes
+ *     "\n\r\n"   → 3 bytes      "\n\n"   → 2 bytes
+ *
+ * Scanning forward from byte 0 is also what keeps a real terminator ahead of
+ * any byte sequence inside a body: preferring a CRLFCRLF found ANYWHERE over
+ * an earlier LFLF mis-framed every LF-framed peer whose JSON body happened to
+ * contain a raw `\r\n\r\n` — legal inter-token whitespace — because the header
+ * block was then cut at a boundary inside the body, losing that frame and the
+ * next. A single forward scan cannot reach the body before the block ends, so
+ * no body byte can outrank the terminator and no two readings compete.
+ *
+ * Consequence worth stating, because it is load-bearing for the caller: an
+ * EXTRA empty line after the terminator is body, not header. The body window
+ * then opens on that empty line and is shifted by the two or three bytes the
+ * peer did not count, so it no longer covers the same span as the JSON value.
+ * All four extra-blank-line shapes behave alike here, which is the point: the
+ * reading does not depend on which terminator style the peer chose.
+ *
+ * What that shift COSTS is a separate question, and the answer is not always
+ * "the frame". The usual outcome is a window running off the end of the JSON,
+ * `readContentLengthMessage`'s body-parse failure and a framing-fatal — see
+ * {@link JsonRpcFramingFatalError}. But the window is only shifted, not
+ * mis-sized, so trailing whitespace INSIDE the declared length can absorb the
+ * shift exactly: a length that counts two trailing spaces, against two
+ * uncounted leading bytes, lands the window on `"\r\n" + <json>`, which
+ * `JSON.parse` accepts. Such a frame is delivered normally. The reader does
+ * not detect the extra blank line; it only ever sees where the bytes fall.
  */
 function findHeaderBoundary(buffer: Buffer): HeaderBoundary | undefined {
-  const crlfBoundary = buffer.indexOf("\r\n\r\n");
-  const lfBoundary = buffer.indexOf("\n\n");
+  let searchFrom = 0;
+  while (true) {
+    const lineEnd = buffer.indexOf(0x0a, searchFrom);
+    if (lineEnd === -1) {
+      return undefined;
+    }
 
-  if (crlfBoundary !== -1 && (lfBoundary === -1 || crlfBoundary < lfBoundary)) {
-    return { index: crlfBoundary, delimiterBytes: 4 };
-  }
-  if (lfBoundary !== -1) {
-    return { index: lfBoundary, delimiterBytes: 2 };
-  }
+    // The next line starts immediately after that LF. It is the empty line
+    // when the only bytes it holds are its own terminator: an optional CR and
+    // then an LF. An out-of-range read is `undefined`, which matches neither
+    // byte, so a truncated tail simply keeps the scan waiting for more input.
+    let cursor = lineEnd + 1;
+    if (buffer[cursor] === 0x0d) {
+      cursor += 1;
+    }
+    if (buffer[cursor] === 0x0a) {
+      // A CR in front of the FIRST LF terminates the preceding header line, so
+      // it is part of the delimiter, not of the headers. Guarding on
+      // `lineEnd > 0` keeps the lookbehind inside the buffer when the block is
+      // terminated at byte 0.
+      const index = lineEnd > 0 && buffer[lineEnd - 1] === 0x0d ? lineEnd - 1 : lineEnd;
+      return { index, delimiterBytes: cursor + 1 - index };
+    }
 
-  return undefined;
+    searchFrom = lineEnd + 1;
+  }
 }
 
 function parseJsonRpcMessage(json: string): JSONRPCMessage {
@@ -555,11 +602,23 @@ export class JsonRpcFrameReader {
       }
 
       if (/^\s*content-length\s*:/i.test(line)) {
-        // Always re-inject with CRLF: choosing the separator from the next
-        // buffered byte raced byte-granular chunking (the peer's \r may not
-        // have arrived yet, yielding a "\n\r\n" boundary findHeaderBoundary
-        // cannot see). With CRLF both peer styles stay recognizable:
-        // "...\r\n" + "\r\n…" → "\r\n\r\n", "...\r\n" + "\n…" → "\n\n".
+        // `line` has already had its trailing \r stripped, so the terminator
+        // has to be written back. Always re-inject CRLF: choosing the
+        // separator from the next buffered byte raced byte-granular chunking
+        // (the peer's \r may not have arrived yet, so the boundary style would
+        // depend on read timing rather than on the peer), and this keeps the
+        // output independent of arrival.
+        //
+        // It does not cost the FRAMING: findHeaderBoundary sees an empty line
+        // next either way — "...\r\n" + "\r\n…" and "...\r\n" + "\n…" are both
+        // first-empty-line boundaries — so no boundary moves. It does cost one
+        // BYTE when the peer wrote a bare LF, and that byte is measured
+        // against MAX_CONTENT_LENGTH_HEADER_BYTES: an LF-framed header block of
+        // exactly 8192 bytes frames on its own, but re-injected here it
+        // measures 8193 and is rejected. Exactly one block size is affected —
+        // 8192, since anything larger was already over the ceiling — and only
+        // when it follows a line-delimited frame, which is why this is left as
+        // it stands rather than traded for the chunking race.
         this.buffer = Buffer.concat([Buffer.from(`${line}\r\n`, "utf8"), this.buffer]);
         this.mode = "content-length";
         return undefined;

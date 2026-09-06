@@ -342,6 +342,33 @@ type CleanupState = {
   parentExited: boolean;
 };
 
+/**
+ * Describes a thrown value without being able to throw while doing it.
+ *
+ * The recovery paths in this file start by turning the thrown value into a
+ * string for the client's error message. Written inline as
+ * `error instanceof Error ? error.message : String(error)`, that conversion
+ * runs BEFORE any guard the recovery installs — and it is not safe: `String`
+ * calls `toString`, which a thrown object may define to throw, and `.message`
+ * may be an accessor that throws (an `Error` subclass, or any object passed
+ * through `Object.defineProperty`). A throw there escaped the recovery
+ * entirely and reached the frame reader, which drops the frame as a parse
+ * error: the request the recovery existed to answer was lost, with no reply,
+ * no deadline and its queue still parked.
+ *
+ * Every step is inside the guard, `instanceof` included — a Proxy can throw
+ * from its `getPrototypeOf` trap — and the fallback is a constant, so this
+ * function has no throwing path of its own.
+ */
+function describeThrown(error: unknown): string {
+  try {
+    const described = error instanceof Error ? error.message : error;
+    return typeof described === "string" ? described : String(described);
+  } catch {
+    return "<error description unavailable>";
+  }
+}
+
 function isRequest(message: JSONRPCMessage): message is JSONRPCRequest {
   return "method" in message && "id" in message;
 }
@@ -953,6 +980,25 @@ export class StdioSupervisor {
   >();
 
   private child: ChildProcessWithoutNullStreams | undefined;
+  /**
+   * The one response `handleWorkerMessage` is part-way through settling.
+   *
+   * It removes a response's pending entry BEFORE writing the reply, so between
+   * those two statements the id is owed a response that NOTHING records: the
+   * entry is gone, no deadline is armed for anything but validate-project, and
+   * the worker considers the request answered. A fault in that window used to
+   * be indistinguishable from an id already settled, and the request stayed
+   * unanswered for the life of an otherwise healthy session.
+   *
+   * Set the moment the entry is deleted and cleared the moment the write
+   * returns, so it is defined only inside that window and only ever names one
+   * request. `answerFaultedWorkerResponse` is the sole reader, and it consumes
+   * the marker rather than merely reading it.
+   */
+  private settlingWorkerResponse:
+    | { key: string; snapshot: Pick<PendingRequestSnapshot, "id" | "era" | "mode"> }
+    | undefined;
+
   private childReady = false;
   /**
    * Monotonic timestamp of the current generation's adoption, or undefined
@@ -1179,15 +1225,20 @@ export class StdioSupervisor {
   };
 
   /**
-   * Admission entry point, wrapped so a fault can never make a request vanish.
+   * Admission entry point, wrapped so a fault cannot silently drop a request.
    *
    * Anything thrown while classifying, queueing or forwarding a client frame
    * propagates out of the frame reader's `onFrame`, where the reader swallows
    * it as a parse error — the request then gets NO reply and the client waits
    * on that id forever (and on a modern-era request the one-way era lock has
-   * already happened). Answering the id with -32603 keeps the
-   * exactly-one-response guarantee; id-less frames (notifications, malformed
-   * ids) have nothing to answer and are only logged.
+   * already happened). The catch below answers the id with -32603 instead.
+   *
+   * The reply is conditional, and on exactly one thing: that nothing this
+   * admission installed is still live at the id. A surviving instance is
+   * already tracked and will be settled by an ordinary path, so answering
+   * alongside it would make two terminal replies for one request; the catch
+   * reports and stands down in that case rather than answering. Id-less frames
+   * (notifications, malformed ids) have nothing to answer and are only logged.
    */
   private handleClientMessage(message: JSONRPCMessage): void {
     const admittedId = isRequest(message) ? getTrackedRequestId(message) : undefined;
@@ -1198,48 +1249,169 @@ export class StdioSupervisor {
     try {
       this.routeClientMessage(message);
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      this.eventWriter("error", "supervisor.admission_failed", {
-        id: "id" in message ? (message as { id?: unknown }).id : undefined,
-        method: "method" in message ? message.method : undefined,
-        message: detail
+      // `describeThrown`, not an inline conversion: this line runs BEFORE
+      // every guard below, so a thrown value whose `toString` or `.message`
+      // throws would escape the recovery here and cost the request its reply.
+      const detail = describeThrown(error);
+      // EVERY step below is individually guarded, because this whole block runs
+      // inside the frame reader's `onFrame`: a throw escaping here is reported
+      // as a parse error and the request is dropped — the exact loss this
+      // handler exists to prevent, reintroduced by its own recovery. Guarding
+      // per step rather than as a block is what keeps a faulting event writer
+      // from costing the client its terminal reply, and a faulting reply from
+      // costing the queue its drain.
+      //
+      // The two writers are separate channels, not one: in the DEFAULT
+      // configuration `eventWriter` is `log`, which writes to stderr, while a
+      // reply with no injected `clientWriter` goes to stdout. A failure of one
+      // is therefore no evidence about the other, in either direction — which
+      // is the reason each step carries its own guard rather than the block
+      // carrying one.
+      this.runRecoveryStep("admission.event", () => {
+        this.eventWriter("error", "supervisor.admission_failed", {
+          id: "id" in message ? (message as { id?: unknown }).id : undefined,
+          method: "method" in message ? message.method : undefined,
+          message: detail
+        });
       });
       // Admission installs state before it can fault (see rollbackFailedAdmission),
       // and the -32603 below is terminal for the id — so anything half-installed
       // has to go before the reply, or it will answer the id a second time.
-      const rolledBack =
-        admittedId !== undefined &&
-        preexisting !== undefined &&
-        this.rollbackFailedAdmission(requestKey(admittedId), preexisting);
+      let rolledBack = false;
+      this.runRecoveryStep("admission.rollback", () => {
+        rolledBack =
+          admittedId !== undefined &&
+          preexisting !== undefined &&
+          this.rollbackFailedAdmission(requestKey(admittedId), preexisting);
+      });
+      // A rollback that FAULTED may have removed part of the state and left
+      // the rest, and it reports neither — so the step above proves only that
+      // it did not throw, never that the id is clear. Redo the removal through
+      // the primitives themselves rather than through the method that may just
+      // have thrown (a fallback that re-enters the failed step is not a
+      // fallback), then read the id back. Both halves are idempotent: after a
+      // rollback that succeeded they find nothing and change nothing.
+      let admissionInstanceSurvives = false;
+      if (admittedId !== undefined && preexisting !== undefined) {
+        const admittedKey = requestKey(admittedId);
+        const scope = preexisting;
+        this.runRecoveryStep("admission.rollback_finality", () => {
+          try {
+            if (this.dropQueuedInstances(admittedKey, scope)) rolledBack = true;
+            const live = this.pendingRequests.get(admittedKey);
+            if (live && !scope.has(live) && this.releaseForwardedRequest(admittedKey, live)) {
+              rolledBack = true;
+            }
+          } finally {
+            // In a `finally` because the removal above may itself throw, and a
+            // removal that threw part-way through is exactly the case the read
+            // back has to cover. Should the read ITSELF throw, the step's guard
+            // contains it and the flag stays false, so the reply goes out: a
+            // request answered is the failure this handler exists to prevent,
+            // and it is the safer of the two directions to fail in.
+            admissionInstanceSurvives = this.hasInstanceOutside(admittedKey, scope);
+          }
+        });
+      }
       if (!isRequest(message)) return;
       const id = getTrackedRequestId(message);
       if (id === undefined) return;
-      this.writeToClient(
-        {
-          jsonrpc: "2.0",
-          id,
-          error: {
-            code: -32603,
-            message: `MCP supervisor failed to admit the request: ${detail}`
-          }
-        } as JSONRPCResponse,
-        this.modeForMessage(message)
-      );
-      if (rolledBack) {
-        // The released entry may have been the last occupant of a dispatch
-        // barrier, and its cleared deadline was the timer that used to (much
-        // later) unblock the queue behind it. Drain now instead. A second fault
-        // must not escape: the client is already answered, and an escaping throw
-        // reaches the frame reader, which swallows it as a parse error.
-        try {
-          this.drainQueue();
-        } catch (drainError) {
-          this.eventWriter("error", "supervisor.admission_failed", {
+      if (admissionInstanceSurvives) {
+        // Nothing could take the id away from this admission's own instance,
+        // and that instance still owns it: it is tracked, so the worker's
+        // answer, the worker-exit terminalization or an armed validate-project
+        // deadline will settle it. Adding -32603 on top would be the second
+        // terminal reply for one request, which is the one thing this handler
+        // may never do. It is reported and left alone instead.
+        //
+        // Known limitation: a non-validate tool arms no deadline, so if the
+        // fault also kept the request from reaching the worker, the id waits
+        // for the worker's exit. That is the accepted cost of not adding a
+        // universal per-request deadline; a blanket one would cut off the long
+        // calls this server legitimately makes.
+        this.runRecoveryStep("admission.rollback_incomplete", () => {
+          this.eventWriter("error", "supervisor.admission_rollback_incomplete", {
             id,
-            method: message.method,
-            message: drainError instanceof Error ? drainError.message : String(drainError)
+            method: message.method
           });
-        }
+        });
+      } else {
+        this.runRecoveryStep("admission.reply", () => {
+          this.writeToClient(
+            {
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32603,
+                message: `MCP supervisor failed to admit the request: ${detail}`
+              }
+            } as JSONRPCResponse,
+            this.modeForMessage(message)
+          );
+        });
+      }
+      if (rolledBack) {
+        // Something WAS removed — which is true on the stand-down branch too,
+        // where a queued instance went but a forwarded one survived. The
+        // released entry may have been the last occupant of a dispatch
+        // barrier, and its cleared deadline was the timer that used to (much
+        // later) unblock the queue behind it. Drain now instead — whether or
+        // not the reply above got out, since a client channel that refused the
+        // reply is no reason to leave the queue parked. A second fault must not
+        // escape either: an escaping throw reaches the frame reader, which
+        // swallows it as a parse error.
+        this.runRecoveryStep("admission.drain", () => {
+          try {
+            this.drainQueue();
+          } catch (drainError) {
+            this.eventWriter("error", "supervisor.admission_failed", {
+              id,
+              method: message.method,
+              message: describeThrown(drainError)
+            });
+          }
+        });
+      }
+    }
+  }
+
+  /**
+   * Runs one step of a fault-recovery path so that it cannot throw.
+   *
+   * The two frame-reader callers — the admission catch in handleClientMessage
+   * and the worker-frame catch in handleWorkerData — execute inside a
+   * {@link JsonRpcFrameReader}'s `onFrame`, where the reader deliberately
+   * converts an escaping throw into a plain parse error: the frame is then
+   * silently dropped, which for a recovery path means the request it was
+   * rescuing is lost after all. `dispatchQueuedRequest` is the third caller,
+   * and its exposure is wider rather than narrower: a drain is reached from
+   * those two `onFrame` paths, but also from timer callbacks
+   * (handleValidateProjectDeadline) and from process-event handlers
+   * (handleWorkerExit), where nothing above it is prepared to contain a throw
+   * at all.
+   *
+   * Reporting goes through `log` rather than the injected `eventWriter` so
+   * that an INJECTED writer — the collaborator most likely to have thrown — is
+   * not also the reporter. That NARROWS the failure; it does not remove it.
+   * `eventWriter` defaults to `log` (see the constructor), so in the default
+   * configuration, where nothing is injected, the reporter IS the writer that
+   * just faulted. The report therefore carries its own try/catch whose handler
+   * does nothing: past this point there is no reporting channel left, and a
+   * throw here would drop the frame this method exists to save.
+   */
+  private runRecoveryStep(step: string, run: () => void): void {
+    try {
+      run();
+    } catch (error) {
+      try {
+        // describeThrown cannot throw, so the outer try/catch here guards only
+        // the `log` call itself.
+        log("error", "supervisor.recovery_step_failed", {
+          step,
+          message: describeThrown(error)
+        });
+      } catch {
+        // Deliberately empty — see above. Nothing is left to report through.
       }
     }
   }
@@ -1278,7 +1450,24 @@ export class StdioSupervisor {
    * Returns whether anything was rolled back.
    */
   private rollbackFailedAdmission(key: string, preexisting: Set<PendingRequest>): boolean {
-    let rolledBack = false;
+    let rolledBack = this.dropQueuedInstances(key, preexisting);
+    const pending = this.pendingRequests.get(key);
+    if (pending && !preexisting.has(pending) && this.releaseForwardedRequest(key, pending)) {
+      rolledBack = true;
+    }
+    return rolledBack;
+  }
+
+  /**
+   * Removes every QUEUED instance at `key` that is absent from `preexisting`.
+   *
+   * Split out of rollbackFailedAdmission so the admission catch's finality
+   * check can repeat the removal without re-entering the method that may just
+   * have thrown. Returns whether anything was removed; calling it twice is
+   * harmless, because the second call finds nothing.
+   */
+  private dropQueuedInstances(key: string, preexisting: Set<PendingRequest>): boolean {
+    let removed = false;
     for (let index = this.queuedRequests.length - 1; index >= 0; index -= 1) {
       const entry = this.queuedRequests[index];
       if (requestKey(entry.pending.id) !== key || preexisting.has(entry.pending)) continue;
@@ -1293,13 +1482,20 @@ export class StdioSupervisor {
       if (this.validateBarrierKey === key && this.runningValidateKey !== key) {
         this.validateBarrierKey = undefined;
       }
-      rolledBack = true;
+      removed = true;
     }
-    const pending = this.pendingRequests.get(key);
-    if (pending && !preexisting.has(pending) && this.releaseForwardedRequest(key, pending)) {
-      rolledBack = true;
+    return removed;
+  }
+
+  /**
+   * Whether any request instance live at `key` is absent from `preexisting` —
+   * that is, whether the admission being rolled back still owns its id.
+   */
+  private hasInstanceOutside(key: string, preexisting: Set<PendingRequest>): boolean {
+    for (const instance of this.liveInstancesAt(key)) {
+      if (!preexisting.has(instance)) return true;
     }
-    return rolledBack;
+    return false;
   }
 
   private routeClientMessage(message: JSONRPCMessage): void {
@@ -1767,6 +1963,18 @@ export class StdioSupervisor {
         this.queuedRequests.push({ message, pending });
       } else {
         if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+        // Unlike the admission-time queue-limit site, this one runs AFTER
+        // admission may have raised the validate barrier for this very
+        // request, and the terminal reply below is the last event the id will
+        // ever produce — so the barrier has to come down here or nothing
+        // behind it would ever dispatch again. Same guard as every other
+        // release: the barrier may be held by a DIFFERENT, RUNNING request
+        // that reuses this id, and releasing that one would admit concurrent
+        // work alongside a live validate-project.
+        const abandonedKey = requestKey(pending.id);
+        if (this.validateBarrierKey === abandonedKey && this.runningValidateKey !== abandonedKey) {
+          this.validateBarrierKey = undefined;
+        }
         this.writeSyntheticReply(
           pending,
           buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
@@ -2020,8 +2228,12 @@ export class StdioSupervisor {
           return;
         }
         this.queuedRequests.shift();
-        this.forwardRequest(next.message, next.pending);
-        return;
+        // Return only when the dispatch actually happened: a validate-project
+        // runs alone, but one that never reached the worker was settled
+        // instead and released the barrier with it, so the queue behind it is
+        // free to move in the same pass.
+        if (this.dispatchQueuedRequest(next)) return;
+        continue;
       }
       if (this.validateBarrierKey && this.validateBarrierKey !== nextKey) {
         const barrierIndex = this.queuedRequests.findIndex(
@@ -2030,7 +2242,75 @@ export class StdioSupervisor {
         if (barrierIndex === 0) return;
       }
       this.queuedRequests.shift();
-      this.forwardRequest(next.message, next.pending);
+      this.dispatchQueuedRequest(next);
+    }
+  }
+
+  /**
+   * Forwards one queued entry, containing a fault in the forward itself.
+   *
+   * `forwardRequest` installs the pending entry and takes the validate
+   * slot/barrier BEFORE it writes to the worker's stdin, so a throw from the
+   * encode or the write leaves the request holding an id it never reached the
+   * worker on. Unguarded, that request is unreachable: it has been shifted out
+   * of the queue, so no later drain can dispatch it, and no worker will answer
+   * an id it never saw — and only validate-project arms a deadline, so nothing
+   * else settles it either. The one containing guard above this
+   * (`runRecoveryStep` around the recovery drain) contains the exception
+   * without recovering the request, and stops the drain on top of that,
+   * leaving everything behind it parked as well.
+   *
+   * Both are repaired here: the entry is released — which records the finality
+   * tombstone, so a worker that did somehow see the bytes cannot answer over
+   * the reply below — terminally answered, and the drain carries on to the
+   * next entry. Containment is per-entry because the fault this catches is
+   * per-message: an encode failure on one payload, or a stdin `write` that
+   * throws. A stdin that is merely destroyed never reaches this catch at all —
+   * `forwardRequest` tests for that first and takes its own no-child fallback,
+   * which does not throw.
+   *
+   * The `initialize` carve-out in `releaseForwardedRequest` is honoured: if it
+   * declines, nothing is answered here and the handshake lifecycle keeps the
+   * entry. Admission parks `initialize` in `queuedNotifications` rather than in
+   * `queuedRequests`, so the ordinary path never puts one in front of this
+   * drain; `forwardRequest`'s own no-child fallback is the one way an
+   * initialize can end up queued, and the carve-out is what covers it.
+   *
+   * Returns whether the entry reached the worker.
+   */
+  private dispatchQueuedRequest(entry: QueuedRequest): boolean {
+    try {
+      this.forwardRequest(entry.message, entry.pending);
+      return true;
+    } catch (error) {
+      const detail = describeThrown(error);
+      this.runRecoveryStep("queue.dispatch", () => {
+        this.eventWriter("error", "supervisor.queued_dispatch_failed", {
+          id: entry.pending.id,
+          method: entry.pending.method,
+          toolName: entry.pending.toolName,
+          message: detail
+        });
+      });
+      this.runRecoveryStep("queue.dispatch_settle", () => {
+        const key = requestKey(entry.pending.id);
+        // Only THIS instance may be settled here. A fault before forwardRequest
+        // installed anything leaves the request re-queued by its own no-child
+        // fallback (a later drain owns it) or already answered by the
+        // queue-limit rejection; either way the id may meanwhile belong to a
+        // different live request, which keeps its own guarantee.
+        if (this.pendingRequests.get(key) !== entry.pending) return;
+        if (!this.releaseForwardedRequest(key, entry.pending)) return;
+        this.writeSyntheticReply(entry.pending, {
+          jsonrpc: "2.0",
+          id: entry.pending.id,
+          error: {
+            code: -32603,
+            message: `MCP supervisor failed to dispatch the queued request: ${detail}`
+          }
+        } as JSONRPCResponse);
+      });
+      return false;
     }
   }
 
@@ -2094,7 +2374,14 @@ export class StdioSupervisor {
     if (!reader) return;
     reader.processChunk(chunk, {
       onFrame: ({ message }) => {
-        this.handleWorkerMessage(child, message);
+        try {
+          this.handleWorkerMessage(child, message);
+        } catch (error) {
+          // Mirror of the client side's admission safety net (see
+          // handleClientMessage): an unguarded throw here escapes into the
+          // reader, which reports it as a parse error and drops the frame.
+          this.recoverFaultedWorkerMessage(message, error);
+        }
       },
       onError: (error) => {
         if (isJsonRpcFramingFatalError(error)) {
@@ -2110,6 +2397,184 @@ export class StdioSupervisor {
         }
         log("warn", "supervisor.worker_parse_error", { message: error.message });
       }
+    });
+  }
+
+  /**
+   * Rescues the request a faulted worker frame was answering.
+   *
+   * `handleWorkerMessage` runs inside the worker reader's `onFrame`, where a
+   * throw becomes a parse error and the frame is simply dropped. For a
+   * RESPONSE frame that left the pending entry live with no reply and nothing
+   * left to settle it — deadlines are armed for validate-project only, so any
+   * other tool had no rescue at all and the client waited on that id for the
+   * life of the session. The id is released and answered here instead.
+   *
+   * The queue drain is the OTHER half, and it is why the answering half lives
+   * in its own method: `handleWorkerMessage` deletes a response's pending
+   * entry before the `writeToClient` that can throw, and its `drainQueue()` is
+   * the last statement of all. So the commonest fault arrives here with the
+   * entry already gone AND the queue undrained, and every early return in the
+   * answering path is a case where the drain is the only rescue left.
+   *
+   * What this recovery is worth, stated exactly. It answers the id when this
+   * supervisor is the one entitled to (see `answerFaultedWorkerResponse`), and
+   * every id it answers is tombstoned, so the worker's own answer for that id
+   * cannot become a second reply. It does NOT make one-response-per-id a
+   * property of the whole file: an id whose entry could not be released is
+   * deliberately left unanswered here rather than answered twice, the
+   * `initialize` carve-out is settled by the handshake lifecycle instead, and
+   * tombstone retention is capped at {@link MAX_SYNTHETIC_TOMBSTONES} — past
+   * 1024 live tombstones in one worker generation the oldest is evicted, and a
+   * very old worker's late answer for an evicted id would pass through.
+   *
+   * What this deliberately does NOT do: tear the session down or touch framing
+   * state. One frame the supervisor could not handle is not evidence that the
+   * worker's stream desynchronized (that is `supervisor.worker_framing_fatal`,
+   * reported by the reader itself), and the reader's own state already
+   * describes the stream correctly. The one exception is an in-flight
+   * `initialize`, whose generation cannot finish its handshake once its answer
+   * has been lost — see `answerFaultedWorkerResponse`.
+   */
+  private recoverFaultedWorkerMessage(message: JSONRPCMessage, error: unknown): void {
+    // `describeThrown`, not an inline conversion: this line runs BEFORE every
+    // guard below, so a thrown value whose `toString` or `.message` throws
+    // would escape into the reader and drop the frame this method exists to
+    // rescue.
+    const detail = describeThrown(error);
+    this.runRecoveryStep("worker_message.event", () => {
+      this.eventWriter("error", "supervisor.worker_message_failed", {
+        id: "id" in message ? (message as { id?: unknown }).id : undefined,
+        method: "method" in message ? message.method : undefined,
+        message: detail
+      });
+    });
+
+    this.answerFaultedWorkerResponse(message, detail);
+
+    // Unconditional, and outside every early return above. Running it when the
+    // ordinary tail-drain would not have is bounded rather than free-handed:
+    // drainQueue returns at once unless the current child is ready with a live
+    // stdin, and dispatches nothing at all while a validate-project is running.
+    //
+    // The guard here contains a drain fault; it does not recover one. What
+    // recovers the request a faulting dispatch stranded is
+    // `dispatchQueuedRequest`, one level down — a request shifted out of the
+    // queue and installed at its id has left every path that could re-reach
+    // it, so containment alone would strand it exactly as badly as the throw
+    // this method exists to answer for.
+    this.runRecoveryStep("worker_message.drain", () => {
+      this.drainQueue();
+    });
+  }
+
+  /**
+   * Terminally answers the client request a faulted worker RESPONSE frame was
+   * carrying the answer for, if this supervisor is still the one entitled to
+   * answer it. Returns without replying otherwise; the caller's drain runs
+   * either way.
+   */
+  private answerFaultedWorkerResponse(message: JSONRPCMessage, detail: string): void {
+    if (!isResponse(message)) return;
+    const id = getTrackedRequestId(message);
+    if (id === undefined) return;
+    const key = requestKey(id);
+    const pending = this.pendingRequests.get(key);
+    if (!pending) {
+      // No entry at the id — which is NOT proof the id was answered.
+      // handleWorkerMessage deletes a response's pending entry BEFORE it writes
+      // the reply, so a write that faults arrives here with the entry already
+      // gone and the client still owed a response. That window is the only
+      // thing `settlingWorkerResponse` records, and it is the only case in
+      // which an id with no entry may be answered here; anything else is an id
+      // this supervisor already settled, or one it never tracked.
+      this.answerUndeliveredWorkerResponse(key, detail);
+      return;
+    }
+
+    let released = false;
+    this.runRecoveryStep("worker_message.release", () => {
+      // releaseForwardedRequest declines an in-flight `initialize` by design:
+      // that entry belongs to the handshake lifecycle.
+      released = this.releaseForwardedRequest(key, pending);
+    });
+    if (!released) {
+      // `released` is false for three different reasons: the `initialize`
+      // carve-out declined, the release threw before it removed anything, or
+      // the release threw AFTER removing the entry. Only the first two leave
+      // the entry owning its id, and the flag cannot tell them apart — the
+      // step is guarded, so any throw leaves it false, and
+      // releaseForwardedRequest deletes the entry and records its tombstone
+      // before it returns. An entry that no longer owns its id has nothing
+      // left that could ever answer it, so the id is read back rather than
+      // assumed.
+      this.runRecoveryStep("worker_message.release_verify", () => {
+        if (pending.method === "initialize" || this.pendingRequests.has(key)) return;
+        // Re-recording is idempotent (see recordFinalityTombstone), and covers
+        // a release that threw before it got this far.
+        this.recordFinalityTombstone(key, pending.mode);
+        released = true;
+      });
+    }
+    if (!released) {
+      // Still live and still owning its id. The `initialize` carve-out leaves
+      // the entry to the handshake lifecycle — but that lifecycle's recovery
+      // paths are not all armed here. The startup watchdog in particular is
+      // cleared by adoptActiveChild, so a client whose `initialize` reached an
+      // ALREADY-READY worker has no watchdog behind it, and a worker that stays
+      // alive triggers neither the exit nor the replay path. What is certain in
+      // every one of those lifecycles is that THIS generation can no longer
+      // finish the handshake: the frame that was lost was its answer. So the
+      // generation is replaced: the current child is invalidated and
+      // terminated, and a successor is spawned — now, or once the live-child
+      // cap allows. That successor arms a fresh startup watchdog and, on
+      // ready, re-forwards the retained initialize (handleWorkerReady), so the
+      // handshake gets a second chance instead of stalling.
+      if (pending.method === "initialize") {
+        this.runRecoveryStep("worker_message.initialize_recovery", () => {
+          this.recoverTimedOutWorker();
+        });
+      }
+      return;
+    }
+
+    this.runRecoveryStep("worker_message.reply", () => {
+      this.writeSyntheticReply(pending, {
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32603,
+          message: `MCP supervisor failed to process the worker response: ${detail}`
+        }
+      } as JSONRPCResponse);
+    });
+  }
+
+  /**
+   * Answers a request whose pending entry `handleWorkerMessage` had already
+   * removed when it faulted, and which therefore never reached the client.
+   *
+   * Consumed once: the marker is cleared before the reply is attempted, so a
+   * fault in the reply cannot leave a stale claim on the id for a later,
+   * unrelated fault to act on.
+   */
+  private answerUndeliveredWorkerResponse(key: string, detail: string): void {
+    const settling = this.settlingWorkerResponse;
+    this.settlingWorkerResponse = undefined;
+    if (!settling || settling.key !== key) return;
+    this.runRecoveryStep("worker_message.undelivered_reply", () => {
+      // The entry is already gone, so writeSyntheticReply will not settle or
+      // tombstone anything; the tombstone is recorded here so the worker
+      // repeating its answer cannot become a second reply.
+      this.recordFinalityTombstone(key, settling.snapshot.mode);
+      this.writeSyntheticReply(settling.snapshot, {
+        jsonrpc: "2.0",
+        id: settling.snapshot.id,
+        error: {
+          code: -32603,
+          message: `MCP supervisor failed to deliver the worker response: ${detail}`
+        }
+      } as JSONRPCResponse);
     });
   }
 
@@ -2368,6 +2833,14 @@ export class StdioSupervisor {
         const pending = this.pendingRequests.get(key);
         responseMode = pending?.mode;
         this.pendingRequests.delete(key);
+        if (pending && pending.method !== "initialize") {
+          // The entry is gone and the client has not been answered yet. From
+          // here until writeToClient returns, this marker is the only record
+          // that the id is still owed a response (see settlingWorkerResponse).
+          // An in-flight initialize is excluded: it is settled by the handshake
+          // branch above, never here.
+          this.settlingWorkerResponse = { key, snapshot: pending };
+        }
         if (pending?.deadlineTimer) this.timerClearer(pending.deadlineTimer);
         if (pending?.toolName === "validate-project") {
           this.runningValidateKey = undefined;
@@ -2377,6 +2850,10 @@ export class StdioSupervisor {
     }
 
     this.writeToClient(message, responseMode);
+    // Past this point the reply has been handed to the client channel, so the
+    // id is no longer owed one by the recovery. A fault in the drain below is
+    // the drain's own problem, not an undelivered response.
+    this.settlingWorkerResponse = undefined;
     this.drainQueue();
   }
 
