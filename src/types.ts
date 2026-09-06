@@ -194,9 +194,26 @@ export interface Config {
   decompileMaxMemoryMb: number;
 }
 
-export interface ArtifactSignature {
+/**
+ * A jar's filesystem stat, stamped. NOT an artifact identity: nothing here is
+ * read from the jar's bytes, so a `touch` moves it and a byte-for-byte
+ * replacement of the same length at the same mtime does not.
+ *
+ * Artifact identity lives in `src/artifact-identity.ts`. This shape feeds the
+ * `jarSignature` field `get-project-context` publishes, and that field's
+ * stat-based value is part of the tool's output contract.
+ */
+export interface JarStatStamp {
   sourcePath: string;
+  /**
+   * sha256 of `jar|<resolved path>|<mtimeMs>:<size>`.
+   *
+   * The name is inherited and overstates it: this is not the artifactId of
+   * anything. Its only consumer is the `jarSignature` field in
+   * `src/minecraft-explorer-service.ts`.
+   */
   sourceArtifactId: string;
+  /** The `<truncated mtimeMs>:<size>` stamp itself. */
   signature: string;
   signatureParts: {
     mtimeMs: number;

@@ -29,13 +29,16 @@ import { createError, ERROR_CODES, isAppError } from "./errors.js";
  * That claim is scoped to this entry point, not to the `downloads/` directory.
  * Callers that reach for raw {@link downloadToCache} - the version service's
  * Mojang jars, the mapping service's mapping archives - park files under the
- * same root, write no sidecar, and keep their own identity on purpose: a Mojang
- * artifact already carries an upstream SHA-1 contract, and a version jar keeps
- * an `mtimeMs:size` signature. They are a different cache layer, not a
- * migration this module is waiting on. Artifacts on local disk outside the
- * cache entirely (`~/.m2`, the Gradle module cache) are identified by their
- * bytes as well - see `contentSignature` in `source-resolver.ts`, which reuses
- * {@link digestFile} to get there.
+ * same root and write no sidecar: a Mojang artifact already carries an upstream
+ * SHA-1 contract. They are a different cache layer, not a migration this module
+ * is waiting on.
+ *
+ * Every artifactId `src/artifact-identity.ts` composes, in both of its id
+ * spaces, is built on a sha256 of the bytes of the file it names - see
+ * `contentSignature` there, which reuses {@link digestFile} to get it. That
+ * covers artifacts on local disk outside the cache entirely (`~/.m2`, the
+ * Gradle module cache) and a jar or a Minecraft version the caller names
+ * directly.
  */
 
 export interface DownloadResult {
@@ -172,6 +175,113 @@ const DEFINITIVE_REJECTION_STATUS_CODES: ReadonlySet<number> = new Set([403, 404
 
 function isDefinitiveRejection(statusCode: number | undefined): boolean {
   return statusCode !== undefined && DEFINITIVE_REJECTION_STATUS_CODES.has(statusCode);
+}
+
+/**
+ * How long a definitive rejection is remembered, and how many such records are
+ * kept at once.
+ *
+ * Nothing about a FAILED download is recorded anywhere else: only bytes land in
+ * the download cache, so a coordinate whose sources jar does not exist re-issues
+ * the same request to every configured repository on every resolve. That is what
+ * makes a repeated `target`-addressed resolve expensive - the artifact index it
+ * built is reused, but the repository sweep that preceded it is paid again - and
+ * a caller whose first call timed out pays the identical sweep on its retry.
+ *
+ * Only {@link DEFINITIVE_REJECTION_STATUS_CODES} are eligible, because those are
+ * the statuses this module already treats as an answer about the artifact rather
+ * than about the repository's health; the doc comment there is the reasoning.
+ * A 5xx, a 429, a 401, a timeout and a thrown network error are all ineligible,
+ * so a passing fault costs one extra request on the next call rather than
+ * locking the artifact out of reach.
+ *
+ * The window bounds even the eligible ones. Records live in memory only, so the
+ * whole set dies with the process, and an artifact published after its rejection
+ * was recorded is reachable again once the record expires.
+ */
+const REMEMBERED_REJECTION_TTL_MS = 5 * 60_000;
+const REMEMBERED_REJECTION_MAX_ENTRIES = 1024;
+
+type RememberedRejection = { expiresAt: number; result: CachedDownloadFailure };
+
+/**
+ * Definitive rejections, keyed by the cache slot AND the url that was refused.
+ *
+ * The slot is in the key because it names the cache directory: two configs
+ * pointed at different cache directories are different caches and must not
+ * inherit each other's verdicts. The url is in the key as well because
+ * `destinationPath` is the caller's to choose, so nothing here may assume the
+ * slot was derived from the url it is being asked about.
+ */
+const rememberedRejections = new Map<string, RememberedRejection>();
+
+function rememberedRejectionKey(url: string, destinationPath: string): string {
+  return `${destinationPath}\u0000${url}`;
+}
+
+/** The unexpired rejection recorded for this url in this slot, if there is one. */
+function readRememberedRejection(
+  url: string,
+  destinationPath: string,
+  now: number
+): CachedDownloadFailure | undefined {
+  const key = rememberedRejectionKey(url, destinationPath);
+  const remembered = rememberedRejections.get(key);
+  if (remembered === undefined) {
+    return undefined;
+  }
+  if (remembered.expiresAt <= now) {
+    rememberedRejections.delete(key);
+    return undefined;
+  }
+  // A copy, so a caller that mutates what it was handed cannot edit the record
+  // every later call is answered from.
+  return { ...remembered.result };
+}
+
+function rememberRejection(
+  url: string,
+  destinationPath: string,
+  result: CachedDownloadFailure,
+  now: number
+): void {
+  const key = rememberedRejectionKey(url, destinationPath);
+  // Delete before set, so re-recording a key moves it to the back of the Map's
+  // insertion order - which is the order the eviction below reads as recency.
+  rememberedRejections.delete(key);
+  rememberedRejections.set(key, {
+    expiresAt: now + REMEMBERED_REJECTION_TTL_MS,
+    result: { ...result }
+  });
+  if (rememberedRejections.size <= REMEMBERED_REJECTION_MAX_ENTRIES) {
+    return;
+  }
+  // Over the cap. Expired records first - they answer nothing anyway - and then
+  // oldest-recorded first until the set fits. Deleting during iteration is
+  // defined for a Map: the iterator skips what has already been removed.
+  for (const [candidate, entry] of rememberedRejections) {
+    if (entry.expiresAt <= now) {
+      rememberedRejections.delete(candidate);
+    }
+  }
+  for (const candidate of rememberedRejections.keys()) {
+    if (rememberedRejections.size <= REMEMBERED_REJECTION_MAX_ENTRIES) {
+      break;
+    }
+    rememberedRejections.delete(candidate);
+  }
+}
+
+/**
+ * Drop every remembered rejection.
+ *
+ * The records are process-local and expire on their own, so this exists for a
+ * caller that wants the next resolve to ask the repositories again without
+ * waiting out {@link REMEMBERED_REJECTION_TTL_MS} - a test isolating itself from
+ * the record another test left behind, above all.
+ */
+export function clearRememberedRejections(): void {
+  rememberedRejections.clear();
 }
 
 /** The persisted identity and freshness record for one cached download. */
@@ -955,6 +1065,18 @@ export async function resolveCachedDownload(
     // hand the caller's repository loop an ENOENT as its reason to fail over.
   }
 
+  if (freshness === "immutable") {
+    // A repository's definitive answer about this url, still inside its window.
+    // Below the cached-bytes hit above on purpose: bytes we hold outrank a
+    // remembered refusal, and the 404 leg further down deliberately keeps the
+    // bytes it found. Only immutable urls are ever recorded, so this can never
+    // answer for a -SNAPSHOT.
+    const remembered = readRememberedRejection(url, destinationPath, Date.now());
+    if (remembered !== undefined) {
+      return remembered;
+    }
+  }
+
   const conditionalHeaders = freshness === "revalidate" ? conditionalHeadersFor(sidecar) : undefined;
 
   /**
@@ -1146,13 +1268,21 @@ export async function resolveCachedDownload(
       // this module's call - and the record goes back with them, so a later
       // revalidation that finds the artifact restored still has its validators.
       restoreRetiredSidecar();
-      return {
+      const rejection: CachedDownloadFailure = {
         ok: false,
         statusCode: downloaded.statusCode,
         etag: downloaded.etag,
         lastModified: downloaded.lastModified,
         contentLength: downloaded.contentLength
       };
+      // Remember it, so the next resolve of this url inside the window answers
+      // from here instead of re-issuing the request. Immutable urls only: a
+      // -SNAPSHOT is republished under the same name, so its 404 can be a
+      // publish in progress rather than an answer that will hold.
+      if (freshness === "immutable") {
+        rememberRejection(url, destinationPath, rejection, Date.now());
+      }
+      return rejection;
     }
 
     // The same stale-if-error reuse, for a repository that answered rather than

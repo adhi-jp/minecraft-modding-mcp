@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import type { ArtifactSignature } from "./types.js";
+import type { JarStatStamp } from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 
@@ -85,7 +85,18 @@ export function buildJarSignature(stats: { mtimeMs: number; size: number }): str
   return `${Math.trunc(stats.mtimeMs)}:${stats.size}`;
 }
 
-export function artifactSignatureFromFile(jarPath: string): ArtifactSignature {
+/**
+ * Read a jar's stat stamp: it stats the file, it does not read a byte of it.
+ *
+ * The name says stat because a stat is all this is. Artifact identity is
+ * derived and composed in `src/artifact-identity.ts`; nothing this returns is
+ * an artifactId, and nothing keys an artifact by it.
+ *
+ * Its one production caller is the `jarSignature` field in
+ * `src/minecraft-explorer-service.ts`, which publishes this stat-based value to
+ * callers of `get-project-context`.
+ */
+export function readJarStatStamp(jarPath: string): JarStatStamp {
   const resolvedPath = resolveJarPathWithSymlinkCheck(jarPath).resolvedPath;
   const stats = statSync(resolvedPath);
   return {

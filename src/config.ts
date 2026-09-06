@@ -393,8 +393,8 @@ export function buildArtifactAlias(input: ArtifactAliasInput): string {
   } else {
     tokens.push("jar", aliasJarBase(input.value));
   }
-  // mappingVariant is canonical — `artifactIdForJar` / `artifactIdForCoordinate`
-  // bake "mojang-remapped" into the artifactId, so the same artifactId always
+  // mappingVariant is canonical — `composeArtifactId` in `src/artifact-identity.ts`
+  // bakes "mojang-remapped" into the artifactId, so the same artifactId always
   // produces the same alias regardless of how many times resolveArtifact is
   // called. The token here is purely a human-readable hint; the 12-char hash
   // suffix would already separate remapped artifacts from pass-through ones.

@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import { loadConfig } from "./config.js";
-import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
+import { normalizeJarPath, readJarStatStamp } from "./path-resolver.js";
 import { createJarEntryReader } from "./source-jar-reader.js";
 import { artifactIdNamesMinecraftRuntime } from "./source/artifact-resolver.js";
 import { matchesMemberPattern } from "./source/member-pattern.js";
@@ -1201,7 +1201,7 @@ export class MinecraftExplorerService {
       // is also the right default for a dependency jar's own bytecode namespace.
       mappingNamespace:
         minecraftVersion && isUnobfuscatedVersion(minecraftVersion) ? "mojang" : "obfuscated",
-      jarSignature: artifactSignatureFromFile(jarPath).sourceArtifactId,
+      jarSignature: readJarStatStamp(jarPath).sourceArtifactId,
       generatedAt: new Date().toISOString()
     };
   }

@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  artifactSignatureFromFile,
+  readJarStatStamp,
   buildJarSignature,
   isSecureJarEntryPath,
   resolveJarPathWithSymlinkCheck,
@@ -118,7 +118,11 @@ test("resolveJarPathWithSymlinkCheck preserves the original input alongside the 
   assert.equal(info.resolvedPath, await realpath(realJar));
 });
 
-// --- artifactSignatureFromFile / buildJarSignature ---------------------------
+// --- readJarStatStamp / buildJarSignature ------------------------------------
+// The test name below still says `artifactSignatureFromFile`: it is frozen in
+// tests/fixtures/premigration/test-list.txt, and the named-set gate in
+// scripts/run-tests.mjs fails on a frozen name that disappears. The function it
+// exercises is `readJarStatStamp`.
 
 test("buildJarSignature emits `<truncated mtime>:<size>` format", () => {
   assert.equal(buildJarSignature({ mtimeMs: 1700000000.123, size: 42 }), "1700000000:42");
@@ -128,8 +132,8 @@ test("artifactSignatureFromFile yields a stable sha256 id for the same jar conte
   const root = await mkdtemp(join(tmpdir(), "path-resolver-sig-"));
   const jar = join(root, "mod.jar");
   await writeFile(jar, Buffer.from("PK\x03\x04"));
-  const sig1 = artifactSignatureFromFile(jar);
-  const sig2 = artifactSignatureFromFile(jar);
+  const sig1 = readJarStatStamp(jar);
+  const sig2 = readJarStatStamp(jar);
   assert.match(sig1.sourceArtifactId, /^[a-f0-9]{64}$/);
   assert.equal(sig1.sourceArtifactId, sig2.sourceArtifactId);
   assert.equal(sig1.signature, sig2.signature);

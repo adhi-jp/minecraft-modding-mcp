@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
@@ -24,86 +23,20 @@ import {
 } from "./maven-resolver.js";
 import {
   defaultDownloadPath,
-  digestFile,
   discardCachedDownload,
   resolveCachedDownload,
   type CacheFreshness
 } from "./repo-downloader.js";
-import { artifactSignatureFromFile, normalizeJarPath } from "./path-resolver.js";
-import { stableArtifactId } from "./config.js";
+import { normalizeJarPath } from "./path-resolver.js";
+import {
+  composeArtifactId,
+  contentDigestSignature,
+  contentSignature,
+  jarArtifactIdentity,
+  DECOMPILE_SIGNATURE_QUALIFIER,
+  type ContentDigestSignature
+} from "./artifact-identity.js";
 import { hasAnyJarEntry, hasJavaSourceExtension } from "./source-jar-reader.js";
-
-function readStatsSignature(filePath: string): string {
-  const stats = artifactSignatureFromFile(filePath);
-  return stats.signature;
-}
-
-/**
- * Digests already derived from a local jar, each pinned to the stat that
- * produced it.
- *
- * Keyed by the symlink-resolved path, so a jar reached through two names is
- * hashed once. The entry is only ever *reused*, never trusted on its own: a
- * mismatched mtime or size discards it, so the map cannot serve a digest for
- * bytes that have since been replaced.
- *
- * Bounded, like the helper caches in `src/source/artifact-resolver.ts`: this map
- * is module-level and lives as long as the process, and a long-running server
- * walks this cascade once per target-driven tool call, so an unbounded map grows
- * with every distinct jar path the server has ever seen. Eviction costs at most
- * one re-hash, which is exactly what a cache miss already costs.
- */
-const contentSignatureCache = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
-const MAX_CONTENT_SIGNATURE_CACHE = 512;
-
-/** Insert, dropping the oldest key first when the bound is reached. */
-function rememberContentSignature(
-  resolvedPath: string,
-  entry: { mtimeMs: number; size: number; sha256: string }
-): void {
-  if (!contentSignatureCache.has(resolvedPath) && contentSignatureCache.size >= MAX_CONTENT_SIGNATURE_CACHE) {
-    const oldestKey = contentSignatureCache.keys().next().value as string | undefined;
-    if (oldestKey) {
-      contentSignatureCache.delete(oldestKey);
-    }
-  }
-  contentSignatureCache.set(resolvedPath, entry);
-}
-
-/**
- * The identity of a jar sitting on local disk: a sha256 of its bytes.
- *
- * `~/.m2` and the Gradle module cache move a file's mtime for reasons that have
- * nothing to do with its contents - an eviction followed by a re-fetch of
- * byte-identical bytes, a filesystem restore, a plain `touch`. An `mtimeMs:size`
- * signature turns every one of those into a fresh artifactId and a fresh
- * decompile, which is exactly the instability the download cache's
- * content-addressed identity removed from the remote half of this cascade.
- *
- * Hashing is not free and this cascade is re-walked on every target-driven tool
- * call, so the digest is memoized against the stat that produced it. The stat is
- * taken *before* the digest on purpose: bytes replaced mid-hash are recorded
- * against a stat they no longer have, so the entry is rejected on the next call
- * and re-derived - a wasted hash, never a wrong identity.
- */
-async function contentSignature(jarPath: string): Promise<string> {
-  // The same normalization `artifactSignatureFromFile` applied, kept so this
-  // path still refuses a vanished or non-jar file the way it always has.
-  const resolvedPath = normalizeJarPath(jarPath);
-  const stats = statSync(resolvedPath);
-  const cached = contentSignatureCache.get(resolvedPath);
-  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
-    return cached.sha256;
-  }
-
-  const { contentSha256 } = await digestFile(resolvedPath);
-  rememberContentSignature(resolvedPath, {
-    mtimeMs: stats.mtimeMs,
-    size: stats.size,
-    sha256: contentSha256
-  });
-  return contentSha256;
-}
 
 /**
  * Whether a jar contains java sources, with archive errors deliberately
@@ -571,33 +504,6 @@ function resolveRemoteBinaryCandidate(coordinate: string, repos: string[]): stri
 
 export type { MappingVariant } from "./types.js";
 
-export function artifactIdForJar(
-  inputKind: string,
-  artifactPath: string,
-  signature: string,
-  suffix?: string,
-  mappingVariant: MappingVariant = "pass"
-): string {
-  const parts = [inputKind, artifactPath, signature, suffix ?? "source"];
-  if (mappingVariant === "mojang-remapped") {
-    parts.push("mojang-remapped");
-  }
-  return stableArtifactId(parts);
-}
-
-function artifactIdForCoordinate(
-  coordinate: string,
-  source: string,
-  signature: string,
-  mappingVariant: MappingVariant = "pass"
-): string {
-  const parts = ["coord", coordinate, source, signature];
-  if (mappingVariant === "mojang-remapped") {
-    parts.push("mojang-remapped");
-  }
-  return stableArtifactId(parts);
-}
-
 function resolvedAtNow(): string {
   return new Date().toISOString();
 }
@@ -610,7 +516,12 @@ interface CoordinateArtifactSpec {
    * artifact id hash.
    */
   idSource: string;
-  signature: string;
+  /**
+   * A sha256 of the bytes this cascade resolved. Typed as a digest rather than
+   * a bare string so no leg of the cascade can quietly identify a coordinate by
+   * anything but the bytes it proved.
+   */
+  signature: ContentDigestSignature;
   origin: ResolvedSourceArtifact["origin"];
   isDecompiled: boolean;
   sourceJarPath?: string;
@@ -628,13 +539,14 @@ interface CoordinateArtifactSpec {
 /** Shared shape for every artifact the coordinate cascade can return. */
 function coordinateArtifact(spec: CoordinateArtifactSpec): ResolvedSourceArtifact {
   return {
-    artifactId: artifactIdForCoordinate(
-      spec.coordinate,
-      spec.idSource,
-      spec.signature,
-      spec.mappingVariant ?? "pass"
-    ),
-    artifactSignature: spec.signature,
+    artifactId: composeArtifactId({
+      space: "coordinate",
+      coordinate: spec.coordinate,
+      idSource: spec.idSource,
+      signature: spec.signature,
+      mappingVariant: spec.mappingVariant
+    }),
+    artifactSignature: spec.signature.value,
     origin: spec.origin,
     sourceJarPath: spec.sourceJarPath,
     binaryJarPath: spec.binaryJarPath,
@@ -832,7 +744,6 @@ export async function resolveSourceTarget(
 
   if (input.kind === "jar") {
     const resolvedJarPath = normalizeJarPath(input.value);
-    const binarySignature = readStatsSignature(resolvedJarPath);
     const exactSourceJarPath = resolveExactJarSourceCandidate(resolvedJarPath);
     const adjacentSourceCandidates = await listAdjacentJarSourceCandidates(resolvedJarPath);
     const maybeAdjacentSourceCandidates =
@@ -844,9 +755,10 @@ export async function resolveSourceTarget(
       const binaryJarPath =
         siblingBinaryJarPath ??
         (basename(resolvedJarPath).endsWith("-sources.jar") ? undefined : resolvedJarPath);
+      const identity = await jarArtifactIdentity(resolvedJarPath);
       return {
-        artifactId: artifactIdForJar("jar", resolvedJarPath, binarySignature),
-        artifactSignature: binarySignature,
+        artifactId: identity.artifactId,
+        artifactSignature: identity.signature,
         origin: "local-jar",
         binaryJarPath,
         sourceJarPath: resolvedJarPath,
@@ -857,10 +769,10 @@ export async function resolveSourceTarget(
     }
 
     if (!preferBinaryOnly && await candidateHasJavaSources(exactSourceJarPath)) {
-      const sourceSignature = readStatsSignature(exactSourceJarPath);
+      const identity = await jarArtifactIdentity(exactSourceJarPath);
       return {
-        artifactId: artifactIdForJar("jar", exactSourceJarPath, sourceSignature),
-        artifactSignature: sourceSignature,
+        artifactId: identity.artifactId,
+        artifactSignature: identity.signature,
         origin: "local-jar",
         binaryJarPath: resolvedJarPath,
         sourceJarPath: exactSourceJarPath,
@@ -891,15 +803,13 @@ export async function resolveSourceTarget(
     // no `.java` entries.
     const subjectArchive = await inspectSubjectJarArchive(resolvedJarPath);
     const subjectQualityFlags = subjectArchive ? binaryJarQualityFlags(subjectArchive) : [];
+    const identity = await jarArtifactIdentity(resolvedJarPath, {
+      signatureQualifier: DECOMPILE_SIGNATURE_QUALIFIER,
+      mappingVariant: options.mappingVariant
+    });
     return {
-      artifactId: artifactIdForJar(
-        "jar",
-        resolvedJarPath,
-        `${binarySignature}:decompile`,
-        undefined,
-        options.mappingVariant ?? "pass"
-      ),
-      artifactSignature: `${binarySignature}:decompile`,
+      artifactId: identity.artifactId,
+      artifactSignature: identity.signature,
       origin: "decompiled",
       binaryJarPath: resolvedJarPath,
       adjacentSourceCandidates: maybeAdjacentSourceCandidates,
@@ -1129,7 +1039,7 @@ export async function resolveSourceTarget(
       // Identity follows the bytes. The HTTP validators that used to form this
       // signature rotate whenever a CDN or repository migration happens, even
       // when the jar is byte-identical.
-      const signature = download.contentSha256;
+      const signature = contentDigestSignature(download.contentSha256);
       return coordinateArtifact({
         coordinate,
         idSource: "remote-repo",
@@ -1274,7 +1184,7 @@ export async function resolveSourceTarget(
 
       // A file in the URL-keyed download cache is identified by its bytes, not
       // by a stat signature that a re-download would change for free.
-      const signature = downloaded.contentSha256;
+      const signature = contentDigestSignature(downloaded.contentSha256);
       return coordinateArtifact({
         coordinate,
         idSource: "decompiled",

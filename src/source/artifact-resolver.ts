@@ -1,5 +1,6 @@
 import fastGlob from "fast-glob";
 
+import { DECOMPILE_SIGNATURE_QUALIFIER, jarArtifactIdentity } from "../artifact-identity.js";
 import { buildArtifactAlias } from "../config.js";
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError, isAppError } from "../errors.js";
@@ -12,13 +13,11 @@ import { log } from "../logger.js";
 import { applyMappingPipeline } from "../mapping-pipeline-service.js";
 import { parseCoordinate } from "../maven-resolver.js";
 import { resolveMojangTinyFile } from "../mojang-tiny-mapping-service.js";
-import { artifactSignatureFromFile } from "../path-resolver.js";
 import {
   detectFabricLikeInputNamespace,
   listJavaEntries
 } from "../source-jar-reader.js";
 import {
-  artifactIdForJar,
   type MappingVariant,
   resolveSourceTarget as resolveSourceTargetInternal
 } from "../source-resolver.js";
@@ -772,8 +771,10 @@ export async function probeMinecraftArtifact(
     }
 
     const selectedSourceJarPath = versionSourceDiscovery.selectedSourceJarPath;
-    const sourceSignature = artifactSignatureFromFile(selectedSourceJarPath).signature;
-    const artifactId = artifactIdForJar("jar", selectedSourceJarPath, sourceSignature);
+    // The same helper `resolveSourceTarget`'s jar branch uses, so the id this
+    // probe publishes and the id a full resolve mints for the same jar are
+    // derived and composed by one piece of code.
+    const { artifactId } = await jarArtifactIdentity(selectedSourceJarPath);
     warnings.push(`Resolved source-backed artifact from Loom cache candidate: ${selectedSourceJarPath}.`);
     if (versionSourceDiscovery.selectedHasMinecraftNamespace === false) {
       warnings.push(
@@ -793,8 +794,14 @@ export async function probeMinecraftArtifact(
     };
   }
 
-  const binarySignature = artifactSignatureFromFile(versionJar.jarPath).signature;
-  const artifactId = artifactIdForJar("jar", versionJar.jarPath, `${binarySignature}:decompile`);
+  // "Lightweight" describes what this probe SKIPS: it neither decompiles nor
+  // rebuilds the index. It does read the version jar's bytes, because that is
+  // what the jar route derives an id from, so the first probe of a given jar in
+  // a process pays for one hash of it; the digest memo in
+  // `src/artifact-identity.ts` covers the ones after that.
+  const { artifactId } = await jarArtifactIdentity(versionJar.jarPath, {
+    signatureQualifier: DECOMPILE_SIGNATURE_QUALIFIER
+  });
   return {
     artifactId,
     mappingApplied: effectiveMapping,

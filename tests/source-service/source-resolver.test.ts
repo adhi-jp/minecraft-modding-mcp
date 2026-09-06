@@ -1536,14 +1536,20 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   assert.equal(second.artifactId, first.artifactId);
 });
 
-test("resolveSourceTarget(targetKind=jar) gives a touched jar a new artifactId, because a jar-path target is identified by path plus mtime and size", async () => {
-  // The documented counterpart to the coordinate-route tests above. Content
-  // addressing reaches the local stores only through a Maven coordinate; a jar
-  // the caller names by path keeps the stat signature it has always had, so a
-  // touch alone mints a new id even though not one byte moved. That is the
-  // contract, not an oversight - pin it so the next id change to the local
-  // routes cannot quietly take this one with it.
-  const root = await mkdtemp(join(tmpdir(), "resolver-jar-touch-"));
+/**
+ * The jar route used to be the documented exception to content addressing: a
+ * jar named by path was signed with `mtimeMs:size`, so a `touch` alone minted a
+ * new artifactId - and with it a fresh decompile and a fresh index - even though
+ * not one byte had moved. It is identified by its bytes now, like the coordinate
+ * routes above.
+ *
+ * Three branches of the jar route mint an id, each from a different file, and
+ * each was its own producer of the old signature. All three get their own proof
+ * below rather than one shared one.
+ */
+
+test("resolveSourceTarget(targetKind=jar) keeps a stable artifactId when the named sources jar is touched without a byte changing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-touch-named-"));
   const sourceJarPath = join(root, "touched-by-path-sources.jar");
   await createJar(sourceJarPath, {
     "com/example/TouchedByPath.java": [
@@ -1555,40 +1561,132 @@ test("resolveSourceTarget(targetKind=jar) gives a touched jar a new artifactId, 
   const config = buildTestConfig(root);
   const target = { kind: "jar", value: sourceJarPath } as const;
 
-  // Control leg: resolve twice with the file left alone. A resolver that minted
-  // a fresh signature on every call would fail here, which is what makes the
-  // touch below the only variable in the comparison that follows.
   const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
-  const untouchedRepeat = await resolveSourceTarget(target, { allowDecompile: true }, config);
-  assert.equal(
-    untouchedRepeat.artifactSignature,
-    first.artifactSignature,
-    "an untouched jar must keep its signature across resolves, or the touch below proves nothing"
-  );
-  assert.equal(
-    untouchedRepeat.artifactId,
-    first.artifactId,
-    "an untouched jar must keep its artifactId across resolves, or the touch below proves nothing"
-  );
-
   const bytesBeforeTouch = await sha256OfFile(sourceJarPath);
   await touchWithoutRewriting(sourceJarPath);
   const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
 
   assert.equal(first.origin, "local-jar");
-  assert.equal(untouchedRepeat.origin, "local-jar");
   assert.equal(second.origin, "local-jar");
   assert.equal(
     await sha256OfFile(sourceJarPath),
     bytesBeforeTouch,
     "the touch must leave every byte in place, or this proves nothing"
   );
-  assert.notEqual(
-    second.artifactSignature,
-    untouchedRepeat.artifactSignature,
-    "a jar-path target signs with mtime and size, so moving mtime must move the signature"
+  assert.equal(
+    first.artifactSignature,
+    bytesBeforeTouch,
+    "a jar named by path is identified by the bytes of that jar"
   );
-  assert.notEqual(second.artifactId, untouchedRepeat.artifactId);
+  assert.equal(second.artifactSignature, first.artifactSignature);
+  assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=jar) keeps a stable artifactId when the adopted sibling sources jar is touched", async () => {
+  // The branch that answers with `<basename>-sources.jar` beside the binary the
+  // caller named composes its id from that sibling, so the sibling is the file
+  // whose bytes have to hold the id still. Both files are touched, because a
+  // rebuild that moves one usually moves the other.
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-touch-sibling-"));
+  const binaryJarPath = join(root, "sibling.jar");
+  const exactSourcesJarPath = join(root, "sibling-sources.jar");
+  await createJar(binaryJarPath, {
+    "com/example/Sibling.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(exactSourcesJarPath, {
+    "com/example/Sibling.java": ["package com.example;", "public class Sibling {}"].join("\n")
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "jar", value: binaryJarPath } as const;
+
+  const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+  const sourcesBytesBeforeTouch = await sha256OfFile(exactSourcesJarPath);
+  await touchWithoutRewriting(binaryJarPath);
+  await touchWithoutRewriting(exactSourcesJarPath);
+  const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+  assert.equal(first.origin, "local-jar");
+  assert.equal(first.sourceJarPath, exactSourcesJarPath);
+  assert.equal(second.sourceJarPath, exactSourcesJarPath);
+  assert.equal(
+    await sha256OfFile(exactSourcesJarPath),
+    sourcesBytesBeforeTouch,
+    "the touch must leave every byte in place, or this proves nothing"
+  );
+  assert.equal(
+    first.artifactSignature,
+    sourcesBytesBeforeTouch,
+    "the adopted sibling is the file this branch's id is about"
+  );
+  assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=jar) keeps a stable artifactId when a binary jar bound for the decompiler is touched", async () => {
+  // No sources anywhere, so the id carries the `decompile` qualifier and keys
+  // the decompiler's output directory. A touch used to throw that output away.
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-touch-decompile-"));
+  const binaryJarPath = join(root, "binary-only.jar");
+  await createJar(binaryJarPath, {
+    "com/example/BinaryOnly.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "jar", value: binaryJarPath } as const;
+
+  const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+  const bytesBeforeTouch = await sha256OfFile(binaryJarPath);
+  await touchWithoutRewriting(binaryJarPath);
+  const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+  assert.equal(first.origin, "decompiled");
+  assert.equal(second.origin, "decompiled");
+  assert.equal(
+    await sha256OfFile(binaryJarPath),
+    bytesBeforeTouch,
+    "the touch must leave every byte in place, or this proves nothing"
+  );
+  assert.equal(
+    first.artifactSignature,
+    `${bytesBeforeTouch}:decompile`,
+    "the decompile qualifier rides on the content digest, not on a stat stamp"
+  );
+  assert.equal(second.artifactSignature, first.artifactSignature);
+  assert.equal(second.artifactId, first.artifactId);
+});
+
+test("resolveSourceTarget(targetKind=jar) gives a jar named by path a new artifactId once its bytes really change", async () => {
+  // The other half of the contract: stability under a touch must not have been
+  // bought by making the id ignore the jar.
+  const root = await mkdtemp(join(tmpdir(), "resolver-jar-rewritten-"));
+  const sourceJarPath = join(root, "rewritten-by-path-sources.jar");
+  await createJar(sourceJarPath, {
+    "com/example/RewrittenByPath.java": [
+      "package com.example;",
+      "public class RewrittenByPath {}"
+    ].join("\n")
+  });
+
+  const config = buildTestConfig(root);
+  const target = { kind: "jar", value: sourceJarPath } as const;
+
+  const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+  await createJar(sourceJarPath, {
+    "com/example/RewrittenByPath.java": [
+      "package com.example;",
+      "public class RewrittenByPath {",
+      "  public void addedInTheRebuild() {}",
+      "}"
+    ].join("\n")
+  });
+
+  const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+  assert.equal(second.origin, "local-jar");
+  assert.equal(second.artifactSignature, await sha256OfFile(sourceJarPath));
+  assert.notEqual(second.artifactSignature, first.artifactSignature);
+  assert.notEqual(second.artifactId, first.artifactId);
 });
 
 test("resolveSourceTarget publishes the download size cap to the CALLER, even behind a later unrelated failure", async () => {
