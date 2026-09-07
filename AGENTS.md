@@ -34,6 +34,8 @@
 - Release and publish workflows MUST use a clean build to prevent stale `dist` artifacts from being shipped.
 - `package.json` release-facing contracts (`files`, `engines`, `bin`, and release scripts) MUST match implemented behavior and tests.
 - Baseline runtime/tooling for this repository is Node.js 22.13.0+ and `pnpm`. `engines.node` and `packageManager` in `package.json` are the source of truth for both. The Node floor is not a preference: 22.0–22.12 fail at process start, because `node:sqlite` stayed behind `--experimental-sqlite` until 22.13.0 and the symbol index needs a statement API added in the same release.
+- The release commit (`chore(release): {version}`) MUST be created on `main`. A release cut on a side branch leaves the tag pointing at a commit that `main` does not contain, and `main` then has to be fast-forwarded after the fact. When release work was done on a branch, first confirm the branch is a pure fast-forward of `origin/main` (`git rev-list --left-right --count origin/main...HEAD` shows `0` on the left), fast-forward `main` to it, and create the release commit there.
+- Push `main` together with the release tag, as one release step: `git push origin main` and then `git push origin v{version}`. Pushing the tag alone publishes the package from a commit that no branch on `origin` reaches, which is exactly the state that treating `origin` release tags as the source of truth is meant to rule out. Before calling the release done, verify that `git branch -r --contains v{version}` lists `origin/main`.
 
 ## Changelog and Tag Safety (MUST)
 - Treat `origin` release tags (`vX.Y.Z`) as the source of truth for published versions.
@@ -67,7 +69,7 @@
 - Use Conventional Commits.
 - A commit that INTRODUCES a breaking change MUST use `!` in its type/scope summary and include a `BREAKING CHANGE:` footer. Breaking means the public MCP tool surface (tool names, input parameters, response envelope shape) or the Node package surface (exports, types, `engines`) stops working for an existing caller.
 - A release commit that only cuts a version and its CHANGELOG section is an aggregation, not an introduction, and carries neither marker. The breaking changes it releases are announced by the major version bump and the `**Breaking**` entries in the release section.
-- Release commit subject: `chore(release): {version}`. No verb, no `v` prefix.
+- Release commit subject: `chore(release): {version}`. No verb, no `v` prefix. Created on `main` and pushed with its tag; see Release Safety.
 - Keep commits logically scoped; do not mix unrelated changes.
 - Do not commit files under `docs/specs/`, `docs/plans/`, or `docs/reports/`; keep specifications, implementation plans, and session reports out of repository history. `.gitignore` enforces all three, so a document that genuinely needs to ship belongs at a tracked path rather than force-added from one of these.
 - Do not force-add ignored files or otherwise commit files outside the agreed commit scope unless the user explicitly instructs you to include those extra files.
