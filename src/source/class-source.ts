@@ -36,6 +36,7 @@ import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, pro
 import { collectDidYouMeanCandidates, type DidYouMeanCandidate } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
 import { findNestedJarClasses, resolveUniqueNestedJarForClass } from "./nested-jars.js";
+import { extractSymbolsFromSource } from "../symbols/symbol-extractor.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import {
   dedupeQualityFlags,
@@ -581,6 +582,56 @@ function projectDecompiledFallback(fallback: DecompiledFallback, level: MemberPr
 // isTypeSymbol checks below; pushed down to SQL so non-type rows are never fetched.
 const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
 
+/**
+ * Reconstruct the full nesting chain between a file's top-level type and a
+ * type declared two or more levels deeper inside it. The extractor stores
+ * only ONE qualifiedName per FILE (the top-level type), so naively
+ * concatenating `<topLevelFQN>.<symbolName>` is only correct for exactly one
+ * level of nesting — it silently drops every intermediate enclosing type.
+ *
+ * Walks the file's own type declarations from the top-level type downward,
+ * using brace-range containment to find which declaration directly encloses
+ * `targetLine` at each level, collecting each intermediate simple name.
+ *
+ * Returns the intermediate simple names (outermost first, target excluded)
+ * or undefined when the chain cannot be reconstructed — e.g. the file's
+ * content is unavailable — in which case the caller falls back to the
+ * single-level formula.
+ */
+function resolveNestedTypeChain(
+  svc: SourceService,
+  artifactId: string,
+  filePath: string,
+  topSimpleName: string,
+  targetLine: number
+): string[] | undefined {
+  const fileRow = svc.filesRepo.getFileContent(artifactId, filePath);
+  if (!fileRow) return undefined;
+  const lines = fileRow.content.split(/\r?\n/);
+  const fileSymbols = extractSymbolsFromSource(filePath, fileRow.content);
+  let currentBody = classSourceHelpers.computeBraceRange(lines, fileSymbols, topSimpleName);
+  if (!currentBody) return undefined;
+
+  const chain: string[] = [];
+  // Bounded by the number of type symbols in the file; guards against ever
+  // looping on a malformed structure.
+  for (let step = 0; step <= fileSymbols.length; step += 1) {
+    const childRanges = classSourceHelpers.computeNestedTypeRanges(lines, fileSymbols, currentBody);
+    if (childRanges.some((range) => range.declarationLine === targetLine)) {
+      return chain;
+    }
+    const containingChild = childRanges.find(
+      (range) => range.declarationLine < targetLine && targetLine <= range.endLine
+    );
+    if (!containingChild) return undefined;
+    const childSymbol = fileSymbols.find((symbol) => symbol.line === containingChild.declarationLine);
+    if (!childSymbol) return undefined;
+    chain.push(childSymbol.symbolName);
+    currentBody = containingChild;
+  }
+  return undefined;
+}
+
 export function findClass(svc: SourceService, input: FindClassInput): FindClassOutput {
   const className = input.className.trim();
   if (!className) {
@@ -682,8 +733,18 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
       row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
     const enclosingSimpleName = enclosingQualifiedName.split(".").at(-1) ?? enclosingQualifiedName;
     const nested = enclosingSimpleName !== row.symbolName;
+    let qualifiedName = nested ? `${enclosingQualifiedName}.${row.symbolName}` : enclosingQualifiedName;
+    if (nested) {
+      // The formula above assumes exactly one level of nesting. When the type
+      // is nested two or more levels deep, reconstruct the real chain so the
+      // intermediate enclosing type(s) are not silently dropped.
+      const intermediateChain = resolveNestedTypeChain(svc, artifactId, row.filePath, enclosingSimpleName, row.line);
+      if (intermediateChain && intermediateChain.length > 0) {
+        qualifiedName = `${enclosingQualifiedName}.${[...intermediateChain, row.symbolName].join(".")}`;
+      }
+    }
     candidates.push({
-      qualifiedName: nested ? `${enclosingQualifiedName}.${row.symbolName}` : enclosingQualifiedName,
+      qualifiedName,
       filePath: row.filePath,
       line: row.line,
       symbolKind: row.symbolKind,

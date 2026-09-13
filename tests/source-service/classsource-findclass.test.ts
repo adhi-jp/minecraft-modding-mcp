@@ -1731,6 +1731,80 @@ test("findClass reports a nested type by its own FQN and ranks the top-level mat
   assert.equal(result.matches[1].symbolKind, "enum");
 });
 
+// Regression: the single-level fix (56bc87a) always concatenates the FILE's
+// top-level FQN directly with the bare symbolName, which is only correct for
+// exactly one level of nesting. A type nested TWO OR MORE levels deep (here,
+// GameOptions.OptionInstance.TooltipSupplier) had the intermediate enclosing
+// type silently dropped, fabricating "GameOptions.TooltipSupplier".
+test("findClass reports the full FQN for a type nested two or more levels deep", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const { seedIndexedArtifact } = await import("../helpers/seed-artifact.ts");
+  const root = await mkdtemp(join(tmpdir(), "findclass-deep-nested-"));
+  const service = new SourceService(buildTestConfig(root));
+  const artifactId = "artifact-deep-nested";
+
+  seedIndexedArtifact(service, {
+    artifactId,
+    origin: "local-jar",
+    requestedMapping: "mojang",
+    mappingApplied: "mojang",
+    qualityFlags: ["source-backed"],
+    version: "1.21.11",
+    files: [
+      {
+        filePath: "net/minecraft/client/GameOptions.java",
+        content:
+          "package net.minecraft.client;\n" +
+          "public class GameOptions {\n" +
+          "  public static class OptionInstance {\n" +
+          "    public interface TooltipSupplier {}\n" +
+          "  }\n" +
+          "}\n"
+      }
+    ],
+    symbols: [
+      {
+        filePath: "net/minecraft/client/GameOptions.java",
+        symbolKind: "class",
+        symbolName: "GameOptions",
+        qualifiedName: "net.minecraft.client.GameOptions",
+        line: 2
+      },
+      {
+        // The extractor stores ONE qualifiedName per FILE, so every nested
+        // symbol — regardless of depth — is recorded under the top-level FQN.
+        filePath: "net/minecraft/client/GameOptions.java",
+        symbolKind: "class",
+        symbolName: "OptionInstance",
+        qualifiedName: "net.minecraft.client.GameOptions",
+        line: 3
+      },
+      {
+        filePath: "net/minecraft/client/GameOptions.java",
+        symbolKind: "interface",
+        symbolName: "TooltipSupplier",
+        qualifiedName: "net.minecraft.client.GameOptions",
+        line: 4
+      }
+    ]
+  });
+
+  const result = (service as unknown as {
+    findClass: (input: { className: string; artifactId: string; limit?: number }) => {
+      matches: Array<{ qualifiedName: string; nested?: boolean; enclosingClass?: string; symbolKind: string }>;
+      total: number;
+    };
+  }).findClass({ className: "TooltipSupplier", artifactId, limit: 10 });
+
+  assert.equal(result.total, 1);
+  // Pre-fix this was "net.minecraft.client.GameOptions.TooltipSupplier" —
+  // dropping the intermediate "OptionInstance" enclosing type.
+  assert.equal(result.matches[0].qualifiedName, "net.minecraft.client.GameOptions.OptionInstance.TooltipSupplier");
+  assert.equal(result.matches[0].nested, true);
+  assert.equal(result.matches[0].enclosingClass, "net.minecraft.client.GameOptions");
+  assert.equal(result.matches[0].symbolKind, "interface");
+});
+
 test("findClass hands back a working call when partial coverage makes the index unable to answer", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const { seedIndexedArtifact } = await import("../helpers/seed-artifact.ts");
