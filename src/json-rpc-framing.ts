@@ -70,8 +70,10 @@ type HeaderBoundary = {
  *
  * Consequence worth stating, because it is load-bearing for the caller: an
  * EXTRA empty line after the terminator is body, not header. The body window
- * then opens on that empty line and is shifted by the two or three bytes the
- * peer did not count, so it no longer covers the same span as the JSON value.
+ * then opens on that empty line, shifted by however many bytes that line's own
+ * terminator took — one for a bare LF, two for CRLF — bytes the peer's
+ * declared length did not count, so the window no longer covers the same span
+ * as the JSON value.
  * All four extra-blank-line shapes behave alike here, which is the point: the
  * reading does not depend on which terminator style the peer chose.
  *
