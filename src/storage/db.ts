@@ -183,7 +183,11 @@ export function openDatabase(
           path: config.sqlitePath,
           reason: errorMessage
         });
-        throw caughtError;
+        throw createError({
+          code: ERROR_CODES.DB_FAILURE,
+          message: `Failed to open SQLite database at ${config.sqlitePath}: ${errorMessage}`,
+          details: { sqlitePath: config.sqlitePath, reason: (caughtError as { code?: string })?.code }
+        });
       }
 
       // The rebuild runs INSIDE the handler for the failure it is recovering
