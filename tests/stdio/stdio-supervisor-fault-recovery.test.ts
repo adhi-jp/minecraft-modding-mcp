@@ -75,6 +75,7 @@ type Harness = {
   releaseForwardedRequest(key: string, pending: unknown): boolean;
   handleWorkerMessage(child: FakeChild, message: JSONRPCMessage): void;
   handleWorkerData(child: FakeChild, chunk: Buffer): void;
+  handleWorkerStdinError(child: FakeChild, error: Error): void;
   handleClientData(chunk: Buffer): void;
   handleClientMessage(message: JSONRPCMessage): void;
   drainQueue(): void;
@@ -1914,3 +1915,295 @@ test("the default writer configuration recovers an unstringifiable worker fault"
 
   await supervisor.shutdown();
 });
+
+// --- handleWorkerStdinError ------------------------------------------------
+// Bug 1: a non-EPIPE stdin write error used to only log a warning and return,
+// never invalidating the child, never answering the request that was in
+// flight on it, and never scheduling a restart — leaving `this.child` pointed
+// at a permanently broken worker forever.
+
+test(
+  "a non-EPIPE worker stdin error invalidates the child, answers the stranded " +
+    "request, and drives a restart to a usable successor",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_601, workerWritesA);
+    const childB = createEmitterChild(920_602, workerWritesB);
+    let spawnIndex = 0;
+    const timers: FakeScheduledTimer[] = [];
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: (callback: () => void) => {
+        const timer = {
+          callback,
+          cleared: false,
+          unref() {
+            return this;
+          }
+        } as unknown as FakeScheduledTimer;
+        timers.push(timer);
+        return timer;
+      },
+      timerClearer: (timer: unknown) => {
+        (timer as FakeScheduledTimer).cleared = true;
+      }
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(childA);
+
+    // A forwarded, non-validate-project request lands in pendingRequests and
+    // reaches childA's stdin.
+    supervisor.handleClientData(
+      encodeJsonRpcMessage(modernCall(80, "list-versions"), "content-length")
+    );
+    assert.equal(dispatchCount(workerWritesA, 80), 1, "premise: the request reached childA");
+
+    // Fired through the REAL listener spawnWorker wired at
+    // `child.stdin.on("error", ...)`, not a direct method call.
+    const stdinError = Object.assign(new Error("write EIO"), { code: "EIO" });
+    (childA.stdin as unknown as EventEmitter).emit("error", stdinError);
+
+    assert.notEqual(
+      supervisor.child,
+      childA,
+      "the broken child must be invalidated, or scheduleRestart's own " +
+        "`this.child` guard makes every later restart attempt a permanent no-op"
+    );
+    const replies = repliesFor(outbound, 80);
+    assert.equal(
+      replies.length,
+      1,
+      "the request stranded on the broken stdin must be answered, not lost forever"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:80"),
+      false,
+      "the stranded entry must be released"
+    );
+
+    // scheduleRestart must have actually armed a restart timer (captured
+    // before firing it, since firing it spawns childB and arms ITS OWN
+    // startup-watchdog timer, appending another entry to `timers`).
+    const restartTimer = timers.at(-1);
+    assert.ok(restartTimer, "premise: a restart timer must have been armed");
+    restartTimer!.callback();
+    assert.equal(
+      supervisor.child,
+      childB,
+      "the restart must actually spawn a successor worker"
+    );
+
+    // A second request must be dispatchable once the successor is ready.
+    supervisor.handleWorkerReady(childB);
+    supervisor.handleClientData(
+      encodeJsonRpcMessage(modernCall(81, "list-versions"), "content-length")
+    );
+    assert.equal(
+      dispatchCount(workerWritesB, 81),
+      1,
+      "the second request must reach the successor worker rather than sit queued forever"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test("an EPIPE worker stdin error is still a silent no-op", async () => {
+  const { supervisor, child } = createFixture();
+  supervisor.handleClientData(
+    encodeJsonRpcMessage(modernCall(82, "list-versions"), "content-length")
+  );
+
+  const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+  supervisor.handleWorkerStdinError(child, epipeError);
+
+  assert.equal(supervisor.child, child, "an EPIPE must not invalidate the child");
+  assert.equal(
+    supervisor.pendingRequests.has("number:82"),
+    true,
+    "an EPIPE must not disturb requests already in flight"
+  );
+
+  await supervisor.shutdown();
+});
+
+// --- handleWorkerStdinError during a not-yet-ready initialize replay -------
+// Bug 1's fix treated every non-EPIPE stdin fault as a post-ready fault
+// (failPendingRequestsOnWorkerExit + scheduleRestart), reasoning that
+// child.stdin only exists once a child is spawned so there is no
+// "still starting up" case to distinguish. That misses one window:
+// handleWorkerReady's legacy-era replay of a retained `initialize` forwards
+// it WITHOUT calling adoptActiveChild first (adoptActiveChild only runs once
+// the initialize response actually arrives, or on the no-replay early
+// return). So a stdin fault that lands while that replay is in flight hits a
+// child that is live but not yet `childReady`, and failPendingRequestsOnWorkerExit
+// deliberately carves the retained initialize's pending entry OUT of what it
+// fails — leaving the client's `initialize` call answered by nothing and
+// re-attempted against every successor forever if the fault persists.
+function legacyInitialize(id: number): JSONRPCRequest {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "fault-recovery-test", version: "1.0.0" }
+    }
+  } as JSONRPCRequest;
+}
+
+test(
+  "a non-EPIPE stdin error during the not-yet-ready initialize replay fails " +
+    "the client's initialize fast instead of leaving it pending across restarts",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_701, workerWritesA);
+    const childB = createEmitterChild(920_702, workerWritesB);
+    let spawnIndex = 0;
+    const timers: FakeScheduledTimer[] = [];
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: (callback: () => void) => {
+        const timer = {
+          callback,
+          cleared: false,
+          unref() {
+            return this;
+          }
+        } as unknown as FakeScheduledTimer;
+        timers.push(timer);
+        return timer;
+      },
+      timerClearer: (timer: unknown) => {
+        (timer as FakeScheduledTimer).cleared = true;
+      }
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+
+    // Sent before childA signals ready: parked as the retained
+    // `initializeRequest` rather than forwarded immediately.
+    supervisor.handleClientMessage(legacyInitialize(1));
+    assert.equal(dispatchCount(workerWritesA, 1), 0, "premise: not yet forwarded");
+
+    // childA signals ready: handleWorkerReady replays the retained initialize
+    // onto its stdin without adopting it first — childReady stays false while
+    // this write is in flight, which is the window under test.
+    supervisor.handleWorkerReady(childA);
+    assert.equal(dispatchCount(workerWritesA, 1), 1, "premise: the replay reached childA");
+    assert.equal(
+      supervisor.childReady,
+      false,
+      "premise: not yet adopted while the replayed initialize awaits a response"
+    );
+
+    const stdinError = Object.assign(new Error("write EIO"), { code: "EIO" });
+    (childA.stdin as unknown as EventEmitter).emit("error", stdinError);
+
+    assert.notEqual(supervisor.child, childA, "the broken child must be invalidated");
+
+    const replies = repliesFor(outbound, 1);
+    assert.equal(
+      replies.length,
+      1,
+      "the client's initialize must get a prompt error reply rather than hang " +
+        "silently across restarts"
+    );
+    assert.equal(replies[0].error?.code, -32603);
+
+    await supervisor.shutdown();
+  }
+);
+
+// --- initialize-response settling-window marker (Bug 2) --------------------
+// A successful `initialize` response used to delete its pending entry with no
+// `settlingWorkerResponse` marker recorded first — unlike every other
+// successful-response path in this method. If the client write then threw,
+// AND the diagnostic write reporting that throw also threw, the fault escaped
+// `writeToClient` with no entry left to answer and no marker to recover it
+// from: `initialize` received zero replies, permanently.
+
+function legacyInitializeRequest(id: number): JSONRPCRequest {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "fault-recovery-test", version: "1.0.0" }
+    }
+  } as JSONRPCRequest;
+}
+
+function initializeResultMessage(id: number): JSONRPCMessage {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      protocolVersion: "2025-06-18",
+      capabilities: { tools: {} },
+      serverInfo: { name: "fault-recovery-fixture", version: "1.0.0" }
+    }
+  } as JSONRPCMessage;
+}
+
+test(
+  "a client-write fault AND its own diagnostic-write fault on a successful " +
+    "initialize reply are still recoverable",
+  async () => {
+    const { supervisor, child, outbound, transientFailingReplyIds, transientFailingEvents } =
+      createFixture();
+
+    supervisor.handleClientMessage(legacyInitializeRequest(1));
+    assert.equal(
+      supervisor.pendingRequests.has("number:1"),
+      true,
+      "premise: the initialize request is forwarded and pending"
+    );
+
+    // The client write for id 1's reply throws once, and the diagnostic write
+    // writeToClient's own catch uses to REPORT that throw ALSO throws once —
+    // the combination that lets the fault escape writeToClient entirely
+    // (rather than being swallowed there) and reach the worker reader's
+    // onFrame recovery.
+    transientFailingReplyIds.add(1);
+    transientFailingEvents.add("supervisor.client_write_error");
+
+    supervisor.handleWorkerData(
+      child,
+      encodeJsonRpcMessage(initializeResultMessage(1), "content-length")
+    );
+
+    const replies = repliesFor(outbound, 1);
+    assert.equal(
+      replies.length,
+      1,
+      "the initialize request must still receive exactly one reply, recovered " +
+        "via settlingWorkerResponse/answerUndeliveredWorkerResponse"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:1"),
+      false,
+      "the entry must not be left live either"
+    );
+
+    await supervisor.shutdown();
+  }
+);

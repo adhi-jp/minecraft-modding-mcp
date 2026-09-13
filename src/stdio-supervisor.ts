@@ -2646,6 +2646,37 @@ export class StdioSupervisor {
       return;
     }
     log("warn", "supervisor.worker_stdin_error", { message: error.message });
+
+    // This event fires only on child.stdin, which exists only once the child
+    // has actually been spawned, but that does NOT collapse to a single
+    // "always post-ready" case: handleWorkerReady's legacy-era replay of a
+    // retained `initialize` (era === "legacy" with `this.initializeRequest`
+    // set) forwards it to a freshly spawned successor WITHOUT calling
+    // adoptActiveChild first — adoptActiveChild only runs once that
+    // initialize's response actually comes back, or on the no-replay early
+    // return. So a live child can have `child.stdin` while `this.childReady`
+    // is still false, mirroring the fork handleWorkerProcessError already
+    // makes on `wasReady`. Treating that window as post-ready would run
+    // failPendingRequestsOnWorkerExit, which deliberately carves the retained
+    // initialize's pending entry OUT of what it fails (so a later id reuse of
+    // the completed initialize is not wrongly caught) — leaving the client's
+    // `initialize` answered by nothing and re-replayed against every
+    // successor forever if the stdin fault persists. Before this recovery
+    // existed at all, a broken stdin left `this.child` pointing at a worker
+    // nothing could ever write to again: scheduleRestart's own `this.child`
+    // guard made every later restart attempt a permanent no-op, and any
+    // request already forwarded to this child had nothing left that would
+    // ever answer it.
+    const wasReady = this.childReady;
+    this.invalidateCurrentChild(child);
+    this.beginTreeTermination(child);
+    if (!wasReady) {
+      this.handleStartupFailure(this.attemptToken, { code: null, signal: null });
+    } else {
+      this.consecutiveImmediateStandDowns = 0;
+      this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
+      this.scheduleRestart(true);
+    }
   }
 
   /**
@@ -2828,14 +2859,17 @@ export class StdioSupervisor {
     if (this.isInitializationResponse(message)) {
       const id = getTrackedRequestId(message);
       let initializeMode: ConcreteFramingMode | undefined;
+      let initializeKey: string | undefined;
+      let initializePending: PendingRequest | undefined;
       if (id !== undefined) {
-        const key = requestKey(id);
-        initializeMode = this.pendingRequests.get(key)?.mode;
-        this.pendingRequests.delete(key);
+        initializeKey = requestKey(id);
+        initializePending = this.pendingRequests.get(initializeKey);
+        initializeMode = initializePending?.mode;
       }
       initializeMode ??= this.modeForMessage(this.initializeRequest);
 
       if ("error" in message) {
+        if (initializeKey !== undefined) this.pendingRequests.delete(initializeKey);
         if (!this.replayingInitialization && id !== undefined) {
           this.writeSyntheticReply(
             { id, era: this.era, mode: initializeMode },
@@ -2856,6 +2890,7 @@ export class StdioSupervisor {
       }
 
       if (this.replayingInitialization) {
+        if (initializeKey !== undefined) this.pendingRequests.delete(initializeKey);
         this.replayingInitialization = false;
         if (this.initializedNotification) {
           this.writeToWorker(child, this.initializedNotification);
@@ -2865,9 +2900,21 @@ export class StdioSupervisor {
         return;
       }
 
+      // Mark the entry as settling and remove it BEFORE writeToClient, so a
+      // throw there (or in the diagnostic write reporting that throw) still
+      // leaves `settlingWorkerResponse` for `answerUndeliveredWorkerResponse`
+      // to answer this id from later — mirrors the non-initialize response
+      // path below, which does the same for every other successful reply.
+      // Without this, the entry was gone and no marker recorded it, so a
+      // faulted client write here permanently lost the reply to `initialize`.
+      if (initializeKey !== undefined && initializePending) {
+        this.settlingWorkerResponse = { key: initializeKey, snapshot: initializePending };
+      }
+      if (initializeKey !== undefined) this.pendingRequests.delete(initializeKey);
       this.clientInitialized = true;
       this.adoptActiveChild();
       this.writeToClient(message, initializeMode);
+      this.settlingWorkerResponse = undefined;
       this.flushQueue();
       return;
     }
@@ -3034,7 +3081,12 @@ export class StdioSupervisor {
     // count to N and falsely escalate retryRecommendation to "report-bug".
     const pendingToolNames: Array<string | undefined> = [];
     for (const [key, pending] of this.pendingRequests.entries()) {
-      if (key === preservedInitializeKey) continue;
+      // Identity, not just id: a client may legally reuse `initialize`'s id
+      // for a later request once initialize has completed. `initializeRequest`
+      // (and so `preservedInitializeKey`) is retained past that point, so a
+      // bare key match would treat the REUSED entry as the still-pending
+      // initialize and skip it here — leaving it answered by nothing.
+      if (key === preservedInitializeKey && pending.method === "initialize") continue;
       pendingToolNames.push(pending.toolName);
     }
     const { prunedByTool, updatedByTool } = buildExitTimestampGroups(
@@ -3060,7 +3112,9 @@ export class StdioSupervisor {
     // forever. Splitting into two steps also means a fault in ONE entry's
     // cleanup cannot suppress that SAME entry's own reply.
     for (const [key, pending] of [...this.pendingRequests.entries()]) {
-      if (key === preservedInitializeKey) continue;
+      // See the identical guard above: a bare key match would also wrongly
+      // skip a request that legally reused the completed initialize's id.
+      if (key === preservedInitializeKey && pending.method === "initialize") continue;
       this.runRecoveryStep("worker_exit.fail_pending_cleanup", () => {
         if (this.runningValidateKey === key) this.runningValidateKey = undefined;
         if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;

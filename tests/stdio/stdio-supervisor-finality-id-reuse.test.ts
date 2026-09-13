@@ -39,6 +39,8 @@ type Harness = {
   pendingRequests: Map<string, { method?: string }>;
   handleClientMessage(message: JSONRPCMessage): void;
   handleWorkerMessage(child: FakeChild, message: JSONRPCMessage): void;
+  handleWorkerExit(child: FakeChild, code: number | null, signal: NodeJS.Signals | null): void;
+  spawnWorker(): void;
   shutdown(): Promise<void>;
 };
 
@@ -217,3 +219,57 @@ test("a cap-blocked re-initialize discards the preserved same-id initialize entr
 
   await supervisor.shutdown();
 });
+
+test(
+  "a worker-exit cleanup must not skip a request that legally reused the " +
+    "completed initialize's id",
+  async () => {
+    const { supervisor, child, outbound } = createHarness();
+    // Prevent scheduleRestart's eventual real spawn from doing anything.
+    supervisor.spawnWorker = () => {};
+
+    // initialize with id 1 completes normally. `initializeRequest` (and so
+    // the cleanup loop's `preservedInitializeKey`) is retained past this
+    // point — the legacy handshake lifecycle never clears it on success.
+    supervisor.handleClientMessage(legacyInitialize(1));
+    supervisor.handleWorkerMessage(child, initializeResult(1));
+    assert.equal(
+      supervisor.pendingRequests.has("number:1"),
+      false,
+      "premise: the completed initialize's own entry is gone"
+    );
+
+    // A later request LEGALLY reuses id 1 — a client-side choice the
+    // supervisor must still tolerate.
+    supervisor.handleClientMessage(claimlessCall(1, "tools/list"));
+    assert.equal(
+      supervisor.pendingRequests.get("number:1")?.method,
+      "tools/call",
+      "premise: the id-1 entry is now the reused tools/list request, not initialize"
+    );
+
+    // The worker exits before answering it. `outbound` already holds the
+    // earlier initialize reply (also id 1) at this point, so only newly
+    // written frames are this assertion's concern.
+    const beforeExit = outbound.length;
+    supervisor.handleWorkerExit(child, 1, null);
+
+    const repliesForOne = outbound
+      .slice(beforeExit)
+      .filter((frame) => (frame as { id?: unknown }).id === 1);
+    assert.equal(
+      repliesForOne.length,
+      1,
+      "the reused-id request must receive a synthetic reply — a bare key match " +
+        "against the cached initialize id must not treat it as the still-pending " +
+        "initialize and skip it"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:1"),
+      false,
+      "and its entry must actually be cleaned up, not stranded"
+    );
+
+    await supervisor.shutdown();
+  }
+);
