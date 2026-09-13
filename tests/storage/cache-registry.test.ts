@@ -1,14 +1,40 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createCacheRegistry, pathContainsVersion } from "../../src/cache-registry.ts";
-import { downloadSidecarPath } from "../../src/repo-downloader.ts";
+import { createCacheRegistry, pathContainsVersion, readDownloadEntryIdentity } from "../../src/cache-registry.ts";
+import { discardCachedDownload, downloadSidecarPath } from "../../src/repo-downloader.ts";
 import { runMigrations } from "../../src/storage/migrations.ts";
 import Database from "../../src/storage/sqlite.ts";
+
+function sha256Of(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Write the sidecar `resolveCachedDownload` would have left beside
+ * `jarPath`, stamped with the file's real size and mtime - the same
+ * fixture shape tests/runtime/repo-downloader.test.ts uses, since a record
+ * that does not match the file's own stat is simply rejected by the reader
+ * and would prove nothing here either.
+ */
+async function writeSidecarFor(jarPath: string, url: string, contentSha256: string): Promise<void> {
+  const stats = await stat(jarPath);
+  await writeFile(
+    downloadSidecarPath(jarPath),
+    JSON.stringify({
+      version: 2,
+      url,
+      contentSha256,
+      contentLength: stats.size,
+      contentMtimeMs: stats.mtimeMs
+    })
+  );
+}
 
 test("pathContainsVersion matches whole version tokens, not coarse substrings", () => {
   // Exact and major.minor.patch sweep should match.
@@ -554,6 +580,165 @@ test("cache registry deletes a download sidecar together with the jar it describ
   assert.equal(existsSync(sidecarPath), false, "a prune must not leave the sidecar orphaned");
   assert.equal(existsSync(keptJarPath), true, "an unselected jar stays");
   assert.equal(existsSync(keptSidecarPath), true, "an unselected jar keeps its sidecar");
+});
+
+test("cache registry deletes a downloads entry with a real sidecar identity end-to-end", async () => {
+  // The existing sidecar-delete test above uses a `{}` sidecar, which carries
+  // no identity at all and so exercises only the "cannot prove otherwise"
+  // fallback. This covers the other half of the wiring: a sidecar that DOES
+  // describe the bytes must still be deleted normally when nothing raced it.
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-sidecar-identity-delete-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const jarPath = join(root, "downloads", "client.jar");
+  await writeFile(jarPath, "jar-bytes");
+  await writeSidecarFor(jarPath, "https://repo.example.com/client.jar", sha256Of("jar-bytes"));
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  const deletion = await registry.deleteEntries({
+    cacheKinds: ["downloads"],
+    selector: { jarPath },
+    executionMode: "apply"
+  });
+
+  assert.equal(deletion.deletedEntries, 1);
+  assert.equal(existsSync(jarPath), false, "a matching identity must not block the normal delete path");
+  assert.equal(existsSync(downloadSidecarPath(jarPath)), false, "the sidecar goes with it");
+  assert.deepEqual(deletion.warnings, [], "the ordinary successful delete must not report a warning");
+});
+
+test("cache registry deleteEntries reports a warning and excludes the entry from counts when a downloads-cache unlink genuinely fails", async () => {
+  if (process.getuid?.() === 0) {
+    // Root bypasses directory write-permission checks entirely, so this
+    // reproduction cannot make the unlink fail deterministically.
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-delete-fail-"));
+  const downloadsDir = join(root, "downloads");
+  await mkdir(downloadsDir, { recursive: true });
+  const jarPath = join(downloadsDir, "client.jar");
+  await writeFile(jarPath, "jar-bytes");
+  await writeSidecarFor(jarPath, "https://repo.example.com/client.jar", sha256Of("jar-bytes"));
+
+  const registry = createCacheRegistry({
+    cacheDir: root,
+    sqlitePath: join(root, "source-cache.db")
+  });
+
+  // Deny write on the containing directory so the real unlink genuinely
+  // fails (EACCES) rather than merely declining because of a raced identity
+  // mismatch - discardCachedDownload swallows exactly this failure since it
+  // is best-effort for its own original caller, but deleteEntries must not
+  // silently report success for a jar that is still on disk.
+  await chmod(downloadsDir, 0o555);
+  try {
+    const deletion = await registry.deleteEntries({
+      cacheKinds: ["downloads"],
+      selector: { jarPath },
+      executionMode: "apply"
+    });
+
+    assert.equal(existsSync(jarPath), true, "the jar must still be on disk after a genuine unlink failure");
+    assert.equal(
+      deletion.deletedEntries,
+      0,
+      "an entry that could not actually be removed must not be counted as deleted"
+    );
+    assert.equal(deletion.deletedBytes, 0, "bytes still on disk must not be counted as freed");
+    assert.equal(deletion.warnings.length, 1, "the failure must surface as a warning");
+    assert.ok(
+      deletion.warnings[0]?.includes(jarPath),
+      `expected warning to name ${jarPath}, got: ${deletion.warnings[0]}`
+    );
+  } finally {
+    await chmod(downloadsDir, 0o755);
+  }
+});
+
+test("readDownloadEntryIdentity reads the url and digest a valid sidecar records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-identity-valid-"));
+  const jarPath = join(root, "client.jar");
+  await writeFile(jarPath, "jar-bytes");
+  const url = "https://repo.example.com/client.jar";
+  await writeSidecarFor(jarPath, url, sha256Of("jar-bytes"));
+
+  assert.deepEqual(await readDownloadEntryIdentity(jarPath), { url, contentSha256: sha256Of("jar-bytes") });
+});
+
+test("readDownloadEntryIdentity answers undefined for a missing, empty, or malformed sidecar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-identity-absent-"));
+  const noSidecarJar = join(root, "no-sidecar.jar");
+  await writeFile(noSidecarJar, "jar-bytes");
+  assert.equal(
+    await readDownloadEntryIdentity(noSidecarJar),
+    undefined,
+    "no sidecar at all: identity cannot be proved"
+  );
+
+  const emptyRecordJar = join(root, "empty-record.jar");
+  await writeFile(emptyRecordJar, "jar-bytes");
+  await writeFile(downloadSidecarPath(emptyRecordJar), "{}");
+  assert.equal(
+    await readDownloadEntryIdentity(emptyRecordJar),
+    undefined,
+    "a sidecar with neither field recorded proves nothing"
+  );
+
+  const malformedJar = join(root, "malformed.jar");
+  await writeFile(malformedJar, "jar-bytes");
+  await writeFile(downloadSidecarPath(malformedJar), '{"version": 2, "url": "https://re');
+  assert.equal(
+    await readDownloadEntryIdentity(malformedJar),
+    undefined,
+    "unparseable JSON is exactly as uninformative as no sidecar at all"
+  );
+});
+
+test("deleteEntries' downloads path must not destroy a concurrent resolve's replacement jar", async () => {
+  // Reproduces the coordinator-verified hazard directly: `deleteEntries`
+  // captures a downloads entry's identity at listing time (via
+  // readDownloadEntryIdentity) and is supposed to route the actual removal
+  // through discardCachedDownload with that captured identity - the same
+  // sidecar-identity check every other eviction of this shared cache goes
+  // through (see repo-downloader.ts). Before the fix, cache-registry.ts's
+  // delete path used a bare existsSync+unlink with no identity check at all,
+  // so this same sequence would have destroyed the winner's bytes below.
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-race-"));
+  await mkdir(join(root, "downloads"), { recursive: true });
+  const jarPath = join(root, "downloads", "client.jar");
+  const url = "https://repo.example.com/client.jar";
+
+  // The state `deleteEntries` lists: a poisoned/stale jar this call means to
+  // evict.
+  await writeFile(jarPath, "poisoned-bytes");
+  await writeSidecarFor(jarPath, url, sha256Of("poisoned-bytes"));
+
+  // Listing time: this is exactly what cache-registry.ts's deleteEntries
+  // captures before it opens the db or unlinks anything.
+  const listedIdentity = await readDownloadEntryIdentity(jarPath);
+  assert.deepEqual(listedIdentity, { url, contentSha256: sha256Of("poisoned-bytes") });
+
+  // Between listing and delete, a concurrent resolve of the same coordinate
+  // finishes and installs its own good bytes and its own record at the same
+  // path - the exact race the bug report describes.
+  await writeFile(jarPath, "winner-bytes");
+  await writeSidecarFor(jarPath, url, sha256Of("winner-bytes"));
+
+  // The delete path's actual removal call, using the identity captured at
+  // listing time - precisely what deleteEntries now does per downloads entry.
+  discardCachedDownload(jarPath, listedIdentity);
+
+  assert.equal(existsSync(jarPath), true, "a listing-time verdict must not delete a different, later jar");
+  assert.equal(await readFile(jarPath, "utf8"), "winner-bytes");
+  assert.equal(
+    existsSync(downloadSidecarPath(jarPath)),
+    true,
+    "and the winner's own record has to survive with the bytes it describes"
+  );
 });
 
 test("cache registry ignores an orphan download sidecar whose jar is gone", async () => {

@@ -1660,6 +1660,50 @@ test("discardCachedDownload gives up quietly when it can neither unlink nor empt
   }
 });
 
+test("resolveCachedDownload(immutable) surfaces a stat failure on the cached entry instead of a silent live re-download", {
+  // Denying execute on the containing directory is what makes `statSync` on the
+  // file itself fail with EACCES rather than ENOENT - the file is there, the
+  // permission bit that gates traversal to it is not. Root bypasses that bit
+  // entirely, and this project's CI does not run on Windows, where directory
+  // permission bits do not gate traversal the same way.
+  skip:
+    process.platform === "win32"
+      ? "directory permission bits do not gate stat the same way on Windows"
+      : process.getuid?.() === 0
+        ? "root is not subject to the directory mode this stages"
+        : false
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-stat-eacces-"));
+  const cacheDir = join(root, "downloads");
+  await mkdir(cacheDir);
+  const destination = join(cacheDir, "sealed.jar");
+  const url = "https://repo.example.com/sealed.jar";
+  await writeFile(destination, "cached-bytes");
+  await writeSidecarFor(destination, { url, contentSha256: sha256Of("cached-bytes") });
+
+  await chmod(cacheDir, 0o000);
+  const seen = { calls: 0 };
+  try {
+    await assert.rejects(
+      resolveCachedDownload(url, destination, {
+        freshness: "immutable",
+        retries: 0,
+        timeoutMs: 2_000,
+        fetchFn: forbiddenFetch(seen)
+      }),
+      (error: NodeJS.ErrnoException) => error.code === "EACCES",
+      "a cache entry this process cannot even stat is an actionable error, not a byte count of zero"
+    );
+  } finally {
+    await chmod(cacheDir, 0o755);
+  }
+  assert.equal(
+    seen.calls,
+    0,
+    "and never a live re-download either: reported as a miss, this immutable url would transfer on every call forever while the one actionable error stayed hidden behind whatever the network did next"
+  );
+});
+
 /**
  * The production cap on a honoured `Retry-After`, pinned here rather than read
  * from source so a regression toward trusting the header whole fails loudly.

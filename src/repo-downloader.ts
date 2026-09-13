@@ -1002,12 +1002,23 @@ async function cachedBytesResult(
  * a zip reader opens it - so it must satisfy neither an immutable hit nor a
  * stale-if-error fallback. Treating it as absent lets the next transfer replace
  * it instead of pinning it forever.
+ *
+ * That equivalence stops at "missing", the same line {@link describeFileIfPresent}
+ * draws: only {@link isMissingFileError} answers a cache miss. A present-but-
+ * unreadable entry (EACCES from a locked-down cache directory, EISDIR, EIO)
+ * propagates instead of collapsing to 0, because this is the first stat this
+ * module makes on the path - collapsing it here would let `resolveCachedDownload`
+ * read "no cached bytes" and fall through to a live transfer without ever
+ * reaching the read path that already reports this failure correctly.
  */
 function cachedByteCount(filePath: string): number {
   try {
     return statSync(filePath).size;
-  } catch {
-    return 0;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return 0;
+    }
+    throw error;
   }
 }
 

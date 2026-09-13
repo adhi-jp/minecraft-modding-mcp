@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { normalizeOptionalPathForHost, type PathRuntimeInfo } from "./path-converter.js";
-import { downloadSidecarPath, isDownloadSidecarPath } from "./repo-downloader.js";
+import { discardCachedDownload, downloadSidecarPath, isDownloadSidecarPath } from "./repo-downloader.js";
 import { openDatabase } from "./storage/db.js";
 import type Database from "./storage/sqlite.js";
 import {
@@ -640,6 +640,40 @@ async function downloadSidecarSizeBytes(downloadPath: string): Promise<number> {
 }
 
 /**
+ * The identity `deleteEntries` captures for a downloads-cache jar at listing
+ * time, so a prune that only ever looked at the file once cannot destroy a
+ * concurrent resolve's freshly-written replacement at the same path.
+ *
+ * A missing, unreadable, or malformed sidecar answers with no identity to
+ * prove - {@link discardCachedDownload} already treats that as licence to
+ * evict unconditionally, the "cannot prove otherwise" rule this module's own
+ * sidecar-less entries already rely on elsewhere.
+ *
+ * Exported for direct testing, the same way {@link pathContainsVersion} is.
+ */
+export async function readDownloadEntryIdentity(
+  jarPath: string
+): Promise<{ url: string; contentSha256: string } | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(downloadSidecarPath(jarPath), "utf8")) as {
+      url?: unknown;
+      contentSha256?: unknown;
+    };
+    if (
+      typeof parsed.url === "string" &&
+      typeof parsed.contentSha256 === "string" &&
+      parsed.contentSha256.length > 0
+    ) {
+      return { url: parsed.url, contentSha256: parsed.contentSha256 };
+    }
+  } catch {
+    // Missing, unreadable, or malformed sidecar: nothing to identify these
+    // bytes with.
+  }
+  return undefined;
+}
+
+/**
  * Binary-remap cache entries are keyed by the final artifact id even when the
  * on-disk entry is a corrupt final directory or a leftover temp path.
  */
@@ -869,8 +903,21 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
     async deleteEntries(input) {
       const entries = await collectEntries(input.cacheKinds, input.selector);
       const selectedBytes = entries.reduce((total, entry) => total + entry.sizeBytes, 0);
+      const warnings: string[] = [];
+      const failedEntries: CacheEntry[] = [];
 
       if (input.executionMode === "apply") {
+        // Captured now, against the listing this call just made, rather than
+        // re-read right before each unlink below: the identity has to describe
+        // what THIS call selected, not whatever a concurrent resolve may have
+        // already replaced it with by the time the loop below reaches it.
+        const downloadIdentities = new Map<string, { url: string; contentSha256: string } | undefined>();
+        for (const entry of entries) {
+          if (entry.cacheKind === "downloads") {
+            downloadIdentities.set(entry.path, await readDownloadEntryIdentity(entry.path));
+          }
+        }
+
         const db = openDb(config);
         try {
           for (const entry of entries) {
@@ -883,12 +930,42 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
               continue;
             }
             if (entry.cacheKind === "downloads") {
-              // The sidecar is part of this entry, so it goes with the jar —
-              // outside the existsSync guard below, so a jar that vanished
-              // out-of-band since the listing still takes its sidecar with it
-              // instead of leaving an orphan behind. `force` makes a missing
-              // sidecar a no-op.
-              await rm(downloadSidecarPath(entry.path), { force: true });
+              // Route through the same sidecar-identity check every other
+              // eviction of this shared cache goes through, instead of an
+              // unconditional unlink that cannot tell a poisoned jar from a
+              // concurrent resolve's good one sitting at the same path. This
+              // also retires the sidecar, so it goes with the jar exactly as
+              // before - but only when the check above says the jar is still
+              // the one this call listed. See discardCachedDownload's doc
+              // comment in repo-downloader.ts for what the check does and does
+              // not close.
+              const expectedIdentity = downloadIdentities.get(entry.path);
+              discardCachedDownload(entry.path, expectedIdentity);
+
+              // discardCachedDownload swallows a genuine unlink failure
+              // (EACCES, EBUSY, a locked file, ...) - documented there as an
+              // accepted limitation for its own best-effort callers. That is
+              // wrong for this explicit, user-facing delete/prune request:
+              // verify the postcondition instead of trusting the call's
+              // silence. The jar surviving is only a LEGITIMATE decline when
+              // the identity recorded beside it now genuinely differs from
+              // what this call captured at listing time - i.e. a concurrent
+              // resolve's replacement is sitting there, exactly the case
+              // discardCachedDownload itself declines for. A jar that is
+              // still present with no such change (or no readable identity at
+              // all) means the removal itself failed.
+              if (existsSync(entry.path)) {
+                const currentIdentity = await readDownloadEntryIdentity(entry.path);
+                const declinedForConcurrentReplacement =
+                  expectedIdentity !== undefined &&
+                  currentIdentity !== undefined &&
+                  currentIdentity.contentSha256 !== expectedIdentity.contentSha256;
+                if (!declinedForConcurrentReplacement) {
+                  warnings.push(`Could not delete cached download (it may be locked or read-only): ${entry.path}`);
+                  failedEntries.push(entry);
+                }
+              }
+              continue;
             }
             if (existsSync(entry.path)) {
               // Only binary-remap inventory can return directories as entries;
@@ -901,10 +978,11 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
         }
       }
 
+      const failedBytes = failedEntries.reduce((total, entry) => total + entry.sizeBytes, 0);
       return {
-        deletedEntries: entries.length,
-        deletedBytes: selectedBytes,
-        warnings: []
+        deletedEntries: entries.length - failedEntries.length,
+        deletedBytes: selectedBytes - failedBytes,
+        warnings
       };
     },
 
