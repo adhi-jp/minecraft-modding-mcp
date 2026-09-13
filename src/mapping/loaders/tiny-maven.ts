@@ -1,4 +1,5 @@
 import { defaultDownloadPath, downloadToCache } from "../../repo-downloader.js";
+import { loadMaxNestedJarEntryBytes } from "../../source/nested-jars.js";
 import { collectMatchedJarEntriesAsUtf8 } from "../../source-jar-reader.js";
 import type { DirectionIndex, PairKey } from "../internal-types.js";
 import { mergeDirectionIndexes } from "../parsers/symbol-records.js";
@@ -36,11 +37,21 @@ async function fetchYarnCoordinates(
   }
 }
 
-async function parseTinyFromJar(jarPath: string): Promise<Map<PairKey, DirectionIndex>> {
+/**
+ * `maxEntryBytes` reuses the same ceiling as nested-jar extraction
+ * ({@link loadMaxNestedJarEntryBytes}): the downloaded jar is itself
+ * download-size-capped, but a single `.tiny`/`.tinyv2` entry inside it is
+ * decompressed in full before parsing, so an entry with a small compressed
+ * size and a huge inflated size (zip-bomb style) must still be bounded here.
+ */
+export async function parseTinyFromJar(
+  jarPath: string,
+  maxEntryBytes: number = loadMaxNestedJarEntryBytes()
+): Promise<Map<PairKey, DirectionIndex>> {
   const tinyEntries = (await collectMatchedJarEntriesAsUtf8(
     jarPath,
     (entry) => entry.toLowerCase().endsWith(".tiny") || entry.toLowerCase().endsWith(".tinyv2"),
-    { continueOnError: true }
+    { continueOnError: true, maxBytes: maxEntryBytes }
   )).sort((left, right) => left.filePath.localeCompare(right.filePath));
 
   // Parsed straight into the shared accumulator: a parse-then-merge loop would
