@@ -141,6 +141,11 @@ test("headerless garbage exceeding the frame limit is rejected and the reader re
   assert.equal(harness.errors.length, 1);
   assert.match(harness.errors[0]?.message ?? "", /65.*limit.*64/i);
 
+  // The garbage run had no newline of its own yet: a byte stream has no
+  // boundary besides chunk splits, so a message arriving next is only a
+  // genuinely fresh frame once the garbage line's own terminator has been
+  // seen and swallowed (see the discard-through-newline test below).
+  harness.process(Buffer.from("\n", "utf8"));
   harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
   assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
 });
@@ -155,8 +160,62 @@ test("an overlong line-delimited frame is rejected and the reader recovers", () 
   assert.equal(harness.errors.length, 1);
   assert.match(harness.errors[0]?.message ?? "", /line-delimited.*65.*limit.*64/i);
 
+  // Same reasoning as above: the oversized line's own terminator has to
+  // arrive and be swallowed before the next bytes can be trusted as a fresh
+  // frame rather than the tail of the just-rejected line.
+  harness.process(Buffer.from("\n", "utf8"));
   harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
   assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
+});
+
+test("a large line-delimited frame after a Content-Length frame is not rejected as an oversized header", () => {
+  // Bug 1: the 8 KiB Content-Length header ceiling must only apply while the
+  // reader is still accumulating a header block. Once mode has stuck at
+  // "content-length" from an earlier frame, a subsequent line-mode frame
+  // arriving in one chunk must not be judged against that ceiling just
+  // because the mode hasn't been reclassified yet.
+  const harness = createHarness(64 * 1024 * 1024);
+  const longArg = "a".repeat(9_000);
+  const lineMessage = {
+    jsonrpc: "2.0" as const,
+    id: 2,
+    method: "ping",
+    params: { longArg }
+  };
+
+  harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "content-length"));
+  harness.process(encodeJsonRpcMessage(lineMessage, "line"));
+
+  assert.deepEqual(harness.errors, []);
+  assert.deepEqual(harness.frames, [NORMAL_MESSAGE, lineMessage]);
+});
+
+test("an oversized unterminated line is discarded through its eventual newline, not re-parsed as a fresh frame", () => {
+  // Bug 2: discarding an oversized, not-yet-terminated line must remember
+  // that the reader is mid-discard so the eventual terminating newline (which
+  // can arrive in a later chunk) is consumed too, rather than letting the
+  // discarded line's own trailing bytes be re-read as a standalone frame.
+  const maxFrameBytes = 1_048_576;
+  const harness = createHarness(maxFrameBytes);
+  const oversizedPrefix = Buffer.alloc(maxFrameBytes + 1, 0x78); // 'x', no newline yet
+  const smuggledRequest = { jsonrpc: "2.0" as const, id: 100, method: "smuggled" };
+  const legitRequest = { jsonrpc: "2.0" as const, id: 200, method: "legit" };
+
+  harness.process(oversizedPrefix);
+  assert.equal(harness.errors.length, 1);
+  assert.match(harness.errors[0]?.message ?? "", /exceeding the configured frame limit/i);
+  assert.deepEqual(harness.frames, []);
+
+  // A separate write completes the SAME logical line (the well-formed-looking
+  // "smuggled" request is really just the rest of the discarded line, not a
+  // fresh frame) before a genuinely separate, well-formed frame follows.
+  harness.process(Buffer.from(
+    `${JSON.stringify(smuggledRequest)}\n${JSON.stringify(legitRequest)}\n`,
+    "utf8"
+  ));
+
+  assert.equal(harness.errors.length, 1, "no new error from the discarded continuation");
+  assert.deepEqual(harness.frames, [legitRequest]);
 });
 
 test("loadMaxFrameBytes applies defaults, overrides, fallback, and the minimum clamp", () => {

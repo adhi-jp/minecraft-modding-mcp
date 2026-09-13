@@ -219,6 +219,15 @@ export class JsonRpcFrameReader {
   private awaitedBodyStart = -1;
   private idleTimer: FrameIdleTimerHandle | undefined;
   private fatal = false;
+  /**
+   * Set when an oversized, not-yet-terminated line/header-less run was just
+   * discarded with no newline in hand. The bytes that eventually complete
+   * that same logical line are not a delimiter the reader can trust as the
+   * start of a fresh frame, so every byte up to and including the next 0x0a —
+   * however many chunks it takes to arrive — is swallowed unread before
+   * normal parsing resumes. See `rejectOversizedIncompleteInput`.
+   */
+  private discardingOversizedLine = false;
 
   /**
    * @param options.maxFrameBytes Largest accepted frame; defaults to
@@ -265,6 +274,7 @@ export class JsonRpcFrameReader {
     this.awaitedFrameEnd = -1;
     this.awaitedBodyStart = -1;
     this.fatal = false;
+    this.discardingOversizedLine = false;
   }
 
   clear(): void {
@@ -276,6 +286,7 @@ export class JsonRpcFrameReader {
     this.awaitedFrameEnd = -1;
     this.awaitedBodyStart = -1;
     this.fatal = false;
+    this.discardingOversizedLine = false;
   }
 
   processChunk(
@@ -318,6 +329,25 @@ export class JsonRpcFrameReader {
 
     while (true) {
       try {
+        if (this.discardingOversizedLine) {
+          // Swallow bytes up to and including the next newline WITHOUT
+          // interpreting them as a frame — they are the tail of the line just
+          // rejected as oversized, not a fresh start, even if they happen to
+          // look like a well-formed message on their own. Only once that
+          // terminator is found does this resynchronize on the byte position
+          // the peer itself delimited.
+          const newlineIndex = this.buffer.indexOf(0x0a);
+          if (newlineIndex === -1) {
+            // The discarded bytes carry no information, so there is nothing
+            // to hold onto while waiting for the terminator.
+            this.buffer = Buffer.alloc(0);
+            return;
+          }
+          this.buffer = this.buffer.subarray(newlineIndex + 1);
+          this.discardingOversizedLine = false;
+          continue;
+        }
+
         this.rejectOversizedIncompleteInput();
 
         if (this.mode === "unknown") {
@@ -378,6 +408,7 @@ export class JsonRpcFrameReader {
           this.buffer = Buffer.alloc(0);
           this.pendingChunks = [];
           this.pendingBytes = 0;
+          this.discardingOversizedLine = false;
           handlers.onError(error);
           return;
         }
@@ -453,6 +484,33 @@ export class JsonRpcFrameReader {
     this.idleTimer = handle;
   }
 
+  /**
+   * Whether the buffer, despite `mode` still sticking at "content-length"
+   * from an earlier frame, actually opens a line-mode frame — the same probe
+   * `readContentLengthMessage` uses to detect the mid-stream switch back to
+   * line framing (a JSON object/array opener can never begin a Content-Length
+   * header block). Used to keep the header-size ceiling scoped to buffers
+   * still being accumulated as a header block, so it never judges a line
+   * frame's bytes as an oversized header just because the switch hasn't been
+   * recognized yet.
+   */
+  private looksLikeLineFrame(): boolean {
+    let probeIndex = 0;
+    while (
+      probeIndex < this.buffer.length &&
+      (this.buffer[probeIndex] === 0x20 ||
+        this.buffer[probeIndex] === 0x09 ||
+        this.buffer[probeIndex] === 0x0d ||
+        this.buffer[probeIndex] === 0x0a)
+    ) {
+      probeIndex += 1;
+    }
+    return (
+      probeIndex < this.buffer.length &&
+      (this.buffer[probeIndex] === 0x7b /* '{' */ || this.buffer[probeIndex] === 0x5b /* '[' */)
+    );
+  }
+
   private canCompleteFrame(chunk: Buffer): boolean {
     const bufferedBytes = this.buffer.length + this.pendingBytes;
     if (this.mode === "content-length" && this.awaitedFrameEnd >= 0) {
@@ -468,10 +526,19 @@ export class JsonRpcFrameReader {
   }
 
   private rejectOversizedIncompleteInput(): void {
-    const headerBoundary =
-      this.mode === "content-length" ? findHeaderBoundary(this.buffer) : undefined;
+    // Sticky "content-length" mode only means a header block is being
+    // accumulated when the buffer doesn't already look like a line frame; a
+    // JSON object/array opener here is the same mid-stream switch
+    // `readContentLengthMessage` recognizes, just not yet reached. The header
+    // ceiling below must be scoped to actual header accumulation, or a large
+    // line-mode frame arriving right after a Content-Length frame gets judged
+    // as an oversized header before the switch is detected.
+    const isLineFrameAfterContentLength =
+      this.mode === "content-length" && this.looksLikeLineFrame();
+    const inHeaderAccumulation = this.mode === "content-length" && !isLineFrameAfterContentLength;
+    const headerBoundary = inHeaderAccumulation ? findHeaderBoundary(this.buffer) : undefined;
     if (
-      this.mode === "content-length" &&
+      inHeaderAccumulation &&
       !headerBoundary &&
       this.buffer.length > MAX_CONTENT_LENGTH_HEADER_BYTES
     ) {
@@ -488,17 +555,27 @@ export class JsonRpcFrameReader {
     if (this.buffer.length <= this.maxFrameBytes) {
       return;
     }
-    if (this.mode === "content-length" && headerBoundary) {
+    if (inHeaderAccumulation && headerBoundary) {
       return;
     }
-    if (this.mode !== "content-length" && this.buffer.includes(0x0a)) {
+    if (!inHeaderAccumulation && this.buffer.includes(0x0a)) {
       return;
     }
 
     const observedBytes = this.buffer.length;
     const description =
-      this.mode === "line" ? "Line-delimited JSON-RPC frame" : "Headerless JSON-RPC input";
+      this.mode === "line" || isLineFrameAfterContentLength
+        ? "Line-delimited JSON-RPC frame"
+        : "Headerless JSON-RPC input";
     this.buffer = Buffer.alloc(0);
+    if (!inHeaderAccumulation) {
+      // The oversized run has no newline anywhere in it yet (the check above
+      // would otherwise have returned): remember to swallow bytes through the
+      // eventual terminator — wherever it arrives — before resuming normal
+      // parsing, so the discarded line's own tail is never re-read as a fresh
+      // frame (see `discardingOversizedLine` in `drainChunk`).
+      this.discardingOversizedLine = true;
+    }
     throw new Error(
       `${description} is ${observedBytes} bytes, exceeding the configured frame limit of ` +
       `${this.maxFrameBytes} bytes.`
