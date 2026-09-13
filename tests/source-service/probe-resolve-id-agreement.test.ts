@@ -131,3 +131,55 @@ test("a target.kind=version probe keeps its artifactId when the runtime jar is t
   );
   assert.equal(second.artifactId, first.artifactId);
 });
+
+test("the probe's implicit mappingVariant agrees with an explicit resolve(mappingVariant: \"pass\") and would disagree with mojang-remapped", async () => {
+  // The two id-agreement tests above never set `mappingVariant` on either side, so an
+  // agreement they prove would hold even if the probe silently emitted the wrong
+  // variant - both sides are just defaulting together. This test pins the field
+  // itself: `jarArtifactIdentity` (src/artifact-identity.ts) folds `mappingVariant`
+  // into the composed id only when it is "mojang-remapped" (composeArtifactId,
+  // artifact-identity.ts:104-106), and `probeMinecraftArtifact`'s jar-route id
+  // (src/source/artifact-resolver.ts:802-804) never passes a `mappingVariant` option
+  // at all - so its id is only ever the implicit "pass" variant. `resolveSourceTarget`,
+  // by contrast, exposes `mappingVariant` directly on `ResolveSourceTargetOptions`
+  // (src/source-resolver.ts:582) and threads it into the same composer. Asserting
+  // against both an explicit "pass" and an explicit "mojang-remapped" resolve proves
+  // the agreement is real - it would fail today if either side's mappingVariant
+  // handling changed - instead of merely coincidental.
+  const root = realpathSync(await mkdtemp(join(tmpdir(), "probe-resolve-mapping-variant-")));
+  const jarPath = join(root, "minecraft-1.21.10-client.jar");
+  await createJar(jarPath, {
+    "net/minecraft/Marker.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const svc = stubServiceResolvingVersionJar(jarPath);
+  const probe = await probeMinecraftArtifact(svc, { target: { kind: "version", value: "1.21.10" } });
+
+  const config = buildTestConfig(root);
+  const resolvedPass = await resolveSourceTarget(
+    { kind: "jar", value: jarPath },
+    { allowDecompile: true, mappingVariant: "pass" },
+    config
+  );
+  const resolvedMojangRemapped = await resolveSourceTarget(
+    { kind: "jar", value: jarPath },
+    { allowDecompile: true, mappingVariant: "mojang-remapped" },
+    config
+  );
+
+  assert.notEqual(
+    resolvedMojangRemapped.artifactId,
+    resolvedPass.artifactId,
+    "mappingVariant must actually change the composed id, or this test proves nothing"
+  );
+  assert.equal(
+    probe.artifactId,
+    resolvedPass.artifactId,
+    "the probe's implicit mappingVariant must be \"pass\""
+  );
+  assert.notEqual(
+    probe.artifactId,
+    resolvedMojangRemapped.artifactId,
+    "the probe must not silently agree with a mojang-remapped resolve of the same jar"
+  );
+});

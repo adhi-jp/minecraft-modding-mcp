@@ -306,6 +306,167 @@ test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve w
   });
 });
 
+// ---------------------------------------------------------------------------
+// 403 and 410 are the other two members of DEFINITIVE_REJECTION_STATUS_CODES
+// (src/repo-downloader.ts): the module documents all three as a repository's
+// definitive answer about the artifact, not about its own health, so they must
+// be remembered and must drive the repository sweep exactly like a 404.
+// ---------------------------------------------------------------------------
+
+test("resolveCachedDownload(immutable) answers a second call from the remembered 403 without a request", async () => {
+  isolateRememberedRejections();
+  const root = await mkdtemp(join(tmpdir(), "remembered-rejection-403-hit-"));
+  const url = "https://repo.example.test/com/example/refused/1.0.0/refused-1.0.0-sources.jar";
+  const destination = join(root, "refused-sources.jar");
+  const { fetchFn, urls } = countingFetch(() => new Response("forbidden", { status: 403 }));
+
+  const first = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 1_000,
+    fetchFn
+  });
+  const second = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 1_000,
+    fetchFn
+  });
+
+  assert.equal(urls.length, 1, "the second call must not reach the repository at all");
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+  assert.deepEqual(second, first, "the remembered answer must be the answer that was recorded");
+});
+
+test("resolveCachedDownload(immutable) answers a second call from the remembered 410 without a request", async () => {
+  isolateRememberedRejections();
+  const root = await mkdtemp(join(tmpdir(), "remembered-rejection-410-hit-"));
+  const url = "https://repo.example.test/com/example/gone/1.0.0/gone-1.0.0-sources.jar";
+  const destination = join(root, "gone-sources.jar");
+  const { fetchFn, urls } = countingFetch(() => new Response("gone", { status: 410 }));
+
+  const first = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 1_000,
+    fetchFn
+  });
+  const second = await resolveCachedDownload(url, destination, {
+    freshness: "immutable",
+    retries: 0,
+    timeoutMs: 1_000,
+    fetchFn
+  });
+
+  assert.equal(urls.length, 1, "the second call must not reach the repository at all");
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+  assert.deepEqual(second, first, "the remembered answer must be the answer that was recorded");
+});
+
+test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve without re-sweeping the repositories after a 403", async () => {
+  isolateRememberedRejections();
+  const root = await mkdtemp(join(tmpdir(), "sweep-retry-403-binary-only-"));
+  const localBinaryJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "refused-binary",
+    "1.0.0",
+    "refused-binary-1.0.0.jar"
+  );
+  await createJar(localBinaryJarPath, {
+    "com/example/RefusedBinary.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const { fetchFn, urls } = countingFetch(() => new Response("forbidden", { status: 403 }));
+  const config = buildTestConfig(root, {
+    sourceRepos: ["https://repo-one.example.test", "https://repo-two.example.test"]
+  });
+  const target = { kind: "coordinate", value: "com.example:refused-binary:1.0.0" } as const;
+
+  await withGradleHome(join(root, "gradle-home"), async () => {
+    await withGlobalFetch(fetchFn, async () => {
+      const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const sweptOnFirstCall = urls.length;
+      const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+      assert.equal(
+        sweptOnFirstCall,
+        2,
+        "the first call asks both repositories for the sources jar that does not exist"
+      );
+      assert.equal(
+        urls.length,
+        sweptOnFirstCall,
+        "the repeat call must not re-ask a repository that already refused"
+      );
+
+      assert.equal(first.origin, "local-m2");
+      assert.equal(first.isDecompiled, true);
+      assert.equal(first.binaryJarPath, localBinaryJarPath);
+      assert.equal(second.artifactId, first.artifactId);
+      assert.equal(second.artifactSignature, first.artifactSignature);
+      assert.equal(second.binaryJarPath, first.binaryJarPath);
+      assert.equal(second.origin, first.origin);
+      assert.equal(second.isDecompiled, first.isDecompiled);
+    });
+  });
+});
+
+test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve without re-sweeping the repositories after a 410", async () => {
+  isolateRememberedRejections();
+  const root = await mkdtemp(join(tmpdir(), "sweep-retry-410-binary-only-"));
+  const localBinaryJarPath = join(
+    root,
+    "m2",
+    "com",
+    "example",
+    "withdrawn-binary",
+    "1.0.0",
+    "withdrawn-binary-1.0.0.jar"
+  );
+  await createJar(localBinaryJarPath, {
+    "com/example/WithdrawnBinary.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+
+  const { fetchFn, urls } = countingFetch(() => new Response("gone", { status: 410 }));
+  const config = buildTestConfig(root, {
+    sourceRepos: ["https://repo-one.example.test", "https://repo-two.example.test"]
+  });
+  const target = { kind: "coordinate", value: "com.example:withdrawn-binary:1.0.0" } as const;
+
+  await withGradleHome(join(root, "gradle-home"), async () => {
+    await withGlobalFetch(fetchFn, async () => {
+      const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const sweptOnFirstCall = urls.length;
+      const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+
+      assert.equal(
+        sweptOnFirstCall,
+        2,
+        "the first call asks both repositories for the sources jar that does not exist"
+      );
+      assert.equal(
+        urls.length,
+        sweptOnFirstCall,
+        "the repeat call must not re-ask a repository that already said it is gone"
+      );
+
+      assert.equal(first.origin, "local-m2");
+      assert.equal(first.isDecompiled, true);
+      assert.equal(first.binaryJarPath, localBinaryJarPath);
+      assert.equal(second.artifactId, first.artifactId);
+      assert.equal(second.artifactSignature, first.artifactSignature);
+      assert.equal(second.binaryJarPath, first.binaryJarPath);
+      assert.equal(second.origin, first.origin);
+      assert.equal(second.isDecompiled, first.isDecompiled);
+    });
+  });
+});
+
 test("resolveSourceTarget(targetKind=coordinate) still prefers published sources after a transient sources failure", async () => {
   isolateRememberedRejections();
   const root = await mkdtemp(join(tmpdir(), "sweep-retry-transient-"));
