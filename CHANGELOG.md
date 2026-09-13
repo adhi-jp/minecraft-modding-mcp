@@ -7,6 +7,11 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Fixed
+
+- Several more ways a fault during the stdio supervisor's own fault-recovery work could leave a request permanently unanswered, or answered twice, are closed. If clearing a `validate-project` request's own deadline timer had thrown while the supervisor was recovering from an earlier fault on that same request, the supervisor was left believing a `validate-project` was still running, blocking every later `validate-project` request for the rest of the session; that internal bookkeeping is now cleared before the timer-clear step instead of after. If a client re-sent `initialize` to a worker that was already ready and the supervisor then faulted while recovering from that duplicate handshake, replacing the worker did not also answer other requests still in flight on the worker being replaced, so those requests could hang for the rest of the session; they are now answered before the worker is replaced, and a fault answering one of them can no longer stop the rest from being answered too. A request taken from the internal queue whose own reply step then failed in a narrow way could be left with no reply at all, or — in a different narrow case, where the request had actually been retried later or already rejected for a full queue — answered a second, spurious time once the real attempt also finished; exactly one reply is now produced either way. Each of these requires an internal fault, such as a timer-clearing call throwing, that is not known to occur in current Node.js and has not been observed in production.
+- Two remaining internal call sites that build an error's logged description now use the same safe string conversion already used elsewhere in the supervisor for this reason, so a thrown value whose own string conversion itself throws can no longer slip past them either. Cosmetic; there is no known way to trigger it.
+
 ## [7.0.0-rc.3] - 2026-09-07
 
 ### Changed

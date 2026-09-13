@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import type { JSONRPCMessage, JSONRPCRequest } from "@modelcontextprotocol/server";
@@ -78,6 +79,10 @@ type Harness = {
   handleClientMessage(message: JSONRPCMessage): void;
   drainQueue(): void;
   recoverTimedOutWorker(): void;
+  spawnWorker(): void;
+  handleWorkerReady(child: FakeChild): void;
+  timerClearer(timer: unknown): void;
+  initializeRequest?: JSONRPCRequest;
   shutdown(): Promise<void>;
 };
 
@@ -527,6 +532,17 @@ test("a fault handling a worker response preserves the in-flight initialize carv
   // The handshake's pending entry belongs to the initialization lifecycle,
   // which owns its own recovery paths; releasing it here would answer an id
   // that replay correlation still expects to settle itself.
+  //
+  // `initializeRequest` is set alongside the pending entry, matching the real
+  // admission invariant (handleClientMessage sets both together): it is what
+  // failPendingRequestsOnWorkerExit's preservedInitializeKey carve-out keys
+  // off, not `pending.method`.
+  supervisor.initializeRequest = {
+    jsonrpc: "2.0",
+    id: 60,
+    method: "initialize",
+    params: {}
+  } as unknown as JSONRPCRequest;
   supervisor.pendingRequests.set("number:60", {
     id: 60,
     method: "initialize",
@@ -979,6 +995,16 @@ test("a fault handling an in-flight initialize's response replaces the worker ge
   // The lifecycle the carve-out defers to: the client's initialize reached an
   // ALREADY-READY worker, so adoptActiveChild had cleared the startup watchdog
   // before admission forwarded it.
+  //
+  // `initializeRequest` mirrors the real admission invariant: it is what
+  // failPendingRequestsOnWorkerExit's preservedInitializeKey carve-out keys
+  // off (see answerFaultedWorkerResponse's initialize_recovery step).
+  supervisor.initializeRequest = {
+    jsonrpc: "2.0",
+    id: 62,
+    method: "initialize",
+    params: {}
+  } as unknown as JSONRPCRequest;
   supervisor.pendingRequests.set("number:62", {
     id: 62,
     method: "initialize",
@@ -1159,6 +1185,617 @@ test("a queue-limit rejection lowers a barrier a QUEUED namesake owns, which re-
 
   await supervisor.shutdown();
 });
+
+// --- Recovery-path order-of-operations and fault-isolation hardening -------
+// Settling-window barrier release, initialize-recovery cleanup ordering,
+// queued-dispatch release verification, and per-entry fault isolation in
+// failPendingRequestsOnWorkerExit.
+
+/** An EventEmitter-backed fake child, for tests that drive a real `spawnWorker`. */
+function createEmitterChild(pid: number, writes: string[]): FakeChild {
+  const stdin = new EventEmitter() as EventEmitter & FakeChild["stdin"];
+  stdin.destroyed = false;
+  stdin.write = (payload: string) => {
+    writes.push(payload);
+    return true;
+  };
+  const child = new EventEmitter() as unknown as EventEmitter & FakeChild;
+  child.pid = pid;
+  child.stdin = stdin;
+  child.stdout = new EventEmitter() as unknown as FakeChild["stdout"];
+  child.stderr = new EventEmitter() as unknown as FakeChild["stderr"];
+  child.kill = () => true;
+  return child;
+}
+
+test(
+  "a timerClearer fault settling a validate-project response still lowers the barrier",
+  async () => {
+    const { supervisor, child, workerWrites } = createFixture();
+    supervisor.handleClientData(
+      encodeJsonRpcMessage(modernCall(30, "validate-project"), "content-length")
+    );
+    assert.equal(supervisor.runningValidateKey, "number:30", "premise: 30 holds the running slot");
+    assert.equal(supervisor.validateBarrierKey, "number:30", "premise: 30 holds the barrier");
+
+    // canDispatchImmediately declines any non-validate request while the
+    // barrier is held, so 31 queues behind it rather than dispatching.
+    supervisor.handleClientData(
+      encodeJsonRpcMessage(modernCall(31, "list-versions"), "content-length")
+    );
+    assert.equal(supervisor.queuedRequests.length, 1, "premise: 31 is queued, not dispatched");
+
+    const pendingThirty = supervisor.pendingRequests.get("number:30") as { deadlineTimer?: unknown };
+    const validateTimer = pendingThirty.deadlineTimer;
+    assert.ok(validateTimer, "premise: a deadline is armed for the running validate-project");
+
+    // Throws exactly once, and only for 30's own deadline timer.
+    const realTimerClearer = supervisor.timerClearer.bind(supervisor);
+    let thrown = false;
+    supervisor.timerClearer = (timer: unknown) => {
+      if (timer === validateTimer && !thrown) {
+        thrown = true;
+        throw new Error("synthetic timer clearer fault");
+      }
+      realTimerClearer(timer);
+    };
+
+    supervisor.handleWorkerData(child, workerResponse(30));
+
+    assert.equal(
+      supervisor.runningValidateKey,
+      undefined,
+      "the running slot must be freed despite the timerClearer fault"
+    );
+    assert.equal(
+      supervisor.validateBarrierKey,
+      undefined,
+      "and the barrier too, or every later request queues behind it forever"
+    );
+    assert.equal(
+      dispatchCount(workerWrites, 31),
+      1,
+      "the request parked behind the barrier must reach the worker exactly once"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "failPendingRequestsOnWorkerExit does not redundantly re-clear an already-cleared timer",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_301, workerWritesA);
+    const childB = createEmitterChild(920_302, workerWritesB);
+    let spawnIndex = 0;
+    // Assigned below, after construction, and read by reference from the
+    // closure — mirrors the fixtures above.
+    let watchedTimer: unknown;
+    let watchedTimerClears = 0;
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: () =>
+        ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+      // Succeeds on the FIRST invocation for id 63's own deadline timer, but
+      // throws on any SECOND invocation for that SAME timer object — this is
+      // the reviewer's exact scenario: a timer clearer that tolerates being
+      // called once but faults on a redundant repeat call for the same
+      // timer. Before the fix, the fail_pending_cleanup step's first clear
+      // left `pending.deadlineTimer` still set, so writeSyntheticReply's own
+      // internal `if (pending.deadlineTimer)` check would fire a SECOND,
+      // avoidable clear attempt on the same timer and throw BEFORE the entry
+      // was deleted from pendingRequests — stranding it forever, unanswered.
+      timerClearer: (timer: unknown) => {
+        if (timer !== watchedTimer) return;
+        watchedTimerClears += 1;
+        if (watchedTimerClears > 1) {
+          throw new Error(
+            "synthetic timerClearer fault on a redundant second clear of id 63's deadline"
+          );
+        }
+      }
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(childA);
+
+    // The retained `initialize` (id 62), carved out of
+    // failPendingRequestsOnWorkerExit via `this.initializeRequest`.
+    supervisor.initializeRequest = {
+      jsonrpc: "2.0",
+      id: 62,
+      method: "initialize",
+      params: {}
+    } as unknown as JSONRPCRequest;
+    supervisor.pendingRequests.set("number:62", {
+      id: 62,
+      method: "initialize",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected"
+    });
+
+    // id 63 is a validate-project entry (also confirms the running/barrier
+    // slots clear correctly) whose deadline timer is the one under watch.
+    watchedTimer = { unref() { return this; } };
+    supervisor.pendingRequests.set("number:63", {
+      id: 63,
+      method: "tools/call",
+      toolName: "validate-project",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected",
+      deadlineTimer: watchedTimer
+    });
+    supervisor.runningValidateKey = "number:63";
+    supervisor.validateBarrierKey = "number:63";
+
+    // Force answerFaultedWorkerResponse to fault handling id 62's response,
+    // taking the initialize_recovery branch — same trigger as the tests
+    // above, which is the call path this file already uses to reach
+    // failPendingRequestsOnWorkerExit.
+    supervisor.handleWorkerMessage = () => {
+      throw new Error("synthetic worker message fault");
+    };
+    supervisor.handleWorkerData(childA, workerResponse(62));
+
+    assert.equal(
+      repliesFor(outbound, 63).length,
+      1,
+      "the request must receive exactly one reply"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:63"),
+      false,
+      "the entry must actually be removed from pendingRequests, not stranded"
+    );
+    assert.equal(
+      supervisor.runningValidateKey,
+      undefined,
+      "the running slot must be freed"
+    );
+    assert.equal(
+      supervisor.validateBarrierKey,
+      undefined,
+      "and the barrier too"
+    );
+    assert.equal(
+      watchedTimerClears,
+      1,
+      "timerClearer must be invoked exactly once for the timer — the redundant " +
+        "second clear must never be attempted at all"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "an initialize-recovery fault also terminalizes other in-flight requests on the replaced generation",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_001, workerWritesA);
+    const childB = createEmitterChild(920_002, workerWritesB);
+    let spawnIndex = 0;
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: () =>
+        ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+      timerClearer: () => {}
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(childA);
+
+    // The retained `initialize` (id 62) is excluded from
+    // failPendingRequestsOnWorkerExit via `this.initializeRequest`, mirroring
+    // the real handshake carve-out.
+    supervisor.initializeRequest = {
+      jsonrpc: "2.0",
+      id: 62,
+      method: "initialize",
+      params: {}
+    } as unknown as JSONRPCRequest;
+    supervisor.pendingRequests.set("number:62", {
+      id: 62,
+      method: "initialize",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected"
+    });
+
+    // id 63 is an ordinary in-flight request on the same (childA) generation.
+    // Admitting it through the real modern admission path would call
+    // lockModernEra(), which deliberately wipes `initializeRequest` — modern
+    // era never reuses the legacy handshake lifecycle — so it is installed
+    // directly instead, the same way 62 is above.
+    supervisor.pendingRequests.set("number:63", {
+      id: 63,
+      method: "tools/call",
+      toolName: "list-versions",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected"
+    });
+
+    // Force answerFaultedWorkerResponse to fault handling id 62's response,
+    // taking the initialize_recovery branch. recoverTimedOutWorker is NOT
+    // stubbed here — unlike the existing stubbed test above — so the real
+    // generation replacement runs.
+    supervisor.handleWorkerMessage = () => {
+      throw new Error("synthetic worker message fault");
+    };
+    supervisor.handleWorkerData(childA, workerResponse(62));
+
+    assert.equal(
+      repliesFor(outbound, 63).length,
+      1,
+      "the in-flight request stranded on the replaced generation must still be answered"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:63"),
+      false,
+      "and it must not stay live at an id nothing will ever settle"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:62"),
+      true,
+      "the retained initialize's pending entry survives the terminalization — replay to a " +
+        "successor is a separate mechanism (gated on this.era === \"legacy\" in " +
+        "handleWorkerReady) that this test does not exercise"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "a fault in failPendingRequestsOnWorkerExit still lets recoverTimedOutWorker replace the worker",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_101, workerWritesA);
+    const childB = createEmitterChild(920_102, workerWritesB);
+    let spawnIndex = 0;
+    // Assigned below, after construction, and read by reference from the
+    // closure — the fixture's timerClearer must exist before id 63's
+    // deadline timer object does.
+    let faultingTimer: unknown;
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: () =>
+        ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+      // Faults only ONCE for id 63's OWN deadline timer — mirrors Defect 2's
+      // account of failPendingRequestsOnWorkerExit's internal timerClearer
+      // call throwing for some OTHER, unrelated pending request. One-shot so
+      // that shutdown's own unrelated cleanup pass over the same (still-live,
+      // since the fault left id 63 unsettled) timer does not also throw.
+      timerClearer: (() => {
+        let thrown = false;
+        return (timer: unknown) => {
+          if (timer === faultingTimer && !thrown) {
+            thrown = true;
+            throw new Error("synthetic timerClearer fault for id 63's deadline");
+          }
+        };
+      })()
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(childA);
+
+    // The retained `initialize` (id 62), carved out of
+    // failPendingRequestsOnWorkerExit via `this.initializeRequest`.
+    supervisor.initializeRequest = {
+      jsonrpc: "2.0",
+      id: 62,
+      method: "initialize",
+      params: {}
+    } as unknown as JSONRPCRequest;
+    supervisor.pendingRequests.set("number:62", {
+      id: 62,
+      method: "initialize",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected"
+    });
+
+    // id 63 is an ordinary in-flight request whose deadline-timer clearing is
+    // the fault this test drives through failPendingRequestsOnWorkerExit.
+    faultingTimer = { unref() { return this; } };
+    supervisor.pendingRequests.set("number:63", {
+      id: 63,
+      method: "tools/call",
+      toolName: "list-versions",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected",
+      deadlineTimer: faultingTimer
+    });
+
+    // Force answerFaultedWorkerResponse to fault handling id 62's response,
+    // taking the initialize_recovery branch — same trigger as the test above.
+    supervisor.handleWorkerMessage = () => {
+      throw new Error("synthetic worker message fault");
+    };
+    supervisor.handleWorkerData(childA, workerResponse(62));
+
+    // recoverTimedOutWorker's effect — the generation is replaced — must still
+    // happen despite failPendingRequestsOnWorkerExit throwing while clearing id
+    // 63's deadline timer in the SAME initialize_recovery branch. Before the
+    // fix, both calls ran inside one runRecoveryStep, so this throw would have
+    // silently suppressed recoverTimedOutWorker and left `this.child`
+    // pointing at the dead childA forever.
+    assert.equal(
+      supervisor.child,
+      childB,
+      "the worker generation must be replaced even though the sibling cleanup step faulted"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "a fault clearing one stranded request's timer does not stop " +
+    "failPendingRequestsOnWorkerExit from answering the others",
+  async () => {
+    const outbound: JSONRPCMessage[] = [];
+    const workerWritesA: string[] = [];
+    const workerWritesB: string[] = [];
+    const childA = createEmitterChild(920_201, workerWritesA);
+    const childB = createEmitterChild(920_202, workerWritesB);
+    let spawnIndex = 0;
+    // Assigned below, after construction, and read by reference from the
+    // closure — mirrors the single-entry fixture above, but this fixture
+    // carries two OTHER pending entries after the faulting one in Map
+    // insertion order, which is what the unfixed single unguarded loop lets
+    // an escaping throw strand.
+    let faultingTimer: unknown;
+    const supervisor = new StdioSupervisor({
+      entryFile: "fixture.ts",
+      clientWriter: (message: JSONRPCMessage) => outbound.push(message),
+      eventWriter: () => {},
+      monotonicNow: () => 0,
+      workerSpawner: () => [childA, childB][spawnIndex++] as never,
+      treeTerminator: () => true,
+      timerScheduler: () =>
+        ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+      // Faults only once, and only for id 63's own deadline timer.
+      timerClearer: (() => {
+        let thrown = false;
+        return (timer: unknown) => {
+          if (timer === faultingTimer && !thrown) {
+            thrown = true;
+            throw new Error("synthetic timerClearer fault for id 63's deadline");
+          }
+        };
+      })()
+    } as never) as unknown as Harness;
+
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(childA);
+
+    // The retained `initialize` (id 62), carved out of
+    // failPendingRequestsOnWorkerExit via `this.initializeRequest`.
+    supervisor.initializeRequest = {
+      jsonrpc: "2.0",
+      id: 62,
+      method: "initialize",
+      params: {}
+    } as unknown as JSONRPCRequest;
+    supervisor.pendingRequests.set("number:62", {
+      id: 62,
+      method: "initialize",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected"
+    });
+
+    // id 63 is the entry whose OWN deadline-timer clearing throws.
+    faultingTimer = { unref() { return this; } };
+    supervisor.pendingRequests.set("number:63", {
+      id: 63,
+      method: "tools/call",
+      toolName: "list-versions",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected",
+      deadlineTimer: faultingTimer
+    });
+
+    // id 64 is an ordinary entry that clears normally, inserted AFTER 63 —
+    // the unfixed single `for` loop aborts on 63's throw and never reaches
+    // this entry at all.
+    supervisor.pendingRequests.set("number:64", {
+      id: 64,
+      method: "tools/call",
+      toolName: "list-versions",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected",
+      deadlineTimer: { unref() { return this; } }
+    });
+
+    // id 65 is a validate-project entry, also inserted after 63, holding the
+    // running/barrier slots. If the loop aborts before reaching it, both
+    // slots stay stuck forever — every later validate-project request would
+    // queue behind a barrier nothing will ever release.
+    supervisor.pendingRequests.set("number:65", {
+      id: 65,
+      method: "tools/call",
+      toolName: "validate-project",
+      startedAt: 0,
+      mode: "content-length",
+      era: "unselected",
+      deadlineTimer: { unref() { return this; } }
+    });
+    supervisor.runningValidateKey = "number:65";
+    supervisor.validateBarrierKey = "number:65";
+
+    // Force answerFaultedWorkerResponse to fault handling id 62's response,
+    // taking the initialize_recovery branch — same trigger as the tests above.
+    supervisor.handleWorkerMessage = () => {
+      throw new Error("synthetic worker message fault");
+    };
+    supervisor.handleWorkerData(childA, workerResponse(62));
+
+    assert.equal(
+      repliesFor(outbound, 64).length,
+      1,
+      "an ordinary entry stranded AFTER the faulting one must still be answered exactly once"
+    );
+    assert.equal(
+      repliesFor(outbound, 65).length,
+      1,
+      "the validate-project entry stranded after the faulting one must still be answered exactly once"
+    );
+    assert.equal(
+      supervisor.runningValidateKey,
+      undefined,
+      "the running slot must be freed despite a DIFFERENT entry's timerClearer fault"
+    );
+    assert.equal(
+      supervisor.validateBarrierKey,
+      undefined,
+      "and the barrier too, or every later validate-project request queues behind it forever"
+    );
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "a dispatch-settle release that throws after removing the entry still answers the queued request",
+  async () => {
+    const { supervisor, child, outbound, workerWrites } = createFixture();
+    queueRequest(supervisor, 914);
+    queueRequest(supervisor, 915);
+    failWorkerWritesFor(supervisor, new Set([914]));
+    // Mirrors "a release that throws after removing the entry still answers
+    // the request" above, but drives dispatchQueuedRequest's catch instead of
+    // answerFaultedWorkerResponse's.
+    const realRelease = supervisor.releaseForwardedRequest.bind(supervisor);
+    supervisor.releaseForwardedRequest = (key: string, pending: unknown) => {
+      realRelease(key, pending);
+      throw new Error("synthetic post-mutation release fault");
+    };
+
+    supervisor.drainQueue();
+
+    assert.equal(
+      supervisor.pendingRequests.has("number:914"),
+      false,
+      "the premise: the release completed its mutation before it threw"
+    );
+    assert.equal(
+      repliesFor(outbound, 914).length,
+      1,
+      "so the id is answered rather than left to nothing"
+    );
+    assert.equal(repliesFor(outbound, 914)[0].error?.code, -32603);
+    assert.equal(dispatchCount(workerWrites, 915), 1, "and the queue behind it is drained once");
+
+    await supervisor.shutdown();
+  }
+);
+
+test(
+  "a queued dispatch whose no-child fallback re-queues the entry is not double-answered when the fallback itself later throws",
+  async () => {
+    const { supervisor, child, outbound, workerWrites } = createFixture();
+
+    // No usable child at dispatch time: forwardRequest's no-child fallback
+    // re-queues the SAME entry (the queue is not full) and then calls
+    // scheduleRestart(), which this test makes throw via the injectable
+    // timerScheduler seam. scheduleRestart's own guard bails out immediately
+    // whenever `this.child` is set, so the child has to be removed — not just
+    // have a destroyed stdin — to actually reach armRestartReservation's
+    // `this.timerScheduler(...)` call.
+    supervisor.child = undefined;
+    (
+      supervisor as unknown as {
+        timerScheduler: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+      }
+    ).timerScheduler = () => {
+      throw new Error("synthetic scheduleRestart timer fault");
+    };
+
+    const entry: QueuedEntry = {
+      message: modernCall(914, "list-versions"),
+      pending: { id: 914, method: "tools/call" }
+    };
+    const dispatched = (
+      supervisor as unknown as { dispatchQueuedRequest(entry: QueuedEntry): boolean }
+    ).dispatchQueuedRequest(entry);
+
+    assert.equal(dispatched, false, "premise: the fault propagated out of forwardRequest");
+    assert.equal(
+      supervisor.queuedRequests.length,
+      1,
+      "premise: the no-child fallback re-queued the SAME entry before the later fault"
+    );
+    assert.equal(
+      supervisor.pendingRequests.has("number:914"),
+      false,
+      "premise: forwardRequest's no-child branch never installs the entry into pendingRequests"
+    );
+    assert.equal(
+      repliesFor(outbound, 914).length,
+      0,
+      "must not be answered yet — it is still waiting in the queue for a real dispatch, " +
+        "not released by queue.dispatch_settle in the first place"
+    );
+
+    // Let the re-queued entry dispatch for real: restore a usable child and a
+    // non-throwing timerScheduler.
+    supervisor.child = child;
+    (
+      supervisor as unknown as {
+        timerScheduler: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+      }
+    ).timerScheduler = () => ({ unref() { return this; } }) as unknown as NodeJS.Timeout;
+
+    supervisor.drainQueue();
+    assert.equal(
+      dispatchCount(workerWrites, 914),
+      1,
+      "the re-queued entry reaches the worker exactly once"
+    );
+
+    supervisor.handleWorkerData(child, workerResponse(914));
+
+    assert.equal(
+      repliesFor(outbound, 914).length,
+      1,
+      "exactly one reply is ever produced for this id — not two from a spurious " +
+        "queue.dispatch_settle_verify tombstone racing the real answer"
+    );
+
+    await supervisor.shutdown();
+  }
+);
 
 // --- The DEFAULT writer configuration --------------------------------------
 

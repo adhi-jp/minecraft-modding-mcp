@@ -2292,24 +2292,60 @@ export class StdioSupervisor {
           message: detail
         });
       });
+      const key = requestKey(entry.pending.id);
+      let released = false;
+      let attemptedRelease = false;
       this.runRecoveryStep("queue.dispatch_settle", () => {
-        const key = requestKey(entry.pending.id);
         // Only THIS instance may be settled here. A fault before forwardRequest
         // installed anything leaves the request re-queued by its own no-child
         // fallback (a later drain owns it) or already answered by the
         // queue-limit rejection; either way the id may meanwhile belong to a
         // different live request, which keeps its own guarantee.
         if (this.pendingRequests.get(key) !== entry.pending) return;
-        if (!this.releaseForwardedRequest(key, entry.pending)) return;
-        this.writeSyntheticReply(entry.pending, {
-          jsonrpc: "2.0",
-          id: entry.pending.id,
-          error: {
-            code: -32603,
-            message: `MCP supervisor failed to dispatch the queued request: ${detail}`
-          }
-        } as JSONRPCResponse);
+        attemptedRelease = true;
+        released = this.releaseForwardedRequest(key, entry.pending);
       });
+      if (attemptedRelease && !released) {
+        // releaseForwardedRequest deletes the entry and records its tombstone
+        // BEFORE it returns, so a throw part-way through (recordFinalityTombstone's
+        // only throw site today is the debug-log call during tombstone
+        // eviction) can still have taken the id away from its entry. `released`
+        // cannot tell "declined" apart from "threw after mutating", so the id
+        // is read back rather than assumed — mirrors
+        // answerFaultedWorkerResponse's worker_message.release_verify.
+        //
+        // Gated on `attemptedRelease`, not merely `!released`: the identity
+        // check above (`pendingRequests.get(key) !== entry.pending`) returns
+        // early, WITHOUT calling releaseForwardedRequest, whenever this entry
+        // was never installed into pendingRequests to begin with — which is
+        // exactly what happens when forwardRequest's no-child fallback re-queues
+        // this same entry (queue not full) or already answered it itself (queue
+        // full) before throwing later in that same fallback (e.g. from
+        // scheduleRestart). In either of those cases the id is either still
+        // waiting for a real dispatch that will answer it for real later, or
+        // already answered — and this verify step cannot distinguish "never
+        // installed" from "installed, then removed by a throwing release" using
+        // `pendingRequests.has(key)` alone. Running it anyway would record a
+        // spurious tombstone and send a synthetic reply for a request that gets
+        // (or already got) a real one, i.e. two replies for the same id.
+        this.runRecoveryStep("queue.dispatch_settle_verify", () => {
+          if (entry.pending.method === "initialize" || this.pendingRequests.has(key)) return;
+          this.recordFinalityTombstone(key, entry.pending.mode);
+          released = true;
+        });
+      }
+      if (released) {
+        this.runRecoveryStep("queue.dispatch_reply", () => {
+          this.writeSyntheticReply(entry.pending, {
+            jsonrpc: "2.0",
+            id: entry.pending.id,
+            error: {
+              code: -32603,
+              message: `MCP supervisor failed to dispatch the queued request: ${detail}`
+            }
+          } as JSONRPCResponse);
+        });
+      }
       return false;
     }
   }
@@ -2328,7 +2364,7 @@ export class StdioSupervisor {
       child = this.workerSpawner();
     } catch (error) {
       log("error", "supervisor.worker_spawn_throw", {
-        message: error instanceof Error ? error.message : String(error)
+        message: describeThrown(error)
       });
       this.handleStartupFailure(token, { code: null, signal: null });
       return;
@@ -2530,7 +2566,33 @@ export class StdioSupervisor {
       // cap allows. That successor arms a fresh startup watchdog and, on
       // ready, re-forwards the retained initialize (handleWorkerReady), so the
       // handshake gets a second chance instead of stalling.
+      //
+      // Replacing the generation does not by itself terminalize any OTHER
+      // request forwarded to the old child: when its `exit` eventually fires,
+      // `handleWorkerExit` finds `this.child` already pointing at the
+      // successor and takes its early-return branch, skipping
+      // failPendingRequestsOnWorkerExit entirely. So that call runs here
+      // first, mirroring the precedent at handleWorkerProcessError, and BEFORE
+      // recoverTimedOutWorker replaces the generation. It does not touch the
+      // retained `initialize` itself: failPendingRequestsOnWorkerExit carves
+      // out `this.initializeRequest`'s key, which is exactly the entry this
+      // lifecycle is about to continue on the successor.
+      //
+      // Split into two independent recovery steps, deliberately: these are two
+      // unrelated effects (terminalizing OTHER stranded requests, and replacing
+      // the generation so the retained initialize gets a second chance), and
+      // they must not share a fault boundary. Before failPendingRequestsOnWorkerExit
+      // existed here, recoverTimedOutWorker was the only statement in this step
+      // and ran unconditionally on any path that reached it. Running both in one
+      // `runRecoveryStep` would let a throw inside failPendingRequestsOnWorkerExit
+      // (e.g. its own timerClearer call faulting for some OTHER pending
+      // request's deadline timer) silently swallow the call to
+      // recoverTimedOutWorker that follows it in the same callback — silently
+      // skipping the one guarantee this whole branch exists to provide.
       if (pending.method === "initialize") {
+        this.runRecoveryStep("worker_message.initialize_recovery_fail_pending", () => {
+          this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
+        });
         this.runRecoveryStep("worker_message.initialize_recovery", () => {
           this.recoverTimedOutWorker();
         });
@@ -2841,11 +2903,17 @@ export class StdioSupervisor {
           // branch above, never here.
           this.settlingWorkerResponse = { key, snapshot: pending };
         }
-        if (pending?.deadlineTimer) this.timerClearer(pending.deadlineTimer);
+        // These two clears run BEFORE timerClearer: a validate-project id must
+        // not stay "running" if the timer clear below throws. answerUndelivered-
+        // WorkerResponse (which later answers this id via settlingWorkerResponse
+        // on a writeToClient/drainQueue fault) never touches these two fields,
+        // so leaving them ordered after a throwing call would strand the
+        // barrier and every validate-project admitted behind it, permanently.
         if (pending?.toolName === "validate-project") {
           this.runningValidateKey = undefined;
           if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
         }
+        if (pending?.deadlineTimer) this.timerClearer(pending.deadlineTimer);
       }
     }
 
@@ -2978,25 +3046,60 @@ export class StdioSupervisor {
       this.recentRestarts.set(toolName, updated);
     }
 
+    // Each entry's cleanup and its reply run as two SEPARATE recovery steps,
+    // not one bundled try around the whole loop body. Fault containment must
+    // be per-entry, not just per-function: a throw from `this.timerClearer`
+    // (or anything else in the cleanup half) for entry N must not abort the
+    // `for` loop, or every entry after N in Map iteration order is left
+    // completely unprocessed — not answered, and not cleared from
+    // runningValidateKey/validateBarrierKey either. Since the old worker's
+    // own `exit`/`error` handling short-circuits once `this.child` already
+    // points at a successor generation, a request stranded that way here is
+    // stranded permanently, and a stranded validate-project holding the
+    // barrier keys would jam every later validate-project request behind it
+    // forever. Splitting into two steps also means a fault in ONE entry's
+    // cleanup cannot suppress that SAME entry's own reply.
     for (const [key, pending] of [...this.pendingRequests.entries()]) {
       if (key === preservedInitializeKey) continue;
-      if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
-      if (this.runningValidateKey === key) this.runningValidateKey = undefined;
-      if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
-      // Forwarded entries stay in pendingRequests until writeSyntheticReply
-      // settles them (the FORWARDED pending is what entitles the id to a
-      // finality tombstone). Cancelled entries are already gone — the
-      // cancellation settled them terminally at admission.
-      const toolName = pending.toolName ?? "unknown";
-      const pruned = prunedByTool.get(toolName) ?? [];
-      const { reply } = buildWorkerRestartReply(
-        pending,
-        exit,
-        now,
-        pruned,
-        { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
-      );
-      this.writeSyntheticReply(pending, reply);
+      this.runRecoveryStep("worker_exit.fail_pending_cleanup", () => {
+        if (this.runningValidateKey === key) this.runningValidateKey = undefined;
+        if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
+        // Nil the field immediately after clearing, matching the convention
+        // releaseForwardedRequest already uses. writeSyntheticReply (below,
+        // in the SEPARATE fail_pending_reply step) also does
+        // `if (pending.deadlineTimer) this.timerClearer(...)` before it
+        // deletes the entry from pendingRequests. If this step cleared the
+        // timer but left the field set, that second check would still be
+        // true and writeSyntheticReply would attempt a REDUNDANT second
+        // clear of the SAME already-cleared timer. A timerClearer that
+        // faults on a repeat invocation for the same timer would then throw
+        // BEFORE writeSyntheticReply's delete/tombstone — unlike a fault
+        // strictly after deletion (which only loses that one reply), this
+        // would leave the entry live in pendingRequests forever, with
+        // nothing left to remove or answer it. Nilling here makes
+        // writeSyntheticReply's own check false, so it never attempts that
+        // second clear at all.
+        if (pending.deadlineTimer) {
+          this.timerClearer(pending.deadlineTimer);
+          pending.deadlineTimer = undefined;
+        }
+      });
+      this.runRecoveryStep("worker_exit.fail_pending_reply", () => {
+        // Forwarded entries stay in pendingRequests until writeSyntheticReply
+        // settles them (the FORWARDED pending is what entitles the id to a
+        // finality tombstone). Cancelled entries are already gone — the
+        // cancellation settled them terminally at admission.
+        const toolName = pending.toolName ?? "unknown";
+        const pruned = prunedByTool.get(toolName) ?? [];
+        const { reply } = buildWorkerRestartReply(
+          pending,
+          exit,
+          now,
+          pruned,
+          { structuredRestartDisabled: STRUCTURED_RESTART_DISABLED }
+        );
+        this.writeSyntheticReply(pending, reply);
+      });
     }
   }
 
@@ -3106,7 +3209,7 @@ export class StdioSupervisor {
       process.stdout.write(frame);
     } catch (error) {
       this.eventWriter("warn", "supervisor.client_write_error", {
-        message: error instanceof Error ? error.message : String(error)
+        message: describeThrown(error)
       });
     }
   }
