@@ -15,7 +15,8 @@ import { parseCoordinate } from "../maven-resolver.js";
 import { resolveMojangTinyFile } from "../mojang-tiny-mapping-service.js";
 import {
   detectFabricLikeInputNamespace,
-  listJavaEntries
+  listJavaEntries,
+  type JavaSourceScan
 } from "../source-jar-reader.js";
 import {
   type MappingVariant,
@@ -333,6 +334,40 @@ export function inferRuntimeJarMinecraftVersion(path: string): string | undefine
 }
 
 /**
+ * The Minecraft version a `kind: "jar"` target PROVES it is the unobfuscated
+ * runtime of, or undefined. The file path is never evidence: Loom and other
+ * tools lay jars out in ways that path heuristics have misread before.
+ *
+ * All three must hold: the walk met no `.java` entry, the jar ships
+ * `net/minecraft/SharedConstants.class`, and its root `version.json` parses with a
+ * string `id` that `isUnobfuscatedVersion` accepts. The id is put to that test
+ * only once the other two hold, so it is the id a Minecraft `version.json`
+ * declares, never a library's own release number. A Loom-mapped 1.x jar carries
+ * both signals too; its `1.x` id is what keeps it out. The path is never read.
+ */
+export function provenUnobfuscatedRuntimeJarVersion(scan: JavaSourceScan | undefined): string | undefined {
+  const signals = scan?.minecraftRuntimeSignals;
+  if (!scan || scan.hasJavaSources || !signals?.hasSharedConstantsClass || signals.versionJsonText === undefined) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(signals.versionJsonText);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const id = (parsed as { id?: unknown }).id;
+  if (typeof id !== "string") {
+    return undefined;
+  }
+  const version = id.trim();
+  return isUnobfuscatedVersion(version) ? version : undefined;
+}
+
+/**
  * Segment that opens a directory tree a BUILD TOOL wrote: a dot-directory
  * (`.gradle`, `.gradle-user-home`, `.m2`), Gradle's `caches` root, or a project
  * `build` directory. Everything below the deepest such segment was laid out by a
@@ -528,6 +563,8 @@ function buildProvenance(input: {
   requestedTarget: SourceTargetInput;
   resolved: ResolvedSourceArtifact;
   transformChain: string[];
+  /** The artifact's runtime names ship unobfuscated (Minecraft 26.1+). */
+  unobfuscatedRuntime: boolean;
 }): ArtifactProvenance {
   const provenance: ArtifactProvenance = {
     target: input.requestedTarget,
@@ -540,7 +577,8 @@ function buildProvenance(input: {
       version: input.resolved.version,
       repoUrl: input.resolved.repoUrl
     },
-    transformChain: [...input.transformChain]
+    transformChain: [...input.transformChain],
+    ...(input.unobfuscatedRuntime ? { unobfuscatedRuntime: true } : {})
   };
 
   if (!provenance.resolvedAt || !provenance.target.kind || !provenance.target.value) {
@@ -1622,7 +1660,15 @@ export async function buildMappingFallbackSuggestedCall(svc: SourceService, args
   }
 
   if (kind !== "version") {
-    return buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath });
+    return buildLegacyMappingFallback({
+      kind,
+      value,
+      scope,
+      isVanillaMojang,
+      projectPath,
+      projectRuntimeUnobfuscated:
+        isVanillaMojang && (await projectNamesUnobfuscatedMinecraft(svc, projectPath))
+    });
   }
 
   const cached = svc.workspaceContextCache.read(projectPath);
@@ -1688,15 +1734,36 @@ export async function buildMappingFallbackSuggestedCall(svc: SourceService, args
   return buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath });
 }
 
+/**
+ * Whether the project's gradle.properties names a Minecraft 26.1+ release. The
+ * property is a Minecraft version by name (`minecraft_version` and its aliases), so
+ * it may be put to `isUnobfuscatedVersion`. Unreadable or absent answers false.
+ */
+async function projectNamesUnobfuscatedMinecraft(svc: SourceService, projectPath: string): Promise<boolean> {
+  try {
+    const version = await svc.workspaceMappingService.detectProjectMinecraftVersion(projectPath);
+    return version !== undefined && isUnobfuscatedVersion(version);
+  } catch {
+    return false;
+  }
+}
+
 function buildLegacyMappingFallback(args: {
   kind: ArtifactTargetKind;
   value: string;
   scope: ArtifactScope | undefined;
   isVanillaMojang: boolean;
   projectPath: string | undefined;
+  /** The project names a Minecraft 26.1+ release (see `projectNamesUnobfuscatedMinecraft`). */
+  projectRuntimeUnobfuscated?: boolean;
 }): MappingFallbackSuggestion {
   const { kind, value, scope, isVanillaMojang, projectPath } = args;
-  if (isVanillaMojang && projectPath) {
+  // scope=merged reaches Loom source discovery only for a version target. For a
+  // jar or coordinate in a 26.1+ project, re-suggesting mojang+merged on the same
+  // target repeats the request that was just refused, so that case takes the
+  // generic retry below instead.
+  const mergedRetryWouldRepeat = kind !== "version" && args.projectRuntimeUnobfuscated === true;
+  if (isVanillaMojang && projectPath && !mergedRetryWouldRepeat) {
     return {
       ...buildSuggestedCall({
         tool: "resolve-artifact",
@@ -1710,7 +1777,7 @@ function buildLegacyMappingFallback(args: {
         "Retry with scope=merged to allow source-jar resolution from the project cache."
     };
   }
-  if (isVanillaMojang) {
+  if (isVanillaMojang && !projectPath) {
     return {
       ...buildSuggestedCall({
         tool: "resolve-artifact",
@@ -1732,7 +1799,15 @@ function buildLegacyMappingFallback(args: {
         { mapping: "obfuscated", ...(scope ? { scope } : {}) }
       )
     }),
-    nextAction: "Retry with mapping=obfuscated to use the runtime obfuscated namespace."
+    // A jar reaches here only when it was NOT proven to be a Minecraft runtime jar,
+    // so its version is unknown and "obfuscated" must not be described as
+    // obfuscated names: on 26.1+ the as-shipped names are Mojang names. Version and
+    // coordinate refusals keep their established wording.
+    nextAction:
+      kind === "jar"
+        ? "Retry with mapping=obfuscated to read this jar's names as shipped (already Mojang names on Minecraft 26.1+). " +
+          "For a vanilla Minecraft release, use target kind \"version\" instead."
+        : "Retry with mapping=obfuscated to use the runtime obfuscated namespace."
   };
 }
 
@@ -1842,17 +1917,23 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     const versionNamesMinecraft =
       kind === "version" ||
       (kind === "coordinate" && !dependencyOrigin && coordinateIsMinecraftRuntime);
-    const minecraftVersion = versionNamesMinecraft ? resolvedVersion : undefined;
-    const runtimeNamesUnobfuscated =
+    // A kind="jar" target names no version at all. It joins this gate only AFTER its
+    // archive has been walked and proved to be a Minecraft 26.1+ runtime jar (see
+    // `provenUnobfuscatedRuntimeJarVersion` below); until then it stays out.
+    let minecraftVersion = versionNamesMinecraft ? resolvedVersion : undefined;
+    let runtimeNamesUnobfuscated =
       minecraftVersion !== undefined && isUnobfuscatedVersion(minecraftVersion);
 
     let effectiveMapping: SourceMapping = mapping;
-    if ((mapping === "intermediary" || mapping === "yarn") && runtimeNamesUnobfuscated) {
-      warnings.push(
-        `Version ${minecraftVersion} is unobfuscated; ${mapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
-      );
-      effectiveMapping = "obfuscated";
-    }
+    const dropInapplicableUnobfuscatedMapping = (): void => {
+      if ((effectiveMapping === "intermediary" || effectiveMapping === "yarn") && runtimeNamesUnobfuscated) {
+        warnings.push(
+          `Version ${minecraftVersion} is unobfuscated; ${effectiveMapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
+        );
+        effectiveMapping = "obfuscated";
+      }
+    };
+    dropInapplicableUnobfuscatedMapping();
 
     if (
       kind === "version" &&
@@ -1893,11 +1974,23 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       warnings.push(...binaryRemapGate.warnings);
     }
 
+    // Only a jar the caller named directly can be proved from its contents. A
+    // dependency-origin jar is excluded for the reason given above, and a version
+    // target is rewritten into a jar but already carries its version.
+    const proveRuntimeJar = kind === "jar" && !dependencyOrigin;
+    let subjectJarScan = undefined as JavaSourceScan | undefined;
     const resolved = await resolveSourceTargetInternal(
       resolvedTarget,
       {
         allowDecompile: effectiveMapping === "mojang" ? true : input.allowDecompile ?? true,
         mappingVariant: binaryRemapGate.mappingVariant,
+        ...(proveRuntimeJar
+          ? {
+              onSubjectJarScanned: (scan: JavaSourceScan) => {
+                subjectJarScan = scan;
+              }
+            }
+          : {}),
         onRepoFailover: (event: {
           stage: string;
           repoUrl: string;
@@ -1919,6 +2012,13 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       },
       svc.config
     );
+    const provenJarVersion = proveRuntimeJar ? provenUnobfuscatedRuntimeJarVersion(subjectJarScan) : undefined;
+    if (provenJarVersion) {
+      resolvedVersion = provenJarVersion;
+      minecraftVersion = provenJarVersion;
+      runtimeNamesUnobfuscated = true;
+      dropInapplicableUnobfuscatedMapping();
+    }
     resolved.version = resolvedVersion;
 
     let mappingDecision: ReturnType<typeof applyMappingPipeline>;
@@ -2008,7 +2108,8 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     const provenance = buildProvenance({
       requestedTarget: { kind, value },
       resolved,
-      transformChain: [...mappingDecision.transformChain, ...additionalTransformChain]
+      transformChain: [...mappingDecision.transformChain, ...additionalTransformChain],
+      unobfuscatedRuntime: runtimeNamesUnobfuscated
     });
     if (workspaceProvenance) {
       provenance.workspaceResolution = workspaceProvenance;

@@ -84,6 +84,15 @@ export interface ArtifactProvenance {
     repoUrl?: string;
   };
   transformChain: string[];
+  /**
+   * The artifact's runtime names ship unobfuscated (Minecraft 26.1+): set for a
+   * 26.1+ version target, a 26.1+ Minecraft runtime coordinate, and a jar target
+   * proven to be a 26.1+ runtime jar; absent otherwise. `mappingApplied` keeps the
+   * label the caller asked for, so on such an artifact "obfuscated" names the
+   * as-shipped names, which are already Mojang names. Same flag name as
+   * `mappingContext.unobfuscatedRuntime`.
+   */
+  unobfuscatedRuntime?: boolean;
   workspaceResolution?: WorkspaceResolutionProvenance;
   dependencyResolution?: DependencyResolutionProvenance;
   warnings?: string[];

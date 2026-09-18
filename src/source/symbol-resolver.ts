@@ -4,6 +4,101 @@ import type {
   ResolveWorkspaceSymbolInput,
   ResolveWorkspaceSymbolOutput
 } from "../source-service.js";
+import { isUnobfuscatedVersion } from "../version-service.js";
+import type { WorkspaceCompileMappingOutput } from "../workspace-mapping-service.js";
+import { runUnobfuscatedRuntimeCheck } from "./lifecycle/runtime-check.js";
+
+/**
+ * Minecraft 26.1+ ships its runtime in Mojang names, so a Loom project for it has no
+ * `mappings` declaration: it compiles against the runtime names directly. Resolving a
+ * workspace symbol there is an identity lookup, checked against runtime bytecode the
+ * same way checkSymbolExists validates unobfuscated versions.
+ */
+async function resolveUnobfuscatedWorkspaceSymbol(
+  svc: SourceService,
+  input: ResolveWorkspaceSymbolInput,
+  context: {
+    version: string;
+    querySymbol: ResolveWorkspaceSymbolOutput["querySymbol"];
+    sourcePriorityApplied: ResolveWorkspaceSymbolOutput["mappingContext"]["sourcePriorityApplied"];
+  }
+): Promise<ResolveWorkspaceSymbolOutput> {
+  const { version, querySymbol, sourcePriorityApplied } = context;
+  const workspaceDetection: WorkspaceCompileMappingOutput = {
+    resolved: true,
+    mappingApplied: "mojang",
+    evidence: [],
+    warnings: [
+      `Minecraft ${version} is unobfuscated; no mappings declaration is needed — symbols are resolved against runtime (Mojang) names.`
+    ]
+  };
+  // The requested/defaulted sourceMapping label is echoed unchanged: on 26.1+ an
+  // "obfuscated" label already means the as-shipped Mojang names, and rewriting it to
+  // "mojang" would break callers that compare namespace labels for equality.
+  const base = {
+    querySymbol,
+    mappingContext: {
+      version,
+      sourceMapping: input.sourceMapping,
+      targetMapping: "mojang" as const,
+      sourcePriorityApplied,
+      unobfuscatedRuntime: true
+    },
+    resolved: false,
+    status: "not_found" as const,
+    candidates: [],
+    candidateCount: 0,
+    warnings: [...workspaceDetection.warnings]
+  };
+
+  // The runtime names are both the "obfuscated" (as-shipped) and the Mojang names;
+  // intermediary and yarn names do not exist for these versions.
+  if (input.sourceMapping !== "obfuscated" && input.sourceMapping !== "mojang") {
+    return {
+      ...base,
+      status: "mapping_unavailable",
+      workspaceDetection,
+      warnings: [
+        ...base.warnings,
+        `sourceMapping "${input.sourceMapping}" has no names on unobfuscated Minecraft ${version}; pass sourceMapping "mojang" (or "obfuscated") to resolve against runtime names.`
+      ]
+    };
+  }
+
+  const runtime = await runUnobfuscatedRuntimeCheck(
+    svc,
+    {
+      version,
+      kind: querySymbol.kind,
+      name: querySymbol.name,
+      owner: querySymbol.owner,
+      descriptor: querySymbol.descriptor,
+      sourceMapping: input.sourceMapping,
+      signatureMode: "exact"
+    },
+    base
+  );
+  if (!runtime) {
+    // Mirrors checkSymbolExists: a symbol that could not be checked is not reported missing.
+    return {
+      ...base,
+      status: "mapping_unavailable",
+      workspaceDetection,
+      warnings: [
+        ...base.warnings,
+        `Minecraft ${version} runtime jar could not be resolved; symbol existence was not verified.`
+      ]
+    };
+  }
+  if (!runtime.verified) {
+    // The jar was reached but did not answer (short class name, class that failed to
+    // load for a reason other than being absent): the result carries the reason, and
+    // an unanswered lookup is not a definitive miss. `not_found` stays reserved for a
+    // class confirmed missing or a member lookup that completed without a match.
+    return { ...runtime.result, status: "mapping_unavailable", workspaceDetection };
+  }
+  return { ...runtime.result, workspaceDetection };
+}
 
 export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveWorkspaceSymbolInput): Promise<ResolveWorkspaceSymbolOutput> {
   const projectPath = input.projectPath?.trim();
@@ -86,6 +181,17 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
   const workspaceDetection = await svc.workspaceMappingService.detectCompileMapping({
     projectPath
   });
+  // No evidence also means no build script was found at all (a missing, mistyped or
+  // empty projectPath). Only a build that was read and declares no mappings is a
+  // 26.1+ Loom project compiling against the runtime names.
+  if (
+    !workspaceDetection.resolved &&
+    workspaceDetection.evidence.length === 0 &&
+    isUnobfuscatedVersion(version) &&
+    (await svc.workspaceMappingService.hasReadableBuildScript(projectPath))
+  ) {
+    return resolveUnobfuscatedWorkspaceSymbol(svc, input, { version, querySymbol, sourcePriorityApplied });
+  }
   const warnings = [...workspaceDetection.warnings];
   if (!workspaceDetection.resolved || !workspaceDetection.mappingApplied) {
     return {

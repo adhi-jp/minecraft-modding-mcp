@@ -7,11 +7,44 @@ import type {
   SourceService
 } from "../../source-service.js";
 
+/**
+ * What a runtime-bytecode existence check established.
+ *
+ * `verified` is true when the runtime jar answered: the class loaded and the member
+ * lookup ran to completion, or the class was confirmed missing (CLASS_NOT_FOUND). It
+ * is false when the check could not be performed - a short class name, a member query
+ * without an owner, or a class that failed to load for any other reason (unreadable
+ * jar, malformed class file) - and `result` is then the fallback base with the
+ * explanatory warning appended, so it still carries the caller's own status.
+ */
+export interface UnobfuscatedRuntimeCheck {
+  verified: boolean;
+  result: CheckSymbolExistsOutput;
+}
+
+/**
+ * check-symbol-exists's runtime fallback: the result of `runUnobfuscatedRuntimeCheck`
+ * alone. Its callers keep the fallback base's status whenever the check could not be
+ * performed, so they need no `verified` flag.
+ */
 export async function checkSymbolExistsInUnobfuscatedRuntime(
   svc: SourceService,
   input: CheckSymbolExistsInput,
   fallbackBase: CheckSymbolExistsOutput
 ): Promise<CheckSymbolExistsOutput | undefined> {
+  return (await runUnobfuscatedRuntimeCheck(svc, input, fallbackBase))?.result;
+}
+
+/**
+ * Checks a symbol against the Minecraft runtime jar of an unobfuscated version, whose
+ * names are the Mojang names. Undefined when the version or name is empty or the
+ * runtime jar cannot be resolved.
+ */
+export async function runUnobfuscatedRuntimeCheck(
+  svc: SourceService,
+  input: CheckSymbolExistsInput,
+  fallbackBase: CheckSymbolExistsOutput
+): Promise<UnobfuscatedRuntimeCheck | undefined> {
   const version = input.version.trim();
   const name = input.name.trim();
   const owner = input.owner?.trim();
@@ -21,11 +54,14 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
 
   if (input.kind === "class" && input.nameMode !== "fqcn" && !name.includes(".")) {
     return {
-      ...fallbackBase,
-      warnings: [
-        ...fallbackBase.warnings,
-        `Version ${version} is unobfuscated, but short class name "${name}" could not be checked against runtime bytecode without a fully-qualified name.`
-      ]
+      verified: false,
+      result: {
+        ...fallbackBase,
+        warnings: [
+          ...fallbackBase.warnings,
+          `Version ${version} is unobfuscated, but short class name "${name}" could not be checked against runtime bytecode without a fully-qualified name.`
+        ]
+      }
     };
   }
 
@@ -53,7 +89,7 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
 
   const targetClass = input.kind === "class" ? name : owner;
   if (!targetClass) {
-    return fallbackBase;
+    return { verified: false, result: fallbackBase };
   }
 
   let jarPath: string;
@@ -77,16 +113,20 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
       includeInherited: input.kind === "method"
     });
   } catch (error) {
+    // Only CLASS_NOT_FOUND is an answer; any other failure means the lookup never completed.
     const classMissing = isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND;
     return {
-      ...fallbackBase,
-      querySymbol,
-      warnings: [
-        ...fallbackBase.warnings,
-        classMissing
-          ? `Class "${targetClass}" was not found in the Minecraft ${version} runtime jar; it does not exist (or is not in this jar).`
-          : `Version ${version} is unobfuscated; runtime bytecode lookup could not load class "${targetClass}".`
-      ]
+      verified: classMissing,
+      result: {
+        ...fallbackBase,
+        querySymbol,
+        warnings: [
+          ...fallbackBase.warnings,
+          classMissing
+            ? `Class "${targetClass}" was not found in the Minecraft ${version} runtime jar; it does not exist (or is not in this jar).`
+            : `Version ${version} is unobfuscated; runtime bytecode lookup could not load class "${targetClass}".`
+        ]
+      }
     };
   }
 
@@ -98,36 +138,43 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
     runtimeValidated: true
   };
 
+  // From here on the class loaded, so every answer below is a completed lookup.
   const buildResolved = (
     resolvedSymbol: MappingSymbolResolutionOutput["resolvedSymbol"]
-  ): CheckSymbolExistsOutput => ({
-    ...fallbackBase,
-    mappingContext: runtimeValidatedContext,
-    querySymbol,
-    resolved: true,
-    status: "resolved",
-    resolvedSymbol,
-    candidates: resolvedSymbol
-      ? [{
-          ...resolvedSymbol,
-          matchKind: "exact",
-          confidence: 1
-        }]
-      : [],
-    candidateCount: resolvedSymbol ? 1 : 0,
-    warnings
+  ): UnobfuscatedRuntimeCheck => ({
+    verified: true,
+    result: {
+      ...fallbackBase,
+      mappingContext: runtimeValidatedContext,
+      querySymbol,
+      resolved: true,
+      status: "resolved",
+      resolvedSymbol,
+      candidates: resolvedSymbol
+        ? [{
+            ...resolvedSymbol,
+            matchKind: "exact",
+            confidence: 1
+          }]
+        : [],
+      candidateCount: resolvedSymbol ? 1 : 0,
+      warnings
+    }
   });
 
-  const buildUnresolved = (status: CheckSymbolExistsOutput["status"]): CheckSymbolExistsOutput => ({
-    ...fallbackBase,
-    mappingContext: runtimeValidatedContext,
-    querySymbol,
-    resolved: false,
-    status,
-    resolvedSymbol: undefined,
-    candidates: [],
-    candidateCount: 0,
-    warnings
+  const buildUnresolved = (status: CheckSymbolExistsOutput["status"]): UnobfuscatedRuntimeCheck => ({
+    verified: true,
+    result: {
+      ...fallbackBase,
+      mappingContext: runtimeValidatedContext,
+      querySymbol,
+      resolved: false,
+      status,
+      resolvedSymbol: undefined,
+      candidates: [],
+      candidateCount: 0,
+      warnings
+    }
   });
 
   if (input.kind === "class") {
@@ -151,7 +198,11 @@ export async function checkSymbolExistsInUnobfuscatedRuntime(
     });
   }
 
-  const methodCandidates = signature.methods.filter((method) => method.name === name);
+  // The bytecode reader lists constructors apart from methods (and only the owner's
+  // own: constructors are not inherited), so "<init>" is answered from them.
+  const methodCandidates = (name === "<init>" ? signature.constructors : signature.methods).filter(
+    (method) => method.name === name
+  );
   const signatureMode = input.signatureMode ?? "name-only";
   if (signatureMode === "name-only") {
     // Existence semantics: any overload with this name means the method exists. Multiple

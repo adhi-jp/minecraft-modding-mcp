@@ -36,16 +36,22 @@ import {
   DECOMPILE_SIGNATURE_QUALIFIER,
   type ContentDigestSignature
 } from "./artifact-identity.js";
-import { hasAnyJarEntry, hasJavaSourceExtension } from "./source-jar-reader.js";
+import {
+  hasAnyJarEntry,
+  hasJavaSourceExtension,
+  scanJarForJavaSources,
+  type JavaSourceScan
+} from "./source-jar-reader.js";
 
 /**
  * Whether a jar contains java sources, with archive errors deliberately
  * propagating.
  *
  * This is the check for a jar that IS the subject of the request - the
- * `input.kind === "jar"` branch of `resolveSourceTarget` calling it on
- * `resolvedJarPath`. What propagates is the reader's refusal to OPEN the
- * archive: a truncated file, a non-zip file, an unreadable central directory,
+ * `input.kind === "jar"` branch of `resolveSourceTarget` runs it on
+ * `resolvedJarPath` as `scanSubjectJarForJavaSources`, the same walk that also
+ * collects Minecraft runtime signals. What propagates is the reader's refusal
+ * to OPEN the archive: a truncated file, a non-zip file, an unreadable central directory,
  * an I/O failure. On the subject jar that refusal is the verdict itself, and
  * swallowing it would downgrade "this archive could not be read" into "this
  * archive has no sources" - handing back a sibling `-sources.jar` as if the
@@ -102,6 +108,19 @@ async function candidateHasJavaSources(jarPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * `hasJavaSources` for the subject jar of a `kind: "jar"` request, returning the
+ * Minecraft runtime signals the same walk collected. Same contract on both counts
+ * that matter: an absent file answers "no sources" without opening anything, and
+ * an archive that cannot be opened propagates.
+ */
+async function scanSubjectJarForJavaSources(jarPath: string): Promise<JavaSourceScan> {
+  if (!hasExistingJar(jarPath)) {
+    return { hasJavaSources: false };
+  }
+  return await scanJarForJavaSources(jarPath);
 }
 
 function resolveExactJarSourceCandidate(inputJarPath: string): string {
@@ -580,6 +599,12 @@ export interface ResolveSourceTargetOptions {
    * legacy hash for obfuscated and source-backed artifacts.
    */
   mappingVariant?: MappingVariant;
+  /**
+   * Receives the result of walking the jar a `kind: "jar"` request names, once,
+   * when that walk ran. The resolver uses it to recognise a Minecraft runtime jar
+   * from its contents without walking the archive a second time.
+   */
+  onSubjectJarScanned?: (scan: JavaSourceScan) => void;
   onRepoFailover?: (event: {
     stage: "source" | "binary";
     repoUrl: string;
@@ -750,7 +775,9 @@ export async function resolveSourceTarget(
       adjacentSourceCandidates.length > 0 ? adjacentSourceCandidates : undefined;
     const preferBinaryOnly = options.preferBinaryOnly ?? false;
 
-    if (await hasJavaSources(resolvedJarPath)) {
+    const subjectScan = await scanSubjectJarForJavaSources(resolvedJarPath);
+    options.onSubjectJarScanned?.(subjectScan);
+    if (subjectScan.hasJavaSources) {
       const siblingBinaryJarPath = resolveSiblingBinaryJarCandidate(resolvedJarPath);
       const binaryJarPath =
         siblingBinaryJarPath ??

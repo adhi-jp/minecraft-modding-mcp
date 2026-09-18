@@ -3,7 +3,32 @@ import { ERROR_CODES, createError } from "../../errors.js";
 import type { SignatureMember } from "../../minecraft-explorer-service.js";
 import type { SourceService } from "../../source-service.js";
 import type { MappingSourcePriority, SourceMapping } from "../../types.js";
+import { isUnobfuscatedVersion } from "../../version-service.js";
 import { rebuildJavaSignature, remapJvmDescriptor } from "../descriptor-utils.js";
+
+/**
+ * On unobfuscated versions (26.1+) the as-shipped ("obfuscated") names are the Mojang
+ * names, so obfuscated<->mojang is the identity. The mapping graph is empty there, so
+ * asking it would only report every member as unmapped.
+ *
+ * `minecraftVersion` must be a proven Minecraft version. A dependency
+ * artifact's version is its own release number (`annotations:26.0.2`), so callers
+ * serving one pass undefined and keep the mapping lookup it always had.
+ */
+export function isUnobfuscatedIdentityPair(
+  minecraftVersion: string | undefined,
+  sourceMapping: SourceMapping,
+  targetMapping: SourceMapping
+): boolean {
+  const pair = new Set([sourceMapping, targetMapping]);
+  return (
+    pair.size === 2 &&
+    pair.has("obfuscated") &&
+    pair.has("mojang") &&
+    minecraftVersion !== undefined &&
+    isUnobfuscatedVersion(minecraftVersion)
+  );
+}
 
 export function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
   if (mapping == null) {
@@ -137,7 +162,7 @@ export async function resolveToObfuscatedMemberName(
   warnings: string[],
   gradleUserHome?: string
 ): Promise<{ name: string; descriptor?: string }> {
-  if (mapping === "obfuscated") {
+  if (mapping === "obfuscated" || isUnobfuscatedIdentityPair(version, mapping, "obfuscated")) {
     return {
       name,
       descriptor: kind === "method" ? descriptor : undefined
@@ -231,10 +256,20 @@ export async function remapSignatureMembers(
   sourcePriority: MappingSourcePriority | undefined,
   warnings: string[],
   projectPath?: string,
-  gradleUserHome?: string
+  gradleUserHome?: string,
+  /**
+   * The Minecraft version the obfuscated<->mojang identity shortcut may trust.
+   * Defaults to `version`, which the lifecycle, validate-mixin and access-widener
+   * callers pass as a Minecraft version; get-class-members passes undefined for a
+   * dependency artifact, whose `version` is the library's own.
+   */
+  identity: { minecraftVersion: string | undefined } = { minecraftVersion: version }
 ): Promise<{ members: SignatureMember[]; failedNames: Set<string> }> {
   const failedNames = new Set<string>();
-  if (sourceMapping === targetMapping) {
+  if (
+    sourceMapping === targetMapping ||
+    isUnobfuscatedIdentityPair(identity.minecraftVersion, sourceMapping, targetMapping)
+  ) {
     return { members, failedNames };
   }
 

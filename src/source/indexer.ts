@@ -515,8 +515,11 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
     if (resolved.artifactAlias && existing.alias !== resolved.artifactAlias) {
       svc.artifactsRepo.setAlias(resolved.artifactId, resolved.artifactAlias);
     }
-    svc.metrics.recordArtifactCacheHit();
     const touchedAt = new Date().toISOString();
+    if (!existing.version) {
+      backfillResolvedVersion(svc, resolved, touchedAt);
+    }
+    svc.metrics.recordArtifactCacheHit();
     svc.artifactsRepo.touchArtifact(resolved.artifactId, touchedAt);
     touchCacheMetrics(svc, resolved.artifactId, touchedAt);
     return;
@@ -544,6 +547,72 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
       svc.state.inflightArtifactIngests.delete(resolved.artifactId);
     }
   }
+}
+
+/**
+ * Writes the version a warm resolve derived onto a stored row that records none,
+ * with the two provenance fields that follow from it.
+ *
+ * The artifactId is a content hash, so a row indexed before its version could be
+ * derived - a Minecraft 26.1+ runtime jar indexed before the in-jar proof existed -
+ * is served warm by every later resolve and never rewritten. resolve-artifact then
+ * reports the version while the row lacks it, and every lookup by artifactId reads
+ * the row: get-class-members refuses mapping "mojang" for want of a version, and a
+ * miss still gets the legacy "use mapping=mojang" hint.
+ *
+ * Only gaps are filled. A stored version is never replaced, and the row keeps the
+ * label, chain and target it was indexed under. Only a version the fresh provenance
+ * records as resolved from is written: resolve-artifact records the version the
+ * target itself names (version target, coordinate or in-jar proof), which describes
+ * these bytes, while the binary fallback of get-class-source re-ingests with a
+ * caller version that may come from the project's gradle.properties, under the
+ * stored provenance, so it never qualifies. The row is re-read in the same
+ * synchronous turn as the write, so a concurrent writer since `existing` was read
+ * is not overwritten.
+ * `upsertArtifact` is the repo's only writer for these columns; on an existing row
+ * it updates in place and leaves `created_at` and the file index alone.
+ */
+function backfillResolvedVersion(svc: SourceService, resolved: ResolvedSourceArtifact, timestamp: string): void {
+  const version = resolved.version;
+  if (!version || resolved.provenance?.resolvedFrom?.version !== version) {
+    return;
+  }
+  // Only a proven Minecraft 26.1+ runtime qualifies. A library version recorded by a
+  // dependency resolve must never land on a row whose stored provenance does not mark
+  // it as a dependency, or later lookups would read that version as Minecraft's.
+  if (resolved.provenance?.unobfuscatedRuntime !== true) {
+    return;
+  }
+  const current = svc.artifactsRepo.getArtifact(resolved.artifactId);
+  if (!current || current.version) {
+    return;
+  }
+  svc.artifactsRepo.upsertArtifact({
+    artifactId: current.artifactId,
+    alias: current.alias,
+    origin: current.origin,
+    coordinate: current.coordinate,
+    version,
+    binaryJarPath: current.binaryJarPath,
+    sourceJarPath: current.sourceJarPath,
+    repoUrl: current.repoUrl,
+    requestedMapping: current.requestedMapping,
+    mappingApplied: current.mappingApplied,
+    provenance: current.provenance
+      ? {
+          ...current.provenance,
+          resolvedFrom: {
+            ...current.provenance.resolvedFrom,
+            version: current.provenance.resolvedFrom?.version ?? version
+          },
+          unobfuscatedRuntime: true
+        }
+      : undefined,
+    qualityFlags: current.qualityFlags,
+    artifactSignature: current.artifactSignature,
+    isDecompiled: current.isDecompiled,
+    timestamp
+  });
 }
 
 async function rebuildMissingArtifactIndex(

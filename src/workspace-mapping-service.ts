@@ -1,4 +1,5 @@
-import { readdir, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -373,6 +374,16 @@ function detectLoadersFromContent(content: string): LoaderDetection[] {
   return detections;
 }
 
+/** The build.gradle(.kts) files `detectCompileMapping` scans under `root`, sorted. */
+async function listCompileMappingBuildScripts(root: string): Promise<string[]> {
+  return (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
+    cwd: root,
+    absolute: true,
+    onlyFiles: true,
+    ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+  })).sort((left, right) => left.localeCompare(right));
+}
+
 export class WorkspaceMappingService {
   async detectCompileMapping(
     input: WorkspaceCompileMappingInput
@@ -389,12 +400,7 @@ export class WorkspaceMappingService {
     }
 
     const root = resolve(projectPath);
-    const files = (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
-      cwd: root,
-      absolute: true,
-      onlyFiles: true,
-      ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-    })).sort((left, right) => left.localeCompare(right));
+    const files = await listCompileMappingBuildScripts(root);
 
     const evidence = (await mapWithConcurrencyLimit(
       files,
@@ -439,6 +445,29 @@ export class WorkspaceMappingService {
       evidence,
       warnings: []
     };
+  }
+
+  /**
+   * Whether `projectPath` holds at least one build.gradle(.kts) that
+   * `detectCompileMapping` reads: the same files, found the same way, and readable.
+   * `detectCompileMapping` answers "no evidence" both when a build declares no
+   * mappings and when there was no build to read (a missing, mistyped or empty
+   * directory); this tells the two apart without changing that output.
+   */
+  async hasReadableBuildScript(projectPath: string): Promise<boolean> {
+    const trimmed = projectPath.trim();
+    if (!trimmed) {
+      return false;
+    }
+    for (const filePath of await listCompileMappingBuildScripts(resolve(trimmed))) {
+      try {
+        await access(filePath, constants.R_OK);
+        return true;
+      } catch {
+        // detectCompileMapping skips an unreadable script too.
+      }
+    }
+    return false;
   }
 
   async detectProjectMinecraftVersion(projectPath: string): Promise<string | undefined> {

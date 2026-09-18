@@ -272,6 +272,84 @@ export async function hasAnyJarEntry(
   });
 }
 
+/** Root entry in which a Minecraft runtime jar names its own release (`"id": "26.2"`). */
+export const MINECRAFT_VERSION_JSON_ENTRY = "version.json";
+/** Class every Minecraft runtime jar ships, under its Mojang name, from 26.1 on. */
+export const MINECRAFT_SHARED_CONSTANTS_ENTRY = "net/minecraft/SharedConstants.class";
+/** The real file is under 1 KiB; anything far larger is not the file this looks for. */
+const MAX_VERSION_JSON_BYTES = 64 * 1024;
+
+/**
+ * What an archive walk saw that bears on "is this the Minecraft runtime jar?".
+ * Raw observations only: judging them is the resolver's job.
+ */
+export interface MinecraftRuntimeJarSignals {
+  hasSharedConstantsClass: boolean;
+  /**
+   * Text of the root `version.json`; absent when the entry is missing, larger
+   * than the bound, unreadable, or not UTF-8.
+   */
+  versionJsonText?: string;
+}
+
+export interface JavaSourceScan {
+  hasJavaSources: boolean;
+  /** Set only when the walk reached the end without meeting a `.java` entry. */
+  minecraftRuntimeSignals?: MinecraftRuntimeJarSignals;
+}
+
+/**
+ * `hasAnyJarEntry(jarPath, hasJavaSourceExtension)` that also collects the
+ * Minecraft runtime signals on the same walk.
+ *
+ * A jar without sources is already walked to its last entry to prove it has none,
+ * so noting two entry names on the way costs no extra open and no extra pass. The
+ * one entry read, `version.json`, uses the handle that is already open. A failure
+ * to read it only withholds the signal: it is evidence for a mapping decision, not
+ * the archive's verdict, so it never fails the scan. Errors opening or walking the
+ * archive propagate exactly as they do from `hasAnyJarEntry`.
+ */
+export async function scanJarForJavaSources(jarPath: string): Promise<JavaSourceScan> {
+  return withZipFile(jarPath, async (zipFile) => {
+    let hasSharedConstantsClass = false;
+    let versionJsonEntry: ZipEntry | undefined;
+    while (true) {
+      const entry = await readNextEntry(zipFile);
+      if (!entry) {
+        break;
+      }
+      if (!isSecureJarEntryPath(entry.fileName)) {
+        continue;
+      }
+      if (hasJavaSourceExtension(entry.fileName)) {
+        return { hasJavaSources: true };
+      }
+      if (entry.fileName === MINECRAFT_SHARED_CONSTANTS_ENTRY) {
+        hasSharedConstantsClass = true;
+      } else if (entry.fileName === MINECRAFT_VERSION_JSON_ENTRY) {
+        versionJsonEntry = entry;
+      }
+    }
+
+    let versionJsonText: string | undefined;
+    if (versionJsonEntry && versionJsonEntry.uncompressedSize <= MAX_VERSION_JSON_BYTES) {
+      try {
+        const buffer = await readEntryStream(zipFile, versionJsonEntry, jarPath, MAX_VERSION_JSON_BYTES);
+        versionJsonText = UTF8_DECODER.decode(buffer);
+      } catch {
+        versionJsonText = undefined;
+      }
+    }
+    return {
+      hasJavaSources: false,
+      minecraftRuntimeSignals: {
+        hasSharedConstantsClass,
+        ...(versionJsonText !== undefined ? { versionJsonText } : {})
+      }
+    };
+  });
+}
+
 export async function readJarEntryAsUtf8(jarPath: string, entryPath: string): Promise<string> {
   const contentBuffer = await readJarEntryAsBuffer(jarPath, entryPath);
   return decodeUtf8OrThrow(contentBuffer, jarPath, entryPath);

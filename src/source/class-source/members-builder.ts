@@ -1,6 +1,7 @@
 import type { SignatureMember } from "../../minecraft-explorer-service.js";
 import type { SourceService } from "../../source-service.js";
 import type { MappingSourcePriority, SourceMapping } from "../../types.js";
+import { remapSignatureMembers } from "../lifecycle/mapping-helpers.js";
 import { matchesMemberPattern } from "../member-pattern.js";
 
 export type RemappedMembers = {
@@ -20,6 +21,13 @@ export type RemapMembersInput = {
   signatureFields: SignatureMember[];
   signatureMethods: SignatureMember[];
   version: string | undefined;
+  /**
+   * `version` when it is a Minecraft version, else undefined: a dependency
+   * artifact's `version` is its own release number, which must not reach the
+   * 26.1+ obfuscated<->mojang identity shortcut, which may only be asked about a
+   * string proven to be a Minecraft version.
+   */
+  minecraftVersion: string | undefined;
   mappingApplied: SourceMapping;
   requestedMapping: SourceMapping;
   sourcePriority: MappingSourcePriority | undefined;
@@ -36,7 +44,10 @@ export async function remapAndCountMembers(
     if (input.version == null) {
       return members;
     }
-    const result = await svc.remapSignatureMembers(
+    // Called directly rather than through svc.remapSignatureMembers, whose fixed
+    // parameter list cannot carry minecraftVersion.
+    const result = await remapSignatureMembers(
+      svc,
       members,
       kind,
       input.version,
@@ -45,7 +56,8 @@ export async function remapAndCountMembers(
       input.sourcePriority,
       input.warnings,
       undefined,
-      input.gradleUserHome
+      input.gradleUserHome,
+      { minecraftVersion: input.minecraftVersion }
     );
     return result.members;
   };

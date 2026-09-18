@@ -302,7 +302,7 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 
 `find-class` accepts either an `artifactId` or the shared object `target` shape. For a workspace-relative dependency, pass `target: { kind: "dependency", group, name, versionFromProject: true }` with top-level `projectPath`. Fabric-style umbrella JARs are searched through their nested `.class` inventories; a top-level class match can then be passed to `get-class-source` or `get-class-members`, which resolve the containing nested JAR. Dotted inner-class matches are also readable through `get-class-source`. An empty result still means that the requested class name is absent from the resolved dependency version.
 
-For unobfuscated releases such as `26.1+`, `mapping="mojang"` uses the runtime/decompile path directly and skips Loom source-jar discovery, while `intermediary` and `yarn` fall back to `obfuscated` with a warning.
+For unobfuscated releases such as `26.1+`, `obfuscated` names the runtime jar's names as shipped, which are already Mojang names: both `obfuscated` and `mojang` are accepted, `mappingApplied` reports the label you asked for, and `provenance.unobfuscatedRuntime: true` marks the artifact. `mapping="mojang"` uses the runtime/decompile path directly and skips Loom source-jar discovery, while `intermediary` and `yarn` fall back to `obfuscated` with a warning. This applies to version targets, Minecraft runtime coordinates, and JAR targets whose own contents (a top-level `version.json` with a 26.1+ `id`, `net/minecraft/SharedConstants.class`, and no `.java` sources) prove a 26.1+ Minecraft runtime jar; see [docs/tool-reference.md → Lookup Rules](docs/tool-reference.md#lookup-rules).
 
 ### Version Comparison & Symbol Tracking
 

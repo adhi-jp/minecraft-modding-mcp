@@ -30,6 +30,7 @@ import type {
   SourceTargetInput
 } from "../types.js";
 import * as artifactResolver from "./artifact-resolver.js";
+import { isUnobfuscatedIdentityPair } from "./lifecycle/mapping-helpers.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
@@ -131,13 +132,39 @@ function obfuscatedNamespaceHint(className: string): string {
   return `Artifact is indexed in obfuscated runtime names. Deobfuscated names like "${className}" usually require mapping="mojang" or a find-mapping lookup to obfuscated names.`;
 }
 
+/**
+ * The artifact's Minecraft version when its runtime ships unobfuscated (26.1+)
+ * names, else undefined. A native dependency's version is its own release number,
+ * not a Minecraft version, so it is never put to `isUnobfuscatedVersion` (the same
+ * rule as the `reconcileUnobfuscatedNamespace` call sites).
+ */
+function unobfuscatedMinecraftVersion(input: {
+  version: string | undefined;
+  nativeDependency: boolean;
+}): string | undefined {
+  if (input.nativeDependency || !input.version || !isUnobfuscatedVersion(input.version)) {
+    return undefined;
+  }
+  return input.version;
+}
+
+/**
+ * Said where the obfuscated namespace hint would otherwise have been: on 26.1+
+ * the as-shipped names are the Mojang names, so no mapping choice finds another class.
+ */
+function unobfuscatedRuntimeNamesNote(version: string): string {
+  return `Minecraft ${version} ships Mojang names at runtime, so retrying with a different mapping will not change the class names.`;
+}
+
 function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
 /**
- * Whether "this artifact is indexed in obfuscated names, ask for mapping=mojang"
- * is TRUE for this artifact, from the pieces of it the caller sees.
+ * Whether a miss has the shape "this artifact is indexed in obfuscated names, ask
+ * for mapping=mojang" answers, from the pieces of the artifact the caller sees.
+ * The claim can still be false on Minecraft 26.1+; `isObfuscatedNamespaceHintTrue`
+ * adds that gate.
  *
  * Two artifact kinds report `mappingApplied: "obfuscated"` without being an
  * obfuscated Minecraft index, and the hint is simply false for them:
@@ -151,7 +178,7 @@ function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
  * without these exclusions an ordinary library class such as "GameTest"
  * qualifies and the caller is told to remap a jar that was never obfuscated.
  */
-function isObfuscatedNamespaceHintTrue(input: {
+function isObfuscatedLabelMiss(input: {
   mappingApplied: SourceMapping | undefined;
   qualityFlags: readonly string[];
   nativeDependency: boolean;
@@ -165,19 +192,47 @@ function isObfuscatedNamespaceHintTrue(input: {
   );
 }
 
-function shouldSuggestObfuscatedMapping(
+/**
+ * `isObfuscatedLabelMiss` is the shape of the miss the hint answers; this adds
+ * the one fact that makes its claim false even then. A Minecraft 26.1+ artifact
+ * labelled "obfuscated" is indexed in the as-shipped names, which ARE Mojang
+ * names: telling the caller to ask for mapping="mojang" sends them round a
+ * retry that returns the same names.
+ */
+function isObfuscatedNamespaceHintTrue(input: {
+  mappingApplied: SourceMapping | undefined;
+  qualityFlags: readonly string[];
+  nativeDependency: boolean;
+  className: string;
+  minecraftVersion: string | undefined;
+}): boolean {
+  return (
+    isObfuscatedLabelMiss(input) &&
+    unobfuscatedMinecraftVersion({
+      version: input.minecraftVersion,
+      nativeDependency: input.nativeDependency
+    }) === undefined
+  );
+}
+
+function describeArtifactForNamespaceHint(
   artifact: ReturnType<SourceService["getArtifact"]>,
   className: string
-): boolean {
-  return isObfuscatedNamespaceHintTrue({
+): Parameters<typeof isObfuscatedNamespaceHintTrue>[0] {
+  return {
     mappingApplied: artifact.mappingApplied,
     qualityFlags: artifact.qualityFlags,
     nativeDependency: artifactResolver.isDependencyLikeArtifact({
       provenance: artifact.provenance,
       coordinate: artifact.coordinate
     }),
-    className
-  });
+    className,
+    minecraftVersion: artifactResolver.inferVersionFromContext({
+      version: artifact.version,
+      provenance: artifact.provenance,
+      coordinate: artifact.coordinate
+    })
+  };
 }
 
 function classNameToClassPath(className: string): string {
@@ -224,7 +279,7 @@ export function resolveClassFilePath(svc: SourceService, artifactId: string, cla
   );
 }
 
-export async function resolveClassNameForLookup(svc: SourceService, input: {
+type ClassNameLookupInput = {
   className: string;
   version?: string;
   sourceMapping: SourceMapping;
@@ -233,8 +288,35 @@ export async function resolveClassNameForLookup(svc: SourceService, input: {
   gradleUserHome?: string;
   warnings: string[];
   context: string;
-}): Promise<string> {
+};
+
+/**
+ * The class-name translation behind `svc.resolveClassNameForLookup`, whose callers
+ * (the lifecycle tools) pass a Minecraft version, so `version` also keys the 26.1+
+ * identity shortcut.
+ */
+export async function resolveClassNameForLookup(svc: SourceService, input: ClassNameLookupInput): Promise<string> {
+  return resolveArtifactClassNameForLookup(svc, { ...input, minecraftVersion: input.version });
+}
+
+/**
+ * `resolveClassNameForLookup` for an artifact the caller named, whose `version`
+ * need not be a Minecraft version: a dependency artifact's is its own release
+ * number. `version` still drives the mapping lookup, exactly as before; only
+ * `minecraftVersion`, which must be a proven Minecraft version, may take the 26.1+
+ * identity shortcut.
+ */
+async function resolveArtifactClassNameForLookup(
+  svc: SourceService,
+  input: ClassNameLookupInput & { minecraftVersion: string | undefined }
+): Promise<string> {
   if (input.sourceMapping === input.targetMapping) {
+    return input.className;
+  }
+  // On 26.1+ the as-shipped ("obfuscated") names ARE the Mojang names and the
+  // mapping graph between them is empty by design, so the lookup can only miss
+  // and warn about a translation that is the identity.
+  if (isUnobfuscatedIdentityPair(input.minecraftVersion, input.sourceMapping, input.targetMapping)) {
     return input.className;
   }
   if (!input.version) {
@@ -265,6 +347,41 @@ export async function resolveClassNameForLookup(svc: SourceService, input: {
     );
   }
   return input.className;
+}
+
+/**
+ * The provenance as returned, carrying `unobfuscatedRuntime` whenever the artifact
+ * it describes is a Minecraft 26.1+ runtime. The resolver stamps the flag on every
+ * fresh resolve, but a row indexed before the flag existed is served warm and never
+ * rewritten, and a row with no provenance gets `buildFallbackProvenance`. Only the
+ * provenance's OWN recorded version counts - never a project-derived one - and a
+ * dependency-like provenance is excluded, so a library's release number is never
+ * read as a Minecraft version. A jar row that predates the in-jar proof records no
+ * version and stays unflagged until a resolve proves the jar again, which backfills
+ * the row (`backfillResolvedVersion` in the indexer).
+ */
+function withUnobfuscatedRuntimeFlag(provenance: ArtifactProvenance): ArtifactProvenance {
+  if (
+    provenance.unobfuscatedRuntime === true ||
+    provenance.nestedJar ||
+    artifactResolver.isDependencyLikeArtifact({ provenance })
+  ) {
+    return provenance;
+  }
+  // A persisted or stubbed object can be partial; with nothing recorded there is
+  // nothing to derive the flag from.
+  const partial = provenance as Partial<ArtifactProvenance>;
+  if (!partial.resolvedFrom || !partial.target) {
+    return provenance;
+  }
+  const version = unobfuscatedMinecraftVersion({
+    version: artifactResolver.inferVersionFromContext({
+      provenance,
+      coordinate: partial.resolvedFrom.coordinate
+    }),
+    nativeDependency: false
+  });
+  return version ? { ...provenance, unobfuscatedRuntime: true } : provenance;
 }
 
 export function buildFallbackProvenance(svc: SourceService, input: {
@@ -403,7 +520,21 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
     didYouMean: unionDidYouMeanCandidates(svc, requestedArtifactId, input.artifactId, input.className)
   };
 
+  const unobfuscatedVersion = unobfuscatedMinecraftVersion({
+    version: input.version,
+    nativeDependency: input.nativeDependency === true
+  });
   let nextAction = `Use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
+  // On 26.1+ there is no namespace to switch to, so the most useful thing to say
+  // first is the nearest class the index does hold.
+  const nearestCandidate = unobfuscatedVersion
+    ? (details.didYouMean as DidYouMeanCandidate[])[0]
+    : undefined;
+  if (nearestCandidate) {
+    nextAction =
+      `Did you mean "${nearestCandidate.className}"? didYouMean lists near-miss classes from the index; ` +
+      `otherwise use find-class to resolve the correct fully-qualified name for "${simpleName}".`;
+  }
   let suggestionSpec: { tool: string; params: Record<string, unknown> } = {
     tool: "find-class",
     params: { className: simpleName, artifactId: requestedArtifactId }
@@ -454,18 +585,27 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
   // imperative "Provide/Pass mapping", and the sentence is concatenated into
   // the same `nextAction` string as the find-class guidance, which is published
   // as a single hint that no mid-string excision can repair.
+  //
+  // A third gate lives inside `isObfuscatedNamespaceHintTrue`: on Minecraft 26.1+
+  // the claim is false, and the same miss gets a note that no mapping will help.
   const callerAskedForNonObfuscatedMapping =
     input.callerSuppliedMapping != null && input.callerSuppliedMapping !== "obfuscated";
-  if (
-    !callerAskedForNonObfuscatedMapping &&
-    isObfuscatedNamespaceHintTrue({
-      mappingApplied: input.mappingApplied,
-      qualityFlags: input.qualityFlags,
-      nativeDependency: input.nativeDependency === true,
-      className: input.className
-    })
-  ) {
+  const namespaceHintInput = {
+    mappingApplied: input.mappingApplied,
+    qualityFlags: input.qualityFlags,
+    nativeDependency: input.nativeDependency === true,
+    className: input.className,
+    minecraftVersion: input.version
+  };
+  if (!callerAskedForNonObfuscatedMapping && isObfuscatedNamespaceHintTrue(namespaceHintInput)) {
     nextAction += ` ${obfuscatedNamespaceHint(input.className)}`;
+  } else if (
+    !callerAskedForNonObfuscatedMapping &&
+    unobfuscatedVersion &&
+    !hasPartialNetMinecraftCoverage(input.qualityFlags) &&
+    isObfuscatedLabelMiss(namespaceHintInput)
+  ) {
+    nextAction += ` ${unobfuscatedRuntimeNamesNote(unobfuscatedVersion)}`;
   }
 
   details.nextAction = nextAction;
@@ -813,8 +953,24 @@ function finishFindClass(
       }
     }).suggestedCall;
   }
-  if (matches.length === 0 && shouldSuggestObfuscatedMapping(artifact, className)) {
-    warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
+  if (matches.length === 0) {
+    const hintInput = describeArtifactForNamespaceHint(artifact, className);
+    const unobfuscatedVersion = unobfuscatedMinecraftVersion({
+      version: hintInput.minecraftVersion,
+      nativeDependency: hintInput.nativeDependency
+    });
+    if (isObfuscatedNamespaceHintTrue(hintInput)) {
+      warnings.push(`No exact class symbol matched "${className}". ${obfuscatedNamespaceHint(className)}`);
+    } else if (unobfuscatedVersion && isObfuscatedLabelMiss(hintInput)) {
+      const nearest = collectDidYouMeanCandidates(svc, artifactId, className)
+        .slice(0, 3)
+        .map((candidate) => `"${candidate.className}"`);
+      warnings.push(
+        `No exact class symbol matched "${className}".` +
+          (nearest.length > 0 ? ` Did you mean ${nearest.join(", ")}?` : "") +
+          ` ${unobfuscatedRuntimeNamesNote(unobfuscatedVersion)}`
+      );
+    }
   }
   return {
     matches,
@@ -978,6 +1134,12 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
   if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
     mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
   }
+  // The same rule for the class-name lookup: its 26.1+ identity shortcut trusts only
+  // a Minecraft version, so a library's 26.x-shaped release number keeps the lookup
+  // (and its warnings) that any other library gets.
+  const minecraftVersion = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })
+    ? undefined
+    : version;
 
   let activeArtifactId = artifactId;
   let activeOrigin = origin;
@@ -1091,9 +1253,10 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     return true;
   };
 
-  let activeLookupClassName = await svc.resolveClassNameForLookup({
+  let activeLookupClassName = await resolveArtifactClassNameForLookup(svc, {
     className,
     version,
+    minecraftVersion,
     sourceMapping: requestedMapping,
     targetMapping: activeMappingApplied,
     sourcePriority: input.sourcePriority,
@@ -1106,9 +1269,10 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     filePath = resolveClassFilePath(svc, activeArtifactId, activeLookupClassName);
   }
   if (!filePath && (await tryBinaryFallback())) {
-    activeLookupClassName = await svc.resolveClassNameForLookup({
+    activeLookupClassName = await resolveArtifactClassNameForLookup(svc, {
       className,
       version,
+      minecraftVersion,
       sourceMapping: requestedMapping,
       targetMapping: activeMappingApplied,
       sourcePriority: input.sourcePriority,
@@ -1152,9 +1316,10 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     }
   }
   if (!row && (await tryBinaryFallback())) {
-    activeLookupClassName = await svc.resolveClassNameForLookup({
+    activeLookupClassName = await resolveArtifactClassNameForLookup(svc, {
       className,
       version,
+      minecraftVersion,
       sourceMapping: requestedMapping,
       targetMapping: activeMappingApplied,
       sourcePriority: input.sourcePriority,
@@ -1217,14 +1382,15 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     sourceText = `[Written to ${outputPath}]`;
   }
 
-  const normalizedProvenance =
+  const normalizedProvenance = withUnobfuscatedRuntimeFlag(
     activeProvenance ??
-    buildFallbackProvenance(svc, {
-      artifactId: activeArtifactId,
-      origin: activeOrigin,
-      requestedMapping,
-      mappingApplied: activeMappingApplied
-    });
+      buildFallbackProvenance(svc, {
+        artifactId: activeArtifactId,
+        origin: activeOrigin,
+        requestedMapping,
+        mappingApplied: activeMappingApplied
+      })
+  );
 
   const nextStartLine = snippet.nextStartLine;
   // Continuation guidance: when output was truncated and was not redirected to
@@ -1409,10 +1575,14 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
 
   // Gated on the same predicate as the source path above, and for the same
   // reason: a dependency's `version` is its own coordinate version, so the
-  // unobfuscated-runtime relabel must not reach it.
+  // unobfuscated-runtime relabel must not reach it - nor the 26.1+ identity
+  // shortcut of the class and member lookups below.
   if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
     mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
   }
+  const minecraftVersion = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })
+    ? undefined
+    : version;
 
   if (requestedMapping !== "obfuscated" && !version) {
     throw createError({
@@ -1485,9 +1655,10 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     });
   }
 
-  const lookupClassName = await svc.resolveClassNameForLookup({
+  const lookupClassName = await resolveArtifactClassNameForLookup(svc, {
     className,
     version,
+    minecraftVersion,
     sourceMapping: requestedMapping,
     targetMapping: mappingApplied,
     sourcePriority: input.sourcePriority,
@@ -1616,6 +1787,7 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     signatureFields,
     signatureMethods,
     version,
+    minecraftVersion,
     mappingApplied,
     requestedMapping,
     sourcePriority: input.sourcePriority,
@@ -1660,14 +1832,15 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const nextCursor =
     sliced.nextOffset != null ? encodeOffsetCursor(sliced.nextOffset, memberCursorContext) : undefined;
 
-  const baseProvenance =
+  const baseProvenance = withUnobfuscatedRuntimeFlag(
     provenance ??
-    buildFallbackProvenance(svc, {
-      artifactId,
-      origin,
-      requestedMapping,
-      mappingApplied
-    });
+      buildFallbackProvenance(svc, {
+        artifactId,
+        origin,
+        requestedMapping,
+        mappingApplied
+      })
+  );
   const normalizedProvenance = nestedJarRedirect
     ? { ...baseProvenance, nestedJar: nestedJarRedirect }
     : baseProvenance;
