@@ -29,6 +29,7 @@ import {
 
 import { loadConfig } from "./config.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
+import { convertRuntimeSqliteCorruption } from "./storage/db.js";
 import { log } from "./logger.js";
 import {
   applyNbtJsonPatch,
@@ -676,38 +677,58 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       });
     });
   } catch (caughtError) {
-    const problem = mapErrorToProblem(caughtError, requestId, {
+    // A raw SQLite corruption error surfaced mid-call (as opposed to at DB
+    // open, which is already a typed AppError by the time it gets here) means
+    // quick_check passed for this file but a live query still hit corruption.
+    // Escalate the next open to a full integrity_check and report a typed,
+    // restart-guiding ERR_DB_FAILURE instead of leaking ERR_INTERNAL.
+    const reportedError = convertRuntimeSqliteCorruption(caughtError, config.sqlitePath);
+    if (reportedError !== caughtError) {
+      // The public envelope only ever gets the generic ERR_DB_FAILURE message
+      // and nextAction (see convertRuntimeSqliteCorruption) - the original
+      // SQLite diagnostic is server-side-only, logged here with the request
+      // context convertRuntimeSqliteCorruption itself does not have access to.
+      const rawSqliteError = caughtError as { message?: unknown; code?: unknown; errcode?: unknown };
+      log("error", "tool.call.sqlite_runtime_corruption", {
+        requestId,
+        tool,
+        message: typeof rawSqliteError?.message === "string" ? rawSqliteError.message : String(caughtError),
+        code: rawSqliteError?.code,
+        errcode: rawSqliteError?.errcode
+      });
+    }
+    const problem = mapErrorToProblem(reportedError, requestId, {
       tool,
       normalizedInput
     });
 
-    if (isAppError(caughtError)) {
+    if (isAppError(reportedError)) {
       const isSevere =
-        caughtError.code === ERROR_CODES.DB_FAILURE ||
-        caughtError.code === ERROR_CODES.REPO_FETCH_FAILED ||
-        caughtError.code === ERROR_CODES.REGISTRY_GENERATION_FAILED ||
-        caughtError.code === ERROR_CODES.JAVA_UNAVAILABLE ||
-        caughtError.code.startsWith("ERR_DECOMPILER");
+        reportedError.code === ERROR_CODES.DB_FAILURE ||
+        reportedError.code === ERROR_CODES.REPO_FETCH_FAILED ||
+        reportedError.code === ERROR_CODES.REGISTRY_GENERATION_FAILED ||
+        reportedError.code === ERROR_CODES.JAVA_UNAVAILABLE ||
+        reportedError.code.startsWith("ERR_DECOMPILER");
       if (isSevere) {
         log("error", "tool.call.failed", {
           requestId,
           tool,
-          code: caughtError.code,
-          message: caughtError.message
+          code: reportedError.code,
+          message: reportedError.message
         });
       } else {
         log("warn", "tool.call.warning", {
           requestId,
           tool,
-          code: caughtError.code,
-          message: caughtError.message
+          code: reportedError.code,
+          message: reportedError.message
         });
       }
-    } else if (!(caughtError instanceof ZodError)) {
+    } else if (!(reportedError instanceof ZodError)) {
       log("error", "tool.call.unhandled", {
         requestId,
         tool,
-        reason: caughtError instanceof Error ? caughtError.message : String(caughtError)
+        reason: reportedError instanceof Error ? reportedError.message : String(reportedError)
       });
     }
 
@@ -718,7 +739,7 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       tool,
       durationMs: errorDurationMs
     };
-    applyErrorMetaExtensions(errorMeta, caughtError);
+    applyErrorMetaExtensions(errorMeta, reportedError);
     return objectResult({
       error: problem,
       meta: errorMeta

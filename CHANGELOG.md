@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Performance
+
+- The first tool call after the server starts no longer stalls on a full consistency check of the local cache database. The check that runs when the cache database is opened now uses SQLite's `quick_check` instead of `integrity_check`: on a 3.6 GB cache it drops from about 19 s to about 2 s, and every tool paid it on the first call of each server process. A damaged cache file is still detected at startup, backed up and rebuilt as before. The lighter check does not cross-verify index contents against table rows, so rare damage of that kind can pass it and surface later during a tool call. A call that hits that kind of damage directly now fails with `ERR_DB_FAILURE` and restart guidance instead of `ERR_INTERNAL` (a call where the damage surfaces inside another step may still report that step's own error); the server schedules a full `integrity_check` for the next start, and if it cannot record that request, the error instead explains how to reset the cache by hand.
+
 ## [7.0.0] - 2026-09-13
 
 ### Fixed
