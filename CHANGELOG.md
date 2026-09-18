@@ -31,6 +31,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - On Minecraft 26.1+, `compare-minecraft` with `task="class-diff"` (and `diff-class-signatures`) and `trace-symbol-lifecycle` with `mapping: "mojang"` no longer mark every member as unmapped with "Could not remap" or "Could not map" warnings.
 - `check-symbol-exists` on Minecraft 26.1+ now finds constructors: a method query named `<init>` with an existing descriptor resolves instead of returning `not_found`.
 
+### Documentation
+
+- On Minecraft 26.1+, responses label the runtime's Mojang names `obfuscated`, for example `mappingApplied: "obfuscated"`, whenever a request omits `mapping` or asks for `obfuscated`. The tool reference now documents this as a known issue. The label stays unchanged until a future major release corrects it; until then, `provenance.unobfuscatedRuntime: true` marks an artifact whose names are Mojang names, and `mapping: "mojang"` returns the same names labelled `mojang`.
+
 ## [7.0.0] - 2026-09-13
 
 ### Fixed

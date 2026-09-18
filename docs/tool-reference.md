@@ -671,6 +671,25 @@ The legacy public namespace name `official` was removed. Requests that still sen
 
 On an unobfuscated runtime (`26.1+`), `mappingApplied` keeps the label the request asked for: an omitted or `obfuscated` mapping reports `"obfuscated"`, and `mapping="mojang"` reports `"mojang"`. Both read the same Mojang names. The artifact's `provenance` then carries `unobfuscatedRuntime: true`; the field is absent for every other artifact. It is set for 26.1+ version targets, 26.1+ Minecraft runtime coordinates, and jar targets proven to be a 26.1+ Minecraft runtime jar, and it appears wherever the artifact provenance is returned: `resolve-artifact` `provenance` (omitted at its default `detail: "summary"`; pass `include: ["provenance"]` or `detail: "standard"` / `"full"`), `get-class-source` / `get-class-members` `provenance` (omitted at their default `detail: "standard"`; pass `include: ["provenance"]` or `detail: "full"`), and `sharedArtifactProvenance` on `batch-class-source`, `batch-class-members`, and `batch-symbol-exists`. A 26.1+ jar that an earlier release indexed without a version gains the version and the flag the next time `resolve-artifact` proves it; lookups by that `artifactId` then accept `mapping="mojang"`. It is the same flag name as `mappingContext.unobfuscatedRuntime`.
 
+### Known issue: obfuscated label on unobfuscated runtimes
+
+On Minecraft `26.1+`, responses label the runtime's names `obfuscated` even though those names are Mojang names. The label is misleading for these versions, because nothing in them is obfuscated. It is kept unchanged for now, and a future major release will correct it.
+
+The label appears whenever a request omits `mapping` or passes `mapping: "obfuscated"`:
+
+- `mappingApplied: "obfuscated"` from `resolve-artifact`, `get-class-source`, `get-class-members`, and the batch tools, including `target.kind="workspace"` on a 26.1+ project that declares no `mappings` line.
+- `query.mapping: "obfuscated"` from `diff-class-signatures` and `compare-minecraft` with `task="class-diff"`.
+- `mapping: "obfuscated"` in the `tasks["minecraft.artifact.resolved"]` entry of `validate-project`.
+
+`list-versions` reports these versions with `unobfuscated: true`, so the two responses disagree about the same names. The label is not changed yet because changing a response value that clients may already compare is a breaking change under this project's semantic-versioning policy.
+
+Until the correction ships:
+
+- Read `provenance.unobfuscatedRuntime: true` (or `mappingContext.unobfuscatedRuntime: true`) as the signal that the names are Mojang names, whatever `mappingApplied` says. `provenance` is omitted at the default detail levels described above.
+- Pass `mapping: "mojang"` to get responses labelled `"mojang"`. On these versions it reads the same names.
+
+Planned correction: a future major release will stop reporting `obfuscated` for runtimes whose names are Mojang names. The replacement is not decided yet: responses could report `mojang`, or a separate namespace value could be added. The CHANGELOG will announce it as a breaking change.
+
 ### Lookup Rules
 
 `find-mapping` supports lookup across `obfuscated`, `mojang`, `intermediary`, and `yarn`.
