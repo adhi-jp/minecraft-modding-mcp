@@ -888,6 +888,14 @@ export class SourceService {
     return this.versionDiffService.compareVersions(input);
   }
 
+  /**
+   * Thin passthrough so entry tools (migration-overview) can diff a version
+   * pair's `libraries` without reaching into VersionService directly.
+   */
+  async getVersionLibraries(version: string): Promise<string[]> {
+    return this.versionService.getVersionLibraries(version);
+  }
+
   async decompileModJar(input: DecompileModJarInput): Promise<DecompileModJarOutput> {
     return this.modDecompileService.decompileModJar(input);
   }

@@ -259,6 +259,19 @@ Errors:
 
 Set `VERIFY_MIXIN_TARGET_OFF=1` at process start to remove the tool from `tools/list` entirely and reject direct calls. Use as a rollback path while the accessor-inference rules stabilize.
 
+## compare-minecraft migration-overview: `libraries`
+
+`compare-minecraft` with `task="migration-overview"` includes a `migration.libraries` block (the `migration` block is returned at `detail: "standard"` or `"full"`) diffing the two versions' per-version JSON `libraries` array — the dependencies Minecraft itself ships with (LWJGL, Netty, etc.), which a class or registry diff cannot see. This is how a library swap such as LWJGL's GLFW binding being replaced by SDL surfaces, instead of silently changing behavior underneath a migration.
+
+Entries are keyed by `group:artifact` (the Maven coordinate with the version, any trailing `@extension`, and any platform `natives-*` classifier stripped), so a routine version bump or the same library's per-platform native jars never read as churn. Comparison is order-independent: it does not matter what order the two sides' `libraries` arrays list their entries in, and a single side may legitimately carry more than one version for the same `group:artifact` key (Mojang manifests can list different versions on different platform rules) — every version seen on a side is tracked, not just the first.
+
+- `migration.libraries.added` / `removed` — sorted arrays of `group:artifact:<versions>` strings for libraries present on only one side, where `<versions>` is the sorted, comma-joined list of distinct versions seen for that key on that side. A key with one version renders as before (e.g. `"org.libsdl:sdl3:3.2.0"`); a key with several platform-specific versions renders as e.g. `"g:a:1,2"`.
+- `migration.libraries.addedCount` / `removedCount` — counts of the above.
+- `migration.libraries.versionChangedCount` — count of `group:artifact` keys present on both sides whose version sets differ. No list is included.
+- `summary.counts.librariesAdded` / `librariesRemoved` — the same added/removed counts, promoted into the top-level summary, so they are visible at `detail: "summary"` too.
+
+The block is entirely additive: `summary.status` and `migration.impact` remain computed only from class and registry signals, unaffected by library changes. When per-version library details cannot be fetched (offline, or a fetch failure), the `libraries` block is omitted and a warning is added to the response instead of failing the whole `migration-overview` call. Fetching both sides' library lists is itself bounded by a short internal deadline (5 seconds, not configurable via any tool parameter or environment variable) so that an unreachable network — e.g. right after a restart, when class/registry data is already served from cached jars — cannot stall `migration-overview` for the full underlying fetch timeout; a deadline expiry is reported the same way as any other library-fetch failure: the block is omitted and a "timed out" warning is added. The library fetch already in flight is left to finish in the background and may still warm the cache for a later call.
+
 ## Batch lookup contract
 
 `batch-class-source`, `batch-class-members`, `batch-symbol-exists`, and `batch-mappings` share one envelope. Each call sends a fixed shortlist (1..50 entries) and receives a per-entry result plus an aggregate summary. The batch runs `entries.length` underlying calls but resolves the shared artifact ONCE (where applicable), so the round-trip cost is `1 resolve + N per-entry` rather than `N × (resolve + per-entry)`.

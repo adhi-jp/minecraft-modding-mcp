@@ -10,6 +10,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Added
 
 - `batch-class-source` and `batch-class-members` accept `target: { "kind": "artifact", "artifactId": "..." }` to reuse an artifact that an earlier call already resolved, the same shape `get-class-source` and `get-class-members` accept. Previously that target was rejected with `ERR_INVALID_INPUT`, so a batch had to resolve the artifact again from its jar, version, or coordinate. With this target the shared resolve step is skipped, `summary.sharedArtifactProvenance` is omitted, and an unknown `artifactId` fails each entry with `ERR_SOURCE_NOT_FOUND` rather than failing the whole batch.
+- `compare-minecraft` with `task="migration-overview"` now reports which libraries Minecraft itself ships were added or removed between the two versions, for example LWJGL's GLFW binding being replaced by SDL, which class and registry diffs cannot show. The new `migration.libraries` block (at `detail: "standard"` or `"full"`) lists added and removed libraries as `group:artifact:version` and counts libraries whose version changed. `summary.counts.librariesAdded` and `librariesRemoved` carry the same counts at every detail level. Libraries are compared by `group:artifact`, so routine version bumps and per-platform native jars are not reported as additions or removals. If the version details cannot be fetched within 5 seconds, the block is left out and a warning is added; the rest of the result is unchanged.
 
 ### Changed
 

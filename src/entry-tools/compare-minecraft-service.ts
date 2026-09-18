@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { DiffClassSignaturesOutput } from "../source-service.js";
-import type { CompareVersionsOutput } from "../version-diff-service.js";
+import { diffLibraries, type CompareVersionsOutput, type LibraryDiffResult } from "../version-diff-service.js";
 import type { GetRegistryDataOutput } from "../registry-service.js";
 import { createError, ERROR_CODES } from "../errors.js";
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
@@ -80,14 +80,72 @@ type CompareMinecraftDeps = {
     includeData?: boolean;
     maxEntriesPerRegistry?: number;
   }) => Promise<GetRegistryDataOutput>;
+  /**
+   * Raw `libraries[].name` coordinates for one version, used only by
+   * migration-overview to surface library swaps (e.g. LWJGL GLFW replaced by
+   * SDL) that a class/registry diff cannot see. Optional so existing callers
+   * that do not wire it keep working: migration-overview simply omits the
+   * libraries block when this is absent.
+   */
+  getVersionLibraries?: (input: { version: string }) => Promise<string[]>;
 };
 
 function compareStatusFromCounts(changedCount: number): Summary["status"] {
   return changedCount > 0 ? "changed" : "unchanged";
 }
 
+/** Default bound on migration-overview's library enrichment (see `libraryDiffDeadlineMs`). */
+const DEFAULT_LIBRARY_DIFF_DEADLINE_MS = 5000;
+
+export type CompareMinecraftOptions = {
+  /**
+   * Deadline in milliseconds for fetching both sides' library lists during
+   * migration-overview, so a restart with cached jars but no network access
+   * fails fast instead of waiting the full underlying fetch timeout. On
+   * expiry the libraries block is omitted and a warning is added; the
+   * in-flight fetch is left to continue in the background (it may still
+   * warm the version-detail cache). Test-only injection point — never read
+   * from an environment variable.
+   */
+  libraryDiffDeadlineMs?: number;
+};
+
+class LibraryDiffTimeoutError extends Error {}
+
+/**
+ * Races `promise` against a `ms` timer. The timer is always cleared (on
+ * either settlement) and unref'd so it can never keep the process alive.
+ */
+function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new LibraryDiffTimeoutError(`timed out after ${ms}ms`));
+    }, ms);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
 export class CompareMinecraftService {
-  constructor(private readonly deps: CompareMinecraftDeps) {}
+  private readonly libraryDiffDeadlineMs: number;
+
+  constructor(
+    private readonly deps: CompareMinecraftDeps,
+    options?: CompareMinecraftOptions
+  ) {
+    this.libraryDiffDeadlineMs = options?.libraryDiffDeadlineMs ?? DEFAULT_LIBRARY_DIFF_DEADLINE_MS;
+  }
 
   async execute(input: CompareMinecraftInput): Promise<Record<string, unknown> & { warnings?: string[] }> {
     const task = input.task && input.task !== "auto"
@@ -420,6 +478,40 @@ export class CompareMinecraftService {
         const registrySignals = compare.registry?.summary.registriesChanged ?? 0;
         const status = compareStatusFromCounts(classSignals + registrySignals);
         const representativeClassName = compare.classes?.added[0] ?? compare.classes?.removed[0];
+
+        // Library changes (e.g. LWJGL GLFW replaced by SDL) never show up in the
+        // class/registry diff above, so fetch and diff them separately. This must
+        // never fail the whole migration-overview: a missing dependency wiring, a
+        // fetch failure, or a deadline expiry (e.g. offline after a restart, with
+        // only cached jars) just omits the block and adds a warning. On a
+        // timeout, the in-flight fetch is left running — it may still warm the
+        // version-detail cache for a later call — we simply stop waiting on it.
+        let librariesResult: LibraryDiffResult | undefined;
+        const libraryWarnings: string[] = [];
+        if (this.deps.getVersionLibraries) {
+          try {
+            const [fromLibraries, toLibraries] = await withDeadline(
+              Promise.all([
+                this.deps.getVersionLibraries({ version: subject.fromVersion }),
+                this.deps.getVersionLibraries({ version: subject.toVersion })
+              ]),
+              this.libraryDiffDeadlineMs
+            );
+            librariesResult = diffLibraries(fromLibraries, toLibraries);
+          } catch (error) {
+            if (error instanceof LibraryDiffTimeoutError) {
+              libraryWarnings.push(
+                `Library comparison between ${subject.fromVersion} and ${subject.toVersion} timed out after ${this.libraryDiffDeadlineMs}ms.`
+              );
+            } else {
+              libraryWarnings.push(
+                `Could not compare libraries between ${subject.fromVersion} and ${subject.toVersion}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            }
+          }
+        }
         const nextActions = representativeClassName
           ? [
               createNextAction("compare-minecraft", {
@@ -457,7 +549,13 @@ export class CompareMinecraftService {
               }),
               counts: {
                 classSignals,
-                registrySignals
+                registrySignals,
+                ...(librariesResult
+                  ? {
+                      librariesAdded: librariesResult.addedCount,
+                      librariesRemoved: librariesResult.removedCount
+                    }
+                  : {})
               },
               nextActions
             },
@@ -471,11 +569,12 @@ export class CompareMinecraftService {
                     : registrySignals > 0
                       ? "registry"
                       : "minimal",
-                nextActions
+                nextActions,
+                ...(librariesResult ? { libraries: librariesResult } : {})
               }
             }
           }),
-          warnings: compare.warnings
+          warnings: [...compare.warnings, ...libraryWarnings]
         };
       }
       default:

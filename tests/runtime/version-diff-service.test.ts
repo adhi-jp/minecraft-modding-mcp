@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { RegistryData } from "../../src/registry-service.ts";
-import { VersionDiffService } from "../../src/version-diff-service.ts";
+import { diffLibraries, VersionDiffService } from "../../src/version-diff-service.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -556,4 +556,115 @@ test("compareVersions warns when the raw fallback compares an obfuscated jar aga
   assert.match(schemeWarning, /not meaningful/i);
   assert.match(schemeWarning, /unchanged/i);
   assert.ok(schemeWarning.includes("1.21.10") && schemeWarning.includes("26.1"));
+});
+
+test("diffLibraries reports a library replacement (GLFW removed, SDL added) as added/removed", () => {
+  const fromLibraries = [
+    "org.lwjgl:lwjgl-glfw:3.4.1",
+    "org.lwjgl:lwjgl-glfw:3.4.1:natives-linux",
+    "org.lwjgl:lwjgl-glfw:3.4.1:natives-windows"
+  ];
+  const toLibraries = ["org.libsdl:sdl3:3.2.0"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.deepEqual(result.added, ["org.libsdl:sdl3:3.2.0"]);
+  assert.deepEqual(result.removed, ["org.lwjgl:lwjgl-glfw:3.4.1"]);
+  assert.equal(result.addedCount, 1);
+  assert.equal(result.removedCount, 1);
+  assert.equal(result.versionChangedCount, 0);
+});
+
+test("diffLibraries counts a version bump as versionChangedCount without listing it as added or removed", () => {
+  const fromLibraries = ["at.yawk.lz4:lz4-java:1.10.0"];
+  const toLibraries = ["at.yawk.lz4:lz4-java:1.10.1"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.addedCount, 0);
+  assert.equal(result.removedCount, 0);
+  assert.equal(result.versionChangedCount, 1);
+});
+
+test("diffLibraries collapses same-version native classifier variants into a single group:artifact key", () => {
+  const libraries = [
+    "org.lwjgl:lwjgl:3.4.1",
+    "org.lwjgl:lwjgl:3.4.1:natives-linux",
+    "org.lwjgl:lwjgl:3.4.1:natives-windows",
+    "org.lwjgl:lwjgl:3.4.1:natives-macos"
+  ];
+
+  const result = diffLibraries(libraries, libraries);
+
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.addedCount, 0);
+  assert.equal(result.removedCount, 0);
+  assert.equal(result.versionChangedCount, 0);
+});
+
+test("diffLibraries ignores entries lacking a valid group:artifact:version name", () => {
+  const fromLibraries = ["", "not-a-valid-coordinate", "org.lwjgl:lwjgl-glfw:3.4.1"];
+  const toLibraries = ["   ", "org.lwjgl:lwjgl-glfw:3.4.1", "org.libsdl:sdl3:3.2.0"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.deepEqual(result.added, ["org.libsdl:sdl3:3.2.0"]);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.addedCount, 1);
+  assert.equal(result.removedCount, 0);
+  assert.equal(result.versionChangedCount, 0);
+});
+
+test("diffLibraries is order-independent when a group:artifact carries different versions across platform rules", () => {
+  // Real Mojang manifests can list the same group:artifact with different
+  // versions on different platform-specific rules. The result must not
+  // depend on which entry happens to come first in the array.
+  const fromLibraries = ["g:a:1", "g:a:2:natives-linux"];
+  const toLibrariesInOrder = ["g:a:1", "g:a:2:natives-linux"];
+  const toLibrariesReordered = ["g:a:2:natives-linux", "g:a:1"];
+
+  const resultInOrder = diffLibraries(fromLibraries, toLibrariesInOrder);
+  const resultReordered = diffLibraries(fromLibraries, toLibrariesReordered);
+
+  assert.deepEqual(resultInOrder, resultReordered);
+  assert.equal(resultInOrder.versionChangedCount, 0);
+});
+
+test("diffLibraries detects a version change on a non-first entry for a multi-version group:artifact key", () => {
+  const fromLibraries = ["g:a:1", "g:a:2:natives-linux"];
+  const toLibraries = ["g:a:1", "g:a:3:natives-linux"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.equal(result.versionChangedCount, 1);
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.removed, []);
+});
+
+test("diffLibraries renders a multi-version group:artifact as group:artifact:<sorted,versions>", () => {
+  const fromLibraries: string[] = [];
+  const toLibraries = ["g:a:1", "g:a:2:natives-linux"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.deepEqual(result.added, ["g:a:1,2"]);
+  assert.equal(result.addedCount, 1);
+});
+
+test("diffLibraries strips a trailing @extension before parsing, with and without a classifier", () => {
+  // Same real version on both sides, spelled with an @extension on one side
+  // (no classifier) and with a classifier plus @extension on the other. An
+  // unstripped "@ext" suffix would parse into the version string and read as
+  // a false version change.
+  const fromLibraries = ["org.lwjgl:lwjgl-glfw:3.4.1@jar", "org.lwjgl:lwjgl-glfw:3.4.1:natives-linux@jar"];
+  const toLibraries = ["org.lwjgl:lwjgl-glfw:3.4.1", "org.lwjgl:lwjgl-glfw:3.4.1:natives-linux"];
+
+  const result = diffLibraries(fromLibraries, toLibraries);
+
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.removed, []);
+  assert.equal(result.versionChangedCount, 0);
 });

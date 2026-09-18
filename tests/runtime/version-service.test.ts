@@ -508,3 +508,50 @@ test("recordCacheEntry serializes concurrent writes for different versions", asy
   const versions = parsed.entries.map((entry) => entry.version).sort();
   assert.deepEqual(versions, ["1.20.1", "1.21.4"]);
 });
+
+test("getVersionLibraries returns library names from version details, dropping entries without a valid name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-libraries-"));
+  const detailUrl = "https://example.invalid/detail.json";
+  const fetchFn = createFetchStub({
+    [DEFAULT_MANIFEST_URL]: () =>
+      jsonResponse({
+        latest: { release: "26.2" },
+        versions: [{ id: "26.2", type: "release", url: detailUrl }]
+      }),
+    [detailUrl]: () =>
+      jsonResponse({
+        libraries: [
+          { name: "org.lwjgl:lwjgl-glfw:3.4.1" },
+          { name: "org.lwjgl:lwjgl-glfw:3.4.1", downloads: {}, classifiers: { "natives-linux": {} } },
+          { downloads: {} },
+          { name: "" },
+          { name: 42 }
+        ]
+      })
+  });
+  const svc = new VersionService(buildTestConfig(root), fetchFn);
+
+  const libraries = await svc.getVersionLibraries("26.2");
+
+  assert.deepEqual(libraries, ["org.lwjgl:lwjgl-glfw:3.4.1", "org.lwjgl:lwjgl-glfw:3.4.1"]);
+});
+
+test("getVersionLibraries rejects when the version is not found in the manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "vs-libraries-missing-"));
+  const fetchFn = createFetchStub({
+    [DEFAULT_MANIFEST_URL]: () =>
+      jsonResponse({
+        latest: { release: "26.2" },
+        versions: [{ id: "26.2", type: "release", url: "https://example.invalid/detail.json" }]
+      })
+  });
+  const svc = new VersionService(buildTestConfig(root), fetchFn);
+
+  await assert.rejects(
+    () => svc.getVersionLibraries("99.99"),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, ERROR_CODES.VERSION_NOT_FOUND);
+      return true;
+    }
+  );
+});

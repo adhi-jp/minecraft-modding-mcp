@@ -529,3 +529,232 @@ test("CompareMinecraftService falls back to artifact follow-up when migration ov
     }
   ]);
 });
+
+test("CompareMinecraftService adds a libraries diff block to migration-overview revealing a library swap", async () => {
+  const service = new CompareMinecraftService({
+    compareVersions: async () => ({
+      fromVersion: "26.2",
+      toVersion: "26.3",
+      warnings: [],
+      classes: {
+        added: [],
+        removed: [],
+        addedCount: 0,
+        removedCount: 0,
+        unchanged: 10
+      },
+      registry: {
+        added: {},
+        removed: {},
+        newRegistries: [],
+        removedRegistries: [],
+        summary: {
+          registriesChanged: 0,
+          totalAdded: 0,
+          totalRemoved: 0
+        }
+      }
+    }),
+    diffClassSignatures: async () => {
+      throw new Error("not used");
+    },
+    getRegistryData: async () => {
+      throw new Error("not used");
+    },
+    getVersionLibraries: async ({ version }) => {
+      if (version === "26.2") {
+        return [
+          "org.lwjgl:lwjgl-glfw:3.4.1",
+          "org.lwjgl:lwjgl-glfw:3.4.1:natives-linux",
+          "at.yawk.lz4:lz4-java:1.10.0"
+        ];
+      }
+      return ["org.libsdl:sdl3:3.2.0", "at.yawk.lz4:lz4-java:1.10.1"];
+    }
+  });
+
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "standard",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "26.2",
+      toVersion: "26.3"
+    }
+  });
+
+  assert.deepEqual(result.migration?.libraries, {
+    added: ["org.libsdl:sdl3:3.2.0"],
+    removed: ["org.lwjgl:lwjgl-glfw:3.4.1"],
+    addedCount: 1,
+    removedCount: 1,
+    versionChangedCount: 1
+  });
+  assert.equal(result.summary.counts?.librariesAdded, 1);
+  assert.equal(result.summary.counts?.librariesRemoved, 1);
+});
+
+test("CompareMinecraftService warns and keeps migration-overview intact when library details fail to fetch", async () => {
+  const service = new CompareMinecraftService({
+    compareVersions: async () => ({
+      fromVersion: "26.2",
+      toVersion: "26.3",
+      warnings: [],
+      classes: {
+        added: ["net.minecraft.Foo"],
+        removed: [],
+        addedCount: 1,
+        removedCount: 0,
+        unchanged: 10
+      },
+      registry: {
+        added: {},
+        removed: {},
+        newRegistries: [],
+        removedRegistries: [],
+        summary: {
+          registriesChanged: 0,
+          totalAdded: 0,
+          totalRemoved: 0
+        }
+      }
+    }),
+    diffClassSignatures: async () => {
+      throw new Error("not used");
+    },
+    getRegistryData: async () => {
+      throw new Error("not used");
+    },
+    getVersionLibraries: async () => {
+      throw new Error("offline");
+    }
+  });
+
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "standard",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "26.2",
+      toVersion: "26.3"
+    }
+  });
+
+  assert.equal(result.migration?.libraries, undefined);
+  assert.equal(result.summary.counts?.librariesAdded, undefined);
+  assert.equal(result.summary.status, "changed");
+  assert.ok(
+    result.warnings?.some((warning: string) => warning.includes("libraries") && warning.includes("offline")),
+    `expected a library-fetch warning, got: ${JSON.stringify(result.warnings)}`
+  );
+});
+
+test("CompareMinecraftService omits the libraries block on migration-overview when the dependency is not wired", async () => {
+  const service = new CompareMinecraftService({
+    compareVersions: async () => ({
+      fromVersion: "26.2",
+      toVersion: "26.3",
+      warnings: [],
+      classes: {
+        added: [],
+        removed: [],
+        addedCount: 0,
+        removedCount: 0,
+        unchanged: 10
+      },
+      registry: {
+        added: {},
+        removed: {},
+        newRegistries: [],
+        removedRegistries: [],
+        summary: {
+          registriesChanged: 0,
+          totalAdded: 0,
+          totalRemoved: 0
+        }
+      }
+    }),
+    diffClassSignatures: async () => {
+      throw new Error("not used");
+    },
+    getRegistryData: async () => {
+      throw new Error("not used");
+    }
+  });
+
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "standard",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "26.2",
+      toVersion: "26.3"
+    }
+  });
+
+  assert.equal(result.migration?.libraries, undefined);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("CompareMinecraftService times out library enrichment on migration-overview instead of hanging on an unreachable network", async () => {
+  const service = new CompareMinecraftService(
+    {
+      compareVersions: async () => ({
+        fromVersion: "26.2",
+        toVersion: "26.3",
+        warnings: [],
+        classes: {
+          added: ["net.minecraft.Foo"],
+          removed: [],
+          addedCount: 1,
+          removedCount: 0,
+          unchanged: 10
+        },
+        registry: {
+          added: {},
+          removed: {},
+          newRegistries: [],
+          removedRegistries: [],
+          summary: {
+            registriesChanged: 0,
+            totalAdded: 0,
+            totalRemoved: 0
+          }
+        }
+      }),
+      diffClassSignatures: async () => {
+        throw new Error("not used");
+      },
+      getRegistryData: async () => {
+        throw new Error("not used");
+      },
+      // Never resolves, simulating an unreachable network after a restart
+      // with cached jars. Without a deadline of its own, this would hang
+      // the whole migration-overview call for the full fetch timeout.
+      getVersionLibraries: () => new Promise(() => {})
+    },
+    { libraryDiffDeadlineMs: 20 }
+  );
+
+  const start = Date.now();
+  const result = await service.execute({
+    task: "migration-overview",
+    detail: "standard",
+    subject: {
+      kind: "version-pair",
+      fromVersion: "26.2",
+      toVersion: "26.3"
+    }
+  });
+  const elapsedMs = Date.now() - start;
+
+  assert.ok(elapsedMs < 2000, `expected the call to complete quickly, took ${elapsedMs}ms`);
+  assert.equal(result.migration?.libraries, undefined);
+  assert.equal(result.summary.counts?.librariesAdded, undefined);
+  // The rest of the result must remain intact even though libraries timed out.
+  assert.equal(result.summary.status, "changed");
+  assert.ok(
+    result.warnings?.some((warning: string) => /librar/i.test(warning) && /timed out/i.test(warning)),
+    `expected a library timeout warning, got: ${JSON.stringify(result.warnings)}`
+  );
+});

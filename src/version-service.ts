@@ -35,6 +35,10 @@ interface VersionDownloadRecord {
   size?: number;
 }
 
+interface VersionLibraryRecord {
+  name?: unknown;
+}
+
 interface VersionDetails {
   id?: string;
   downloads?: {
@@ -43,6 +47,7 @@ interface VersionDetails {
     server_mappings?: VersionDownloadRecord;
     server?: VersionDownloadRecord;
   };
+  libraries?: VersionLibraryRecord[];
 }
 
 type VersionCacheEntry = {
@@ -254,6 +259,42 @@ export class VersionService {
       serverMappingsUrl: details.downloads?.server_mappings?.url,
       mappingsUrl: clientMappingsUrl
     };
+  }
+
+  /**
+   * Raw `libraries[].name` coordinates (e.g. "org.lwjgl:lwjgl-glfw:3.4.1")
+   * for one version's per-version JSON, in manifest order. Entries missing a
+   * non-empty string `name` are dropped here at the JSON boundary; further
+   * validation (does the name actually parse as a library coordinate) is the
+   * caller's job — see diffLibraries in version-diff-service.ts.
+   */
+  async getVersionLibraries(version: string): Promise<string[]> {
+    const normalizedVersion = version.trim();
+    if (!normalizedVersion) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "version must be non-empty."
+      });
+    }
+
+    const manifest = await this.fetchManifest();
+    const versionEntry = (manifest.versions ?? []).find((entry) => entry.id === normalizedVersion);
+    if (!versionEntry) {
+      throw createError({
+        code: ERROR_CODES.VERSION_NOT_FOUND,
+        message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
+        details: {
+          version: normalizedVersion,
+          nextAction: "Use list-versions to see available Minecraft versions.",
+          ...buildSuggestedCall({ tool: "list-versions", params: {} })
+        }
+      });
+    }
+
+    const details = await this.fetchVersionDetails(versionEntry.url, normalizedVersion);
+    return (details.libraries ?? [])
+      .map((lib) => lib?.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
   }
 
   async resolveServerJar(version: string): Promise<ResolvedServerJar> {

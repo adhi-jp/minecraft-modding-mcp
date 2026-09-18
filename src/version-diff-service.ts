@@ -158,6 +158,133 @@ function diffSets(from: Set<string>, to: Set<string>): { added: string[]; remove
   return { added, removed, unchanged };
 }
 
+/**
+ * `added`/`removed` entries are `group:artifact:<versions>`, where
+ * `<versions>` is the sorted, comma-joined set of distinct versions seen for
+ * that key on the side it was diffed from or to (a single version renders
+ * as before, e.g. "g:a:1"; multiple platform-specific versions render as
+ * "g:a:1,2").
+ */
+export type LibraryDiffResult = {
+  added: string[];
+  removed: string[];
+  addedCount: number;
+  removedCount: number;
+  /** Count only (per design contract) — no list of which libraries bumped. */
+  versionChangedCount: number;
+};
+
+// Matches a Maven-style library coordinate "group:artifact:version" with an
+// optional trailing classifier ("...:natives-linux"). Group/artifact/version
+// segments must be non-empty and colon-free; anything else is not a library
+// name this diff can key on, so it is silently ignored rather than crashing
+// or reading as a spurious added/removed entry. A trailing "@extension"
+// (e.g. "...@jar") is stripped by the caller before this regex runs, so it
+// never leaks into the captured version.
+const LIBRARY_NAME_RE = /^([^:\s]+):([^:\s]+):([^:\s]+)(?::[^:\s]*)?$/;
+
+function parseLibraryName(name: string): { key: string; version: string } | undefined {
+  // Strip a trailing "@extension" (e.g. "g:a:1@jar", "g:a:1:natives-linux@jar")
+  // before parsing, so it never gets captured as part of the version.
+  const withoutExtension = name.trim().replace(/@[^@]*$/, "");
+  const match = LIBRARY_NAME_RE.exec(withoutExtension);
+  if (!match) {
+    return undefined;
+  }
+  const [, group, artifact, version] = match;
+  return { key: `${group}:${artifact}`, version };
+}
+
+/**
+ * Collapses a version's raw library name list to the set of distinct
+ * versions seen per `group:artifact` key, dropping the per-platform natives
+ * classifier and any entry whose name does not parse as a library
+ * coordinate. Real Mojang manifests can list the same `group:artifact` with
+ * different versions under different platform rules, so every version seen
+ * is kept (not just the first) — collapsing to one would make the diff
+ * depend on input order.
+ */
+function collapseLibraryNames(names: string[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const name of names) {
+    if (typeof name !== "string") {
+      continue;
+    }
+    const parsed = parseLibraryName(name);
+    if (!parsed) {
+      continue;
+    }
+    let versions = map.get(parsed.key);
+    if (!versions) {
+      versions = new Set();
+      map.set(parsed.key, versions);
+    }
+    versions.add(parsed.version);
+  }
+  return map;
+}
+
+/** Renders a key's version set as the sorted, comma-joined suffix used in `added`/`removed`. */
+function renderVersions(versions: Set<string>): string {
+  return Array.from(versions).sort().join(",");
+}
+
+function versionSetsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const version of a) {
+    if (!b.has(version)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Pure diff of two versions' `libraries` name lists, keyed by
+ * `group:artifact` so a per-release version bump or a per-platform natives
+ * classifier never reads as churn. Used by migration-overview to surface
+ * library swaps (e.g. LWJGL GLFW replaced by SDL) that a class/registry diff
+ * cannot see.
+ */
+export function diffLibraries(fromNames: string[], toNames: string[]): LibraryDiffResult {
+  const fromMap = collapseLibraryNames(fromNames ?? []);
+  const toMap = collapseLibraryNames(toNames ?? []);
+
+  const added: string[] = [];
+  const removed: string[] = [];
+  let versionChangedCount = 0;
+
+  for (const [key, versions] of toMap) {
+    if (!fromMap.has(key)) {
+      added.push(`${key}:${renderVersions(versions)}`);
+    }
+  }
+  for (const [key, versions] of fromMap) {
+    if (!toMap.has(key)) {
+      removed.push(`${key}:${renderVersions(versions)}`);
+    }
+  }
+  for (const [key, fromVersions] of fromMap) {
+    const toVersions = toMap.get(key);
+    if (toVersions !== undefined && !versionSetsEqual(fromVersions, toVersions)) {
+      versionChangedCount += 1;
+    }
+  }
+
+  added.sort();
+  removed.sort();
+
+  return {
+    added,
+    removed,
+    addedCount: added.length,
+    removedCount: removed.length,
+    versionChangedCount
+  };
+}
+
 function diffRegistries(
   fromRegistries: Record<string, RegistryData>,
   toRegistries: Record<string, RegistryData>

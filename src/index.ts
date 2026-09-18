@@ -293,7 +293,8 @@ const analyzeSymbolService = new AnalyzeSymbolService({
 const compareMinecraftService = new CompareMinecraftService({
   compareVersions: (input) => sourceService.compareVersions(input),
   diffClassSignatures: (input) => sourceService.diffClassSignatures(input),
-  getRegistryData: (input) => sourceService.getRegistryData(input)
+  getRegistryData: (input) => sourceService.getRegistryData(input),
+  getVersionLibraries: (input) => sourceService.getVersionLibraries(input.version)
 });
 const analyzeModService = new AnalyzeModService({
   analyzeModJar: (jarPath, options) => analyzeModJar(jarPath, options),
