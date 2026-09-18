@@ -978,7 +978,10 @@ export function buildValidateProjectSuggestedParams(normalizedInput: unknown): R
     const value = record[field];
     if (
       typeof value === "boolean" &&
-      (!Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
+      // project-summary infers an omitted version, so an explicit
+      // preferProjectVersion=false is an opt-out, not a droppable default.
+      (field === "preferProjectVersion" ||
+        !Object.prototype.hasOwnProperty.call(SUGGESTED_CALL_DEFAULTS, field) ||
         !isSuggestedCallDefault(field as keyof typeof SUGGESTED_CALL_DEFAULTS, value))
     ) {
       result[field] = value;

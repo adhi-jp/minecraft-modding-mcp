@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../../src/errors.ts";
+import { buildValidateProjectSuggestedParams } from "../../../src/tool-guidance.ts";
 import {
   discoverWorkspaceAccessTransformers,
   ValidateProjectService,
@@ -180,6 +181,7 @@ test("ValidateProjectService project-summary blocked recovery suggests preferPro
   const result = await service.execute({
     task: "project-summary",
     detail: "summary",
+    preferProjectVersion: false,
     subject
   });
 
@@ -654,7 +656,8 @@ test("ValidateProjectService project-summary blocks discovered validators when p
         subject: {
           kind: "workspace",
           projectPath: root
-        }
+        },
+        version: "<minecraft-version>"
       }
     }
   ]);
@@ -811,4 +814,288 @@ test("task=\"mixin\" without a version suggests list-versions and a placeholder 
     "<your-mc-version>",
     "the template must make the substitution the caller has to perform obvious"
   );
+});
+
+// project-summary version default: an omitted `version` is inferred from the
+// project unless the caller passes preferProjectVersion=false explicitly.
+
+async function makeDiscoveredWorkspaceFiles(prefix: string): Promise<{
+  root: string;
+  awPath: string;
+  mixinConfigPath: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const resources = join(root, "src", "main", "resources");
+  await mkdir(resources, { recursive: true });
+  const awPath = join(resources, "example.accesswidener");
+  const mixinConfigPath = join(resources, "example.mixins.json");
+  await writeFile(awPath, "accessWidener v2 named\naccessible class net/minecraft/client/Minecraft\n", "utf8");
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({ package: "com.example.mixin", mixins: ["ExampleMixin"] }),
+    "utf8"
+  );
+  return { root, awPath, mixinConfigPath };
+}
+
+test("ValidateProjectService project-summary infers an omitted version from the project when preferProjectVersion is omitted", async () => {
+  const { root, awPath, mixinConfigPath } = await makeDiscoveredWorkspaceFiles("validate-project-infer-version-");
+  const detectedFor: string[] = [];
+  let seenMixinVersion: unknown;
+  let seenAwVersion: string | undefined;
+  const service = new ValidateProjectService({
+    validateMixin: async (input) => {
+      seenMixinVersion = input.version;
+      return { summary: { valid: 1, partial: 0, invalid: 0 }, warnings: [] };
+    },
+    validateAccessWidener: async (input) => {
+      seenAwVersion = input.version;
+      return { valid: true, header: "accessWidener v2 named", namespace: "named", issues: [], warnings: [] };
+    },
+    discoverMixins: async () => [mixinConfigPath],
+    discoverAccessWideners: async () => [awPath],
+    detectProjectMinecraftVersion: async (projectPath) => {
+      detectedFor.push(projectPath);
+      return "1.21.10";
+    }
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    subject: { kind: "workspace", projectPath: root }
+  });
+
+  assert.deepEqual(detectedFor, [root], "the project version must be detected exactly once");
+  assert.equal(result.summary.status, "ok");
+  assert.equal(seenMixinVersion, "1.21.10");
+  assert.equal(seenAwVersion, "1.21.10");
+  assert.equal(result.summary.subject?.version, "1.21.10");
+  assert.ok(
+    result.warnings?.some((warning) => warning.startsWith("version was inferred from the workspace: 1.21.10")),
+    `expected an inference warning; got ${JSON.stringify(result.warnings)}`
+  );
+});
+
+test("ValidateProjectService project-summary treats an inferred version as a project-version resolution for sub-validators and the artifact probe", async () => {
+  const { root, awPath } = await makeDiscoveredWorkspaceFiles("validate-project-infer-provenance-");
+  await writeFile(join(root, "gradle.properties"), "minecraft_version=1.21.10\n", "utf8");
+  await writeFile(join(root, "build.gradle"), "// test workspace\n", "utf8");
+  const probeInputs: Array<{ value: string; preferProjectVersion?: boolean }> = [];
+  let seenAwPreferProjectVersion: boolean | undefined;
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async (input) => {
+      seenAwPreferProjectVersion = input.preferProjectVersion;
+      return { valid: true, header: "accessWidener v2 named", namespace: "named", issues: [], warnings: [] };
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [awPath],
+    detectProjectMinecraftVersion: async () => "1.21.10",
+    probeMinecraftArtifact: async (input) => {
+      probeInputs.push({ value: input.target.value, preferProjectVersion: input.preferProjectVersion });
+      return { artifactId: "probe-minecraft-1.21.10", mappingApplied: "obfuscated" as const };
+    }
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "full",
+    include: ["workspace"],
+    subject: { kind: "workspace", projectPath: root }
+  });
+
+  assert.deepEqual(probeInputs, [{ value: "1.21.10", preferProjectVersion: true }]);
+  assert.equal(seenAwPreferProjectVersion, true);
+  assert.equal(result.tasks?.["minecraft.artifact.resolved"]?.status, "ok");
+});
+
+test("ValidateProjectService project-summary with preferProjectVersion=false and no version stays blocked without detecting the project version", async () => {
+  let detectorCalls = 0;
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    detectProjectMinecraftVersion: async () => {
+      detectorCalls += 1;
+      return "1.21.10";
+    }
+  });
+
+  const subject = { kind: "workspace" as const, projectPath: "/workspace/demo-mod" };
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    preferProjectVersion: false,
+    subject
+  });
+
+  assert.equal(detectorCalls, 0, "an explicit preferProjectVersion=false must suppress version inference");
+  assert.equal(result.summary.status, "blocked");
+  assert.equal(result.summary.headline, "project-summary requires version or preferProjectVersion=true.");
+  assert.ok(
+    result.summary.notes?.some((note) => note.includes("preferProjectVersion=false")),
+    `the note must say inference was suppressed; got ${JSON.stringify(result.summary.notes)}`
+  );
+});
+
+test("ValidateProjectService project-summary without a version or flag blocks with an explicit-version recovery when inference fails", async () => {
+  const { root, awPath, mixinConfigPath } = await makeDiscoveredWorkspaceFiles("validate-project-infer-failed-");
+  let detectorCalls = 0;
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      assert.fail("mixin validation must not run without a version");
+    },
+    validateAccessWidener: async () => {
+      assert.fail("access widener validation must not run without a version");
+    },
+    discoverMixins: async () => [mixinConfigPath],
+    discoverAccessWideners: async () => [awPath],
+    detectProjectMinecraftVersion: async () => {
+      detectorCalls += 1;
+      return undefined;
+    }
+  });
+
+  const subject = { kind: "workspace" as const, projectPath: root };
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    subject
+  });
+
+  assert.equal(detectorCalls, 1);
+  assert.equal(result.summary.status, "blocked");
+  assert.match(result.summary.headline, /Could not resolve Minecraft version/i);
+  // Replaying the failing shape (no version) would infer, fail, and block again,
+  // so the recovery must ask for an explicit version instead.
+  assert.deepEqual(result.summary.nextActions, [
+    {
+      tool: "validate-project",
+      params: {
+        task: "project-summary",
+        subject,
+        version: "<minecraft-version>"
+      }
+    }
+  ]);
+  assert.ok(
+    result.summary.notes?.some((note) => note.includes("<minecraft-version>")),
+    `the note must explain the version placeholder; got ${JSON.stringify(result.summary.notes)}`
+  );
+});
+
+test("ValidateProjectService project-summary says nothing was validated when discovery finds no files", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => []
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    version: "1.21.10",
+    subject: { kind: "workspace", projectPath: "/workspace/demo-mod" }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  assert.equal(
+    result.summary.headline,
+    "Nothing to validate: no mixin configs or access wideners were found."
+  );
+  assert.ok(
+    result.warnings?.some((warning) => warning.startsWith("Nothing was validated:")),
+    `a status-only reader needs the warning; got ${JSON.stringify(result.warnings)}`
+  );
+});
+
+test("ValidateProjectService project-summary says nothing was validated when no version resolves and discovery finds no files", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => {
+      throw new Error("not used");
+    },
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    validateAccessTransformer: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => [],
+    discoverAccessWideners: async () => [],
+    discoverAccessTransformers: async () => [],
+    detectProjectMinecraftVersion: async () => undefined
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/demo-mod",
+      discover: ["mixins", "access-wideners", "access-transformers"]
+    }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  assert.equal(
+    result.summary.headline,
+    "Nothing to validate: no mixin configs, access wideners, or access transformers were found."
+  );
+  assert.ok(
+    result.warnings?.some((warning) => warning.startsWith("Nothing was validated:")),
+    `a status-only reader needs the warning; got ${JSON.stringify(result.warnings)}`
+  );
+});
+
+test("ValidateProjectService project-summary keeps the validated-count headline when discovery finds files", async () => {
+  const service = new ValidateProjectService({
+    validateMixin: async () => ({ summary: { valid: 1, partial: 0, invalid: 0 }, warnings: [] }),
+    validateAccessWidener: async () => {
+      throw new Error("not used");
+    },
+    discoverMixins: async () => ["/workspace/demo-mod/src/main/resources/demo.mixins.json"],
+    discoverAccessWideners: async () => []
+  });
+
+  const result = await service.execute({
+    task: "project-summary",
+    detail: "summary",
+    version: "1.21.10",
+    subject: { kind: "workspace", projectPath: "/workspace/demo-mod" }
+  });
+
+  assert.equal(result.summary.status, "ok");
+  assert.equal(
+    result.summary.headline,
+    "Validated 1 mixin config(s), 0 access widener(s), and 0 access transformer(s)."
+  );
+  assert.equal(
+    result.warnings?.some((warning) => warning.startsWith("Nothing was validated:")),
+    false
+  );
+});
+
+test("validate-project recovery suggestions keep an explicit preferProjectVersion=false", () => {
+  // Omitting preferProjectVersion now means "infer the version", so dropping an
+  // explicit false as a default would silently undo the caller's opt-out.
+  const params = buildValidateProjectSuggestedParams({
+    task: "project-summary",
+    subject: { kind: "workspace", projectPath: "/workspace/demo-mod" },
+    preferProjectVersion: false
+  });
+
+  assert.equal(params.preferProjectVersion, false);
 });

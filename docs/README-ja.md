@@ -161,6 +161,8 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 - ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
 - `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
 - `validate-mixin` と `validate-project` は、`obfuscated` / `mojang` 検証では `mapping-health` を軽量に保ちます。`intermediary` / `yarn` 名前空間を要求しない限り、完全な Tiny マッピンググラフは読み込みません。
+- `validate-project task="project-summary"` は `version` を省略すると `gradle.properties` から Minecraft バージョンを推定し、推定したバージョンを `warnings` に示します。推定を止めるには `preferProjectVersion: false` を指定します。その場合、`version` のない呼び出しは `status: "blocked"` を返します。解決したバージョン（明示指定または推定）は、検出したすべての Mixin / Access Widener / Access Transformer の検証に渡されます。ファイルを検出したのにバージョンを推定できない場合は、推測せずに、明示的な `version` を求める再試行案付きで `status: "blocked"` を返します。
+- `validate-project task="project-summary"` が検証対象のファイルを 1 つも検出しなかった場合、`status` は `"ok"` のままですが、headline が `Nothing to validate: ...` となり、`warnings` にも何も検証していないことが示されます。`"ok"` だけでは、いずれかのファイルが検証に通ったことを意味しません。
 - `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。追加の `tasks` フィールドを省きたい場合は `VALIDATE_PROJECT_TASKS_OFF=1` を使います。
 
 ### あるバージョンの Minecraft ソースを確認する

@@ -26,6 +26,46 @@ async function safeEmit(
   }
 }
 
+const DISCOVER_KIND_LABELS = [
+  ["mixins", "mixin configs"],
+  ["access-wideners", "access wideners"],
+  ["access-transformers", "access transformers"]
+] as const;
+
+function joinWithOr(items: readonly string[]): string {
+  if (items.length <= 2) {
+    return items.join(" or ");
+  }
+  return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+}
+
+// A run that discovered no files keeps status "ok" (nothing failed), so the
+// headline and a warning must say that nothing was checked; otherwise the
+// result reads as a pass. Only the kinds subject.discover searched are named.
+function describeNothingToValidate(
+  discover: readonly string[],
+  projectPath: string
+): { headline: string; warning: string } {
+  const searched = DISCOVER_KIND_LABELS
+    .filter(([kind]) => discover.includes(kind))
+    .map(([, label]) => label);
+  const notOk = "so status \"ok\" does not mean any file passed validation.";
+  const accessTransformerHint = discover.includes("access-transformers")
+    ? ""
+    : " Access Transformer files are searched only when subject.discover includes \"access-transformers\".";
+  if (searched.length === 0) {
+    return {
+      headline: "Nothing to validate: subject.discover selected no file kinds to search.",
+      warning: `Nothing was validated: subject.discover selected no file kinds to search, ${notOk}${accessTransformerHint}`
+    };
+  }
+  const list = joinWithOr(searched);
+  return {
+    headline: `Nothing to validate: no ${list} were found.`,
+    warning: `Nothing was validated: no ${list} were found under ${projectPath}, ${notOk}${accessTransformerHint}`
+  };
+}
+
 export async function handleProjectSummary(
   deps: ValidateProjectDeps,
   input: ValidateProjectInput,
@@ -44,7 +84,9 @@ if (input.subject.kind !== "workspace") {
     message: "task=project-summary requires subject.kind=workspace."
   });
 }
-if (!input.version && !input.preferProjectVersion) {
+// An omitted version is inferred from the project below; only an explicit
+// preferProjectVersion=false opts out of that inference.
+if (!input.version && input.preferProjectVersion === false) {
   const baseResult = buildEntryToolResult({
     task: "project-summary",
     detail,
@@ -69,7 +111,7 @@ if (!input.version && !input.preferProjectVersion) {
         }
       ],
       notes: [
-        "Pass version explicitly, or retry with preferProjectVersion=true when gradle.properties declares the Minecraft version. The suggested retry sets preferProjectVersion=true for you."
+        "Version inference was suppressed by preferProjectVersion=false. Pass version explicitly, or retry without preferProjectVersion=false to infer it from gradle.properties. The suggested retry sets preferProjectVersion=true for you."
       ]
     },
     blocks: {
@@ -103,10 +145,21 @@ await safeEmit(options.stageEmitter,"validate-project:workspace-discovery", {
   projectPath,
   discover
 });
-const detectedProjectVersion = input.preferProjectVersion
+// preferProjectVersion=true overrides an explicit version; an omitted version is
+// inferred (the explicit-false opt-out returned above).
+const detectedProjectVersion = input.preferProjectVersion === true || !input.version
   ? await deps.detectProjectMinecraftVersion?.(projectPath)
   : undefined;
 const resolvedVersion = detectedProjectVersion ?? input.version;
+const versionInferred = !input.version && Boolean(detectedProjectVersion);
+// An inferred version is a project-version resolution: sub-validators and the
+// artifact probe see exactly what an explicit preferProjectVersion=true run sees.
+const effectivePreferProjectVersion = versionInferred ? true : input.preferProjectVersion;
+const versionInferenceWarnings = versionInferred
+  ? [
+      `version was inferred from the workspace: ${detectedProjectVersion} (source: projectPath:gradle.properties (${projectPath})).`
+    ]
+  : [];
 const [mixinConfigs, accessWideners, accessTransformers] = await Promise.all([
   discover.includes("mixins")
     ? deps.discoverMixins(projectPath, input.configPaths)
@@ -136,17 +189,20 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
         sourcePriority: input.sourcePriority,
         scope: input.scope
       }),
+      // Retrying without a version would infer, fail, and block again, so the
+      // recovery asks for an explicit version instead.
       nextActions: [
         {
           tool: "validate-project",
           params: {
             task: "project-summary",
-            subject: input.subject
+            subject: input.subject,
+            version: "<minecraft-version>"
           }
         }
       ],
       notes: [
-        "Pass version explicitly, or make sure gradle.properties declares the Minecraft version before using preferProjectVersion=true."
+        "The Minecraft version could not be inferred from gradle.properties (minecraft_version, mc_version, or minecraftVersion). Retry with version set explicitly: replace \"<minecraft-version>\" in the suggested call with the project's Minecraft version, or declare it in gradle.properties."
       ]
     },
     blocks: {
@@ -176,14 +232,16 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
   };
 }
 
+// Reached only when discovery found nothing (the branch above handles found files).
 if (!resolvedVersion) {
+  const nothingToValidate = describeNothingToValidate(discover, projectPath);
   const baseResult = buildEntryToolResult({
     task: "project-summary",
     detail,
     include,
     summary: {
       status: "ok",
-      headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
+      headline: nothingToValidate.headline,
       subject: createSummarySubject({
         task: "project-summary",
         kind: input.subject.kind,
@@ -213,12 +271,12 @@ if (!resolvedVersion) {
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
-    warnings: []
+    warnings: [nothingToValidate.warning]
   };
 }
 
 const validationVersion = resolvedVersion;
-const warnings: string[] = [];
+const warnings: string[] = [...versionInferenceWarnings];
 const mixinDurationStart = Date.now();
 let validMixins = 0;
 let partialMixins = 0;
@@ -330,7 +388,7 @@ for (const [awIndex, awPath] of accessWideners.entries()) {
       projectPath,
       gradleUserHome,
       scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: effectivePreferProjectVersion
     });
     if (output.valid) {
       validAw += 1;
@@ -378,7 +436,7 @@ for (const [atIndex, atPath] of accessTransformers.entries()) {
       projectPath,
       gradleUserHome,
       scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: effectivePreferProjectVersion
     });
     if (output.valid) {
       validAt += 1;
@@ -401,6 +459,13 @@ const atDurationMs = Date.now() - atDurationStart;
 const invalidCount = invalidMixins + invalidAw + invalidAt;
 const partialCount = partialMixins;
 const status = invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok";
+const nothingToValidate =
+  mixinConfigs.length === 0 && accessWideners.length === 0 && accessTransformers.length === 0
+    ? describeNothingToValidate(discover, projectPath)
+    : undefined;
+if (nothingToValidate) {
+  warnings.push(nothingToValidate.warning);
+}
 
 const baseResult = buildEntryToolResult({
   task: "project-summary",
@@ -408,7 +473,9 @@ const baseResult = buildEntryToolResult({
   include,
   summary: {
     status,
-    headline: `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
+    headline:
+      nothingToValidate?.headline ??
+      `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
     subject: createSummarySubject({
       task: "project-summary",
       kind: input.subject.kind,
@@ -457,7 +524,7 @@ const tasks = await buildFullTaskStatusReport(deps, {
   sourcePriority: input.sourcePriority,
   gradleUserHome,
   scope: input.scope,
-  preferProjectVersion: input.preferProjectVersion,
+  preferProjectVersion: effectivePreferProjectVersion,
   mixinDiscoveryCount: mixinConfigs.length,
   mixinCaughtErrors,
   mixinCounts: { ok: validMixins, partial: partialMixins, invalid: invalidMixins },
