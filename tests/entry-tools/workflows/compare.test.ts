@@ -736,16 +736,28 @@ test("CompareMinecraftService times out library enrichment on migration-overview
     { libraryDiffDeadlineMs: 20 }
   );
 
+  // The deadline timer is unref'd on purpose (it must never keep the server
+  // alive), and the stubbed fetch holds no handle either, so nothing else keeps
+  // this test's event loop alive while it waits: Node 22 drains the loop and
+  // cancels the still-pending test. Hold the loop with a bounded, referenced
+  // timer; if the deadline ever stopped firing, the loop drains after 5 s and
+  // the test fails instead of hanging.
+  const keepAlive = setTimeout(() => undefined, 5_000);
   const start = Date.now();
-  const result = await service.execute({
-    task: "migration-overview",
-    detail: "standard",
-    subject: {
-      kind: "version-pair",
-      fromVersion: "26.2",
-      toVersion: "26.3"
-    }
-  });
+  let result;
+  try {
+    result = await service.execute({
+      task: "migration-overview",
+      detail: "standard",
+      subject: {
+        kind: "version-pair",
+        fromVersion: "26.2",
+        toVersion: "26.3"
+      }
+    });
+  } finally {
+    clearTimeout(keepAlive);
+  }
   const elapsedMs = Date.now() - start;
 
   assert.ok(elapsedMs < 2000, `expected the call to complete quickly, took ${elapsedMs}ms`);
