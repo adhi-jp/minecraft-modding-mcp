@@ -360,6 +360,78 @@ test("schema rejects absolute-path aliases that resolve to the same canonical ou
   }
 });
 
+test("target.kind=artifact reuses the given artifactId without calling resolveArtifact", async () => {
+  const seen: GetClassSourceInput[] = [];
+  const deps: BatchClassSourceDeps = {
+    resolveArtifact: async () => {
+      throw new Error("resolveArtifact must not be called when target.kind is artifact");
+    },
+    getClassSource: async (input) => {
+      seen.push(input);
+      return buildOkSource(input.className);
+    }
+  };
+  const service = new BatchClassSourceService(deps);
+  const out = await service.execute({
+    target: { kind: "artifact", artifactId: "reused-art" },
+    entries: [{ className: "a.A" }, { className: "b.B" }]
+  });
+  assert.equal(out.summary.ok, 2);
+  assert.equal(out.summary.sharedArtifactId, "reused-art");
+  // No provenance is invented for a reused artifact: it was never resolved here.
+  assert.equal(out.summary.sharedArtifactProvenance, undefined);
+  assert.equal(seen[0]!.artifactId, "reused-art");
+  assert.equal(seen[1]!.artifactId, "reused-art");
+});
+
+test("target.kind=artifact with an unknown artifactId fails per-entry with the same error class getClassSource raises", async () => {
+  const deps: BatchClassSourceDeps = {
+    resolveArtifact: async () => {
+      throw new Error("resolveArtifact must not be called when target.kind is artifact");
+    },
+    getClassSource: async () => {
+      throw createError({
+        code: ERROR_CODES.SOURCE_NOT_FOUND,
+        message: "Artifact not found. Resolve context first."
+      });
+    }
+  };
+  const service = new BatchClassSourceService(deps);
+  const out = await service.execute({
+    target: { kind: "artifact", artifactId: "does-not-exist" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(out.summary.error, 1);
+  assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.SOURCE_NOT_FOUND);
+});
+
+test("schema: batch-class-source target accepts kind=artifact", async () => {
+  const { getToolSchema } = await import("../../../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "artifact", artifactId: "art-123" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(parsed.success, true);
+});
+
+test("schema: batch-class-source rejects an unknown target.kind and lists 'artifact' among valid options", async () => {
+  const { getToolSchema } = await import("../../../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-source")!;
+  const parsed = schema.safeParse({
+    target: { kind: "bogus" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const issue = parsed.error.issues.find(
+      (i) => i.path.length === 2 && i.path[0] === "target" && i.path[1] === "kind"
+    );
+    assert.ok(issue, `expected a target.kind discriminator issue; got ${JSON.stringify(parsed.error.issues)}`);
+    assert.match((issue as { message: string }).message, /'artifact'/);
+  }
+});
+
 test("top-level resolution failure surfaces as a thrown error (no results array)", async () => {
   const { deps } = buildDeps({
     resolveError: createError({

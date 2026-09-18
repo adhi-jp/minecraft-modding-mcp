@@ -180,6 +180,83 @@ test("batch-class-members reports a tool issue when the shared target resolved a
   }
 });
 
+test("target.kind=artifact reuses the given artifactId without calling resolveArtifact", async () => {
+  const seen: GetClassMembersInput[] = [];
+  const deps: BatchClassMembersDeps = {
+    resolveArtifact: async () => {
+      throw new Error("resolveArtifact must not be called when target.kind is artifact");
+    },
+    getClassMembers: async (input) => {
+      seen.push(input);
+      return buildOkMembers(input.className);
+    }
+  };
+  const service = new BatchClassMembersService(deps);
+  const out = await service.execute({
+    target: { kind: "artifact", artifactId: "reused-art" },
+    entries: [{ className: "a.A" }, { className: "b.B" }]
+  });
+  assert.equal(out.summary.ok, 2);
+  assert.equal(out.summary.sharedArtifactId, "reused-art");
+  // No provenance is invented for a reused artifact: it was never resolved here.
+  assert.equal(out.summary.sharedArtifactProvenance, undefined);
+  assert.equal(seen[0]!.artifactId, "reused-art");
+  assert.equal(seen[1]!.artifactId, "reused-art");
+  // A kind:"artifact" target is a resolved-id handle, not the caller naming a
+  // jar, so artifactSelectedBy stays "tool" (mirrors get-class-members'
+  // resolveClassArtifactReference semantics — see artifactSelectedByFor in
+  // src/entry-tools/inspect-minecraft/handlers/class-members.ts).
+  assert.equal(seen[0]!.artifactSelectedBy, "tool");
+});
+
+test("target.kind=artifact with an unknown artifactId fails per-entry with the same error class getClassMembers raises", async () => {
+  const deps: BatchClassMembersDeps = {
+    resolveArtifact: async () => {
+      throw new Error("resolveArtifact must not be called when target.kind is artifact");
+    },
+    getClassMembers: async () => {
+      throw createError({
+        code: ERROR_CODES.SOURCE_NOT_FOUND,
+        message: "Artifact not found. Resolve context first."
+      });
+    }
+  };
+  const service = new BatchClassMembersService(deps);
+  const out = await service.execute({
+    target: { kind: "artifact", artifactId: "does-not-exist" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(out.summary.error, 1);
+  assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.SOURCE_NOT_FOUND);
+});
+
+test("schema: batch-class-members target accepts kind=artifact", async () => {
+  const { getToolSchema } = await import("../../../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-members")!;
+  const parsed = schema.safeParse({
+    target: { kind: "artifact", artifactId: "art-123" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(parsed.success, true);
+});
+
+test("schema: batch-class-members rejects an unknown target.kind and lists 'artifact' among valid options", async () => {
+  const { getToolSchema } = await import("../../../src/tool-schema-registry.ts");
+  const schema = getToolSchema("batch-class-members")!;
+  const parsed = schema.safeParse({
+    target: { kind: "bogus" },
+    entries: [{ className: "a.A" }]
+  });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const issue = parsed.error.issues.find(
+      (i) => i.path.length === 2 && i.path[0] === "target" && i.path[1] === "kind"
+    );
+    assert.ok(issue, `expected a target.kind discriminator issue; got ${JSON.stringify(parsed.error.issues)}`);
+    assert.match((issue as { message: string }).message, /'artifact'/);
+  }
+});
+
 test("batch-class-members keeps a code issue when the caller named the jar target itself", async () => {
   const service = new BatchClassMembersService(await buildNoBinaryDeps());
   const out = await service.execute({

@@ -10,9 +10,9 @@ import type {
 import type {
   ArtifactScope,
   MappingSourcePriority,
-  ResolveArtifactTargetInput,
   SourceMapping
 } from "../types.js";
+import type { SourceLookupTargetInput } from "../tool-schemas.js";
 import type { MemberProjection } from "../source/class-source/members-builder.js";
 import {
   runBatch,
@@ -35,7 +35,7 @@ export type BatchClassMembersEntry = {
 };
 
 export type BatchClassMembersInput = {
-  target: ResolveArtifactTargetInput;
+  target: SourceLookupTargetInput;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
@@ -72,6 +72,16 @@ export class BatchClassMembersService {
       concurrency,
       failFast,
       resolveSharedArtifact: async () => {
+        // target.kind === "artifact" reuses an already-resolved artifactId,
+        // short-circuiting resolution exactly as get-class-members's own
+        // `kind:"artifact"` target does (src/index.ts normalizeSourceLookupTarget).
+        // No provenance is invented for a reused artifact: an unknown id is left
+        // to surface per-entry (the same SOURCE_NOT_FOUND getClassMembers raises
+        // for an unknown artifactId), since resolveSharedArtifact has no way to
+        // validate existence without calling deps.resolveArtifact.
+        if (input.target.kind === "artifact") {
+          return { artifactId: input.target.artifactId };
+        }
         const resolved = await this.deps.resolveArtifact({
           target: input.target,
           mapping: input.mapping,
@@ -105,12 +115,16 @@ export class BatchClassMembersService {
         const raw = (await this.deps.getClassMembers({
           artifactId: sharedArtifact.artifactId,
           // This artifactId is OURS, not the caller's: the shared target was
-          // resolved above and every entry is dispatched by the result. Without
-          // saying so, get-class-members reads the bare presence of an
-          // artifactId as the caller having named the artifact, and reports a
-          // missing binary jar as their mistake - once per entry - though
-          // `target` here cannot name an artifact at all. Only a jar the caller
-          // named themselves is genuinely their choice.
+          // resolved (or, for target.kind==="artifact", reused) above and every
+          // entry is dispatched by the result. Without saying so, get-class-members
+          // reads the bare presence of an artifactId as the caller having named
+          // the artifact, and reports a missing binary jar as their mistake - once
+          // per entry. A `kind:"artifact"` target is a resolved-id handle, not a
+          // caller choice either (mirrors resolveClassArtifactReference's
+          // artifactSelectedByFor in inspect-minecraft/handlers/class-members.ts):
+          // it says nothing about whether the artifact carries a binary jar and
+          // cannot be re-resolved into one that does. Only a jar the caller named
+          // themselves is genuinely their choice.
           artifactSelectedBy: input.target.kind === "jar" ? "caller" : "tool",
           className: entry.className,
           access: entry.access,

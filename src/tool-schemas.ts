@@ -147,11 +147,13 @@ export const resolveArtifactTargetSchema = z.discriminatedUnion("kind", [
   dependencyTargetSchema
 ]);
 
-// Extended target schema for the source-lookup tools (get-class-source / get-class-members):
-// the same kind-based shape as resolveArtifactTargetSchema, PLUS a `kind:"artifact"` variant
-// that short-circuits resolution by reusing an already-resolved artifactId. The shared
-// resolveArtifactTargetSchema is intentionally NOT widened — the artifact kind has no
-// resolution meaning for resolve-artifact / verify-mixin-target / the batch tools.
+// Extended target schema for the source-lookup tools (get-class-source / get-class-members)
+// and the batch tools that fan out over one shared artifact (batch-class-source /
+// batch-class-members): the same kind-based shape as resolveArtifactTargetSchema, PLUS a
+// `kind:"artifact"` variant that short-circuits resolution by reusing an already-resolved
+// artifactId. The shared resolveArtifactTargetSchema is intentionally NOT widened —
+// the artifact kind has no resolution meaning for resolve-artifact / verify-mixin-target,
+// which resolve a target rather than reuse one.
 export const sourceLookupTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("version"), value: nonEmptyString }),
   z.object({ kind: z.literal("jar"), value: nonEmptyString }),
@@ -324,7 +326,7 @@ export const batchClassSourceEntrySchema = z.object({
 });
 
 export const batchClassSourceShape = {
-  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional(),
   sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().optional(),
@@ -379,7 +381,7 @@ export const batchClassMembersEntrySchema = z.object({
 });
 
 export const batchClassMembersShape = {
-  target: resolveArtifactTargetSchema.describe(RESOLVE_ARTIFACT_TARGET_DESCRIPTION),
+  target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
   mapping: sourceMappingSchema.optional(),
   sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().optional(),

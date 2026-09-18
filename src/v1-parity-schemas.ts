@@ -447,9 +447,26 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
               "name"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "artifact"
+              },
+              "artifactId": {
+                "$ref": "#/properties/target/anyOf/0/properties/value"
+              }
+            },
+            "required": [
+              "kind",
+              "artifactId"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "Object, not string. e.g. {\"kind\":\"version\",\"value\":\"1.21.10\"}, {\"kind\":\"workspace\"}, or to inspect a loader/Fabric dependency like vanilla: {\"kind\":\"dependency\",\"group\":\"net.fabricmc.fabric-api\",\"name\":\"fabric-api\",\"versionFromProject\":true} (needs projectPath) or with an explicit \"version\"."
+        "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
       },
       "mapping": {
         "type": "string",
@@ -707,9 +724,26 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
               "name"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "artifact"
+              },
+              "artifactId": {
+                "$ref": "#/properties/target/anyOf/0/properties/value"
+              }
+            },
+            "required": [
+              "kind",
+              "artifactId"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "Object, not string. e.g. {\"kind\":\"version\",\"value\":\"1.21.10\"}, {\"kind\":\"workspace\"}, or to inspect a loader/Fabric dependency like vanilla: {\"kind\":\"dependency\",\"group\":\"net.fabricmc.fabric-api\",\"name\":\"fabric-api\",\"versionFromProject\":true} (needs projectPath) or with an explicit \"version\"."
+        "description": "Same shape as resolve-artifact target (incl. {\"kind\":\"dependency\",...} to read a Fabric/loader dependency class like vanilla), plus {\"kind\":\"artifact\",\"artifactId\":\"...\"} to reuse a resolved artifact. Object, not string."
       },
       "mapping": {
         "type": "string",

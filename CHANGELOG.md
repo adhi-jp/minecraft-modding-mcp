@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `batch-class-source` and `batch-class-members` accept `target: { "kind": "artifact", "artifactId": "..." }` to reuse an artifact that an earlier call already resolved, the same shape `get-class-source` and `get-class-members` accept. Previously that target was rejected with `ERR_INVALID_INPUT`, so a batch had to resolve the artifact again from its jar, version, or coordinate. With this target the shared resolve step is skipped, `summary.sharedArtifactProvenance` is omitted, and an unknown `artifactId` fails each entry with `ERR_SOURCE_NOT_FOUND` rather than failing the whole batch.
+
 ### Performance
 
 - The first tool call after the server starts no longer stalls on a full consistency check of the local cache database. The check that runs when the cache database is opened now uses SQLite's `quick_check` instead of `integrity_check`: on a 3.6 GB cache it drops from about 19 s to about 2 s, and every tool paid it on the first call of each server process. A damaged cache file is still detected at startup, backed up and rebuilt as before. The lighter check does not cross-verify index contents against table rows, so rare damage of that kind can pass it and surface later during a tool call. A call that hits that kind of damage directly now fails with `ERR_DB_FAILURE` and restart guidance instead of `ERR_INTERNAL` (a call where the damage surfaces inside another step may still report that step's own error); the server schedules a full `integrity_check` for the next start, and if it cannot record that request, the error instead explains how to reset the cache by hand.

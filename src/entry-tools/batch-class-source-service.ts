@@ -10,9 +10,9 @@ import type {
 import type {
   ArtifactScope,
   MappingSourcePriority,
-  ResolveArtifactTargetInput,
   SourceMapping
 } from "../types.js";
+import type { SourceLookupTargetInput } from "../tool-schemas.js";
 import {
   runBatch,
   splitEntryWarnings,
@@ -32,7 +32,7 @@ export type BatchClassSourceEntry = {
 };
 
 export type BatchClassSourceInput = {
-  target: ResolveArtifactTargetInput;
+  target: SourceLookupTargetInput;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
   allowDecompile?: boolean;
@@ -73,6 +73,16 @@ export class BatchClassSourceService {
       concurrency,
       failFast,
       resolveSharedArtifact: async () => {
+        // target.kind === "artifact" reuses an already-resolved artifactId,
+        // short-circuiting resolution exactly as get-class-source's own
+        // `kind:"artifact"` target does (src/index.ts normalizeSourceLookupTarget).
+        // No provenance is invented for a reused artifact: an unknown id is left
+        // to surface per-entry (the same SOURCE_NOT_FOUND getClassSource raises
+        // for an unknown artifactId), since resolveSharedArtifact has no way to
+        // validate existence without calling deps.resolveArtifact.
+        if (input.target.kind === "artifact") {
+          return { artifactId: input.target.artifactId };
+        }
         const resolved = await this.deps.resolveArtifact({
           target: input.target,
           mapping: input.mapping,

@@ -61,6 +61,17 @@ header), so the advertised `inputSchema` bytes and the parity baseline still
 agree with each other — but a byte comparison of those four against a fresh
 capture from the untouched v1 build would not match on `projectPath`.
 
+Two more `tool-contracts/*.json` files — `batch-class-source.json` and
+`batch-class-members.json` — carry a `{"kind":"artifact","artifactId":...}`
+variant added to their `target` property's `anyOf`, added AFTER capture by the
+change that let the batch tools reuse an already-resolved `artifactId`,
+mirroring the shape `get-class-source.json` /
+`get-class-members.json` already had at capture time for the same reuse-an-
+already-resolved-artifact case. `src/v1-parity-schemas.ts` was regenerated
+from the edited files afterward, so the advertised `inputSchema` bytes and the
+parity baseline still agree — but a byte comparison of those two against a
+fresh capture from the untouched v1 build would not match on that variant.
+
 ## Fixture families
 
 ### `tools-list-order.<flag-config>.json`
