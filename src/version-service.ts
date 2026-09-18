@@ -676,6 +676,12 @@ export class VersionService {
  * MC 26.1+ uses new YY.N version format and ships unobfuscated source.
  * Legacy 1.x.y versions remain obfuscated.
  * Snapshots: "26w01a" (year >= 26) → unobfuscated, "24w01a" → obfuscated.
+ *
+ * Pre-release / rc / snapshot suffixes: Mojang's real version-manifest ids
+ * use a hyphenated "-pre-N" / "-rc-N" / "-snapshot-N" form (e.g.
+ * "26.2-pre-6", "26.2-rc-2", "26.3-snapshot-6"). The older no-hyphen
+ * "-preN"/"-rcN" form is also accepted for backwards compatibility, but an
+ * arbitrary or numberless suffix (e.g. "26.1-foo", "26.1-snapshot") is not.
  */
 export function isUnobfuscatedVersion(version: string): boolean {
   if (!version) return false;
@@ -686,9 +692,14 @@ export function isUnobfuscatedVersion(version: string): boolean {
     return Number(snapshotMatch[1]) >= 26;
   }
 
-  // New format: YY.N or YY.N.P, optionally with -preN/-rcN suffix.
-  // Examples: "26.1", "27.3.1", "26.1-pre1", "26.1-rc1"
-  const newFormatMatch = version.match(/^(\d{2,})\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+)?$/);
+  // New format: YY.N or YY.N.P, optionally with a pre-release/rc/snapshot
+  // suffix in either the legacy no-hyphen form (-preN, -rcN) or Mojang's
+  // real hyphenated form (-pre-N, -rc-N, -snapshot-N).
+  // Examples: "26.1", "27.3.1", "26.1-pre1", "26.1-rc1", "26.2-pre-6",
+  // "26.2-rc-2", "26.3-snapshot-6"
+  const newFormatMatch = version.match(
+    /^(\d{2,})\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+|-(?:pre|rc|snapshot)-\d+)?$/
+  );
   if (newFormatMatch) {
     return Number(newFormatMatch[1]) >= 26;
   }

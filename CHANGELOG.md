@@ -23,6 +23,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 
 - `validate-project` with `task="project-summary"` no longer reports a run that found no Mixin configs, access wideners, or access transformers as "Validated 0 mixin config(s), 0 access widener(s), and 0 access transformer(s)." `status` stays `"ok"`, but the headline now reads `Nothing to validate: …` and names only the file kinds that were searched, and a warning states that nothing was validated.
+- Minecraft 26.x snapshots, pre-releases and release candidates are now recognized as unobfuscated. Their real version ids, such as `26.3-snapshot-6`, `26.2-pre-6`, `26.2-rc-2` and `26.1.2-rc-1`, were treated as obfuscated legacy versions, so `mapping: "mojang"` was refused on them, `intermediary`/`yarn` did not fall back to `obfuscated`, and symbol checks did not use the runtime jar. Only the unhyphenated forms such as `26.1-rc1`, which Mojang does not publish, and weekly ids such as `26w14a` were recognized before.
 
 ## [7.0.0] - 2026-09-13
 

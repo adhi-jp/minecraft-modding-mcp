@@ -70,6 +70,75 @@ test("isUnobfuscatedVersion returns false for empty or unknown formats", () => {
   assert.equal(isUnobfuscatedVersion("foo"), false);
 });
 
+// Real Mojang version-manifest ids for 26.x, captured from Loom's cached
+// mojang_versions_manifest.json. Mojang's actual pre-release/rc/snapshot
+// format is hyphenated with a trailing number ("26.2-pre-6"), not the
+// no-hyphen "26.2-pre6" shape the earlier regex assumed.
+const REAL_MOJANG_26X_IDS = [
+  "26.1",
+  "26.1-pre-1",
+  "26.1-pre-2",
+  "26.1-pre-3",
+  "26.1-rc-1",
+  "26.1-rc-2",
+  "26.1-rc-3",
+  "26.1-snapshot-1",
+  "26.1-snapshot-10",
+  "26.1-snapshot-11",
+  "26.1.1",
+  "26.1.1-rc-1",
+  "26.1.2",
+  "26.1.2-rc-1",
+  "26.2",
+  "26.2-pre-1",
+  "26.2-pre-6",
+  "26.2-rc-1",
+  "26.2-rc-2",
+  "26.2-snapshot-1",
+  "26.2-snapshot-8",
+  "26.3-snapshot-1",
+  "26.3-snapshot-6",
+  "26w14a"
+];
+
+test("isUnobfuscatedVersion returns true for real Mojang 26.x pre-release ids", () => {
+  for (const id of REAL_MOJANG_26X_IDS) {
+    assert.equal(isUnobfuscatedVersion(id), true, `expected ${id} to be unobfuscated`);
+  }
+});
+
+const LEGACY_IDS = [
+  "1.21.10",
+  "1.20.5",
+  "25w14craftmine",
+  "24w01a",
+  "1.21.10-pre1",
+  "1.21.10-rc1"
+];
+
+test("isUnobfuscatedVersion returns false for legacy ids in hyphenated-suffix probe", () => {
+  for (const id of LEGACY_IDS) {
+    assert.equal(isUnobfuscatedVersion(id), false, `expected ${id} to stay obfuscated`);
+  }
+});
+
+const MALFORMED_26X_IDS = [
+  "26.1-foo",
+  "26.1-snapshot",
+  "26.1-snapshot-",
+  "26.1-pre-",
+  "26.1-rc-",
+  "26.1-rc-abc",
+  "26.1-snapshot-abc",
+  "26.1-bogus-1"
+];
+
+test("isUnobfuscatedVersion rejects malformed 26.x suffix variants", () => {
+  for (const id of MALFORMED_26X_IDS) {
+    assert.equal(isUnobfuscatedVersion(id), false, `expected ${id} to be rejected`);
+  }
+});
+
 // --- SHA-1 verification tests ---
 
 function makeManifestFetchFn(
