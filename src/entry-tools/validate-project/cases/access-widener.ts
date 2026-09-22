@@ -43,9 +43,26 @@ if (!input.version) {
     }
   });
 }
-const content = input.subject.input.mode === "inline"
-  ? input.subject.input.content
-  : await readFile(input.subject.input.path, "utf8");
+let content: string;
+if (input.subject.input.mode === "inline") {
+  content = input.subject.input.content;
+} else {
+  const awPath = input.subject.input.path;
+  try {
+    content = await readFile(awPath, "utf8");
+  } catch (err) {
+    const osCode = (err as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Could not read access widener file "${awPath}": ${osCode} - ${err instanceof Error ? err.message : String(err)}`,
+      details: {
+        task: "access-widener",
+        failedStage: "input-validation",
+        nextAction: `Verify the file exists and is readable at "${awPath}".`
+      }
+    });
+  }
+}
 const output = await deps.validateAccessWidener({
   content,
   version: input.version,
@@ -54,6 +71,14 @@ const output = await deps.validateAccessWidener({
   scope: input.scope,
   preferProjectVersion: input.preferProjectVersion
 });
+const issueEntries = Array.isArray(output.entries)
+  ? output.entries.filter((entry) => {
+      if (!entry || typeof entry !== "object" || !("valid" in entry)) {
+        return true;
+      }
+      return (entry as { valid?: boolean }).valid !== true;
+    })
+  : undefined;
 return {
   ...buildEntryToolResult({
     task: "access-widener",
@@ -85,7 +110,7 @@ return {
           invalid: output.valid ? 0 : 1
         }
       },
-      issues: include.includes("issues") || detail !== "summary" ? output.issues : undefined
+      issues: include.includes("issues") || detail !== "summary" ? issueEntries : undefined
     },
     alwaysBlocks: ["project"]
   }),

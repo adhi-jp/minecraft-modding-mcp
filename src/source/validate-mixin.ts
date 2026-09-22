@@ -429,7 +429,8 @@ async function createProjectValidateMixinConfigInput(
 function shouldRetryValidateMixinWithMavenFirst(
   svc: SourceService,
   input: ValidateMixinSingleInput,
-  result: MixinValidationResult
+  result: MixinValidationResult,
+  eligibilityIssues: MixinValidationResult["issues"]
 ): boolean {
   const initialPriority = input.retryState?.initialSourcePriority ?? input.sourcePriority ?? svc.config.mappingSourcePriority;
   if (input.retryState?.attempted || initialPriority !== "loom-first") {
@@ -449,7 +450,9 @@ function shouldRetryValidateMixinWithMavenFirst(
   if (result.summary.membersSkipped > 0) {
     return true;
   }
-  return result.issues.some((issue) =>
+  // eligibilityIssues is the pre-category-filter issue list: a display
+  // filter (warningCategoryFilter) must not change whether a retry happens.
+  return eligibilityIssues.some((issue) =>
     issue.resolutionPath === "source-signature-unavailable" ||
     issue.resolutionPath === "target-mapping-failed" ||
     issue.resolutionPath === "member-remap-failed"
@@ -660,7 +663,27 @@ async function finalizeValidateMixinPipeline(svc: SourceService, ctx: MutableMix
     result.unfilteredSummary = unfilteredSummary;
   }
 
-  if (input.warningCategoryFilter && input.warningCategoryFilter.length > 0) {
+  // Recompute the outcome as the severity/uncertainty filters above leave it
+  // (a no-op when neither minSeverity nor hideUncertain was set), BEFORE any
+  // category filtering narrows things further. This is the baseline a
+  // warningCategoryFilter must reproduce exactly: valid, validationStatus and
+  // quickSummary must come out identical with or without the category
+  // filter, and retry eligibility must be decided from this same
+  // pre-category-filter issue list (see work items: warningCategoryFilter
+  // must not report a target-not-found mixin as valid:true, and must not
+  // change maven-first retry eligibility).
+  refreshMixinValidationOutcome(result);
+  const issuesForRetryEligibility = result.issues;
+  const preCategoryFilterValid = result.valid;
+  const preCategoryFilterValidationStatus = result.validationStatus;
+  const preCategoryFilterQuickSummary = result.quickSummary;
+
+  const categoryFilterApplied = !!(input.warningCategoryFilter && input.warningCategoryFilter.length > 0);
+
+  if (categoryFilterApplied) {
+    if (!result.unfilteredSummary) {
+      result.unfilteredSummary = { ...result.summary };
+    }
     const allowedCategories = new Set(input.warningCategoryFilter);
     result.issues = result.issues.filter((i) => i.category && allowedCategories.has(i.category));
     if (result.structuredWarnings) {
@@ -702,7 +725,16 @@ async function finalizeValidateMixinPipeline(svc: SourceService, ctx: MutableMix
     refreshMixinValidationOutcome(result);
   }
 
-  if (shouldRetryValidateMixinWithMavenFirst(svc, input, result)) {
+  if (categoryFilterApplied) {
+    // refreshMixinValidationOutcome above recomputed valid/validationStatus/
+    // quickSummary from the category-filtered summary; restore the true
+    // (pre-category-filter) verdict now that member-count bookkeeping is done.
+    result.valid = preCategoryFilterValid;
+    result.validationStatus = preCategoryFilterValidationStatus;
+    result.quickSummary = preCategoryFilterQuickSummary;
+  }
+
+  if (shouldRetryValidateMixinWithMavenFirst(svc, input, result, issuesForRetryEligibility)) {
     const retryWarning =
       `Retrying validate-mixin with sourcePriority="maven-first" after partial validation using "${currentSourcePriority}".`;
     try {
@@ -757,10 +789,10 @@ async function resolveMixinConfigSources(input: ValidateMixinInput): Promise<Res
 
   for (const rawConfigPath of input.input.configPaths) {
     const resolvedConfigPath = resolveMixinInputPath(rawConfigPath, "configPath");
-    let configJson: { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
+    let parsedConfig: unknown;
     try {
       const raw = await readFile(resolvedConfigPath, "utf-8");
-      configJson = JSON.parse(raw);
+      parsedConfig = JSON.parse(raw);
     } catch (err) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,
@@ -768,6 +800,45 @@ async function resolveMixinConfigSources(input: ValidateMixinInput): Promise<Res
         details: { failedStage: "input-validation" }
       });
     }
+
+    if (parsedConfig === null || typeof parsedConfig !== "object" || Array.isArray(parsedConfig)) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `Mixin config "${rawConfigPath}" must contain a JSON object.`,
+        details: { failedStage: "input-validation" }
+      });
+    }
+    const configRecord = parsedConfig as Record<string, unknown>;
+    for (const key of ["mixins", "client", "server"] as const) {
+      const fieldValue = configRecord[key];
+      if (fieldValue === undefined) {
+        continue;
+      }
+      if (!Array.isArray(fieldValue)) {
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `Mixin config "${rawConfigPath}" field "${key}" must be an array of class names.`,
+          details: { failedStage: "input-validation" }
+        });
+      }
+      for (let i = 0; i < fieldValue.length; i++) {
+        if (typeof fieldValue[i] !== "string") {
+          throw createError({
+            code: ERROR_CODES.INVALID_INPUT,
+            message: `Mixin config "${rawConfigPath}" field "${key}" element at index ${i} must be a string.`,
+            details: { failedStage: "input-validation" }
+          });
+        }
+      }
+    }
+    if (configRecord.package !== undefined && typeof configRecord.package !== "string") {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `Mixin config "${rawConfigPath}" field "package" must be a string.`,
+        details: { failedStage: "input-validation" }
+      });
+    }
+    const configJson = configRecord as { package?: string; mixins?: string[]; client?: string[]; server?: string[] };
 
     const pkg = configJson.package ?? "";
     const classNames = [

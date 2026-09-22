@@ -49,9 +49,10 @@ test("ValidateProjectService validates direct access widener inline input", asyn
     },
     validateAccessWidener: async () => ({
       valid: true,
-      header: "accessWidener v2 named",
+      headerVersion: "v2",
       namespace: "named",
-      issues: [],
+      entries: [],
+      summary: { total: 0, valid: 0, invalid: 0 },
       warnings: []
     }),
     discoverMixins: async () => [],
@@ -218,9 +219,10 @@ test("ValidateProjectService project-summary continues when one discovered mixin
     },
     validateAccessWidener: async () => ({
       valid: true,
-      header: "accessWidener v2 named",
+      headerVersion: "v2",
       namespace: "named",
-      issues: [],
+      entries: [],
+      summary: { total: 0, valid: 0, invalid: 0 },
       warnings: []
     }),
     discoverMixins: async () => [
@@ -259,9 +261,10 @@ test("ValidateProjectService project-summary keeps empty mixin configs as warnin
     }),
     validateAccessWidener: async () => ({
       valid: true,
-      header: "accessWidener v2 named",
+      headerVersion: "v2",
       namespace: "named",
-      issues: [],
+      entries: [],
+      summary: { total: 0, valid: 0, invalid: 0 },
       warnings: []
     }),
     discoverMixins: async () => ["/workspace/demo-mod/src/main/resources/empty.mixins.json"],
@@ -319,9 +322,10 @@ test("ValidateProjectService project-summary applies preferProjectVersion to dis
       seenVersion = input.version;
       return {
         valid: true,
-        header: "accessWidener v2 named",
+        headerVersion: "v2",
         namespace: "named",
-        issues: [],
+        entries: [],
+        summary: { total: 0, valid: 0, invalid: 0 },
         warnings: []
       };
     },
@@ -379,9 +383,10 @@ test("ValidateProjectService project-summary forwards runtime-aware access widen
       seenPreferProjectVersion = (input as { preferProjectVersion?: boolean }).preferProjectVersion;
       return {
         valid: true,
-        header: "accessWidener v2 named",
+        headerVersion: "v2",
         namespace: "named",
-        issues: [],
+        entries: [],
+        summary: { total: 0, valid: 0, invalid: 0 },
         warnings: []
       };
     },
@@ -432,9 +437,10 @@ test("ValidateProjectService project-summary discovers and forwards runtime-awar
     }),
     validateAccessWidener: async () => ({
       valid: true,
-      header: "accessWidener v2 named",
+      headerVersion: "v2",
       namespace: "named",
-      issues: [],
+      entries: [],
+      summary: { total: 0, valid: 0, invalid: 0 },
       warnings: []
     }),
     validateAccessTransformer: async (input) => {
@@ -487,9 +493,10 @@ test("ValidateProjectService project-summary does not discover access transforme
     }),
     validateAccessWidener: async () => ({
       valid: true,
-      header: "accessWidener v2 named",
+      headerVersion: "v2",
       namespace: "named",
-      issues: [],
+      entries: [],
+      summary: { total: 0, valid: 0, invalid: 0 },
       warnings: []
     }),
     validateAccessTransformer: async () => ({
@@ -579,9 +586,10 @@ test("ValidateProjectService project-summary uses detected project version consi
       seenAwVersion = input.version;
       return {
         valid: true,
-        header: "accessWidener v2 named",
+        headerVersion: "v2",
         namespace: "named",
-        issues: [],
+        entries: [],
+        summary: { total: 0, valid: 0, invalid: 0 },
         warnings: []
       };
     },
@@ -850,7 +858,7 @@ test("ValidateProjectService project-summary infers an omitted version from the 
     },
     validateAccessWidener: async (input) => {
       seenAwVersion = input.version;
-      return { valid: true, header: "accessWidener v2 named", namespace: "named", issues: [], warnings: [] };
+      return { valid: true, headerVersion: "v2", namespace: "named", entries: [], summary: { total: 0, valid: 0, invalid: 0 }, warnings: [] };
     },
     discoverMixins: async () => [mixinConfigPath],
     discoverAccessWideners: async () => [awPath],
@@ -889,7 +897,7 @@ test("ValidateProjectService project-summary treats an inferred version as a pro
     },
     validateAccessWidener: async (input) => {
       seenAwPreferProjectVersion = input.preferProjectVersion;
-      return { valid: true, header: "accessWidener v2 named", namespace: "named", issues: [], warnings: [] };
+      return { valid: true, headerVersion: "v2", namespace: "named", entries: [], summary: { total: 0, valid: 0, invalid: 0 }, warnings: [] };
     },
     discoverMixins: async () => [],
     discoverAccessWideners: async () => [awPath],

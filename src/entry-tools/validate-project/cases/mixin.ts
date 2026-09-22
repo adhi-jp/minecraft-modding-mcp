@@ -86,17 +86,25 @@ const summary = output.summary as {
   valid?: number;
   partial?: number;
   invalid?: number;
+  processingErrors?: number;
 } | undefined;
 const invalidCount = summary?.invalid ?? 0;
 const partialCount = summary?.partial ?? 0;
+const processingErrorsCount = summary?.processingErrors ?? 0;
 return {
   ...buildEntryToolResult({
     task: "mixin",
     detail,
     include,
     summary: {
-      status: invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok",
-      headline: `Validated ${summary?.total ?? 0} mixin input(s).`,
+      status: invalidCount > 0
+        ? "invalid"
+        : partialCount > 0 || processingErrorsCount > 0
+          ? "partial"
+          : "ok",
+      headline: processingErrorsCount > 0
+        ? `Validated ${summary?.total ?? 0} mixin input(s); ${processingErrorsCount} could not be processed.`
+        : `Validated ${summary?.total ?? 0} mixin input(s).`,
       subject: createSummarySubject({
         task: "mixin",
         kind: input.subject.kind,
@@ -109,7 +117,8 @@ return {
       counts: {
         valid: summary?.valid ?? 0,
         partial: partialCount,
-        invalid: invalidCount
+        invalid: invalidCount,
+        processingErrors: processingErrorsCount
       }
     },
     blocks: {

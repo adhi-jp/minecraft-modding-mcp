@@ -93,9 +93,14 @@ test("reads path-mode input from the file and forwards its content to the access
   assert.deepEqual(result.summary.subject?.input, { mode: "path", path: atPath });
 });
 
+// FROZEN TITLE. This name is pinned in tests/fixtures/premigration/test-list.txt,
+// so the named-set gate treats a rename as a deletion. The title is the pre-fix
+// wording; what the body checks now: a missing path-mode file is reported as
+// ERR_INVALID_INPUT naming the path and the OS error code, not as a raw ENOENT.
 test("propagates the raw filesystem error when the path-mode file does not exist", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "validate-project-at-missing-path-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const missingPath = join(root, "missing.cfg");
 
   let validatorCalls = 0;
   const service = createService({
@@ -113,10 +118,14 @@ test("propagates the raw filesystem error when the path-mode file does not exist
         version: "1.21.10",
         subject: {
           kind: "access-transformer",
-          input: { mode: "path", path: join(root, "missing.cfg") }
+          input: { mode: "path", path: missingPath }
         }
       }),
-    (error: any) => error.code === "ENOENT"
+    (error: any) =>
+      error.code === ERROR_CODES.INVALID_INPUT &&
+      typeof error.message === "string" &&
+      error.message.includes(missingPath) &&
+      error.message.includes("ENOENT")
   );
   assert.equal(validatorCalls, 0);
 });

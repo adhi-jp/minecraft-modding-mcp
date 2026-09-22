@@ -44,9 +44,26 @@ if (!input.version) {
     }
   });
 }
-const content = input.subject.input.mode === "inline"
-  ? input.subject.input.content
-  : await readFile(input.subject.input.path, "utf8");
+let content: string;
+if (input.subject.input.mode === "inline") {
+  content = input.subject.input.content;
+} else {
+  const atPath = input.subject.input.path;
+  try {
+    content = await readFile(atPath, "utf8");
+  } catch (err) {
+    const osCode = (err as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Could not read access transformer file "${atPath}": ${osCode} - ${err instanceof Error ? err.message : String(err)}`,
+      details: {
+        task: "access-transformer",
+        failedStage: "input-validation",
+        nextAction: `Verify the file exists and is readable at "${atPath}".`
+      }
+    });
+  }
+}
 if (!deps.validateAccessTransformer) {
   throw createError({
     code: ERROR_CODES.CONTEXT_UNRESOLVED,
