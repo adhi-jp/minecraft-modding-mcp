@@ -213,7 +213,16 @@ export class ModDecompileService {
       const outPath = isAbsolute(input.outputFile)
         ? input.outputFile
         : resolvePath(input.outputFile);
-      await writeFile(outPath, content, "utf8");
+      try {
+        await writeFile(outPath, content, "utf8");
+      } catch (writeError) {
+        const errno = (writeError as NodeJS.ErrnoException | undefined)?.code;
+        throw createError({
+          code: ERROR_CODES.INVALID_INPUT,
+          message: `outputFile "${outPath}" could not be written (${errno ?? "unknown error"}).`,
+          details: { field: "outputFile", value: outPath, osErrorCode: errno }
+        });
+      }
       outputFilePath = outPath;
       content = `[Written to ${outPath}]`;
     }

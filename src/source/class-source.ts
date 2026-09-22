@@ -831,7 +831,8 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
           qualifiedName: isInnerMatch ? className : rowQualified,
           filePath: row.filePath,
           line: row.line,
-          symbolKind: row.symbolKind
+          symbolKind: row.symbolKind,
+          ...(isInnerMatch ? { nested: true, enclosingClass: rowQualified } : {})
         };
       })
       .slice(0, limit);
@@ -1377,7 +1378,16 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     const outputPath = isAbsolute(outputFile)
       ? outputFile
       : resolvePath(outputFile);
-    await writeFile(outputPath, sourceText, "utf8");
+    try {
+      await writeFile(outputPath, sourceText, "utf8");
+    } catch (writeError) {
+      const errno = (writeError as NodeJS.ErrnoException | undefined)?.code;
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `outputFile "${outputPath}" could not be written (${errno ?? "unknown error"}).`,
+        details: { field: "outputFile", value: outputPath, osErrorCode: errno }
+      });
+    }
     resolvedOutputFile = outputPath;
     sourceText = `[Written to ${outputPath}]`;
   }

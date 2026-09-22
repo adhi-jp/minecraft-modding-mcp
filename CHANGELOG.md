@@ -10,6 +10,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 
 - When the server's worker process restarts and the client re-sends `initialize`, tool calls that queued in the meantime are no longer delivered to the replacement worker ahead of the handshake. The re-sent `initialize` now goes first and the queued calls are released once it is answered.
+- `get-class-members` honors `includeAnnotations: true`. The option was accepted but had no effect when called through the MCP tool, so member annotations such as `@Deprecated` were never returned.
+- `get-class-source` and `get-mod-class-source` report `ERR_INVALID_INPUT`, naming `outputFile` and the OS error code, when the `outputFile` path cannot be written because its parent directory does not exist, it is a directory, or it is not writable. They previously failed with `ERR_INTERNAL`.
+- `find-class` with a qualified inner-class name such as `a.b.Outer.Inner` now reports `nested: true` and `enclosingClass`, as an unqualified lookup of the same class already did.
 
 ## [7.1.0] - 2026-09-19
 
