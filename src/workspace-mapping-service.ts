@@ -73,7 +73,120 @@ type LoaderDetection = {
   reason: string;
 };
 
-function detectMappingsFromContent(content: string): MappingDetection[] {
+/** Which Gradle dialect a build script is written in; decided by its file name. */
+type GradleScriptKind = "groovy" | "kotlin";
+
+function gradleScriptKind(filePath: string): GradleScriptKind {
+  return filePath.endsWith(".kts") ? "kotlin" : "groovy";
+}
+
+/**
+ * Blank out Gradle Groovy/Kotlin line and block comments so a commented-out
+ * alternative (`// mappings loom.officialMojangMappings()`) cannot count as a
+ * mapping declaration — a Yarn project that kept such a note used to look like it
+ * declared two mappings and resolved to none.
+ *
+ * Literals are tracked rather than skipped over, because a `//` inside
+ * `"https://..."` opens no comment and a `/*` inside a string must not swallow the
+ * rest of the script. Newlines inside a removed block comment are preserved so the
+ * remaining declarations keep their line structure.
+ *
+ * The two dialects differ in three places, which is why `scriptKind` is threaded in
+ * from the file name rather than guessed from the text: Kotlin block comments NEST
+ * (Groovy's do not), a Kotlin raw string `"""..."""` has NO escape sequences (so
+ * honoring `\` there would let a literal ending in a backslash hide its own
+ * terminator), and the dollar-slashy literal `$/ ... /$` is Groovy-only.
+ *
+ * When a construct is ambiguous the scanner keeps the text instead of dropping it: a
+ * false mapping conflict is a smaller failure than a declaration that never reaches
+ * the detectors.
+ */
+function stripGradleComments(content: string, scriptKind: GradleScriptKind): string {
+  let output = "";
+  let index = 0;
+  while (index < content.length) {
+    const char = content[index]!;
+    if (char === "/" && content[index + 1] === "/") {
+      while (index < content.length && content[index] !== "\n") {
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "/" && content[index + 1] === "*") {
+      let depth = 1;
+      index += 2;
+      while (index < content.length && depth > 0) {
+        if (scriptKind === "kotlin" && content[index] === "/" && content[index + 1] === "*") {
+          depth += 1;
+          index += 2;
+          continue;
+        }
+        if (content[index] === "*" && content[index + 1] === "/") {
+          depth -= 1;
+          index += 2;
+          continue;
+        }
+        if (content[index] === "\n") {
+          output += "\n";
+        }
+        index += 1;
+      }
+      continue;
+    }
+    // Groovy dollar-slashy literal: `$/ ... /$`, whose only escapes are `$$` and `$/`.
+    // The plain slashy form `/.../` is deliberately NOT recognized — `/` is also the
+    // division operator, so `a / b / c` is indistinguishable from a literal without
+    // parsing expressions, and mistaking code for a literal would hide real comments.
+    if (scriptKind === "groovy" && char === "$" && content[index + 1] === "/") {
+      output += "$/";
+      index += 2;
+      while (index < content.length) {
+        if (content[index] === "$" && (content[index + 1] === "$" || content[index + 1] === "/")) {
+          output += content.slice(index, index + 2);
+          index += 2;
+          continue;
+        }
+        if (content[index] === "/" && content[index + 1] === "$") {
+          output += "/$";
+          index += 2;
+          break;
+        }
+        output += content[index];
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      // Triple-quoted Groovy/Kotlin blocks close only on the matching triple.
+      const tripled = content.startsWith(char.repeat(3), index);
+      const quote = tripled ? char.repeat(3) : char;
+      const honorsEscapes = !(tripled && scriptKind === "kotlin");
+      output += quote;
+      index += quote.length;
+      while (index < content.length) {
+        if (honorsEscapes && content[index] === "\\") {
+          output += content.slice(index, index + 2);
+          index += 2;
+          continue;
+        }
+        if (content.startsWith(quote, index)) {
+          output += quote;
+          index += quote.length;
+          break;
+        }
+        output += content[index];
+        index += 1;
+      }
+      continue;
+    }
+    output += char;
+    index += 1;
+  }
+  return output;
+}
+
+function detectMappingsFromContent(rawContent: string, scriptKind: GradleScriptKind): MappingDetection[] {
+  const content = stripGradleComments(rawContent, scriptKind);
   const detections: MappingDetection[] = [];
   if (/officialMojangMappings\s*\(/i.test(content)) {
     detections.push({
@@ -412,7 +525,7 @@ export class WorkspaceMappingService {
         } catch {
           return [];
         }
-        return detectMappingsFromContent(content).map((detection) => ({
+        return detectMappingsFromContent(content, gradleScriptKind(filePath)).map((detection) => ({
           filePath,
           mapping: detection.mapping,
           reason: detection.reason

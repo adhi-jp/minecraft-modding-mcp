@@ -373,19 +373,15 @@ export class MappingService {
       // only against the fully projected target descriptor dropped those valid candidates
       // and produced false `not_found` for common Mojang -> Yarn lookups. Accept any
       // candidate whose descriptor matches the caller's descriptor, the target-space
-      // projection, or the obfuscated-space projection — the three forms that actually
-      // appear in the mapping graph.
+      // projection, or a base-namespace projection — the forms that actually appear in
+      // the mapping graph.
       const strictDescriptor = projectedDescriptor ?? queryRecord.descriptor;
-      const acceptedDescriptors = new Set<string>([queryRecord.descriptor, strictDescriptor]);
-      const toObfuscatedPath = namespacePath(graph, sourceMapping, "obfuscated");
-      if (toObfuscatedPath) {
-        const obfuscatedProjection = this.projectMethodDescriptorToTarget(
-          graph,
-          toObfuscatedPath,
-          queryRecord.descriptor
-        );
-        acceptedDescriptors.add(obfuscatedProjection.descriptor);
-      }
+      const acceptedDescriptors = this.acceptedDescriptorForms(
+        graph,
+        sourceMapping,
+        queryRecord.descriptor,
+        strictDescriptor
+      );
       rawCandidates = rawCandidates.filter(
         (candidate) =>
           candidate.descriptor !== undefined && acceptedDescriptors.has(candidate.descriptor)
@@ -632,16 +628,12 @@ export class MappingService {
     const limitedCandidates = limitResolutionCandidates(candidates, input.maxCandidates);
 
     const strictDescriptor = projectedDescriptor ?? descriptor;
-    const acceptedDescriptors = new Set<string>([descriptor, strictDescriptor]);
-    const toObfuscatedPath = namespacePath(graph, sourceMapping, "obfuscated");
-    if (toObfuscatedPath) {
-      const obfuscatedProjection = this.projectMethodDescriptorToTarget(
-        graph,
-        toObfuscatedPath,
-        descriptor
-      );
-      acceptedDescriptors.add(obfuscatedProjection.descriptor);
-    }
+    const acceptedDescriptors = this.acceptedDescriptorForms(
+      graph,
+      sourceMapping,
+      descriptor,
+      strictDescriptor
+    );
     // "Strict" is the query's full advertised triple: owner + name + descriptor. The
     // descriptor alone is not enough, because `lookupCandidates` also indexes methods
     // under the OWNERLESS `<name><descriptor>` simple-name key — so a same-signature
@@ -1445,6 +1437,41 @@ export class MappingService {
         continue;
       }
       accepted.add(normalizeMappedSymbolOutput(candidate.symbol));
+    }
+    return accepted;
+  }
+
+  /**
+   * The descriptor forms a stored record may legitimately carry for a query written
+   * in `sourceMapping` coordinates: the caller's own descriptor, the target-space
+   * projection, and the projection into each base namespace.
+   *
+   * Tiny v2 writes one descriptor per method row, in the file's FIRST namespace, and
+   * shares it across every column. A merged Loom rendering puts that in obfuscated
+   * coordinates, but a workspace whose `official intermediary` and `intermediary named`
+   * mappings are SEPARATE files leaves the last hop's record carrying an
+   * intermediary-coordinate descriptor, which an obfuscated-only accepted set rejected
+   * as `not_found`. Projecting along every reachable base namespace is the same rule
+   * `checkSymbolExists` applies.
+   */
+  private acceptedDescriptorForms(
+    graph: LoadedGraph,
+    sourceMapping: SourceMapping,
+    descriptor: string,
+    targetDescriptor: string
+  ): Set<string> {
+    const accepted = new Set<string>([descriptor, targetDescriptor]);
+    for (const baseNamespace of ["obfuscated", "intermediary"] as const) {
+      if (sourceMapping === baseNamespace) {
+        continue;
+      }
+      const projectionPath = namespacePath(graph, sourceMapping, baseNamespace);
+      if (!projectionPath) {
+        continue;
+      }
+      accepted.add(
+        this.projectMethodDescriptorToTarget(graph, projectionPath, descriptor).descriptor
+      );
     }
     return accepted;
   }

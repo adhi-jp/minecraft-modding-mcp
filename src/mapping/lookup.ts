@@ -116,6 +116,15 @@ export function lookupCandidates(index: DirectionIndex, query: MappingSymbolReco
   }
 
   return [...collected.values()]
+    // A lookup answers only with candidates of the query's own kind. The index buckets
+    // deliberately mix kinds: `exactLookupKeys` registers every method a second time
+    // under the descriptorless `owner.name` key that a FIELD's symbol also uses, and
+    // `simpleLookupKeys` files classes, fields and methods under the same bare name. So
+    // a field query could be answered with a same-named method's target name at
+    // exact/confidence 1, or with a class that merely shares its simple name. Filtering
+    // here — before the MAX_CANDIDATES slice — also keeps wrong-kind rows from crowding
+    // the right one out of a busy name's bucket.
+    .filter((candidate) => candidate.record.kind === query.kind)
     .sort((left, right) => {
       if (right.confidence !== left.confidence) {
         return right.confidence - left.confidence;
@@ -547,15 +556,21 @@ export function projectLookupCandidateDescriptor(
   // unchanged by design.
   if (
     candidate.kind !== "method" ||
+    !candidate.owner ||
     !candidate.descriptor ||
     !targetDescriptor ||
     candidate.descriptor !== sourceDescriptor
   ) {
     return candidate;
   }
+  // `symbol` embeds the descriptor, so replacing only the `descriptor` field left the
+  // SOURCE-namespace descriptor inside an otherwise target-namespace symbol — one
+  // SymbolReference advertising two namespaces at once. Rebuild it from the target
+  // owner + name + descriptor with the same helper the parsers use.
   return {
     ...candidate,
-    descriptor: targetDescriptor
+    descriptor: targetDescriptor,
+    symbol: createMethodSymbolRecord(candidate.owner, candidate.name, targetDescriptor).symbol
   };
 }
 
