@@ -24,6 +24,7 @@ type Harness = {
   runningValidateKey?: string;
   currentRetryEpoch?: number;
   currentRetryReservation?: { epoch: number; notBefore: number; delayMs: number };
+  clientInitialized?: boolean;
   handleClientMessage(message: JSONRPCMessage): void;
   handleValidateProjectDeadline(key: string): void;
   handleWorkerMessage(child: FakeChild, message: JSONRPCMessage): void;
@@ -1089,4 +1090,101 @@ test("timeout-first cancellation does not create a second terminal response", (t
     (responses[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code,
     "ERR_TOOL_TIMEOUT"
   );
+});
+
+function legacyInitialize(id: number): JSONRPCRequest {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "supervisor-state-test", version: "1.0.0" }
+    }
+  } as JSONRPCRequest;
+}
+
+function legacyInitializeResult(id: number): JSONRPCMessage {
+  return {
+    jsonrpc: "2.0",
+    id,
+    result: {
+      protocolVersion: "2025-06-18",
+      capabilities: { tools: {} },
+      serverInfo: { name: "supervisor-state-fixture", version: "1.0.0" }
+    }
+  } as JSONRPCMessage;
+}
+
+/**
+ * Only the era-neutral discover prefix of an INITIAL initialize may be released
+ * ahead of the handshake. A re-initialize after a completed handshake must
+ * overtake nothing: the queue behind it stays gated until the initialization
+ * response, so no ordinary request reaches an un-handshaken worker first.
+ */
+test("re-initialize after a completed handshake is forwarded before the requests queued behind it", () => {
+  let now = 0;
+  const timers: FakeScheduledTimer[] = [];
+  const childWrites: string[][] = [[], []];
+  const children = childWrites.map((writes, index) => createLifecycleChild(99_200_000 + index, writes));
+  let spawnIndex = 0;
+  const supervisor = new StdioSupervisor({
+    entryFile: "fixture.ts",
+    clientWriter: () => {},
+    eventWriter: () => {},
+    monotonicNow: () => now,
+    workerSpawner: () => children[spawnIndex++] as never,
+    treeTerminator: () => true,
+    timerScheduler: (callback, delayMs) => {
+      const timer = {
+        at: now + delayMs,
+        callback,
+        cleared: false,
+        unref() { return this; }
+      } as unknown as FakeScheduledTimer;
+      timers.push(timer);
+      return timer;
+    },
+    timerClearer: (timer) => { (timer as FakeScheduledTimer).cleared = true; }
+  } as never) as unknown as Harness;
+  const methodsOf = (writes: string[]) =>
+    writes.map((frame) => /"method":"([^"]+)"/.exec(frame)?.[1] ?? "response");
+
+  supervisor.spawnWorker();
+  supervisor.handleClientMessage(legacyInitialize(1));
+  supervisor.handleWorkerReady(children[0]);
+  supervisor.handleWorkerMessage(children[0], legacyInitializeResult(1));
+  supervisor.handleClientMessage({ jsonrpc: "2.0", method: "notifications/initialized" } as JSONRPCMessage);
+  assert.equal(supervisor.clientInitialized, true, "the first handshake must complete");
+
+  // The worker dies; ordinary calls queue, and only THEN does the client
+  // re-send initialize for the replacement generation.
+  supervisor.handleWorkerExit(children[0], 1, null);
+  supervisor.handleClientMessage(call(2, "list-versions"));
+  supervisor.handleClientMessage(call(3, "list-versions"));
+  assert.equal(supervisor.queuedRequests.length, 2, "both calls must queue while the worker is down");
+  supervisor.handleClientMessage(legacyInitialize(9));
+
+  const retry = timers.find((timer) => timer.at === 100 && !timer.cleared);
+  assert.ok(retry, "restart retry timer must be armed");
+  now = 100;
+  retry.callback();
+  assert.equal(supervisor.child, children[1]);
+  supervisor.handleWorkerReady(children[1]);
+
+  assert.deepEqual(
+    methodsOf(childWrites[1]),
+    ["initialize"],
+    "nothing queued may overtake a re-initialize on the replacement worker"
+  );
+
+  supervisor.handleWorkerMessage(children[1], legacyInitializeResult(9));
+  assert.deepEqual(
+    methodsOf(childWrites[1]),
+    ["initialize", "tools/call", "tools/call"],
+    "the initialization response releases the queued calls"
+  );
+  assert.equal(childWrites[1][1]?.includes('"id":2'), true, "client arrival order is preserved after the handshake");
+  assert.equal(childWrites[1][2]?.includes('"id":3'), true);
 });

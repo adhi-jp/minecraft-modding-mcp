@@ -1055,7 +1055,8 @@ export class StdioSupervisor {
    * Number of queued requests that arrived before an initial initialize while
    * the worker was unavailable. Only era-neutral modern discovers can occupy
    * this prefix; readiness forwards it before initialize, then keeps the queue
-   * suffix gated until the initialization response.
+   * suffix gated until the initialization response. A RE-initialize (the era
+   * is already legacy) has no prefix at all: nothing queued may overtake it.
    */
   private initializePredecessorCount = 0;
   private clientInitialized = false;
@@ -1544,6 +1545,7 @@ export class StdioSupervisor {
         );
         return;
       }
+      const eraBeforeInitialize = this.era;
       this.era = "legacy";
       // The SDK's opening classifier treats an initialize that carries a
       // valid modern era claim as MODERN, diverging from this admission rule
@@ -1570,7 +1572,13 @@ export class StdioSupervisor {
         this.initializePredecessorCount = 0;
         this.forwardRequest(message, this.createPendingRequest(message));
       } else {
-        this.initializePredecessorCount = this.queuedRequests.length;
+        // Only an INITIAL initialize owns a releasable prefix: while the era
+        // was unselected the sole request that can have queued is an
+        // era-neutral discover. Once legacy is locked ordinary requests queue
+        // too, and letting them overtake a RE-sent initialize would hand them
+        // to an un-handshaken replacement worker.
+        this.initializePredecessorCount =
+          eraBeforeInitialize === "unselected" ? this.queuedRequests.length : 0;
         const existing = this.queuedNotifications.findIndex(
           (entry) => isRequest(entry) && entry.method === "initialize"
         );

@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Fixed
+
+- When the server's worker process restarts and the client re-sends `initialize`, tool calls that queued in the meantime are no longer delivered to the replacement worker ahead of the handshake. The re-sent `initialize` now goes first and the queued calls are released once it is answered.
+
 ## [7.1.0] - 2026-09-19
 
 ### Added

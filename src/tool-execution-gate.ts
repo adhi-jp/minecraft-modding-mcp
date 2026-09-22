@@ -18,7 +18,8 @@ const DEFAULT_OPTIONS: GateOptions = {
 };
 
 // Heavy tools that have a batch equivalent able to collapse many same-kind
-// queries into a single gated call. Used to point overflow guidance at the
+// queries into one call. The batch-* tools are NOT in the heavy set, so that
+// one call bypasses this gate entirely. Used to point overflow guidance at the
 // right batch-* tool instead of just telling the caller to retry serially.
 const BATCH_EQUIVALENTS: Record<string, string> = {
   "find-mapping": "batch-mappings",
