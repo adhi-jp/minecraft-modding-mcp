@@ -117,6 +117,23 @@ test("resolveArtifact preserves representative suggestedCall hint variants", asy
     });
   }
 
+  /** The same refusal, for the branch whose advice can only be a template. */
+  async function expectMappingNotAppliedTemplate(
+    action: () => Promise<unknown>,
+    verify: (params: Record<string, unknown>) => void
+  ): Promise<void> {
+    await assert.rejects(action, (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      if ((error as { code: string }).code !== ERROR_CODES.MAPPING_NOT_APPLIED) return false;
+      const details = (error as { details?: Record<string, unknown> }).details ?? {};
+      assert.equal(details.suggestedCall, undefined);
+      const examples = details.exampleCalls as Array<{ params: Record<string, unknown> }> | undefined;
+      assert.equal(examples?.length, 1);
+      verify(examples![0]!.params);
+      return true;
+    });
+  }
+
   const cases: Array<{
     name: string;
     createFixture: () => Promise<ResolveArtifactHintFixture>;
@@ -158,20 +175,25 @@ test("resolveArtifact preserves representative suggestedCall hint variants", asy
           }
         }),
       run: async ({ jarPath, service }) => {
-        await expectMappingNotApplied(
+        // This refusal fires because no version is known, so the version it
+        // offers can only be a template: the caller's own target value is a jar
+        // path, and handing that back as a version target is a call that cannot
+        // run. The advice therefore travels as an exampleCall, and what this
+        // case guards - the scope, the nested target shape - is asserted there.
+        await expectMappingNotAppliedTemplate(
           () =>
             service.resolveArtifact({
               target: { kind: "jar", value: jarPath },
               mapping: "intermediary",
               scope: "merged"
             } as any),
-          (_details, suggested) => {
-            assert.equal(suggested.params.scope, "merged");
-            assert.equal(typeof suggested.params.target, "object");
-            assert.notEqual(suggested.params.target, null);
-            assert.equal((suggested.params.target as { kind?: string }).kind, "version");
-            assert.equal("targetKind" in suggested.params, false);
-            assert.equal("targetValue" in suggested.params, false);
+          (params) => {
+            assert.equal(params.scope, "merged");
+            assert.equal(typeof params.target, "object");
+            assert.notEqual(params.target, null);
+            assert.equal((params.target as { kind?: string }).kind, "version");
+            assert.equal("targetKind" in params, false);
+            assert.equal("targetValue" in params, false);
           }
         );
       }

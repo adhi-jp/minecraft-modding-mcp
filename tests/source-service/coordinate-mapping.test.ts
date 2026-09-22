@@ -169,13 +169,20 @@ test("SourceService rejects intermediary and yarn mappings when artifact version
           return false;
         }
         const details = (error as { details?: Record<string, unknown> }).details;
+        const examples = details?.exampleCalls as
+          | Array<{ params?: { target?: { kind?: string; value?: string } } }>
+          | undefined;
         return (
           details?.mapping === mapping &&
           typeof details?.nextAction === "string" &&
           details.nextAction.includes("target: { kind: \"version\", value") &&
-          typeof details?.suggestedCall === "object" &&
-          details.suggestedCall !== null &&
-          (details.suggestedCall as { params?: Record<string, unknown> }).params?.target !== undefined
+          // The recovery advice must be usable: a jar path is not a version id,
+          // so it may never be handed back as a version target's value. The
+          // version is offered as a template the caller fills in instead.
+          details?.suggestedCall === undefined &&
+          examples?.length === 1 &&
+          examples[0]?.params?.target?.kind === "version" &&
+          examples[0]?.params?.target?.value === "<your-mc-version>"
         );
       }
     );

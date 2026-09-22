@@ -270,20 +270,38 @@ function looksLikeMinecraftSourceArtifact(path: string, hasMinecraftNamespace: b
   return hasMinecraftNamespace || looksLikeMinecraftArtifactPath(path);
 }
 
+/**
+ * What a Minecraft version id may be FOLLOWED by and still be the same id:
+ * nothing. A pre-release suffix extends the id rather than decorating it —
+ * `26.1-pre-1` is its own version and not `26.1` — so the hyphen forms Mojang
+ * publishes (`-pre1`, `-rc1`, `-pre-6`, `-rc-2`, `-snapshot-6`) have to close
+ * the token as firmly as a trailing digit does. Any OTHER hyphen is ordinary
+ * path decoration (`minecraft-1.21.1-merged.jar`) and must keep matching.
+ *
+ * The suffix grammar is `isUnobfuscatedVersion`'s in version-service.ts; the
+ * two are read together whenever either changes.
+ */
+const VERSION_ID_SUFFIX_LOOKAHEAD = "-(?:pre|rc)[0-9]|-(?:pre|rc|snapshot)-[0-9]";
+
 export function hasExactVersionToken(path: string, version: string): boolean {
   const normalizedPath = normalizePathStyle(path).toLowerCase();
   const normalizedVersion = version.trim().toLowerCase();
   if (!normalizedVersion) {
     return false;
   }
-  // Avoid prefix false-positives like "1.21.1" matching "1.21.10".
-  const cached = VERSION_TOKEN_REGEX_CACHE.get(normalizedVersion);
+  // Avoid prefix false-positives like "1.21.1" matching "1.21.10", and
+  // pre-release false-positives like "26.1" matching "26.1-pre-1".
+  const cacheKey = normalizedVersion;
+  const cached = VERSION_TOKEN_REGEX_CACHE.get(cacheKey);
   const pattern =
     cached
     ?? rememberCachedRegex(
       VERSION_TOKEN_REGEX_CACHE,
-      normalizedVersion,
-      new RegExp(`(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}(?![0-9a-z]|\\.[0-9])`, "i")
+      cacheKey,
+      new RegExp(
+        `(^|[^0-9a-z])${escapeRegexLiteral(normalizedVersion)}(?![0-9a-z]|\\.[0-9]|${VERSION_ID_SUFFIX_LOOKAHEAD})`,
+        "i"
+      )
     );
   return pattern.test(normalizedPath);
 }
@@ -321,16 +339,90 @@ export function hasLoaderRuntimeVersionToken(path: string, mcVersion: string): b
   return pattern.test(normalizedPath);
 }
 
-const RUNTIME_JAR_VERSION_REGEX = /(?:^|[^0-9.])(1\.\d+(?:\.\d+)?)(?![0-9.])/;
+/**
+ * Every version-SHAPED token a path carries, in both id families: `<a>.<b>[.<c>]`
+ * with an optional pre-release suffix, and the `YYwNNa` snapshot form. Shape
+ * only — `inferRuntimeJarMinecraftVersion` decides which of them is Minecraft's.
+ *
+ * The alternatives are greedy, so the LONGEST token at a position is the one
+ * offered, suffix included. What closes it is another version component — a
+ * digit, or a dot that starts one — and nothing else: a dot that starts a file
+ * extension ends the token instead. Refusing every following dot made
+ * `minecraft-merged-26.1.jar` name no version and made
+ * `minecraft-merged-26.2-pre-6.jar` backtrack off its own suffix down to
+ * "26.2", the release that jar is not.
+ */
+const RUNTIME_JAR_VERSION_TOKEN_REGEX =
+  /(?:^|[^0-9.])(\d+\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+|-(?:pre|rc|snapshot)-\d+)?|\d{2}w\d{2}[a-z])(?![0-9]|\.[0-9])/g;
+
+/** The legacy obfuscated line, `1.21` / `1.21.10` / `1.14.4-pre7`. */
+const LEGACY_MINECRAFT_VERSION_REGEX = /^1\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+|-(?:pre|rc|snapshot)-\d+)?$/;
+
+/** Loom's cache root: the directory whose immediate children are Minecraft versions. */
+const LOOM_CACHE_ROOT_SEGMENT_REGEX = /^(?:fabric-loom|loom-cache)$/;
+
+/**
+ * Does the path POSITION a 26.1+ token sits at vouch for it being Minecraft's
+ * version?
+ *
+ * The new-format grammar is only a shape: `isUnobfuscatedVersion` accepts any
+ * id from year 26 up, and Forge's own versions have long since passed it
+ * (`forge-47.3.0-srg.jar`), so the token needs the same kind of corroboration
+ * the loader-version exclusions elsewhere in this file rely on. Three positions
+ * carry it, and they are the layouts the discovery helpers already walk: the
+ * artifact itself names Minecraft (`minecraft-merged-26.1.jar`), the entry
+ * directly inside the version directory does (neoformruntime's
+ * `<version>/minecraft-joined.jar`), or the version directory is a child of
+ * Loom's cache root (`<...>/fabric-loom/<mcVersion>/`).
+ *
+ * Only the token's own neighbourhood counts, never an ancestor — for the reason
+ * `runtimeJarLayoutRelativePath` exists: a checkout under `~/dev/minecraft/`
+ * names the user's directory, not the jar.
+ */
+function tokenPositionNamesMinecraft(segments: string[], index: number): boolean {
+  return (
+    (segments[index]?.includes("minecraft") ?? false) ||
+    (segments[index + 1]?.includes("minecraft") ?? false) ||
+    LOOM_CACHE_ROOT_SEGMENT_REGEX.test(segments[index - 1] ?? "")
+  );
+}
 
 /**
  * Minecraft version a runtime jar path carries, or undefined when the path
  * names none. Loom lays its cache out as
- * `<gradle>/caches/fabric-loom/<mcVersion>/...`, so the first `1.x[.y]` token
- * of the path is the version the jar was built for.
+ * `<gradle>/caches/fabric-loom/<mcVersion>/...`, so the first token of the path
+ * that names a Minecraft version is the version the jar was built for — in
+ * either id family, and a pre-release names itself and not the release it
+ * precedes. Reading only `1.x[.y]` left every 26.x jar versionless, so no
+ * approximation was ever reported for one.
+ *
+ * A legacy `1.x` token is self-identifying; a 26.1+ token shares its shape with
+ * every loader's own version number, so it additionally has to sit where
+ * {@link tokenPositionNamesMinecraft} says Minecraft's version sits.
  */
 export function inferRuntimeJarMinecraftVersion(path: string): string | undefined {
-  return RUNTIME_JAR_VERSION_REGEX.exec(normalizePathStyle(path))?.[1];
+  const normalizedPath = normalizePathStyle(path);
+  const segments = normalizedPath.toLowerCase().split("/");
+  for (const match of normalizedPath.matchAll(RUNTIME_JAR_VERSION_TOKEN_REGEX)) {
+    const token = match[1];
+    if (!token) {
+      continue;
+    }
+    if (LEGACY_MINECRAFT_VERSION_REGEX.test(token)) {
+      return token;
+    }
+    if (!isUnobfuscatedVersion(token)) {
+      continue;
+    }
+    // `match[0]` carries the leading boundary character, so the token starts at
+    // its end minus the token's own length.
+    const tokenStart = (match.index ?? 0) + match[0].length - token.length;
+    const segmentIndex = normalizedPath.slice(0, tokenStart).split("/").length - 1;
+    if (tokenPositionNamesMinecraft(segments, segmentIndex)) {
+      return token;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -443,7 +535,9 @@ export function inferRuntimeJarLoader(path: string): RuntimeLoader {
  * `version` becomes the version the SERVED jar carries; the caller's original
  * request is preserved under `requestedVersion` and flagged. A served loader
  * that contradicts a KNOWN expected loader is flagged too — never silently
- * dropped.
+ * dropped. When the jar's path names no version at all, the request stands as
+ * the answer and nothing is flagged: there is no served version to contradict
+ * it with.
  */
 export function describeServedRuntimeJar(input: {
   jarPath: string;
@@ -720,9 +814,10 @@ export async function probeMinecraftArtifact(
   let value = input.target.value.trim();
   const warnings: string[] = [];
   const requestedMapping = normalizeMapping(input.mapping);
+  const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
 
-  if (input.preferProjectVersion && input.projectPath) {
-    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+  if (input.preferProjectVersion && normalizedProjectPath) {
+    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
     if (detected && detected !== value) {
       warnings.push(`Overriding version "${value}" with project version "${detected}" from gradle.properties.`);
     }
@@ -789,7 +884,7 @@ export async function probeMinecraftArtifact(
 
     const versionSourceDiscovery = await svc.discoverVersionSourceJar({
       version: resolvedVersion,
-      projectPath: input.projectPath,
+      projectPath: normalizedProjectPath,
       gradleUserHome: input.gradleUserHome
     });
     if (!versionSourceDiscovery.selectedSourceJarPath) {
@@ -1450,11 +1545,12 @@ export async function resolveVersionContext(svc: SourceService, input: {
     return inferredVersion;
   }
 
-  if (!input.preferProjectVersion || !input.projectPath) {
+  const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
+  if (!input.preferProjectVersion || !normalizedProjectPath) {
     return undefined;
   }
 
-  const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+  const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(normalizedProjectPath);
   if (detected) {
     input.warnings.push(
       `Using project version "${detected}" from gradle.properties because the artifact metadata did not include a version.`
@@ -1844,8 +1940,17 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
   const scope = input.scope;
   const warnings: string[] = [...synthesisWarnings];
 
-  if (input.preferProjectVersion && input.projectPath && kind === "version") {
-    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(input.projectPath);
+  // Normalized only for the readers that need it: every other use of
+  // projectPath below reaches a helper that normalizes on its own, and doing it
+  // here unconditionally would newly refuse a malformed path on calls that
+  // never read one.
+  const preferProjectVersionPath = input.preferProjectVersion
+    ? normalizeOptionalProjectPath(input.projectPath)
+    : undefined;
+  if (preferProjectVersionPath && kind === "version") {
+    const detected = await svc.workspaceMappingService.detectProjectMinecraftVersion(
+      preferProjectVersionPath
+    );
     if (detected && detected !== value) {
       warnings.push(`Overriding version "${value}" with project version "${detected}" from gradle.properties.`);
     }
@@ -2082,12 +2187,24 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
             target: { kind, value },
             nextAction:
               "Use target: { kind: \"version\", value } or a versioned Maven coordinate so mapping artifacts can be resolved.",
+            // This branch is reached precisely because no version is known, and
+            // `value` is whatever the caller's own target carried - a jar path
+            // for the kind that gets here. Replaying it as a version target
+            // produced a `suggestedCall` that could never succeed, so the
+            // version goes out as a placeholder the caller must fill in;
+            // buildSuggestedCall routes such a template to exampleCalls.
             ...buildSuggestedCall({
               tool: "resolve-artifact",
-              params: buildResolveArtifactParams(
-                { kind: "version", value },
-                { ...(scope ? { scope } : {}) }
-              )
+              params: undefined,
+              examples: [
+                {
+                  params: buildResolveArtifactParams(
+                    { kind: "version", value: "<your-mc-version>" },
+                    { ...(scope ? { scope } : {}) }
+                  ),
+                  reason: `Replace <your-mc-version> with the Minecraft version this artifact belongs to; ${effectiveMapping} mappings are resolved per version.`
+                }
+              ]
             })
           }
         });

@@ -541,6 +541,13 @@ export class VersionService {
     try {
       const response = await this.fetchFn(url, { signal: timeout.signal });
       if (!response.ok) {
+        // Nothing reads an error body here, and an unread one pins its socket
+        // until GC reaches it. Released best-effort, exactly as `releaseBody`
+        // in repo-downloader.ts: a body that refuses to be cancelled is not a
+        // reason to lose the status the caller actually needs.
+        void response.body?.cancel().catch(() => {
+          // best-effort release
+        });
         throw createError({
           code: ERROR_CODES.REPO_FETCH_FAILED,
           message: `Request failed for "${url}" with status ${response.status}.`,

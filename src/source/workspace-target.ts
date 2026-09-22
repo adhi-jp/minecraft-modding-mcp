@@ -1,5 +1,6 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
+import { normalizeOptionalProjectPath } from "../gradle-paths.js";
 import type { SourceService } from "../source-service.js";
 import type {
   ArtifactScope,
@@ -90,7 +91,11 @@ export async function synthesizeWorkspaceTarget(
     });
   }
 
-  const projectPath = input.projectPath?.trim();
+  // Normalized once, here, and used for everything below: the workspace-context
+  // cache key, the detection reads and the provenance all have to name the same
+  // path. Trimming alone left a Windows-spelled path unreadable on a WSL host
+  // for this target kind while the sibling routes resolved it.
+  const projectPath = normalizeOptionalProjectPath(input.projectPath);
   if (!projectPath) {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
@@ -277,7 +282,7 @@ export async function synthesizeDependencyTarget(
     });
   }
 
-  const projectPath = input.projectPath?.trim();
+  const projectPath = normalizeOptionalProjectPath(input.projectPath);
   if (!projectPath) {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
