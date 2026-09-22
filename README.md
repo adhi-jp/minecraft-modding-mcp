@@ -279,7 +279,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 | `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |
 | `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, read class members from bytecode, and preview or apply remaps |
 | `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |
-| `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |
+| `manage-cache` | List, verify, and preview or apply cache cleanup operations |
 <!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->
 
 ### Source Exploration

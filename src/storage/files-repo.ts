@@ -182,6 +182,16 @@ function tokenizeIndexedQuery(query: string): string[] {
   return query.match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
+/**
+ * Quote a token so FTS5 reads it as a string literal instead of grammar. Real
+ * Minecraft identifiers tokenize into operator keywords (`BooleanOp.AND` ->
+ * `BooleanOp AND`), which unquoted is either a syntax error or - mid-query, as
+ * in `a NOT b` - a silent change of meaning.
+ */
+function quoteIndexedToken(token: string): string {
+  return `"${token.replace(/"/g, '""')}"`;
+}
+
 function buildIndexedMatchQuery(
   query: string,
   match: SearchFilesOptions["match"]
@@ -196,10 +206,11 @@ function buildIndexedMatchQuery(
   // path while SourceService re-checks hydrated path/content matches before
   // returning hits. Callers can still use literal mode for exact substring scans.
   return tokens.map((token, index) => {
+    const quoted = quoteIndexedToken(token);
     if (match === "prefix" && index === tokens.length - 1) {
-      return `${token}*`;
+      return `${quoted}*`;
     }
-    return token;
+    return quoted;
   }).join(" ");
 }
 

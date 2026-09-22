@@ -264,7 +264,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 | `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要を比較する |
 | `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |
 | `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |
-| `manage-cache` | キャッシュの一覧、検証、クリーンアップ / 再構築のプレビュー / 実行を行う |
+| `manage-cache` | キャッシュの一覧、検証、クリーンアップのプレビュー / 実行を行う |
 <!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->
 
 ### ソース探索

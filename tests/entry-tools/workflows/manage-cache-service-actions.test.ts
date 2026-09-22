@@ -297,10 +297,18 @@ test("prune preview forwards the selector, reports unchanged, and offers the app
   assert.deepEqual(result.operation, { executionMode: "preview", deletedEntries: 3, deletedBytes: 1024 });
 });
 
+// FROZEN TITLE. This name is pinned in tests/fixtures/premigration/test-list.txt,
+// so the named-set gate treats a rename as a deletion and fails hard. The title
+// is the pre-fix wording; what the body checks now: rebuild is not implemented,
+// so preview reports unchanged with rebuiltEntries 0, passes the registry's
+// warning through, and offers NO apply follow-up.
 test("rebuild preview reports unchanged with rebuilt counts and offers the apply follow-up call", async () => {
   const service = new ManageCacheService({
     registry: createRegistry({
-      rebuildEntries: async () => ({ rebuiltEntries: 2, warnings: [] })
+      rebuildEntries: async () => ({
+        rebuiltEntries: 0,
+        warnings: ["rebuild is not implemented for cache kind(s): artifact-index."]
+      })
     })
   });
 
@@ -313,29 +321,28 @@ test("rebuild preview reports unchanged with rebuilt counts and offers the apply
   );
 
   assert.equal(result.summary.status, "unchanged");
-  assert.equal(result.summary.headline, "Previewed rebuild for 1 cache kind(s).");
-  assert.deepEqual(result.summary.counts, { rebuiltEntries: 2 });
-  assert.deepEqual(result.summary.nextActions, [
-    {
-      tool: "manage-cache",
-      params: {
-        action: "rebuild",
-        cacheKinds: ["artifact-index"],
-        executionMode: "apply",
-        selector: { artifactId: "net.fabricmc:yarn" }
-      }
-    }
-  ]);
-  assert.deepEqual(result.operation, { executionMode: "preview", rebuiltEntries: 2 });
+  assert.equal(
+    result.summary.headline,
+    "Previewed rebuild for 1 cache kind(s): nothing would change."
+  );
+  assert.deepEqual(result.summary.counts, { rebuiltEntries: 0 });
+  assert.equal(result.summary.nextActions, undefined);
+  assert.deepEqual(result.operation, { executionMode: "preview", rebuiltEntries: 0 });
+  assert.deepEqual(result.warnings, ["rebuild is not implemented for cache kind(s): artifact-index."]);
 });
 
+// FROZEN TITLE (see above). What the body checks now: apply with a selector
+// reports unchanged, rebuiltEntries 0, and the honest "not implemented" headline.
 test("rebuild in apply mode with a selector reports changed with rebuilt counts and no preview follow-up", async () => {
   let seenInput: { executionMode?: string; selector?: Record<string, unknown> } | undefined;
   const service = new ManageCacheService({
     registry: createRegistry({
       rebuildEntries: async (input) => {
         seenInput = input;
-        return { rebuiltEntries: 2, warnings: ["rebuilt artifact index"] };
+        return {
+          rebuiltEntries: 0,
+          warnings: ["rebuild is not implemented for cache kind(s): artifact-index."]
+        };
       }
     })
   });
@@ -349,9 +356,13 @@ test("rebuild in apply mode with a selector reports changed with rebuilt counts 
     })
   );
 
-  assert.equal(result.summary.status, "changed");
-  assert.equal(result.summary.headline, "Applied rebuild for 1 cache kind(s).");
-  assert.deepEqual(result.summary.counts, { rebuiltEntries: 2 });
+  assert.equal(result.summary.status, "unchanged");
+  // The headline must not claim a rebuild was applied when none was.
+  assert.equal(
+    result.summary.headline,
+    "Rebuild is not implemented for 1 cache kind(s); nothing changed."
+  );
+  assert.deepEqual(result.summary.counts, { rebuiltEntries: 0 });
   assert.equal(result.summary.nextActions, undefined);
   assert.deepEqual(result.summary.subject, {
     action: "rebuild",
@@ -359,8 +370,8 @@ test("rebuild in apply mode with a selector reports changed with rebuilt counts 
     executionMode: "apply",
     selector: { artifactId: "net.fabricmc:yarn" }
   });
-  assert.deepEqual(result.operation, { executionMode: "apply", rebuiltEntries: 2 });
-  assert.deepEqual(result.warnings, ["rebuilt artifact index"]);
+  assert.deepEqual(result.operation, { executionMode: "apply", rebuiltEntries: 0 });
+  assert.deepEqual(result.warnings, ["rebuild is not implemented for cache kind(s): artifact-index."]);
   assert.equal(seenInput?.executionMode, "apply");
   assert.deepEqual(seenInput?.selector, { artifactId: "net.fabricmc:yarn" });
 });

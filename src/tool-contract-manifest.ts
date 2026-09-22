@@ -26,7 +26,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `compare-minecraft` | Compare version pairs, class diffs, registry diffs, and migration-oriented summaries |",
       "| `analyze-mod` | Summarize mod metadata, decompile and search mod code, inspect class source, read class members from bytecode, and preview or apply remaps |",
       "| `validate-project` | Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation |",
-      "| `manage-cache` | List, verify, and preview or apply cache cleanup and rebuild operations |"
+      "| `manage-cache` | List, verify, and preview or apply cache cleanup operations |"
     ],
     ja: [
       "| `inspect-minecraft` | バージョン、アーティファクト、クラス、ファイル、ソース本文、ワークスペース文脈の調査フローをまとめて扱う |",
@@ -34,7 +34,7 @@ const SECTION_ROWS: Record<ToolSurfaceSectionId, ToolSurfaceRows> = {
       "| `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要を比較する |",
       "| `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |",
       "| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |",
-      "| `manage-cache` | キャッシュの一覧、検証、クリーンアップ / 再構築のプレビュー / 実行を行う |"
+      "| `manage-cache` | キャッシュの一覧、検証、クリーンアップのプレビュー / 実行を行う |"
     ]
   },
   "source-exploration": {

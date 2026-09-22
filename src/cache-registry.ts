@@ -918,7 +918,11 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
           }
         }
 
-        const db = openDb(config);
+        // Opening the index runs a PRAGMA quick_check over the whole file, so
+        // only pay for it when a row of it is actually going to be deleted.
+        const db = entries.some((entry) => entry.cacheKind === "artifact-index")
+          ? openDb(config)
+          : undefined;
         try {
           for (const entry of entries) {
             if (entry.cacheKind === "artifact-index") {
@@ -991,10 +995,18 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
     },
 
     async rebuildEntries(input) {
-      const entries = await collectEntries(input.cacheKinds, input.selector);
+      // No cache kind knows how to rebuild itself from here: the previous
+      // implementation only counted the entries a selector matched and reported
+      // that count as "rebuilt", so apply mode claimed a change it never made.
+      // Validate the selector the way every other action does - the inventory
+      // itself would be thrown away - then say what actually happened.
+      prepareSelector(input.selector, config.pathRuntimeInfo);
+      const selectedKinds = input.cacheKinds?.length ? input.cacheKinds : [...PUBLIC_CACHE_KINDS];
       return {
-        rebuiltEntries: entries.length,
-        warnings: []
+        rebuiltEntries: 0,
+        warnings: [
+          `rebuild is not implemented for cache kind(s): ${selectedKinds.join(", ")}. Nothing was rebuilt. Delete the matching entries instead (manage-cache action="delete"); each one is rebuilt from source the next time it is needed.`
+        ]
       };
     }
   };

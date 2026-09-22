@@ -261,23 +261,19 @@ export class ManageCacheService {
             include,
             summary: {
               status: output.rebuiltEntries > 0 && executionMode === "apply" ? "changed" : "unchanged",
-              headline: `${executionMode === "apply" ? "Applied" : "Previewed"} rebuild for ${cacheKinds.length} cache kind(s).`,
+              // Neither headline may read as work done: rebuild is not
+              // implemented for any cache kind, so apply changes nothing and
+              // preview has nothing to promise.
+              headline: executionMode === "apply"
+                ? `Rebuild is not implemented for ${cacheKinds.length} cache kind(s); nothing changed.`
+                : `Previewed rebuild for ${cacheKinds.length} cache kind(s): nothing would change.`,
               subject: summarySubject,
               counts: {
                 rebuiltEntries: output.rebuiltEntries
-              },
-              ...(executionMode === "preview"
-                ? {
-                    nextActions: [
-                      createNextAction("manage-cache", {
-                        action: "rebuild",
-                        cacheKinds,
-                        executionMode: "apply",
-                        selector: input.selector
-                      })
-                    ]
-                  }
-                : {})
+              }
+              // No apply follow-up: rebuild is not implemented for any cache
+              // kind, so advertising one would promise a call that changes
+              // nothing. The registry's warning names what to do instead.
             },
             blocks: {
               operation: {
