@@ -163,11 +163,21 @@ export function validateShadow(
   signatureFailedTargets?: Set<string>,
   healthReport?: MappingHealthReport
 ): void {
+  // A @Shadow method declared as `<prefix>name` refers to `name` in the target; a
+  // @Shadow field's targetName is its declared name unchanged, since fields are not
+  // prefixed. `aliases` adds fallback names. Messages keep the declared name so they
+  // stay recognisable in the mixin source.
+  const effectiveName = shadow.targetName ?? shadow.name;
+  const candidateNames = [effectiveName, ...(shadow.aliases ?? [])];
+  const prefixHint = effectiveName !== shadow.name
+    ? ` (resolved to "${effectiveName}" after @Shadow prefix removal)`
+    : "";
+
   for (const targetName of targetNames) {
     const members = targetMembers.get(targetName);
     if (!members) continue;
 
-    const isRemapFailed = remapFailedMembers?.get(targetName)?.has(shadow.name);
+    const isRemapFailed = remapFailedMembers?.get(targetName)?.has(effectiveName);
     const isSigFailed = signatureFailedTargets?.has(targetName);
     const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
     const issueConfidenceReason = isRemapFailed
@@ -180,14 +190,15 @@ export function validateShadow(
 
     if (shadow.kind === "field") {
       const fieldNames = allFieldNames(members);
-      if (!fieldNames.includes(shadow.name)) {
-        const suggestions = suggestSimilar(shadow.name, fieldNames);
+      const matchedName = candidateNames.find((candidate) => fieldNames.includes(candidate));
+      if (matchedName === undefined) {
+        const suggestions = suggestSimilar(effectiveName, fieldNames);
         issues.push({
           severity: memberDegraded ? "warning" : "error",
           kind: "field-not-found",
           annotation: "@Shadow",
-          target: `${targetName}#${shadow.name}`,
-          message: `Field "${shadow.name}" not found in target class "${targetName}" (${fieldNames.length} field(s) available).${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+          target: `${targetName}#${effectiveName}`,
+          message: `Field "${shadow.name}" not found in target class "${targetName}" (${fieldNames.length} field(s) available).${prefixHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
@@ -197,18 +208,19 @@ export function validateShadow(
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${shadow.name}`, status: "resolved" });
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${matchedName}`, status: "resolved" });
       }
     } else {
       const methodNames = allMethodNames(members);
-      if (!methodNames.includes(shadow.name)) {
-        const suggestions = suggestSimilar(shadow.name, methodNames);
+      const matchedName = candidateNames.find((candidate) => methodNames.includes(candidate));
+      if (matchedName === undefined) {
+        const suggestions = suggestSimilar(effectiveName, methodNames);
         issues.push({
           severity: memberDegraded ? "warning" : "error",
           kind: "method-not-found",
           annotation: "@Shadow",
-          target: `${targetName}#${shadow.name}`,
-          message: `Method "${shadow.name}" not found in target class "${targetName}" (${methodNames.length} method(s) available).${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+          target: `${targetName}#${effectiveName}`,
+          message: `Method "${shadow.name}" not found in target class "${targetName}" (${methodNames.length} method(s) available).${prefixHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
           line: shadow.line,
           confidence: issueConfidence,
@@ -218,7 +230,7 @@ export function validateShadow(
         });
         resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
       } else {
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${shadow.name}`, status: "resolved" });
+        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${matchedName}`, status: "resolved" });
       }
     }
   }

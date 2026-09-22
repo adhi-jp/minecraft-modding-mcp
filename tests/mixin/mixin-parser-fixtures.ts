@@ -156,13 +156,13 @@ public abstract class MultiLineMixin {
     priority: 1000
   },
   {
-    name: "prefers .class format over string targets",
+    name: "class literal and string targets combined",
     source: `
 @Mixin(value = PlayerEntity.class, targets = "net.minecraft.Foo")
-public abstract class PreferClassMixin {
+public abstract class CombinedTargetsMixin {
 }
 `,
-    targets: ["PlayerEntity"]
+    targets: ["PlayerEntity", "net.minecraft.Foo"]
   }
 ];
 
