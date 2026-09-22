@@ -301,3 +301,17 @@ test("decodeJavaNbt rejects a MUTF-8 string with an invalid continuation byte", 
     expectAppErrorCode(ERROR_CODES.NBT_PARSE_FAILED)
   );
 });
+
+test("decodeJavaNbt never promises a reported offset when none is present in details", () => {
+  assert.throws(() => decodeJavaNbt(null as unknown as Buffer), (error: unknown) => {
+    const err = error as { code?: string; message?: string; details?: Record<string, unknown> };
+    // Must actually be the generic catch-all (message + code identify it),
+    // not one of the module's own specific, offset-carrying parse errors.
+    assert.equal(err.code, ERROR_CODES.NBT_PARSE_FAILED);
+    assert.equal(err.message, "Failed to decode Java NBT payload.");
+    const details = err.details ?? {};
+    assert.equal(details.offset, undefined);
+    assert.doesNotMatch(String(details.nextAction ?? ""), /reported offset/);
+    return true;
+  });
+});

@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 
-import { createError, ERROR_CODES } from "./errors.js";
+import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { loadConfig } from "./config.js";
 import { normalizeJarPath, readJarStatStamp } from "./path-resolver.js";
 import { createJarEntryReader } from "./source-jar-reader.js";
@@ -564,25 +564,48 @@ class ByteReader {
     this.buffer = buffer;
   }
 
+  // Mirrors NbtReader's ensure() (src/nbt/java-nbt-codec.ts). Without this,
+  // Buffer.subarray silently clips a length past EOF instead of throwing, so
+  // a truncated attribute body (declared length intact, trailing bytes
+  // missing) reads as a shorter-than-declared Buffer and the offset still
+  // advances past the true end - readBytes "succeeds" on corrupted data.
+  private ensure(length: number): void {
+    if (this.offset + length > this.buffer.length) {
+      throw createError({
+        code: ERROR_CODES.INTERNAL,
+        message: "Unexpected end of class file data. Class file may be corrupted.",
+        details: {
+          offset: this.offset,
+          requiredBytes: length,
+          remainingBytes: this.buffer.length - this.offset
+        }
+      });
+    }
+  }
+
   public readU1(): number {
+    this.ensure(1);
     const value = this.buffer.readUInt8(this.offset);
     this.offset += 1;
     return value;
   }
 
   public readU2(): number {
+    this.ensure(2);
     const value = this.buffer.readUInt16BE(this.offset);
     this.offset += 2;
     return value;
   }
 
   public readU4(): number {
+    this.ensure(4);
     const value = this.buffer.readUInt32BE(this.offset);
     this.offset += 4;
     return value;
   }
 
   public readBytes(length: number): Buffer {
+    this.ensure(length);
     const slice = this.buffer.subarray(this.offset, this.offset + length);
     this.offset += length;
     return slice;
@@ -939,7 +962,25 @@ export class MinecraftExplorerService {
           details: { fqn, jarPath, classEntryPath }
         });
       }
-      parsed = parseClassFile(classBuffer);
+      try {
+        parsed = parseClassFile(classBuffer);
+      } catch (error) {
+        // A primary-class parse failure of ANY origin - a raw Buffer bounds
+        // error (ByteReader has no bounds checks), or one of parseClassFile's
+        // own deliberate throws (bad magic, unsupported constant-pool tag) -
+        // is third-party jar content, never blamed on the caller as
+        // ERR_INTERNAL. An AppError that already carries ERR_CLASS_NOT_FOUND
+        // (readUtf8/readClassName) is already in the right shape and passes
+        // through unchanged.
+        if (isAppError(error) && error.code === ERROR_CODES.CLASS_NOT_FOUND) {
+          throw error;
+        }
+        throw createError({
+          code: ERROR_CODES.CLASS_NOT_FOUND,
+          message: `Class "${fqn}" in "${jarPath}" is malformed or truncated. Class file may be corrupted.`,
+          details: { fqn, jarPath, classEntryPath }
+        });
+      }
     } catch (error) {
       reader.close();
       throw error;
@@ -1047,12 +1088,22 @@ export class MinecraftExplorerService {
       category: "method" | "field"
     ): SignatureMember => {
       if (category === "field") {
-        const parsedField = parseFieldType(member.descriptor, 0, { allowVoid: false });
-        if (parsedField.next !== member.descriptor.length) {
+        // parseFieldType/parseMethodDescriptor throw ERR_INVALID_INPUT, which
+        // blames the caller; a member descriptor comes from third-party
+        // bytecode, not tool input, so a malformed one is treated like the
+        // corrupted-class failure above (src/source/descriptor-utils.ts
+        // degrades the same parsers rather than throwing at all).
+        let parsedField: { type: string; next: number };
+        try {
+          parsedField = parseFieldType(member.descriptor, 0, { allowVoid: false });
+          if (parsedField.next !== member.descriptor.length) {
+            throw new Error("Trailing bytes after field descriptor.");
+          }
+        } catch {
           throw createError({
-            code: ERROR_CODES.INVALID_INPUT,
-            message: `Invalid field descriptor "${member.descriptor}".`,
-            details: { descriptor: member.descriptor, position: parsedField.next }
+            code: ERROR_CODES.CLASS_NOT_FOUND,
+            message: `Field "${member.name}" in "${ownerFqn}" has a malformed descriptor in "${jarPath}". Class file may be corrupted.`,
+            details: { ownerFqn, jarPath, member: member.name, descriptor: member.descriptor }
           });
         }
         const fieldType = parsedField.type;
@@ -1069,7 +1120,16 @@ export class MinecraftExplorerService {
         };
       }
 
-      const parsedMethod = parseMethodDescriptor(member.descriptor);
+      let parsedMethod: { args: string[]; returnType: string };
+      try {
+        parsedMethod = parseMethodDescriptor(member.descriptor);
+      } catch {
+        throw createError({
+          code: ERROR_CODES.CLASS_NOT_FOUND,
+          message: `Method "${member.name}" in "${ownerFqn}" has a malformed descriptor in "${jarPath}". Class file may be corrupted.`,
+          details: { ownerFqn, jarPath, member: member.name, descriptor: member.descriptor }
+        });
+      }
       const modifiers = modifierPrefix(member.accessFlags, "method");
       const args = parsedMethod.args.join(", ");
       if (member.name === "<init>") {

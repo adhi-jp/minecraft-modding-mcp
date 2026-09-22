@@ -140,6 +140,14 @@ async function expectAppError(
   });
 }
 
+// a primary-class parse failure of ANY origin - including
+// parseClassFile's own deliberate throws below - is third-party jar content,
+// never blamed on the caller as ERR_INTERNAL. Retitled and rewritten from
+// "... as ERR_INTERNAL", which pinned the defect this contract closes.
+// FROZEN TITLE. This name is pinned in tests/fixtures/premigration/test-list.txt,
+// so the named-set gate treats a rename as a deletion. The title is the pre-fix
+// wording; what the body checks now: invalid magic on the PRIMARY class is a
+// class-corruption ERR_CLASS_NOT_FOUND naming the class and jar, not ERR_INTERNAL.
 test("MinecraftExplorerService reports invalid class magic as ERR_INTERNAL", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-invalid-magic-"));
   const invalidClass = buildClassFile({
@@ -152,13 +160,25 @@ test("MinecraftExplorerService reports invalid class magic as ERR_INTERNAL", asy
   });
   const service = createService(root);
 
-  await expectAppError(
-    service.getSignature({ jarPath, fqn: "com.example.Broken" }),
-    ERROR_CODES.INTERNAL,
-    /Invalid class file magic/
+  let caught: unknown;
+  try {
+    await service.getSignature({ jarPath, fqn: "com.example.Broken" });
+  } catch (error) {
+    caught = error;
+  }
+  const err = caught as { code?: string; message?: string };
+  assert.equal(err.code, ERROR_CODES.CLASS_NOT_FOUND);
+  assert.match(String(err.message), /com\.example\.Broken/, "message must name the class");
+  assert.match(
+    String(err.message),
+    new RegExp(jarPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "message must name the jar"
   );
 });
 
+// FROZEN TITLE (see above). What the body checks now: an unsupported constant
+// pool tag on the PRIMARY class is a class-corruption ERR_CLASS_NOT_FOUND naming
+// the class and jar, not ERR_INTERNAL.
 test("MinecraftExplorerService reports unsupported constant pool tags as ERR_INTERNAL", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-invalid-cp-tag-"));
   const invalidClass = buildClassFile({
@@ -172,10 +192,19 @@ test("MinecraftExplorerService reports unsupported constant pool tags as ERR_INT
   });
   const service = createService(root);
 
-  await expectAppError(
-    service.getSignature({ jarPath, fqn: "com.example.BrokenTag" }),
-    ERROR_CODES.INTERNAL,
-    /Unsupported constant pool tag 99/
+  let caught: unknown;
+  try {
+    await service.getSignature({ jarPath, fqn: "com.example.BrokenTag" });
+  } catch (error) {
+    caught = error;
+  }
+  const err = caught as { code?: string; message?: string };
+  assert.equal(err.code, ERROR_CODES.CLASS_NOT_FOUND);
+  assert.match(String(err.message), /com\.example\.BrokenTag/, "message must name the class");
+  assert.match(
+    String(err.message),
+    new RegExp(jarPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "message must name the jar"
   );
 });
 
@@ -222,10 +251,13 @@ test("MinecraftExplorerService rejects malformed field descriptors", async () =>
   });
   const service = createService(root);
 
+  // A malformed member descriptor is third-party jar content, not caller
+  // input: it is reported as class-file corruption (ERR_CLASS_NOT_FOUND),
+  // not blamed on the caller as ERR_INVALID_INPUT.
   await expectAppError(
     service.getSignature({ jarPath, fqn: "com.example.FieldDescriptor", access: "all" }),
-    ERROR_CODES.INVALID_INPUT,
-    /Invalid field descriptor/
+    ERROR_CODES.CLASS_NOT_FOUND,
+    /malformed descriptor/
   );
 });
 
@@ -239,10 +271,13 @@ test("MinecraftExplorerService rejects malformed method descriptors", async () =
   });
   const service = createService(root);
 
+  // A malformed member descriptor is third-party jar content, not caller
+  // input: it is reported as class-file corruption (ERR_CLASS_NOT_FOUND),
+  // not blamed on the caller as ERR_INVALID_INPUT.
   await expectAppError(
     service.getSignature({ jarPath, fqn: "com.example.MethodDescriptor", access: "all" }),
-    ERROR_CODES.INVALID_INPUT,
-    /Invalid method descriptor/
+    ERROR_CODES.CLASS_NOT_FOUND,
+    /malformed descriptor/
   );
 });
 
@@ -256,10 +291,13 @@ test("MinecraftExplorerService reports void method arguments as invalid method d
   });
   const service = createService(root);
 
+  // A malformed member descriptor is third-party jar content, not caller
+  // input: it is reported as class-file corruption (ERR_CLASS_NOT_FOUND),
+  // not blamed on the caller as ERR_INVALID_INPUT.
   await expectAppError(
     service.getSignature({ jarPath, fqn: "com.example.VoidMethodArg", access: "all" }),
-    ERROR_CODES.INVALID_INPUT,
-    /Invalid method descriptor/
+    ERROR_CODES.CLASS_NOT_FOUND,
+    /malformed descriptor/
   );
 });
 

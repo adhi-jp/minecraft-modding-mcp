@@ -518,7 +518,14 @@ export function decodeJavaNbt(buffer: Buffer): TypedNbtDocument {
         throw error;
       }
     }
-    throw parseError("Failed to decode Java NBT payload.");
+    // Unlike every other parseError() call site in this module, nothing here
+    // has an offset to report - do not inherit PARSE_NEXT_ACTION's "at the
+    // reported offset" promise.
+    throw parseError("Failed to decode Java NBT payload.", {
+      nextAction:
+        "The payload is not a well-formed Java NBT stream. Check that nbtBase64 holds the whole " +
+        'file and that compression matches how it was written (use compression "auto" to detect gzip).'
+    });
   }
 }
 
