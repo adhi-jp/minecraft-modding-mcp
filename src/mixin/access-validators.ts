@@ -1,5 +1,5 @@
 import type { ParsedAccessTransformer } from "../access-transformer-parser.js";
-import type { ParsedAccessWidener } from "../access-widener-parser.js";
+import type { AccessWidenerEntry, ParsedAccessWidener } from "../access-widener-parser.js";
 import type {
   AccessTransformerValidationResult,
   AccessWidenerValidationResult,
@@ -12,6 +12,31 @@ import {
   suggestSimilar
 } from "./helpers.js";
 
+const VALID_AW_HEADER_VERSIONS = new Set(["v1", "v2"]);
+
+/**
+ * Fabric access widener grammar rules (AUTHORITY): `accessible` applies to
+ * class, method, field; `extendable` applies to class and method only;
+ * `mutable` applies to field only; `transitive-` exists only under a v2
+ * header. Returns a line+rule message when `entry` breaks one of these, or
+ * undefined when the pairing is legal.
+ */
+function checkAccessWidenerEntryLegality(
+  entry: AccessWidenerEntry,
+  headerVersion: string
+): string | undefined {
+  if (entry.kind === "mutable" && entry.targetKind !== "field") {
+    return `Line ${entry.line}: "mutable" only applies to field, not ${entry.targetKind}.`;
+  }
+  if (entry.kind === "extendable" && entry.targetKind === "field") {
+    return `Line ${entry.line}: "extendable" does not apply to field (only class and method).`;
+  }
+  if (entry.transitive && headerVersion !== "v2") {
+    return `Line ${entry.line}: "transitive-" entries require a v2 header (declared "${headerVersion || "none"}").`;
+  }
+  return undefined;
+}
+
 export function validateParsedAccessWidener(
   parsed: ParsedAccessWidener,
   membersByClass: Map<string, ResolvedTargetMembers>,
@@ -20,11 +45,32 @@ export function validateParsedAccessWidener(
 ): AccessWidenerValidationResult {
   warnings.push(...parsed.parseWarnings);
 
+  let headerValid = true;
+  const headerLine = parsed.headerLine ?? 1;
+  if (!parsed.headerVersion) {
+    headerValid = false;
+    warnings.push(
+      `Line ${headerLine}: accessWidener requires a header line ("accessWidener <v1|v2> <namespace>"); none was found.`
+    );
+  } else if (!VALID_AW_HEADER_VERSIONS.has(parsed.headerVersion)) {
+    headerValid = false;
+    warnings.push(
+      `Line ${headerLine}: Unsupported accessWidener header version "${parsed.headerVersion}" (expected v1 or v2).`
+    );
+  }
+
   const validatedEntries: AccessWidenerValidationResult["entries"] = [];
   let validCount = 0;
   let invalidCount = 0;
 
   for (const entry of parsed.entries) {
+    const legalityIssue = checkAccessWidenerEntryLegality(entry, parsed.headerVersion);
+    if (legalityIssue) {
+      validatedEntries.push({ ...entry, valid: false, issue: legalityIssue });
+      invalidCount++;
+      continue;
+    }
+
     const ownerFqn = entry.target.replace(/\//g, ".");
 
     if (entry.targetKind === "class") {
@@ -158,7 +204,7 @@ export function validateParsedAccessWidener(
   return {
     headerVersion: parsed.headerVersion,
     namespace: parsed.namespace,
-    valid: invalidCount === 0,
+    valid: invalidCount === 0 && headerValid && (parsed.rejectedEntryCount ?? 0) === 0,
     entries: validatedEntries,
     summary: {
       total: parsed.entries.length,
@@ -323,7 +369,7 @@ export function validateParsedAccessTransformer(
   }
 
   return {
-    valid: invalidCount === 0,
+    valid: invalidCount === 0 && (parsed.rejectedEntryCount ?? 0) === 0,
     entries: validatedEntries,
     summary: {
       total: parsed.entries.length,

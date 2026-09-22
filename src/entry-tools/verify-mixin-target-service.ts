@@ -229,30 +229,30 @@ function inferAnnotation(
     }
     return {
       suggestedAnnotation: "@Shadow",
-      reasoning: `Target "${member.name}" is private. mixin member "${mixinMemberName}" does not match accessor/invoker prefix conventions; @Shadow is appropriate.`,
+      reasoning: `Target "${member.name}" is ${visibility}. mixin member "${mixinMemberName}" does not match accessor/invoker prefix conventions; @Shadow is appropriate.`,
       exampleSnippet: buildExampleSnippet("@Shadow", member, match, mixinMemberName)
     };
   }
   if (member.kind === "field") {
     return {
       suggestedAnnotation: "@Shadow",
-      reasoning: `Target "${member.name}" is private; use @Shadow to access it from the mixin.`,
+      reasoning: `Target "${member.name}" is ${visibility}; use @Shadow to access it from the mixin.`,
       exampleSnippet: buildExampleSnippet("@Shadow", member, match, mixinMemberName)
     };
   }
   return {
     suggestedAnnotation: null,
-    reasoning: `Target method "${member.name}" is private and no mixinMemberName was supplied; cannot decide between @Shadow and @Invoker. Choose @Shadow when the mixin overrides the method, @Invoker when it only needs to call it.`,
+    reasoning: `Target method "${member.name}" is ${visibility} and no mixinMemberName was supplied; cannot decide between @Shadow and @Invoker. Choose @Shadow when the mixin overrides the method, @Invoker when it only needs to call it.`,
     exampleSnippet: "// Provide mixinMemberName to receive a concrete @Shadow or @Invoker template.",
     candidates: [
       {
         annotation: "@Shadow",
-        reasoning: "Use @Shadow to override or read the private method body from the mixin.",
+        reasoning: `Use @Shadow to override or read the ${visibility} method body from the mixin.`,
         exampleSnippet: buildExampleSnippet("@Shadow", member, match, mixinMemberName)
       },
       {
         annotation: "@Invoker",
-        reasoning: "Use @Invoker when the mixin only needs to invoke the private method without redeclaring the body.",
+        reasoning: `Use @Invoker when the mixin only needs to invoke the ${visibility} method without redeclaring the body.`,
         exampleSnippet: buildExampleSnippet("@Invoker", member, match, mixinMemberName)
       }
     ]

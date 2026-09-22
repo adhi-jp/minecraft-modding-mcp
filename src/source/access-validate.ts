@@ -120,6 +120,17 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
     throw createError({ code: ERROR_CODES.INVALID_INPUT, message: "content must be non-empty." });
   }
 
+  // Fabric Loader also reads the classTweaker format; it is out of scope here rather than an
+  // accessWidener file with a bad header, so it gets no verdict.
+  const header = content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
+  if (header && /^classTweaker(\s|$)/.test(header)) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `The classTweaker format is not supported (header "${header}"); only accessWidener v1/v2 files can be validated.`,
+      details: { unsupportedFormat: "classTweaker", header }
+    });
+  }
+
   const warnings: string[] = [];
   const parsed = parseAccessWidener(content);
 

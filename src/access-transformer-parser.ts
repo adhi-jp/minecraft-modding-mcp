@@ -27,6 +27,14 @@ export type AccessTransformerEntry = {
 export type ParsedAccessTransformer = {
   entries: AccessTransformerEntry[];
   parseWarnings: string[];
+  /**
+   * Count of lines the parser had to drop for malformed syntax (unsupported
+   * access declaration, incomplete entry, missing member name/descriptor). A
+   * caller-visible validator uses this to force its verdict invalid even when
+   * `entries` is empty. Optional (defaults to 0) so hand-built
+   * `ParsedAccessTransformer` fixtures that predate this field keep working.
+   */
+  rejectedEntryCount?: number;
 };
 
 function parseAccessDeclaration(raw: string): {
@@ -95,6 +103,7 @@ export function parseAccessTransformer(content: string): ParsedAccessTransformer
   const entries: AccessTransformerEntry[] = [];
   const parseWarnings: string[] = [];
   const lines = content.split(/\r?\n/);
+  let rejectedEntryCount = 0;
 
   for (let index = 0; index < lines.length; index++) {
     const lineNumber = index + 1;
@@ -110,28 +119,33 @@ export function parseAccessTransformer(content: string): ParsedAccessTransformer
     const parts = withoutComment.split(/\s+/);
     if (parts.length < 2) {
       parseWarnings.push(`Line ${lineNumber}: Incomplete access transformer entry "${withoutComment}".`);
+      rejectedEntryCount++;
       continue;
     }
 
     const declaration = parseAccessDeclaration(parts[0] ?? "");
     if (!declaration) {
       parseWarnings.push(`Line ${lineNumber}: Unsupported access declaration "${parts[0]}".`);
+      rejectedEntryCount++;
       continue;
     }
 
     const owner = parts[1] ?? "";
     if (!owner) {
       parseWarnings.push(`Line ${lineNumber}: Incomplete access transformer entry "${withoutComment}".`);
+      rejectedEntryCount++;
       continue;
     }
 
     const member = splitMemberToken(parts.slice(2));
     if (member.targetKind === "method" && (!member.name || !member.descriptor)) {
       parseWarnings.push(`Line ${lineNumber}: Method entry requires a method name and JVM descriptor.`);
+      rejectedEntryCount++;
       continue;
     }
     if ((member.targetKind === "field" || member.targetKind === "method") && !member.name) {
       parseWarnings.push(`Line ${lineNumber}: Member entry requires a target name.`);
+      rejectedEntryCount++;
       continue;
     }
 
@@ -154,6 +168,7 @@ export function parseAccessTransformer(content: string): ParsedAccessTransformer
 
   return {
     entries,
-    parseWarnings
+    parseWarnings,
+    rejectedEntryCount
   };
 }

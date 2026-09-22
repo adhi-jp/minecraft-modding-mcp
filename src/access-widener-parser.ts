@@ -23,6 +23,22 @@ export type ParsedAccessWidener = {
   namespace: string;
   entries: AccessWidenerEntry[];
   parseWarnings: string[];
+  /**
+   * Count of entry lines the parser had to drop for malformed syntax (unknown
+   * kind/target kind, incomplete entry, missing descriptor). Excludes the
+   * purely informational header-line warnings. A caller-visible validator
+   * uses this to force its verdict invalid even when `entries` is empty.
+   * Optional (defaults to 0) so hand-built `ParsedAccessWidener` fixtures
+   * that predate this field keep working.
+   */
+  rejectedEntryCount?: number;
+  /**
+   * The line number the `accessWidener <version> <namespace>` header was
+   * found on, when a syntactically well-formed header line was found (set
+   * even when its version is unsupported). Undefined when no header line
+   * matched the expected format at all; callers fall back to line 1.
+   */
+  headerLine?: number;
 };
 
 const VALID_KINDS = new Set(["accessible", "extendable", "mutable"]);
@@ -34,6 +50,8 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
   const entries: AccessWidenerEntry[] = [];
   let headerVersion = "";
   let namespace = "";
+  let rejectedEntryCount = 0;
+  let headerLine: number | undefined;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i].trim();
@@ -48,6 +66,7 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
       if (parts[0] === "accessWidener" && parts.length >= 3) {
         headerVersion = parts[1];
         namespace = parts[2];
+        headerLine = lineNum;
       } else {
         parseWarnings.push(`Line ${lineNum}: Expected accessWidener header, got: "${raw}"`);
       }
@@ -58,6 +77,7 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
     const parts = raw.split(/\s+/);
     if (parts.length < 3) {
       parseWarnings.push(`Line ${lineNum}: Incomplete entry: "${raw}"`);
+      rejectedEntryCount++;
       continue;
     }
 
@@ -68,10 +88,12 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
     const baseKind = transitive ? kind.slice("transitive-".length) : kind;
     if (!VALID_KINDS.has(baseKind)) {
       parseWarnings.push(`Line ${lineNum}: Unknown access kind "${kind}".`);
+      rejectedEntryCount++;
       continue;
     }
     if (!VALID_TARGET_KINDS.has(targetKind)) {
       parseWarnings.push(`Line ${lineNum}: Unknown target kind "${targetKind}".`);
+      rejectedEntryCount++;
       continue;
     }
 
@@ -94,6 +116,7 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
       });
     } else {
       parseWarnings.push(`Line ${lineNum}: ${validTargetKind} entry requires owner, name, and descriptor.`);
+      rejectedEntryCount++;
     }
   }
 
@@ -101,5 +124,5 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
     parseWarnings.push("Missing accessWidener header.");
   }
 
-  return { headerVersion, namespace, entries, parseWarnings };
+  return { headerVersion, namespace, entries, parseWarnings, rejectedEntryCount, headerLine };
 }
