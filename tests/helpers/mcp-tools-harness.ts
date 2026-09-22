@@ -18,6 +18,7 @@
  * no OS handles or timers, so the test process exits cleanly on its own
  * (verified empirically; the spawned-subprocess call sites rely on this).
  */
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,7 +28,18 @@ import {
   type InProcessSession
 } from "../stdio/inprocess-era-serve.ts";
 
-process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tools-integration-cache");
+// A per-process, never-shared cache dir: Node's test runner gives each split
+// file its own process, so this only fires once per file and never collides
+// with a sibling file's cache. `??=` semantics are preserved by hand (rather
+// than relying on the operator itself) so a file that sets its own
+// MCP_CACHE_DIR before importing this module still wins.
+if (process.env.MCP_CACHE_DIR === undefined) {
+  const cacheDir = mkdtempSync(join(tmpdir(), "mcp-tools-integration-cache-"));
+  process.env.MCP_CACHE_DIR = cacheDir;
+  process.on("exit", () => {
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+}
 
 export type ToolSchema = {
   name: string;

@@ -701,12 +701,7 @@ test("resolveCachedDownload(revalidate) serves the cached bytes as stale when th
   assert.equal(await readFile(destination, "utf8"), "snapshot-bytes-v1");
 });
 
-// NOTE: this title describes the behaviour this test used to pin and no longer
-// does - a withdrawn artifact is now refused, not served stale. The title is
-// deliberately left alone here because renaming it is outside this change's
-// remit; it wants to become "...refuses to serve the cached bytes when the
-// artifact has been withdrawn".
-test("resolveCachedDownload(revalidate) serves the cached bytes as stale when the artifact has been withdrawn", async () => {
+test("resolveCachedDownload(revalidate) refuses to serve the cached bytes when the artifact has been withdrawn", async () => {
   const root = await mkdtemp(join(tmpdir(), "downloader-stale-404-"));
   const destination = join(root, "withdrawn.jar");
   const url = "https://repo.example.com/withdrawn.jar";

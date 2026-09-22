@@ -35,6 +35,16 @@ function stubJavaAvailabilitySpawn(outcomes: Array<"success" | "error">): {
   return { spawn: spawnStub, count: () => spawnCount };
 }
 
+/** True while `pid` still belongs to a running process (signal 0 probes without killing). */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 test("assertJavaAvailable memoizes a successful probe process-wide", async (t) => {
   const stub = stubJavaAvailabilitySpawn(["success"]);
   resetJavaAvailabilityCacheForTests(stub.spawn);
@@ -155,12 +165,16 @@ test("runJavaProcess kills the process and rejects with JAVA_PROCESS_FAILED on t
   const root = await mkdtemp(join(tmpdir(), "java-process-timeout-"));
   const binDir = join(root, "bin");
   const fakeJavaPath = join(binDir, "java");
+  const pidFilePath = join(root, "child.pid");
   mkdirSync(binDir, { recursive: true });
 
-  // Fake `java` that hangs far past the timeout so the kill + reject path runs.
+  // Fake `java` that records its own pid (so the assertions below can confirm
+  // it was actually terminated) and hangs far past the timeout so the kill +
+  // reject path runs.
   writeFileSync(
     fakeJavaPath,
     `#!/usr/bin/env node
+require("node:fs").writeFileSync(${JSON.stringify(pidFilePath)}, String(process.pid));
 setTimeout(() => process.exit(0), 30000);
 `,
     "utf8"
@@ -184,6 +198,24 @@ setTimeout(() => process.exit(0), 30000);
         assert.equal(appError.details?.reason, "timeout");
         return true;
       }
+    );
+
+    // The rejection alone doesn't prove the process was killed: the fake
+    // java hangs on its own for 30s regardless, so a reject that merely fires
+    // on schedule (with the kill call deleted) would still pass everything
+    // above. Poll the recorded pid until it's actually gone, well inside that
+    // 30s window, so a missing kill shows up as this assertion failing.
+    const childPid = Number(readFileSync(pidFilePath, "utf8"));
+    const deadline = Date.now() + 5_000;
+    let alive = isPidAlive(childPid);
+    while (alive && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      alive = isPidAlive(childPid);
+    }
+    assert.equal(
+      alive,
+      false,
+      "the timed-out java process must actually be killed, not merely have its promise rejected"
     );
   } finally {
     process.env.PATH = originalPath;
