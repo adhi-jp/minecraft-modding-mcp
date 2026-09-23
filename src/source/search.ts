@@ -479,6 +479,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       searchWarnings.push(warning);
     };
     const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
+    let indexedWindowFull = false;
     if (intent === "symbol") {
       searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
@@ -496,11 +497,9 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       }
     } else if (canUseIndexedSearchPath(indexedSearchEnabled, intent, match, scope)) {
       try {
-        if (intent === "path") {
-          searchPathIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit);
-        } else {
-          searchTextIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit);
-        }
+        indexedWindowFull = intent === "path"
+          ? searchPathIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit)
+          : searchTextIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit);
         svc.metrics.recordSearchIndexedHit();
       } catch (caughtError) {
         svc.metrics.recordSearchFallback();
@@ -532,6 +531,9 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
 
     const finalizedHits = accumulator.finalize();
     const page = finalizedHits.page;
+    if (indexedWindowFull && page.length < limit) {
+      searchWarnings.push(indexedCandidateWindowWarning(intent, indexedCandidateLimitForMatch(svc, match)));
+    }
     svc.metrics.recordSearchRowsReturned(page.length);
     const nextCursor = finalizedHits.nextCursorHit
       ? encodeSearchCursor(finalizedHits.nextCursorHit, cursorContext)
@@ -595,7 +597,7 @@ export function searchTextIntentIndexed(
   match: SearchMatch,
   scope: SearchScope | undefined,
   onHit: (hit: SearchSourceHit) => void
-): void {
+): boolean {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
   const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
@@ -610,7 +612,7 @@ export function searchTextIntentIndexed(
 
   if (indexed.items.length === 0) {
     svc.metrics.recordSearchIndexedZeroShortcircuit();
-    return;
+    return false;
   }
 
   const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
@@ -646,6 +648,7 @@ export function searchTextIntentIndexed(
       reasonCodes: ["content_match", `text_${match}`, "indexed"]
     });
   }
+  return isCandidateWindowFull(indexed);
 }
 
 export function searchPathIntentIndexed(
@@ -655,7 +658,7 @@ export function searchPathIntentIndexed(
   match: SearchMatch,
   scope: SearchScope | undefined,
   onHit: (hit: SearchSourceHit) => void
-): void {
+): boolean {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
   const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
@@ -669,7 +672,7 @@ export function searchPathIntentIndexed(
 
   if (indexed.items.length === 0) {
     svc.metrics.recordSearchIndexedZeroShortcircuit();
-    return;
+    return false;
   }
 
   const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
@@ -706,6 +709,23 @@ export function searchPathIntentIndexed(
       reasonCodes: ["path_match", `path_${match}`, "indexed"]
     });
   }
+  return isCandidateWindowFull(indexed);
+}
+
+/**
+ * True when the index held more candidates than the window it returned: the
+ * repository reports that with a continuation cursor, which the single-window
+ * indexed search never follows.
+ */
+function isCandidateWindowFull(indexed: { nextCursor?: string }): boolean {
+  return indexed.nextCursor !== undefined;
+}
+
+function indexedCandidateWindowWarning(intent: SearchIntent, candidateLimit: number): string {
+  const fullScan = intent === "text"
+    ? 'queryMode="literal" for a full substring scan'
+    : 'match="regex" for a full path scan';
+  return `indexed ${intent} search examined only its candidate window (the first ${candidateLimit} index candidates) and more matched the index, so results may be incomplete. Use ${fullScan}, or narrow the scope with packagePrefix or a fileGlob that starts with a literal directory.`;
 }
 
 const ASCII_RE = /^[\x00-\x7F]*$/;

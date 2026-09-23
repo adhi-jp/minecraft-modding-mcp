@@ -211,3 +211,105 @@ test("SourceService unscoped indexed search keeps its page-one candidates and or
     assert.ok(result.nextCursor);
   });
 });
+
+// 600 early-sorting files fill the 500-row exact/prefix candidate window
+// without verifying: their bodies hold both tokens but not the phrase, and
+// their paths contain `zzz` but do not start with it. The one real match of
+// each intent sorts last and falls outside the window.
+function buildWindowEntries(): Record<string, string> {
+  const entries: Record<string, string> = {};
+  for (let i = 0; i < 600; i += 1) {
+    const n = String(i).padStart(4, "0");
+    entries[`aaa/zzz/W${n}.java`] = `class W${n} { String s = "windowtail windowhead"; }`;
+  }
+  entries["zzz/WindowTarget.java"] = `class WindowTarget { String s = "windowhead windowtail"; ${FILLER.join(" ")} }`;
+  return entries;
+}
+
+let windowFixturePromise: Promise<SearchFixture> | undefined;
+function getWindowFixture(): Promise<SearchFixture> {
+  windowFixturePromise ??= createResolvedSearchFixture({
+    rootPrefix: "service-indexed-window-",
+    jarBaseName: "server-indexed-window",
+    mapping: "obfuscated",
+    sourceEntries: buildWindowEntries()
+  });
+  return windowFixturePromise;
+}
+
+const WINDOW_WARNING_RE = /candidate window/;
+
+test("SourceService indexed search warns when a short page comes from a full candidate window", async (t) => {
+  const { service, resolved } = await getWindowFixture();
+
+  await t.test("text intent", async () => {
+    const result = await service.searchClassSource({
+      artifactId: resolved.artifactId,
+      query: "windowhead windowtail",
+      intent: "text",
+      limit: 20
+    });
+    assert.deepEqual(result.hits, []);
+    const warning = result.warnings?.find((entry) => WINDOW_WARNING_RE.test(entry));
+    assert.ok(warning, `expected a candidate-window warning, got ${JSON.stringify(result.warnings)}`);
+    assert.match(warning, /incomplete/);
+    assert.match(warning, /queryMode="literal"/);
+    assert.match(warning, /packagePrefix/);
+
+    const literal = await service.searchClassSource({
+      artifactId: resolved.artifactId,
+      query: "windowhead windowtail",
+      intent: "text",
+      queryMode: "literal",
+      limit: 20
+    });
+    assert.deepEqual(literal.hits.map((hit) => hit.filePath), ["zzz/WindowTarget.java"]);
+    assert.equal(literal.warnings, undefined);
+  });
+
+  await t.test("path intent", async () => {
+    const result = await service.searchClassSource({
+      artifactId: resolved.artifactId,
+      query: "zzz",
+      intent: "path",
+      match: "prefix",
+      limit: 20
+    });
+    assert.deepEqual(result.hits, []);
+    const warning = result.warnings?.find((entry) => WINDOW_WARNING_RE.test(entry));
+    assert.ok(warning, `expected a candidate-window warning, got ${JSON.stringify(result.warnings)}`);
+    assert.match(warning, /match="regex"/);
+    assert.match(warning, /fileGlob/);
+  });
+});
+
+test("SourceService indexed search omits the window warning when the window was not full or the page is full", async (t) => {
+  const { service, resolved } = await getWindowFixture();
+
+  await t.test("scope narrows the window below its size", async () => {
+    for (const intent of ["text", "path"] as const) {
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: intent === "text" ? "windowhead" : "zzz",
+        intent,
+        match: "prefix",
+        scope: { packagePrefix: "zzz" },
+        limit: 20
+      });
+      assert.deepEqual(result.hits.map((hit) => hit.filePath), ["zzz/WindowTarget.java"], intent);
+      assert.equal(result.warnings, undefined, intent);
+    }
+  });
+
+  await t.test("a full page from a full window", async () => {
+    const result = await service.searchClassSource({
+      artifactId: resolved.artifactId,
+      query: "windowhead",
+      intent: "text",
+      limit: 20
+    });
+    assert.equal(result.hits.length, 20);
+    assert.ok(result.nextCursor);
+    assert.equal(result.warnings, undefined);
+  });
+});

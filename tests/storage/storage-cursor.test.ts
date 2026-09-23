@@ -831,3 +831,39 @@ test("filesRepo.searchFileCandidates narrows candidates to a literal path prefix
   const unscoped = files.searchFileCandidates(artifactId, { query: "prefneedle", limit: 10, mode: "text" });
   assert.equal(unscoped.items.length, 5);
 });
+
+test("filesRepo.searchFileCandidates keeps the FTS rank order's page-one window past the fetch limit", async () => {
+  const { db, artifacts, files } = await createRepos();
+  const artifactId = "artifact-candidates-rank-window";
+  seedArtifact(artifacts, artifactId);
+
+  // 3,000 identical bodies share one BM25 rank and exceed the 2,500-row fetch
+  // limit of a 500-candidate window; descending insertion makes rowid order
+  // disagree with path order. Which rows survive the fetch cutoff is whatever
+  // `ORDER BY rank LIMIT n` returns, and the window must keep exactly that set.
+  const paths = Array.from({ length: 3_000 }, (_, index) => `t/F${String(index).padStart(4, "0")}.java`).reverse();
+  files.replaceFilesForArtifact(
+    artifactId,
+    paths.map((filePath) => ({ filePath, content: "ranktoken body", contentBytes: 14, contentHash: `rank-${filePath}` }))
+  );
+
+  const limit = 500;
+  const fetchLimit = limit * 5;
+  const rankOrdered = db
+    .prepare(`
+      SELECT file_path
+      FROM files_fts
+      WHERE artifact_id = ? AND files_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `)
+    .all(artifactId, '"ranktoken"', fetchLimit) as { file_path: string }[];
+  const expected = rankOrdered
+    .map((row) => row.file_path)
+    .sort()
+    .slice(0, limit);
+
+  const result = files.searchFileCandidates(artifactId, { query: "ranktoken", limit, mode: "text" });
+  assert.deepEqual(result.items.map((item) => item.filePath), expected);
+  assert.ok(result.nextCursor);
+});
