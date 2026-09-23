@@ -44,6 +44,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `ERR_WORKSPACE_VERSION_UNRESOLVED` carries `exampleCalls` with a `target.kind: "version"` retry to fill in. It carried no retry suggestion at all, although the tool reference said it did. The tool reference now also names the `exampleCalls` field for `ERR_DEPENDENCY_VERSION_UNRESOLVED`.
 - `validate-mixin` reports its mapping health (`toolHealth.overallHealthy`) against the mappings the request actually needs: Mojang mappings for `mojang`, Tiny mappings for `yarn` and `intermediary`, and only the game jar for `obfuscated`. It reported unhealthy whenever Mojang mappings were missing, which lowered the confidence score and turned descriptor mismatches into warnings even for requests that never use them.
 - `verify-mixin-target` suggests `@Shadow` for a public or protected field, since mixin code needs `@Shadow` to reference any target field; it suggested `@Inject-only`, which applies only to methods. For a visible method the reasoning now says no `@Invoker` is needed and that `@Inject` hooks it while `@Shadow` calls it. The `@Shadow` example for a static field keeps `static`. The rule matrix in `docs/tool-reference.md` lists fields and methods separately.
+- `find-class` reports `nested: true` and `enclosingClass` for an inner class found through a Jar-in-Jar shell jar, as it already did for a class found in the artifact's own index.
+- A failed extraction of a nested (Jar-in-Jar) jar no longer leaves a temporary file in the cache directory.
 
 ### Documentation
 

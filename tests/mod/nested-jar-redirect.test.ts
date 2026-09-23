@@ -131,11 +131,16 @@ test("findClassIncludingNested normalizes inner classes to their outer source pa
     artifactId: resolved.artifactId
   });
 
+  // A `$` inner-class match through the shell-jar route now reports
+  // nested/enclosingClass, mirroring the indexed find-class branch's shape for
+  // the same case (class-source.ts's isInnerMatch/nested handling).
   assert.deepEqual(simple.matches, [{
     qualifiedName: "com.example.Outer.Inner",
     filePath: "com/example/Outer.java",
     line: 1,
-    symbolKind: "class"
+    symbolKind: "class",
+    nested: true,
+    enclosingClass: "com.example.Outer"
   }]);
   assert.deepEqual(qualified.matches, simple.matches);
 });

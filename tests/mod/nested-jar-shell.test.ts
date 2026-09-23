@@ -291,6 +291,48 @@ test("extractNestedJar honors a caller-supplied ceiling below the default", asyn
   assert.equal(failure.details?.limit, 16);
 });
 
+// extractNestedJar removes its temp file on every rename failure, not only when a
+// concurrent extraction won the race: an EBUSY/EPERM/ENOSPC with the destination
+// still absent must not leave the temp file under the cache directory.
+// `deps.rename` injects the failure (mirroring JarReaderOpenDeps in
+// source-jar-reader.ts), since a real non-race rename failure cannot be
+// provoked on a plain filesystem.
+test("extractNestedJar removes its temp file on a non-race rename failure", async () => {
+  const { readdir } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "shell-rename-fail-"));
+  const { extractNestedJar, NESTED_JAR_CACHE_DIRNAME } = await import("../../src/source/nested-jars.ts");
+  const inner = await buildInnerJarBytes({
+    "com/example/inner/Api.class": buildClassFile({ internalName: "com/example/inner/Api" })
+  });
+  const shellPath = join(root, "shell.jar");
+  await createShellJar(shellPath, { "META-INF/jars/api.jar": inner });
+  const cacheDir = join(root, "cache");
+
+  const simulatedError = Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+  const rejection = await extractNestedJar(
+    cacheDir,
+    shellPath,
+    "test-signature",
+    "META-INF/jars/api.jar",
+    undefined,
+    {
+      rename: async () => {
+        throw simulatedError;
+      }
+    }
+  ).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+
+  assert.equal(rejection, simulatedError, "the original rename error must propagate unchanged");
+
+  const nestedJarCacheDir = join(cacheDir, NESTED_JAR_CACHE_DIRNAME);
+  const leftoverEntries = await readdir(nestedJarCacheDir);
+  const leakedTempFiles = leftoverEntries.filter((name) => name.includes(".tmp."));
+  assert.deepEqual(leakedTempFiles, [], `expected no orphaned temp files, found: ${leakedTempFiles.join(", ")}`);
+});
+
 // The per-entry cap must not become a denial of service of its own: one
 // oversized inner jar is skipped, and every other nested jar in the shell's
 // inventory still answers.

@@ -68,6 +68,10 @@ export interface NestedClassMatch {
   filePath: string;
   line: number;
   symbolKind: "class";
+  /** Set when the match is a type declared INSIDE another type. */
+  nested?: boolean;
+  /** The enclosing top-level type, present only on a nested match. */
+  enclosingClass?: string;
 }
 
 // In-process cache of class listings per extracted nested jar, so repeated
@@ -139,11 +143,18 @@ function nestedClassMatch(entry: string): NestedClassMatch | undefined {
     return undefined;
   }
 
+  // Mirror the indexed find-class branch's shape (class-source.ts): a `$`
+  // inner-class match reports `nested`/`enclosingClass` against its top-level
+  // enclosing type, exactly like an indexed lookup would.
+  const outerBinaryName = internalName.split("$")[0]!;
+  const isNested = innerSegments.length > 0;
+
   return {
     qualifiedName: internalName.replaceAll("/", ".").replaceAll("$", "."),
-    filePath: `${internalName.split("$")[0]}.java`,
+    filePath: `${outerBinaryName}.java`,
     line: 1,
-    symbolKind: "class"
+    symbolKind: "class",
+    ...(isNested ? { nested: true, enclosingClass: outerBinaryName.replaceAll("/", ".") } : {})
   };
 }
 
@@ -257,6 +268,16 @@ export function nestedJarCachePath(
 }
 
 /**
+ * Seam for injecting the temp->final rename primitive so tests can simulate a
+ * non-race rename failure (e.g. EBUSY/EPERM/ENOSPC), which cannot be provoked
+ * for real against a plain filesystem under the allowed test commands.
+ * Defaults to the module-level `rename` from node:fs/promises.
+ */
+export interface ExtractNestedJarDeps {
+  rename?: typeof rename;
+}
+
+/**
  * Extracts one nested jar to the content-addressed cache (no-op when already
  * present). Entry-name safety is enforced by readJarEntryAsBuffer, and the
  * on-disk name is the digest — never derived from the entry name — so a
@@ -273,8 +294,10 @@ export async function extractNestedJar(
   outerJarPath: string,
   outerSignature: string,
   entryName: string,
-  maxEntryBytes?: number
+  maxEntryBytes?: number,
+  deps: ExtractNestedJarDeps = {}
 ): Promise<string> {
+  const renameFn = deps.rename ?? rename;
   const finalPath = nestedJarCachePath(cacheDir, outerJarPath, outerSignature, entryName);
   try {
     await access(finalPath);
@@ -310,14 +333,16 @@ export async function extractNestedJar(
   const tempPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString("hex")}`;
   await writeFile(tempPath, bytes);
   try {
-    await rename(tempPath, finalPath);
+    await renameFn(tempPath, finalPath);
   } catch (renameError) {
     // A concurrent extraction of the same entry may have won the rename.
     // The content-addressed final file being present makes this call a
-    // success; anything else is a real failure.
+    // success; anything else is a real failure. Either way, best-effort
+    // remove the orphaned temp file before returning/rethrowing.
     try {
       await access(finalPath);
     } catch {
+      await rm(tempPath, { force: true }).catch(() => {});
       throw renameError;
     }
     await rm(tempPath, { force: true });
