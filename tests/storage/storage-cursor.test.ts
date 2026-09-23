@@ -799,3 +799,35 @@ test("filesRepo.searchFileCandidates incorporates BM25 rank bonus for content ma
     assert.ok(item.score >= 100 && item.score <= 119, `score ${item.score} out of content range`);
   }
 });
+
+test("filesRepo.searchFileCandidates narrows candidates to a literal path prefix", async () => {
+  const { artifacts, files } = await createRepos();
+  const artifactId = "artifact-candidates-path-prefix";
+  seedArtifact(artifacts, artifactId);
+
+  files.replaceFilesForArtifact(artifactId, [
+    { filePath: "a/sc_pe/Hit.java", content: "class Hit { int prefneedle; }", contentBytes: 29, contentHash: "pp-a" },
+    { filePath: "a/scXpe/Miss.java", content: "class Miss { int prefneedle; }", contentBytes: 30, contentHash: "pp-b" },
+    { filePath: "a/sc%pe/Pct.java", content: "class Pct { int prefneedle; }", contentBytes: 29, contentHash: "pp-c" },
+    { filePath: "a/scYYpe/Miss2.java", content: "class Miss2 { int prefneedle; }", contentBytes: 31, contentHash: "pp-d" },
+    { filePath: "a/SC_PE/Upper.java", content: "class Upper { int prefneedle; }", contentBytes: 31, contentHash: "pp-e" }
+  ]);
+
+  for (const mode of ["text", "path", "mixed"] as const) {
+    const query = mode === "path" ? ".java" : "prefneedle";
+    const paths = (pathPrefix: string) =>
+      files
+        .searchFileCandidates(artifactId, { query, limit: 10, mode, pathPrefix })
+        .items.map((item) => item.filePath)
+        .sort();
+
+    // `_` and `%` match literally. The prefix match is ASCII case-insensitive,
+    // a superset of the case-sensitive scope checks callers run afterwards.
+    assert.deepEqual(paths("a/sc_pe/"), ["a/SC_PE/Upper.java", "a/sc_pe/Hit.java"], `${mode}: _ is literal`);
+    assert.deepEqual(paths("a/sc%pe/"), ["a/sc%pe/Pct.java"], `${mode}: % is literal`);
+    assert.deepEqual(paths("b/"), [], `${mode}: no candidate outside the prefix`);
+  }
+
+  const unscoped = files.searchFileCandidates(artifactId, { query: "prefneedle", limit: 10, mode: "text" });
+  assert.equal(unscoped.items.length, 5);
+});

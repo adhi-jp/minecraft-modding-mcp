@@ -91,7 +91,9 @@ export function canUseIndexedSearchPath(
     return false;
   }
 
-  // packagePrefix and fileGlob are applied as post-filters on indexed candidates.
+  // packagePrefix and a fileGlob's literal directory prefix narrow the indexed
+  // candidate query (see indexedScopePathPrefix); both scope filters are also
+  // checked exactly on every candidate.
   return true;
 }
 
@@ -150,13 +152,39 @@ export function globToSqlLike(pattern: string): string {
   return result;
 }
 
+function packagePrefixPath(packagePrefix: string): string {
+  return `${packagePrefix.replace(/\.+/g, "/").replace(/\/+$/, "")}/`;
+}
+
 export function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
   if (!packagePrefix) {
     return true;
   }
 
-  const normalizedPrefix = packagePrefix.replace(/\.+/g, "/").replace(/\/+$/, "");
-  return normalizePathStyle(filePath).startsWith(`${normalizedPrefix}/`);
+  return normalizePathStyle(filePath).startsWith(packagePrefixPath(packagePrefix));
+}
+
+/**
+ * A literal file_path prefix every path accepted by the scope starts with, or
+ * undefined when the scope implies none. The indexed candidate query matches it
+ * with an ASCII case-insensitive LIKE, a superset of checkPackagePrefix and the
+ * glob regex (indexed paths are stored with `/` separators), so both exact
+ * checks still run on every candidate.
+ */
+export function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefined {
+  const packagePath = scope?.packagePrefix ? packagePrefixPath(scope.packagePrefix) : undefined;
+  let globPath: string | undefined;
+  if (scope?.fileGlob) {
+    // buildGlobRegex treats everything before the first `*`/`?` as literal.
+    const glob = normalizePathStyle(scope.fileGlob);
+    const wildcardIndex = glob.search(/[*?]/);
+    globPath = (wildcardIndex < 0 ? glob : glob.slice(0, wildcardIndex)) || undefined;
+  }
+  if (packagePath && globPath) {
+    // Keep the longer when one extends the other; otherwise either is a superset.
+    return globPath.startsWith(packagePath) ? globPath : packagePath;
+  }
+  return packagePath ?? globPath;
 }
 
 export function buildSearchCursorContext(input: {
@@ -569,11 +597,13 @@ export function searchTextIntentIndexed(
   onHit: (hit: SearchSourceHit) => void
 ): void {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
+  const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
     query,
     match,
     limit: candidateLimit,
-    mode: "text"
+    mode: "text",
+    ...(pathPrefix ? { pathPrefix } : {})
   });
   svc.metrics.recordSearchDbRoundtrip(indexed.dbRoundtrips);
   svc.metrics.recordSearchRowsScanned(indexed.scannedRows);
@@ -627,10 +657,12 @@ export function searchPathIntentIndexed(
   onHit: (hit: SearchSourceHit) => void
 ): void {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
+  const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
     query,
     limit: candidateLimit,
-    mode: "path"
+    mode: "path",
+    ...(pathPrefix ? { pathPrefix } : {})
   });
   svc.metrics.recordSearchDbRoundtrip(indexed.dbRoundtrips);
   svc.metrics.recordSearchRowsScanned(indexed.scannedRows);

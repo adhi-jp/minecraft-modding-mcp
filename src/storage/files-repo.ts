@@ -35,6 +35,13 @@ export interface SearchFilesOptions {
   cursor?: string;
   mode?: "mixed" | "text" | "path";
   fetchLimitOverride?: number;
+  /**
+   * Literal file_path prefix (e.g. `net/minecraft/`) that narrows the candidate
+   * queries through an escaped, ASCII case-insensitive `LIKE prefix%`. That match
+   * set is a superset of a case-sensitive startsWith, so callers keep their own
+   * exact scope check on the returned candidates.
+   */
+  pathPrefix?: string;
 }
 
 export interface SearchFilesResult {
@@ -272,6 +279,7 @@ export class FilesRepo {
       SELECT file_path
       FROM files
       WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\'
+        AND (? IS NULL OR file_path LIKE ? ESCAPE '\\')
       ORDER BY file_path ASC
       LIMIT ?
     `);
@@ -288,6 +296,7 @@ export class FilesRepo {
       SELECT file_path, rank
       FROM files_fts
       WHERE artifact_id = ? AND files_fts MATCH ?
+        AND (? IS NULL OR file_path LIKE ? ESCAPE '\\')
       ORDER BY rank
       LIMIT ?
     `);
@@ -471,6 +480,7 @@ export class FilesRepo {
     const cursor = parseSearchCursor(options.cursor);
     const likeQuery = `%${escapeLikeNeedle(normalized)}%`;
     const ftsQuery = buildIndexedMatchQuery(normalized, options.match);
+    const scopePattern = options.pathPrefix ? `${escapeLikeNeedle(options.pathPrefix)}%` : null;
     const mode = options.mode ?? "mixed";
 
     // Cursor-adaptive fetch limit: when no cursor, use a generous limit;
@@ -485,7 +495,7 @@ export class FilesRepo {
     const includeContent = mode !== "path" && !cursorExhausted;
 
     const pathRows: { file_path: string }[] = includePath
-      ? (this.searchPathStmt.all(artifactId, likeQuery, fetchLimit) as {
+      ? (this.searchPathStmt.all(artifactId, likeQuery, scopePattern, scopePattern, fetchLimit) as {
           file_path: string;
         }[])
       : [];
@@ -500,7 +510,7 @@ export class FilesRepo {
     let contentRows: { file_path: string; rank: number }[] = [];
     if (includeContent && ftsQuery) {
       try {
-        contentRows = this.searchFtsStmt.all(artifactId, ftsQuery, fetchLimit) as {
+        contentRows = this.searchFtsStmt.all(artifactId, ftsQuery, scopePattern, scopePattern, fetchLimit) as {
           file_path: string;
           rank: number;
         }[];

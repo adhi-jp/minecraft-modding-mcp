@@ -49,6 +49,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `inspect-minecraft` with `task: "versions"` omits its follow-up suggestion when the version manifest lists no release, instead of suggesting a call with no version.
 - Detecting whether a mod jar uses intermediary or Mojang names scores each sampled class name once, so a jar that repeats an entry name is no longer reported with a low-confidence fallback.
 - A failed extraction of a nested (Jar-in-Jar) jar no longer leaves a temporary file in the cache directory.
+- Text and path search (`search-class-source`, and `inspect-minecraft` with `task: "search"`) with `scope.packagePrefix`, or with a `scope.fileGlob` that starts with a literal directory such as `net/minecraft/world/**`, finds in-scope matches even when many out-of-scope files also match. The search reads a bounded window of candidates and filtered it by scope only afterwards, so those matches could come back as no hits at all; the scope now narrows the window itself. A glob without a literal directory prefix still filters only that window; the tool reference describes the window and how to search past it.
 
 ### Documentation
 
