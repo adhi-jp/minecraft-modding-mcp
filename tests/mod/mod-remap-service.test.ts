@@ -45,6 +45,17 @@ function makeTestConfig(cacheDir: string): Config {
   };
 }
 
+// Mirrors resolveOutputJarPath()'s "next to input" default in src/mod-remap-service.ts,
+// used by tests that omit `outputJar` to assert where a fresh/cached run writes.
+function defaultOutputPath(
+  inputJar: string,
+  modId: string | undefined,
+  modVersion: string | undefined,
+  targetMapping: "yarn" | "mojang"
+): string {
+  return join(dirname(inputJar), `${modId ?? "mod"}-${modVersion ?? "0"}-${targetMapping}.jar`);
+}
+
 function legacyCachePath(cacheDir: string, inputJar: string, targetMapping: "yarn" | "mojang"): string {
   const stat = statSync(inputJar, { throwIfNoEntry: false });
   const signature = stat ? `${stat.mtimeMs}:${stat.size}` : "unknown";
@@ -208,7 +219,12 @@ test("remapModJar accepts mojang target and returns cached output", async () => 
     };
 
     const result = await remapModJar(input, config);
-    assert.equal(result.outputJar, cachedOutput);
+    // A cache hit with no explicit outputJar must land at the same
+    // "next to input" default path a cold run would use, not inside the internal
+    // cache directory.
+    const expectedOutputJar = defaultOutputPath(jarPath, "example-mod", "1.0.0", "mojang");
+    assert.equal(result.outputJar, expectedOutputJar);
+    assert.equal(readFileSync(result.outputJar, "utf8"), "cached-remapped-jar");
     assert.equal(result.targetMapping, "mojang");
     assert.equal(result.mcVersion, "1.21.1");
     assert.equal(result.fromMapping, "intermediary");
@@ -306,7 +322,10 @@ test("remapModJar accepts mojang target with auto-detected version and returns c
     };
 
     const result = await remapModJar(input, config);
-    assert.equal(result.outputJar, cachedOutput);
+    // Same default-path convention as the explicit-mcVersion case above.
+    const expectedOutputJar = defaultOutputPath(jarPath, "example-mod", "1.0.0", "mojang");
+    assert.equal(result.outputJar, expectedOutputJar);
+    assert.equal(readFileSync(result.outputJar, "utf8"), "cached-remapped-jar");
     assert.equal(result.targetMapping, "mojang");
     assert.equal(result.mcVersion, "1.21.1");
     assert.equal(result.fromMapping, "intermediary");
@@ -566,6 +585,44 @@ test("remapModJar copies cache hit to an explicit outputJar destination", async 
   }
 });
 
+test("two identical calls without outputJar return the same path for a cold run and a cache hit", async () => {
+  const tempDir = makeTempDir();
+  try {
+    const jarPath = join(tempDir, "sample-fabric-mod.jar");
+    await createMinimalFabricJar(jarPath);
+
+    const mojangTiny = join(tempDir, "1.21.1-mojang.tiny");
+    writeFileSync(mojangTiny, "tiny\t2\t0\tobfuscated\tmojang\n");
+    const intermediaryTiny = join(tempDir, "1.21.1-intermediary.tiny");
+    writeFileSync(intermediaryTiny, "tiny\t2\t0\tofficial\tintermediary\n");
+
+    const config = makeTestConfig(tempDir);
+    const deps = {
+      resolveTinyRemapperJar: async () => join(tempDir, "tiny-remapper.jar"),
+      resolveTinyMappingFile: async () => ({ path: intermediaryTiny }),
+      resolveMojangTinyFile: async () => ({ path: mojangTiny, warnings: [] }),
+      remapJar: async (_jar: string, opts: { outputJar: string }) => {
+        writeFileSync(opts.outputJar, "freshly-remapped-bytes");
+        return { outputJar: opts.outputJar, durationMs: 0 };
+      }
+    };
+
+    const input: ModRemapInput = { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" };
+
+    const cold = await remapModJar(input, config, deps);
+    const warm = await remapModJar(input, config, deps);
+
+    const expectedOutputJar = defaultOutputPath(jarPath, "example-mod", "1.0.0", "mojang");
+    assert.equal(cold.outputJar, expectedOutputJar);
+    assert.equal(warm.outputJar, expectedOutputJar, "a cache hit must return the same path convention as a cold run");
+    assert.ok(warm.warnings.some((w) => w.toLowerCase().includes("cache")), "the second call must be a cache hit");
+    assert.ok(statSync(expectedOutputJar).size > 0, "the file must exist at the shared default output path");
+    assert.equal(readFileSync(expectedOutputJar, "utf8"), "freshly-remapped-bytes");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("remapModJar accepts quilt loader and returns cached output for mojang target", async () => {
   const tempDir = makeTempDir();
   try {
@@ -579,7 +636,10 @@ test("remapModJar accepts quilt loader and returns cached output for mojang targ
       { inputJar: jarPath, mcVersion: "1.21.1", targetMapping: "mojang" },
       makeTestConfig(tempDir)
     );
-    assert.equal(result.outputJar, cachedOutput);
+    // Same default-path convention as the fabric cache-hit cases above.
+    const expectedOutputJar = defaultOutputPath(jarPath, "example-mod", "1.0.0", "mojang");
+    assert.equal(result.outputJar, expectedOutputJar);
+    assert.equal(readFileSync(result.outputJar, "utf8"), "cached");
     assert.equal(result.targetMapping, "mojang");
     assert.equal(result.mcVersion, "1.21.1");
     assert.equal(result.fromMapping, "intermediary");

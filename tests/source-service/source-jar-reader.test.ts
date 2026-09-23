@@ -275,6 +275,53 @@ test("collectMatchedJarEntriesAsBuffers stops after maxEntries matches", async (
   assert.equal(matches[0]?.filePath, "a/A.class");
 });
 
+// A dedup mechanism that marks a name "collected" as soon as the PREDICATE
+// matches it (i.e. before the read is attempted) would incorrectly block a
+// later, readable copy of the same name whenever the first copy fails to
+// read: the predicate already rejected that name as "done", so the walk
+// never even tries the second copy. `stopWhen` exists to avoid that: it only
+// runs in the SUCCESS path, after a read has actually completed, so a name
+// is only ever considered "collected" once something real was read for it.
+// This is exercised with a real read failure (an oversized first copy under
+// `maxBytes`, the same technique the sibling maxBytes tests in this file
+// use), not a hypothetical.
+test("collectMatchedJarEntriesAsBuffers's stopWhen only runs after a successful read, so an unreadable copy of a duplicate name does not block a later readable copy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-buffers-stopwhen-success-path-"));
+  const jarPath = join(root, "dup-first-unreadable.jar");
+
+  const oversizedContent = Buffer.alloc(2000, 0x41);
+  const readableContent = Buffer.from("net/minecraft/class_9999 method_1 field_1", "latin1");
+
+  await createCraftedJar(jarPath, [
+    { name: "net/minecraft/class_1000.class", data: oversizedContent },
+    { name: "net/minecraft/class_1000.class", data: readableContent }
+  ]);
+
+  const stopWhenCallSizes: number[] = [];
+  const matches = await collectMatchedJarEntriesAsBuffers(
+    jarPath,
+    (name) => name === "net/minecraft/class_1000.class",
+    {
+      maxBytes: 100,
+      continueOnError: true,
+      stopWhen: (collected) => {
+        stopWhenCallSizes.push(collected.length);
+        return true;
+      }
+    }
+  );
+
+  // The oversized first copy must fail silently (continueOnError) without ever
+  // being pushed or reaching stopWhen; only the second, readable copy is collected.
+  assert.equal(matches.length, 1, `expected exactly one successfully-read entry, got ${matches.length}`);
+  assert.equal(matches[0]?.content.toString("latin1"), readableContent.toString("latin1"));
+  assert.deepEqual(
+    stopWhenCallSizes,
+    [1],
+    "stopWhen must run exactly once, only after the second (successful) read, never for the failed first copy"
+  );
+});
+
 test("detectFabricLikeInputNamespace opens the jar once for the sampled classes", async () => {
   const root = await mkdtemp(join(tmpdir(), "reader-detect-open-count-"));
   const jarPath = join(root, "intermediary.jar");
@@ -298,6 +345,79 @@ test("detectFabricLikeInputNamespace opens the jar once for the sampled classes"
   assert.equal(result.fromNamespace, "intermediary");
   // The collector opens exactly once; the per-class reads must add ZERO further opens.
   assert.equal(openCount, 1);
+});
+
+test("detectFabricLikeInputNamespace's second (buffer) walk stops once all sampled entries are collected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-detect-early-exit-"));
+  const jarPath = join(root, "big.jar");
+  const entries: Record<string, Buffer> = {};
+  // The first 24 entries are what listJarEntries+slice(0,24) samples; they carry an
+  // intermediary signal. Many more class entries follow so a naive un-bounded second
+  // walk would touch far more than the sampled 24.
+  for (let i = 0; i < 24; i += 1) {
+    entries[`net/minecraft/class_${1000 + i}.class`] = Buffer.from(
+      "net/minecraft/class_1937 method_5678 field_1234",
+      "latin1"
+    );
+  }
+  for (let i = 0; i < 200; i += 1) {
+    entries[`net/minecraft/other/Extra${i}.class`] = Buffer.from("filler bytes", "latin1");
+  }
+  const totalEntries = Object.keys(entries).length;
+  await createJar(jarPath, entries);
+
+  let readEntryCalls = 0;
+  const wrapping = async (p: string): Promise<ZipFile> => {
+    const real = await openZipFile(p);
+    return new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "readEntry") {
+          return () => {
+            readEntryCalls += 1;
+            return target.readEntry();
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      }
+    });
+  };
+
+  const result = await detectFabricLikeInputNamespace(jarPath, { openZipFile: wrapping });
+
+  assert.equal(result.fromNamespace, "intermediary");
+  // A full un-bounded second walk calls readEntry() once per entry plus a final call
+  // that yields "end" (i.e. totalEntries + 1). Stopping once the 24 sampled entries
+  // are all collected should call it far fewer times.
+  assert.ok(
+    readEntryCalls < totalEntries,
+    `expected the second walk to stop once all sampled entries were found, got ${readEntryCalls} readEntry() calls out of ${totalEntries} total entries`
+  );
+});
+
+test("detectFabricLikeInputNamespace scores each sampled class name once when a jar has duplicate entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "reader-detect-duplicate-name-"));
+  const jarPath = join(root, "dup-name.jar");
+
+  // Counting both copies of class_1000 gives mojang and intermediary six
+  // points each, causing a fallback warning. Each distinct class contributes
+  // once: three mojang points versus six intermediary points.
+  await createCraftedJar(jarPath, [
+    { name: "net/minecraft/class_1000.class", data: Buffer.from("net/minecraft/world/", "latin1") },
+    { name: "net/minecraft/class_1000.class", data: Buffer.from("net/minecraft/world/", "latin1") },
+    {
+      name: "net/minecraft/class_1001.class",
+      data: Buffer.from("net/minecraft/class_9999 net/minecraft/class_8888", "latin1")
+    }
+  ]);
+
+  const result = await detectFabricLikeInputNamespace(jarPath);
+
+  assert.equal(result.fromNamespace, "intermediary");
+  assert.deepEqual(
+    result.warnings,
+    [],
+    `expected confident detection after scoring each class once, got: ${result.warnings.join("; ")}`
+  );
 });
 
 test("sourceJarReader: readJarEntryAsUtf8 rejects caller-supplied traversal entry names with INVALID_INPUT", async () => {

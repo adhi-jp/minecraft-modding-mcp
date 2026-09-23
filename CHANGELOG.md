@@ -45,6 +45,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` reports its mapping health (`toolHealth.overallHealthy`) against the mappings the request actually needs: Mojang mappings for `mojang`, Tiny mappings for `yarn` and `intermediary`, and only the game jar for `obfuscated`. It reported unhealthy whenever Mojang mappings were missing, which lowered the confidence score and turned descriptor mismatches into warnings even for requests that never use them.
 - `verify-mixin-target` suggests `@Shadow` for a public or protected field, since mixin code needs `@Shadow` to reference any target field; it suggested `@Inject-only`, which applies only to methods. For a visible method the reasoning now says no `@Invoker` is needed and that `@Inject` hooks it while `@Shadow` calls it. The `@Shadow` example for a static field keeps `static`. The rule matrix in `docs/tool-reference.md` lists fields and methods separately.
 - `find-class` reports `nested: true` and `enclosingClass` for an inner class found through a Jar-in-Jar shell jar, as it already did for a class found in the artifact's own index.
+- `remap-mod-jar` without `outputJar` returns the same output path, next to the input jar, whether or not the remapped jar was already cached. A cached result was returned from the server's internal cache directory instead.
+- `inspect-minecraft` with `task: "versions"` omits its follow-up suggestion when the version manifest lists no release, instead of suggesting a call with no version.
+- Detecting whether a mod jar uses intermediary or Mojang names scores each sampled class name once, so a jar that repeats an entry name is no longer reported with a low-confidence fallback.
 - A failed extraction of a nested (Jar-in-Jar) jar no longer leaves a temporary file in the cache directory.
 
 ### Documentation

@@ -634,6 +634,21 @@ export interface JarReaderOpenDeps {
   openZipFile?: (jarPath: string) => Promise<ZipFile>;
 }
 
+export interface CollectMatchedJarEntriesAsBuffersOptions extends CollectMatchedJarEntriesOptions {
+  /**
+   * Checked only after an entry has been SUCCESSFULLY read and pushed onto the
+   * result (the success path), with the result array so far; returning true
+   * stops the walk immediately, alongside `maxEntries` (whichever triggers
+   * first). Unlike a predicate — which runs before a read is even attempted —
+   * this lets a caller implement a stop condition that depends on which reads
+   * actually succeeded, e.g. "stop once every distinct wanted name has at
+   * least one successful read", so one unreadable copy of a duplicate-named
+   * entry (with `continueOnError: true`) does not block a later readable copy
+   * of the same name from ever being tried.
+   */
+  stopWhen?: (collected: readonly JarEntryBuffer[]) => boolean;
+}
+
 /**
  * Raw-buffer counterpart of {@link collectMatchedJarEntriesAsUtf8}: opens the jar
  * ONCE and returns the matched entries as raw Buffers (no UTF-8 decode), so binary
@@ -644,7 +659,7 @@ export interface JarReaderOpenDeps {
 export async function collectMatchedJarEntriesAsBuffers(
   jarPath: string,
   predicate: (entryPath: string) => boolean,
-  options: CollectMatchedJarEntriesOptions = {},
+  options: CollectMatchedJarEntriesAsBuffersOptions = {},
   deps: JarReaderOpenDeps = {}
 ): Promise<JarEntryBuffer[]> {
   const open = deps.openZipFile ?? openZipFile;
@@ -669,6 +684,9 @@ export async function collectMatchedJarEntriesAsBuffers(
         const contentBuffer = await readEntryStream(zipFile, entry, jarPath, options.maxBytes);
         entries.push({ filePath: entry.fileName, content: contentBuffer });
         if (maxEntries != null && entries.length >= maxEntries) {
+          return entries;
+        }
+        if (options.stopWhen?.(entries)) {
           return entries;
         }
       } catch (error) {
@@ -767,18 +785,47 @@ export async function detectFabricLikeInputNamespace(
 
   // Read all sampled class entries in a SINGLE jar open instead of re-opening the
   // jar once per entry. The sample set and latin1 decode are unchanged, so scores —
-  // and therefore the detected namespace — are identical.
+  // and therefore the detected namespace — are identical. The walk stops as soon
+  // as every sampled entry has been found instead of always scanning the rest of
+  // the jar.
+  //
+  // The predicate only checks name membership (not distinctness), so a readable
+  // duplicate-named entry can still be pushed. Stopping is instead driven by
+  // `stopWhen`, which runs only in the SUCCESS path (after a read has actually
+  // completed) and tracks distinct COLLECTED names there — not in the predicate,
+  // which runs before a read is attempted. A predicate-based dedup would mark a
+  // name "collected" optimistically before knowing whether its read succeeds; if
+  // the first copy of a duplicate name is unreadable (with `continueOnError:
+  // true`), that would permanently block a later, readable copy of the same name
+  // from ever being tried. The walk still stops once every distinct sampled name
+  // has at least one successful read, or the jar is exhausted.
   const sampleSet = new Set(classEntries);
+  const collectedNames = new Set<string>();
   const matched = await collectMatchedJarEntriesAsBuffers(
     inputJar,
     (name) => sampleSet.has(name),
-    { continueOnError: true },
+    {
+      continueOnError: true,
+      stopWhen: (collected) => {
+        collectedNames.add(collected[collected.length - 1]!.filePath);
+        return collectedNames.size >= sampleSet.size;
+      }
+    },
     deps
   );
 
+  // A readable duplicate of an already-collected name can still have been
+  // pushed above (the predicate does not dedupe); keep only the first
+  // successfully-read copy of each distinct name so each sampled class
+  // contributes to the score exactly once.
+  const seenForScoring = new Set<string>();
   let mojangScore = 0;
   let intermediaryScore = 0;
-  for (const { content } of matched) {
+  for (const { filePath, content } of matched) {
+    if (seenForScoring.has(filePath)) {
+      continue;
+    }
+    seenForScoring.add(filePath);
     const text = content.toString("latin1");
     mojangScore += countMatches(
       text,

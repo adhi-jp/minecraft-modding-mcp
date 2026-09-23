@@ -151,3 +151,25 @@ test("InspectMinecraftService omits includeSnapshots=false from versions summary
     kind: "versions"
   });
 });
+
+test("InspectMinecraftService task=versions omits nextActions when no version can be resolved", async () => {
+  const service = new InspectMinecraftService(buildInspectDeps({
+    listVersions: async () => ({
+      latest: {},
+      releases: [],
+      cached: [],
+      totalAvailable: 0
+    })
+  }));
+
+  const result = await service.execute({
+    task: "versions",
+    detail: "summary"
+  });
+
+  assert.equal(
+    result.summary.nextActions,
+    undefined,
+    `expected no nextActions when latest.release and releases[0] are both absent, got ${JSON.stringify(result.summary.nextActions)}`
+  );
+});

@@ -13,6 +13,10 @@ deps: InspectMinecraftDeps,
     includeSnapshots: input.includeSnapshots,
     limit: input.limit
   });
+  // versions.latest.release and releases[0] can both be absent for an effectively
+  // empty version manifest; omit the nextAction rather than suggest an unusable
+  // follow-up call with no version.
+  const resolvedNextVersion = versions.latest.release ?? versions.releases[0]?.id;
   const summary: Summary = {
     status: "ok",
     headline: `Found ${versions.totalAvailable} Minecraft versions.`,
@@ -26,15 +30,19 @@ deps: InspectMinecraftDeps,
       releases: versions.releases.length,
       snapshots: versions.snapshots?.length ?? 0
     },
-    nextActions: nextActionsOrUndefined([
-      createNextAction("inspect-minecraft", {
-        task: "artifact",
-        subject: {
-          kind: "version",
-          version: versions.latest.release ?? versions.releases[0]?.id
-        }
-      })
-    ])
+    nextActions: nextActionsOrUndefined(
+      resolvedNextVersion !== undefined
+        ? [
+            createNextAction("inspect-minecraft", {
+              task: "artifact",
+              subject: {
+                kind: "version",
+                version: resolvedNextVersion
+              }
+            })
+          ]
+        : []
+    )
   };
 
   return {

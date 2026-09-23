@@ -237,14 +237,14 @@ export async function remapModJar(
   const cachedOutput = join(cacheDir, `${cacheKey}.jar`);
 
   if (!input.forceRemap && existsSync(cachedOutput)) {
-    const cacheHitOutputJar = input.outputJar
-      ? outputJar
-      : cachedOutput;
-    copyJarToDestination(cachedOutput, cacheHitOutputJar);
+    // Always copy to the same `outputJar` location a cold run would use (the
+    // caller-supplied path, or resolveOutputJarPath's "next to input" default),
+    // so a cache hit and a cold run return the same path convention.
+    copyJarToDestination(cachedOutput, outputJar);
 
-    log("info", "remap.cache-hit", { inputJar: normalizedInput, outputJar: cacheHitOutputJar });
+    log("info", "remap.cache-hit", { inputJar: normalizedInput, outputJar });
     return {
-      outputJar: cacheHitOutputJar,
+      outputJar,
       mcVersion,
       fromMapping: fromNamespace,
       targetMapping: input.targetMapping,
