@@ -6,7 +6,19 @@ import test from "node:test";
 
 import { SourceService } from "../../src/source-service.ts";
 import { createWorkspaceContextCache, type WorkspaceContext } from "../../src/workspace-context-cache.ts";
+import { withEnv } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
+
+/** Forces `detectPathRuntime` down its WSL branch on any Linux host. */
+const DISTRO = "fallback-distro";
+const WSL_ENV = { WSL_DISTRO_NAME: DISTRO };
+const LINUX_ONLY =
+  process.platform === "linux" ? false : "UNC/WSL spellings only resolve on a Linux host";
+
+/** The `\\wsl$\<distro>\...` spelling a Windows-side agent sends for a Linux path. */
+function uncSpelling(posixPath: string): string {
+  return `\\\\wsl$\\${DISTRO}\\${posixPath.replace(/^\//, "").replace(/\//g, "\\")}`;
+}
 
 type AnySourceService = SourceService & {
   buildMappingFallbackSuggestedCall: (args: {
@@ -60,6 +72,57 @@ test("buildMappingFallbackSuggestedCall returns workspace retry when cache hit r
   assert.equal(params.target.kind, "workspace");
   assert.equal(params.mapping, "mojang");
 });
+
+/**
+ * `buildMappingFallbackSuggestedCall` normalizes `projectPath` like every other
+ * consumer in the artifact resolver, so on a WSL host a Windows/UNC-spelled path
+ * hits the workspace-context cache (keyed by the normalized POSIX path) and
+ * yields the workspace retry rather than the legacy fallback advice.
+ */
+test(
+  "buildMappingFallbackSuggestedCall reads a Windows/UNC-spelled projectPath and returns the workspace retry, not the legacy fallback",
+  { skip: LINUX_ONLY },
+  async () => {
+    const project = await mkdtemp(join(tmpdir(), "fallback-wsl-cache-hit-"));
+    const host = await makeHost();
+    const cache = createWorkspaceContextCache();
+    // Cache keyed by the normalized POSIX path, exactly as `synthesizeWorkspaceTarget`
+    // would have written it after normalizing a Windows-spelled `projectPath`.
+    const ctx: WorkspaceContext = {
+      projectPath: project,
+      minecraftVersion: "1.21.10",
+      compileMapping: "mojang",
+      detectedAt: Date.now(),
+      evidence: [],
+      dependencyVersions: new Map<string, string>()
+    };
+    cache.write(ctx);
+
+    const service = new SourceService(
+      buildTestConfig(host),
+      undefined,
+      { workspaceContextCache: cache }
+    ) as unknown as AnySourceService;
+
+    await withEnv(WSL_ENV, async () => {
+      const result = await service.buildMappingFallbackSuggestedCall({
+        input: {
+          target: { kind: "version", value: "1.21.10" },
+          projectPath: uncSpelling(project),
+          mapping: "mojang"
+        },
+        kind: "version",
+        value: "1.21.10",
+        scope: "vanilla",
+        effectiveMapping: "mojang"
+      });
+
+      const params = result.suggestedCall.params as { target: { kind: string }; mapping: string };
+      assert.equal(params.target.kind, "workspace");
+      assert.equal(params.mapping, "mojang");
+    });
+  }
+);
 
 test("buildMappingFallbackSuggestedCall falls back to legacy obfuscated retry when projectPath is absent", async () => {
   const host = await makeHost();

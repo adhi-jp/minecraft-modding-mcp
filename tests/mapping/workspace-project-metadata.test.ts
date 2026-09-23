@@ -118,6 +118,45 @@ test("detectProjectLoader reports unresolved with descriptive warning when both 
   );
 });
 
+/**
+ * Loader detection strips Gradle line/block comments before scanning, as
+ * mapping detection does, so a commented-out plugin id or accessTransformer
+ * mention is not loader evidence.
+ */
+test("detectProjectLoader ignores a commented-out fabric-loom plugin id", async () => {
+  const { WorkspaceMappingService } = await import("../../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "loader-commented-plugin-"));
+  await writeFile(
+    join(root, "build.gradle"),
+    ["plugins {", "  // id 'fabric-loom' version '1.9'", "}"].join("\n"),
+    "utf8"
+  );
+  const service = new WorkspaceMappingService();
+  const result = await service.detectProjectLoader(root);
+  assert.equal(result.resolved, false);
+  assert.equal(result.evidence.length, 0);
+});
+
+test("detectProjectLoader ignores an accessTransformer mention inside a block comment", async () => {
+  const { WorkspaceMappingService } = await import("../../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "loader-commented-at-"));
+  await writeFile(
+    join(root, "build.gradle"),
+    [
+      "/*",
+      "minecraft {",
+      "  accessTransformer = file('src/main/resources/META-INF/at.cfg')",
+      "}",
+      "*/"
+    ].join("\n"),
+    "utf8"
+  );
+  const service = new WorkspaceMappingService();
+  const result = await service.detectProjectLoader(root);
+  assert.equal(result.resolved, false);
+  assert.equal(result.evidence.length, 0);
+});
+
 test("detectProjectLoader reports unresolved when nothing in the workspace declares a loader", async () => {
   const { WorkspaceMappingService } = await import("../../src/workspace-mapping-service.ts");
   const root = await mkdtemp(join(tmpdir(), "loader-none-"));

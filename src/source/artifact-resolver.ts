@@ -1750,7 +1750,7 @@ export async function buildMappingFallbackSuggestedCall(svc: SourceService, args
     return buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath: input.projectPath });
   }
 
-  const projectPath = input.projectPath?.trim();
+  const projectPath = normalizeOptionalProjectPath(input.projectPath);
   if (!projectPath) {
     return buildLegacyMappingFallback({ kind, value, scope, isVanillaMojang, projectPath: undefined });
   }

@@ -19,6 +19,8 @@ import {
   TEST_AMBIGUOUS_METHOD_TINY,
   TEST_AMBIGUOUS_CLASS_TINY,
   TEST_DESCRIPTOR_REMAP_TINY,
+  TEST_DESCRIPTOR_REMAP_MULTIHOP_OBF_INTER_TINY,
+  TEST_DESCRIPTOR_REMAP_MULTIHOP_INTER_NAMED_TINY,
   TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY,
   TEST_TINY_YARN_2COL,
   TEST_MOJANG_CLIENT_MAPPINGS
@@ -440,6 +442,77 @@ test("MappingService findMapping signatureMode=exact accepts obfuscated-canonica
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Sibling of the test above, but the tiny data is split across TWO
+// Loom tiny files - one obfuscated<->intermediary, one intermediary<->named -
+// instead of one file with all three columns. The test above's
+// `TEST_DESCRIPTOR_REMAP_TINY` fixture has identical obfuscated/intermediary
+// columns, so it exercises a degenerate direct edge; a single file with three
+// GENUINELY distinct columns does not fix that either, because
+// `addPairRecords` builds a pair-index entry for every namespace combination
+// present in one row, so a 3-column file still creates a direct
+// obfuscated<->named edge (confirmed empirically: `buildAdjacency` on such a
+// file yields `obfuscated->[intermediary,yarn]`). Splitting the data into two
+// files whose namespace pairs never overlap is the only way, with existing
+// test infrastructure, to make `namespacePath`'s BFS actually cross the
+// intermediary node: the merged graph's adjacency is
+// `obfuscated->[intermediary]` / `yarn->[intermediary]` only (also confirmed
+// empirically), so this lookup can resolve only by taking two real hops.
+test(
+  "MappingService findMapping signatureMode=exact accepts obfuscated-canonical descriptors on a GENUINE multi-hop path (separate obfuscated<->intermediary and intermediary<->named tiny files, no direct edge)",
+  async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-exact-genuine-multihop-"));
+    try {
+      const config = buildTestConfig(root, { sourceRepos: [] });
+      const loomCacheDir = join(root, ".gradle", "loom-cache", "1.21.10");
+      await mkdir(loomCacheDir, { recursive: true });
+      // Two separate files, no namespace pair in common, so `selectTinyFiles`
+      // merges both instead of dropping either as a redundant rendering - see
+      // the fixtures' own comment for why this is required to avoid a direct
+      // obfuscated<->named edge.
+      await writeFile(join(loomCacheDir, "mappings.tiny"), `${TEST_DESCRIPTOR_REMAP_MULTIHOP_OBF_INTER_TINY}\n`, "utf8");
+      await writeFile(join(loomCacheDir, "mappings-yarn.tiny"), `${TEST_DESCRIPTOR_REMAP_MULTIHOP_INTER_NAMED_TINY}\n`, "utf8");
+
+      const versionServiceStub = {
+        async resolveVersionMappings(version: string) {
+          return {
+            version,
+            versionManifestUrl: "https://example.test/version_manifest_v2.json",
+            versionDetailUrl: `https://example.test/versions/${version}.json`,
+            mappingsUrl: undefined
+          };
+        }
+      };
+
+      const service = new MappingService(config, versionServiceStub, globalThis.fetch);
+
+      const descriptor = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z";
+      const mapped = await withCwd(root, () =>
+        service.findMapping({
+          version: "1.21.10",
+          kind: "method",
+          owner: "net.minecraft.class_1937",
+          name: "method_1725",
+          descriptor,
+          sourceMapping: "obfuscated",
+          targetMapping: "yarn",
+          signatureMode: "exact"
+        })
+      );
+
+      assert.equal(
+        mapped.resolved,
+        true,
+        "genuine multi-hop exact lookup must resolve even when candidate descriptor stays in obfuscated form"
+      );
+      assert.equal(mapped.status, "resolved");
+      assert.equal(mapped.resolvedSymbol?.name, "setBlock");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+);
 
 test("MappingService findMapping omitted signatureMode behaves as name-only at the service layer", async () => {
   const { MappingService } = await import("../../src/mapping-service.ts");

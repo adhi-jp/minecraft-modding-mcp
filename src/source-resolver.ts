@@ -1,10 +1,10 @@
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve as resolvePath, sep } from "node:path";
-import { homedir } from "node:os";
 
 import fastGlob from "fast-glob";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
+import { resolveGradleUserHomePath } from "./gradle-paths.js";
 import type {
   Config,
   MappingVariant,
@@ -454,14 +454,6 @@ async function firstReadableJarArchive(
   return undefined;
 }
 
-function resolveGradleUserHome(): string {
-  const configured = process.env.GRADLE_USER_HOME?.trim();
-  if (configured) {
-    return configured;
-  }
-  return resolvePath(homedir(), ".gradle");
-}
-
 async function resolveGradleCacheCoordinateCandidate(
   coordinate: string
 ): Promise<
@@ -469,7 +461,7 @@ async function resolveGradleCacheCoordinateCandidate(
 > {
   const parsed = parseCoordinate(coordinate);
   const baseDir = resolvePath(
-    resolveGradleUserHome(),
+    resolveGradleUserHomePath(),
     "caches",
     "modules-2",
     "files-2.1",

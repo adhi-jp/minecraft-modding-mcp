@@ -162,6 +162,50 @@ export const TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY = [
   "\tm\t(Lnet/minecraft/class_1799;Ljava/lang/String;)V\tmethod_9000\tmethod_9000\ttagWithLabel"
 ].join("\n");
 
+// `TEST_DESCRIPTOR_REMAP_TINY` above has identical obfuscated and
+// intermediary columns, so a lookup routed through it never actually crosses
+// the intermediary namespace node - it is a degenerate direct edge, not a
+// genuine multi-hop path.
+//
+// A single tiny v2 file with all three namespace columns does NOT fix this
+// either: `addPairRecords` (src/mapping/parsers/tiny.ts) builds a pair index
+// entry for EVERY namespace combination present in one row, so a 3-column
+// file creates a direct obfuscated<->named edge in the same pass as the
+// obfuscated<->intermediary and intermediary<->named edges - `namespacePath`'s
+// BFS then just takes that direct edge and never touches the intermediary
+// node at all. Verified empirically: `buildAdjacency` on a 3-column fixture
+// produces `obfuscated->[intermediary,yarn]`, i.e. a direct edge.
+//
+// This pair of fixtures is instead loaded as TWO SEPARATE Loom tiny files -
+// one obfuscated<->intermediary, one intermediary<->named - exactly how a
+// real Fabric/Yarn Loom cache lays out `mappings.tiny` (official<->intermediary,
+// descriptors in obfuscated coordinates) alongside a Yarn tiny
+// (intermediary<->named, descriptors in intermediary coordinates).
+// `loadTinyPairsFromLoom` globs and merges every `*.tiny` file it finds
+// (src/mapping/loaders/tiny-loom.ts), and `selectTinyFiles`
+// (tiny-loom-selection.ts) only drops a file as a redundant "rendering" when
+// every namespace pair it carries is ALREADY covered by a selected file -
+// these two files introduce disjoint pairs, so both are selected and merged.
+// The result (confirmed empirically) has adjacency
+// `obfuscated->[intermediary]` and `yarn->[intermediary]` only: no direct
+// edge exists, so a lookup from obfuscated to yarn MUST route through
+// intermediary.
+export const TEST_DESCRIPTOR_REMAP_MULTIHOP_OBF_INTER_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary",
+  "c\tnet/minecraft/class_2338\tnet/minecraft/inter/class_9001",
+  "c\tnet/minecraft/class_2680\tnet/minecraft/inter/class_9002",
+  "c\tnet/minecraft/class_1937\tnet/minecraft/inter/class_9003",
+  "\tm\t(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;I)Z\tmethod_1725\tmethod_9004"
+].join("\n");
+
+export const TEST_DESCRIPTOR_REMAP_MULTIHOP_INTER_NAMED_TINY = [
+  "tiny\t2\t0\tintermediary\tnamed",
+  "c\tnet/minecraft/inter/class_9001\tnet/minecraft/core/BlockPos",
+  "c\tnet/minecraft/inter/class_9002\tnet/minecraft/world/level/block/state/BlockState",
+  "c\tnet/minecraft/inter/class_9003\tnet/minecraft/world/level/Level",
+  "\tm\t(Lnet/minecraft/inter/class_9001;Lnet/minecraft/inter/class_9002;I)Z\tmethod_9004\tsetBlock"
+].join("\n");
+
 export const TEST_DESCRIPTOR_REMAP_TINY_PROJECT = [
   "tiny\t2\t0\tobfuscated\tintermediary\tnamed",
   "c\tnet/minecraft/class_2338\tnet/minecraft/class_2338\tnet/minecraft/core/BlockPos",

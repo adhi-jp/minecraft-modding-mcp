@@ -123,10 +123,16 @@ export async function synthesizeWorkspaceTarget(
           "Set minecraft_version in gradle.properties or pass target.kind=\"version\" with an explicit Minecraft version.",
         ...buildSuggestedCall({
           tool: "resolve-artifact",
-          params: {
-            target: { kind: "version", value: "<your-mc-version>" },
-            projectPath
-          }
+          params: undefined,
+          examples: [
+            {
+              params: {
+                target: { kind: "version", value: "<your-mc-version>" },
+                projectPath
+              },
+              reason: "Replace <your-mc-version> with the Minecraft version, or set minecraft_version in gradle.properties."
+            }
+          ]
         })
       }
     });

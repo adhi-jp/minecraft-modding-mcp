@@ -1,12 +1,12 @@
 import { constants } from "node:fs";
 import { access, readdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import fastGlob from "fast-glob";
 
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
+import { resolveGradleUserHomePath } from "./gradle-paths.js";
 import { isSafeMavenSegment, isSafeMavenVersionToken } from "./maven-token.js";
 import type { SourceMapping } from "./types.js";
 
@@ -351,7 +351,7 @@ async function adoptSubmoduleVersionFromUmbrellaPom(args: {
   }
 
   const umbrellaDir = resolve(
-    resolveGradleUserHome(),
+    resolveGradleUserHomePath(),
     "caches",
     "modules-2",
     "files-2.1",
@@ -438,15 +438,8 @@ function compareSemverDescending(left: string, right: string): number {
  */
 export { isSafeMavenVersionToken };
 
-function resolveGradleUserHome(): string {
-  const configured = process.env.GRADLE_USER_HOME?.trim();
-  if (configured) {
-    return configured;
-  }
-  return resolve(homedir(), ".gradle");
-}
-
-function detectLoadersFromContent(content: string): LoaderDetection[] {
+function detectLoadersFromContent(rawContent: string, scriptKind: GradleScriptKind): LoaderDetection[] {
+  const content = stripGradleComments(rawContent, scriptKind);
   const detections: LoaderDetection[] = [];
   if (/\bid\s*(?:\(\s*)?["']net\.neoforged\.moddev["']\s*\)?/i.test(content)) {
     detections.push({
@@ -675,7 +668,7 @@ export class WorkspaceMappingService {
     }
 
     const modulesDir = resolve(
-      resolveGradleUserHome(),
+      resolveGradleUserHomePath(),
       "caches",
       "modules-2",
       "files-2.1",
@@ -771,7 +764,7 @@ export class WorkspaceMappingService {
         } catch {
           return [];
         }
-        return detectLoadersFromContent(content).map((detection) => ({
+        return detectLoadersFromContent(content, gradleScriptKind(filePath)).map((detection) => ({
           filePath,
           loader: detection.loader,
           reason: detection.reason

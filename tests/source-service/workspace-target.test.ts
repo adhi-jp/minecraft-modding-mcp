@@ -136,9 +136,23 @@ test("synthesizeWorkspaceTarget throws ERR_WORKSPACE_VERSION_UNRESOLVED when ver
           { target: { kind: "workspace", strict }, projectPath },
           { kind: "workspace", strict }
         ),
-      (err: Error & { code?: string; details?: { strict?: boolean } }) => {
+      (err: Error & {
+        code?: string;
+        details?: {
+          strict?: boolean;
+          suggestedCall?: unknown;
+          exampleCalls?: Array<{ tool: string; params: { target?: { value?: string } } }>;
+        };
+      }) => {
         assert.equal(err.code, ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED);
         assert.equal(err.details?.strict, strict);
+        // The `<your-mc-version>` placeholder cannot be a runnable suggestedCall,
+        // so the retry is carried as an `exampleCalls` template, as for
+        // ERR_DEPENDENCY_VERSION_UNRESOLVED.
+        assert.equal(err.details?.suggestedCall, undefined);
+        assert.ok(Array.isArray(err.details?.exampleCalls) && err.details.exampleCalls.length > 0);
+        assert.equal(err.details?.exampleCalls?.[0]?.tool, "resolve-artifact");
+        assert.equal(err.details?.exampleCalls?.[0]?.params.target?.value, "<your-mc-version>");
         return true;
       }
     );
