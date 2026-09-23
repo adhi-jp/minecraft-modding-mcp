@@ -39,6 +39,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `find-mapping` with `signatureMode: "exact"` and `resolve-method-mapping-exact` resolve a Mojang-to-Yarn method whose mappings are split across separate per-namespace files (a Mojang ProGuard file plus `official → intermediary` and `intermediary → named` Tiny files). The method's descriptor in the last hop is in intermediary names, which the exact lookup did not accept, so it answered `not_found`.
 - A Java subprocess (the decompiler and the other Java helpers) that is stopped for exceeding its time limit but ignores the stop request is now force-killed after 3 seconds. It was previously left running.
 
+### Documentation
+
+- The tool reference documents a known issue: `get-class-source` with `mode: "metadata"` returns a generated outline of the class's symbols, yet reports `returnedRange` as the whole source file and `truncated: false`. Do not use those values to address lines of the outline; use `mode: "snippet"` or `"full"` for line numbers. A future major release will replace them with fields specific to the metadata mode.
+
 ## [7.1.0] - 2026-09-19
 
 ### Added
