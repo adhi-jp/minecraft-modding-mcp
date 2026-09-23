@@ -1,3 +1,5 @@
+import { resolve as resolvePath } from "node:path";
+
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import { normalizeOptionalProjectPath } from "../gradle-paths.js";
@@ -12,6 +14,7 @@ import type {
   WorkspaceTargetInput
 } from "../types.js";
 import { describeSafeMavenSegmentRule, isSafeMavenSegment } from "../maven-token.js";
+import { computeWorkspaceContextFingerprint } from "../workspace-context-cache.js";
 import type { WorkspaceContext } from "../workspace-context-cache.js";
 import type { ResolveArtifactInput } from "../source-service.js";
 import { normalizeMapping } from "./shared-utils.js";
@@ -20,11 +23,36 @@ import { normalizeMapping } from "./shared-utils.js";
 // re-import source-service.ts with a cache-busting query to flip the flag,
 // but cannot bust this module's cache through that path.
 
+/**
+ * The root-level files `detectProjectMinecraftVersion`/`detectCompileMapping`/
+ * `detectProjectLoader` (src/workspace-mapping-service.ts) are guaranteed to
+ * read (or attempt to read) for every project, independent of what detection
+ * finds: `gradle.properties` by exact path, and `build.gradle`/`build.gradle.kts`
+ * by exact path as the first two entries of the build-script glob those two
+ * methods both run before descending into subdirectories. `settings.gradle(.kts)`
+ * and `libs.versions.toml` are not read by any of the three, so they are not
+ * listed here - see the coverage note on `fingerprintPaths` below.
+ */
+function fixedDetectionFilenames(): readonly string[] {
+  return ["gradle.properties", "build.gradle", "build.gradle.kts"];
+}
+
 export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPath: string): Promise<WorkspaceContext> {
   const cached = svc.workspaceContextCache.read(projectPath);
   if (cached && !cached.partial) {
     return cached;
   }
+
+  const projectRoot = resolvePath(projectPath);
+  // Snapshotted BEFORE detection runs, not after: an edit that lands while
+  // detection is mid-read (racing the very call below) must still show up as
+  // a stat difference on the next read. Fingerprinting after detection would
+  // record whatever is on disk at that later point - which could already be
+  // the edit that should have invalidated the entry, silently absorbing the
+  // race into a "the cache is fresh" fingerprint instead of catching it.
+  const fixedFingerprint = computeWorkspaceContextFingerprint(
+    fixedDetectionFilenames().map((filename) => resolvePath(projectRoot, filename))
+  );
 
   const [minecraftVersion, mappingResult, loaderResult] = await Promise.all([
     svc.workspaceMappingService.detectProjectMinecraftVersion(projectPath),
@@ -56,6 +84,39 @@ export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPa
   }
 
   const latest = svc.workspaceContextCache.read(projectPath);
+  // Fingerprint the files this detection actually read (or, for the fixed
+  // root set above, attempted to read regardless of outcome), so a later
+  // cache hit can catch an edit made within the TTL instead of serving a
+  // stale minecraftVersion/mapping/loader for up to five more minutes.
+  //
+  // Coverage: `fixedFingerprint` above (taken pre-detection) covers
+  // gradle.properties and a root-level build.gradle/build.gradle.kts,
+  // present or not - editing, creating, or deleting any of those three
+  // always invalidates. mapping/loader detection also globs subproject
+  // build scripts (`**/build.gradle(.kts)`) and, for the loader, mod
+  // descriptor files (`fabric.mod.json`, `quilt.mod.json`,
+  // `META-INF/{mods,neoforge.mods}.toml`) anywhere under the project; only
+  // the ones that actually produced a mapping/loader declaration are known
+  // here (as `evidence[].filePath`) and fingerprinted below. A subproject
+  // build script or descriptor that was scanned but declared nothing is NOT
+  // covered - editing one to newly declare a mapping/loader is not caught
+  // until the TTL expires, same as before this fingerprint existed.
+  // settings.gradle(.kts) and libs.versions.toml are not read by detection
+  // at all, so they are never fingerprinted.
+  const fixedPaths = new Set(fixedFingerprint.map((entry) => entry.path));
+  const evidencePaths = [
+    ...(mappingResult?.evidence.map((entry) => entry.filePath) ?? []),
+    ...(loaderResult?.evidence.map((entry) => entry.filePath) ?? [])
+  ].filter((path) => !fixedPaths.has(resolvePath(path)));
+  const fingerprint = [
+    ...fixedFingerprint,
+    // A path already covered by fixedFingerprint above (taken pre-detection)
+    // is skipped here rather than re-stat-ed post-detection: keeping only
+    // the earlier snapshot is what makes that entry catch a mid-detection
+    // race at all, and a second, later entry for the same path would just
+    // add a redundant stat on every read without changing the result.
+    ...computeWorkspaceContextFingerprint(evidencePaths)
+  ];
   const ctx: WorkspaceContext = {
     projectPath,
     minecraftVersion,
@@ -64,7 +125,8 @@ export async function loadOrDetectWorkspaceContext(svc: SourceService, projectPa
     detectedAt: Date.now(),
     evidence,
     dependencyVersions: latest?.dependencyVersions ?? cached?.dependencyVersions ?? new Map<string, string>(),
-    partial: false
+    partial: false,
+    fingerprint
   };
   svc.workspaceContextCache.write(ctx);
   return ctx;

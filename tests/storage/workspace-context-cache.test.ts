@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
-import { createWorkspaceContextCache, type WorkspaceContext } from "../../src/workspace-context-cache.ts";
+import {
+  computeWorkspaceContextFingerprint,
+  createWorkspaceContextCache,
+  type WorkspaceContext
+} from "../../src/workspace-context-cache.ts";
 
 function makeContext(overrides: Partial<WorkspaceContext> = {}): WorkspaceContext {
   return {
@@ -105,4 +112,118 @@ test("createWorkspaceContextCache normalizes the projectPath using path.resolve"
   assert.ok(cache.read("/tmp/dir-a"));
   assert.ok(cache.read("/tmp/./dir-a"));
   assert.ok(cache.read("/tmp/dir-b/../dir-a"));
+});
+
+// ---------------------------------------------------------------------------
+// Fingerprint-based invalidation: a cache entry must not survive an edit to
+// the project files its detection actually read, even well within the TTL.
+// ---------------------------------------------------------------------------
+
+test("createWorkspaceContextCache read() misses once a fingerprinted file's content changes within the TTL", async () => {
+  const root = await mkdtemp(join(tmpdir(), "wcc-fingerprint-"));
+  try {
+    const propsPath = join(root, "gradle.properties");
+    await writeFile(propsPath, "minecraft_version=1.21.4\n");
+
+    const cache = createWorkspaceContextCache({ ttlMs: 5 * 60_000 });
+    cache.write(
+      makeContext({
+        projectPath: root,
+        minecraftVersion: "1.21.4",
+        detectedAt: Date.now(),
+        fingerprint: computeWorkspaceContextFingerprint([propsPath])
+      })
+    );
+    assert.ok(cache.read(root), "unchanged file: still a hit");
+
+    // Edit the file the detection read - well within the TTL.
+    await writeFile(propsPath, "minecraft_version=1.21.10\n");
+
+    assert.equal(
+      cache.read(root),
+      undefined,
+      "an edit to a fingerprinted file must invalidate the entry even though the TTL has not elapsed"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("createWorkspaceContextCache read() hits when every fingerprinted file is unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "wcc-fingerprint-stable-"));
+  try {
+    const propsPath = join(root, "gradle.properties");
+    await writeFile(propsPath, "minecraft_version=1.21.4\n");
+
+    const cache = createWorkspaceContextCache({ ttlMs: 5 * 60_000 });
+    cache.write(
+      makeContext({
+        projectPath: root,
+        minecraftVersion: "1.21.4",
+        detectedAt: Date.now(),
+        fingerprint: computeWorkspaceContextFingerprint([propsPath])
+      })
+    );
+
+    assert.ok(cache.read(root));
+    assert.ok(cache.read(root), "reading again without any file change must still hit");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("createWorkspaceContextCache read() misses once a fingerprinted-absent file is created", async () => {
+  const root = await mkdtemp(join(tmpdir(), "wcc-fingerprint-absent-"));
+  try {
+    const propsPath = join(root, "gradle.properties");
+    // No gradle.properties yet: detection ran and found nothing there.
+    const cache = createWorkspaceContextCache({ ttlMs: 5 * 60_000 });
+    cache.write(
+      makeContext({
+        projectPath: root,
+        minecraftVersion: undefined,
+        detectedAt: Date.now(),
+        fingerprint: computeWorkspaceContextFingerprint([propsPath])
+      })
+    );
+    assert.ok(cache.read(root), "absent file, still absent: a hit");
+
+    // The user creates the file within the TTL.
+    await writeFile(propsPath, "minecraft_version=1.21.4\n");
+
+    assert.equal(
+      cache.read(root),
+      undefined,
+      "a fingerprinted file going from absent to present must invalidate the entry"
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("createWorkspaceContextCache read() ignores fingerprint staleness for an entry with no recorded fingerprint", async () => {
+  // A dependency-only partial entry (workspace-target.ts writes these before
+  // full detection ever ran) carries no fingerprint; only the TTL applies.
+  let now = 0;
+  const cache = createWorkspaceContextCache({ clock: () => now });
+  cache.write(makeContext({ projectPath: "/tmp/no-fingerprint", detectedAt: now, fingerprint: undefined }));
+  assert.ok(cache.read("/tmp/no-fingerprint"));
+});
+
+test("computeWorkspaceContextFingerprint records size/mtime for an existing file and absent:true for a missing one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "wcc-fingerprint-compute-"));
+  try {
+    const presentPath = join(root, "gradle.properties");
+    await writeFile(presentPath, "minecraft_version=1.21.4\n");
+    const missingPath = join(root, "does-not-exist.gradle");
+
+    const fingerprint = computeWorkspaceContextFingerprint([presentPath, missingPath]);
+
+    const present = fingerprint.find((entry) => entry.path === presentPath);
+    const missing = fingerprint.find((entry) => entry.path === missingPath);
+    assert.ok(present && !("absent" in present));
+    assert.ok(missing && "absent" in missing && missing.absent === true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

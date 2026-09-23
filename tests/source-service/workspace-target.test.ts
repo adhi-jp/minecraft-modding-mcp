@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -229,6 +229,121 @@ test("synthesizeWorkspaceTarget reuses the WorkspaceContextCache on the second c
 
   assert.equal(calls, 1);
   assert.equal(second.provenance.cacheHit, true);
+});
+
+test("synthesizeWorkspaceTarget re-detects after gradle.properties changes within the TTL instead of serving a stale cache hit", async () => {
+  const projectPath = await makeProject({ minecraft_version: "1.21.10" });
+  const root = await mkdtemp(join(tmpdir(), "ws-target-fingerprint-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const cache = createWorkspaceContextCache();
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const original = service.workspaceMappingService.detectProjectMinecraftVersion.bind(
+    service.workspaceMappingService
+  );
+  let calls = 0;
+  service.workspaceMappingService.detectProjectMinecraftVersion = async (path: string) => {
+    calls += 1;
+    return original(path);
+  };
+
+  const first = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath },
+    { kind: "workspace" }
+  )) as { target: { value: string } };
+  assert.equal(first.target.value, "1.21.10");
+
+  // Edit the file this detection read, well within the cache's default TTL.
+  const propsPath = join(projectPath, "gradle.properties");
+  const before = await stat(propsPath);
+  await writeFile(propsPath, "minecraft_version=1.21.20\n", "utf8");
+  await utimes(propsPath, before.atime, new Date(before.mtimeMs + 2000));
+
+  const second = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath },
+    { kind: "workspace" }
+  )) as { target: { value: string }; provenance: { cacheHit: boolean } };
+
+  assert.equal(calls, 2, "an edited gradle.properties must force re-detection instead of reusing the cached run");
+  assert.equal(second.provenance.cacheHit, false);
+  assert.equal(second.target.value, "1.21.20");
+});
+
+test("synthesizeWorkspaceTarget re-detects after a root build.gradle that first declared nothing gains a loader declaration within the TTL", async () => {
+  // Regression coverage for the fixed-file fingerprint: build.gradle exists
+  // from the very first detection but produces no mapping/loader evidence
+  // (so loadOrDetectWorkspaceContext never learns its path from `evidence`),
+  // yet it must still be fingerprinted - editing it afterward to newly
+  // declare a loader has to invalidate the cache within the TTL, the same as
+  // a gradle.properties edit does.
+  const projectPath = await makeProject({ minecraft_version: "1.21.10" }, "// no loader or mapping declared yet\n");
+  const root = await mkdtemp(join(tmpdir(), "ws-target-buildgradle-fingerprint-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const cache = createWorkspaceContextCache();
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const first = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath },
+    { kind: "workspace" }
+  )) as { scope?: string };
+  assert.equal(first.scope, "vanilla", "no loader detected yet: defaults to vanilla scope");
+
+  // Edit the previously-empty build.gradle to declare a loader, well within
+  // the cache's default TTL.
+  await writeFile(
+    join(projectPath, "build.gradle"),
+    ["plugins {", "  id 'fabric-loom' version '1.9-SNAPSHOT'", "}"].join("\n"),
+    "utf8"
+  );
+
+  const second = (await service.synthesizeWorkspaceTarget(
+    { target: { kind: "workspace" }, projectPath },
+    { kind: "workspace" }
+  )) as { scope?: string; provenance: { cacheHit: boolean } };
+
+  assert.equal(second.provenance.cacheHit, false, "editing build.gradle must force re-detection, not a cache hit");
+  assert.equal(second.scope, "merged", "the newly-declared loader must be picked up on re-detection");
+});
+
+test("loadOrDetectWorkspaceContext fingerprints the fixed root files before detection runs, so an edit racing the read still invalidates the entry it wrote", async () => {
+  const projectPath = await makeProject({ minecraft_version: "1.21.10" });
+  const root = await mkdtemp(join(tmpdir(), "ws-target-race-fingerprint-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const cache = createWorkspaceContextCache();
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: cache }
+  ) as unknown as AnySourceService;
+
+  const original = service.workspaceMappingService.detectProjectMinecraftVersion.bind(
+    service.workspaceMappingService
+  );
+  service.workspaceMappingService.detectProjectMinecraftVersion = async (path: string) => {
+    // Detection captures the old version, then the file changes before that
+    // result is returned and cached.
+    const oldVersion = await original(path);
+    const propsPath = join(projectPath, "gradle.properties");
+    const before = await stat(propsPath);
+    await writeFile(propsPath, "minecraft_version=1.21.99\n", "utf8");
+    await utimes(propsPath, before.atime, new Date(before.mtimeMs + 2000));
+    service.workspaceMappingService.detectProjectMinecraftVersion = original;
+    return oldVersion;
+  };
+
+  const ctx = (await service.loadOrDetectWorkspaceContext(projectPath)) as { minecraftVersion?: string };
+  assert.equal(ctx.minecraftVersion, "1.21.10", "the first detection captured the old content");
+
+  const refreshed = (await service.loadOrDetectWorkspaceContext(projectPath)) as { minecraftVersion?: string };
+  assert.equal(refreshed.minecraftVersion, "1.21.99", "the next lookup must refresh the stale result");
 });
 
 test("loadOrDetectWorkspaceContext preserves dependency versions written during the detection window", async () => {
