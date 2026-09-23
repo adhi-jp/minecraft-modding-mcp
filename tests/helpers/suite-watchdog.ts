@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 
 /**
  * Idle watchdog for a spawned test suite.
@@ -67,7 +68,10 @@ function tail(output: string, lines = 40): string {
  */
 export function runWithIdleWatchdog(run: IdleWatchdogRun): Promise<IdleWatchdogResult> {
   return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
+    // performance.now() rather than Date.now(): a wall-clock read can jump (a WSL2 host
+    // clock resync, NTP correction) and turn a genuinely slow-but-fine run into a spurious
+    // near-zero or negative elapsed reading. The monotonic clock cannot go backward.
+    const startedAt = performance.now();
     const child = spawn(run.command, run.args, {
       cwd: run.cwd,
       env: run.env,
@@ -107,7 +111,7 @@ export function runWithIdleWatchdog(run: IdleWatchdogRun): Promise<IdleWatchdogR
     });
     child.once("close", (code, signal) => {
       disarm();
-      const elapsedMs = Date.now() - startedAt;
+      const elapsedMs = Math.round(performance.now() - startedAt);
       if (wedged) {
         reject(
           new Error(

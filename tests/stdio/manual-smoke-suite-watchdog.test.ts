@@ -46,21 +46,27 @@ test("the watchdog budget is derived from the suite's own longest declared per-t
 
 test("the idle watchdog lets a slow but progressing run finish", async () => {
   // Total runtime deliberately exceeds the idle budget several times over: duration is not
-  // what is being policed.
+  // what is being policed. The per-tick interval is kept at 1/10th of the idle budget so
+  // that GC pauses or CPU contention on a loaded host can stall an individual tick well
+  // past its nominal spacing without the gap between ticks ever approaching the budget —
+  // this asserts idleness policing, not scheduler precision.
+  const tickIntervalMs = 100;
+  const idleBudgetMs = 1_000;
+  const ticks = 25;
   const script =
-    "let n=0;const t=setInterval(()=>{process.stdout.write(`tick ${++n}\\n`);" +
-    "if(n===8){clearInterval(t);}},120);";
+    `let n=0;const t=setInterval(()=>{process.stdout.write(\`tick \${++n}\\n\`);` +
+    `if(n===${ticks}){clearInterval(t);}},${tickIntervalMs});`;
 
   const result = await runWithIdleWatchdog({
     command: process.execPath,
     args: ["-e", script],
-    idleBudgetMs: 500,
+    idleBudgetMs,
     label: "slow-but-progressing probe"
   });
 
-  assert.match(result.output, /tick 8/, "the child must have run to completion");
+  assert.match(result.output, new RegExp(`tick ${ticks}`), "the child must have run to completion");
   assert.ok(
-    result.elapsedMs > 500,
+    result.elapsedMs > idleBudgetMs,
     `the run outlived the idle budget without being killed (${result.elapsedMs} ms)`
   );
 });
