@@ -187,6 +187,19 @@ test("CI runs when the TypeScript compiler configuration changes", async () => {
   }
 });
 
+test("CI runs when a document the test suite reads changes", async () => {
+  // Contract tests read README.md, CHANGELOG.md and docs/ at runtime, so a docs-only change can
+  // break `pnpm test`; without these paths in both filters it reaches main untested.
+  const filters = (await readCiWorkflow()).split("\n").filter((line) => line.trim().startsWith("paths:"));
+
+  assert.equal(filters.length, 2, "ci.yml must filter both the push and the pull_request trigger");
+  for (const filter of filters) {
+    for (const path of ["'README.md'", "'CHANGELOG.md'", "'docs/**'"]) {
+      assert.ok(filter.includes(path), `a change to ${path} must trigger CI: ${filter.trim()}`);
+    }
+  }
+});
+
 test("publish workflow uses npm 11.x for publish (OIDC for scoped packages)", async () => {
   const workflow = await readPublishWorkflow();
   assert.match(workflow, /npm exec --yes --package=npm@~11\.5\.\d+ -- npm publish/);
