@@ -520,3 +520,107 @@ test("SourceService validateMixin quickSummary surfaces vanilla fallback after s
   assert.match(single!.quickSummary!, /Scope fell back from "merged" to "vanilla"/);
   assert.match(single!.quickSummary!, /Loom cache empty/);
 });
+
+// toolHealth.overallHealthy must be gated on what the requested mapping
+// actually needs, not unconditionally on Mojang mappings. Mojang mappings
+// are only on the resolution path for `mapping: "mojang"`; yarn/intermediary
+// resolve through Tiny mappings, and obfuscated needs neither.
+async function runMappingHealthGateCase(root: string, jarPath: string, requestedMapping: "obfuscated" | "yarn" | "mojang") {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const service = new SourceService(buildTestConfig(root));
+
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).workspaceMappingService = {
+    async detectCompileMapping() {
+      return { resolved: false, evidence: [], warnings: [] };
+    },
+    async detectProjectMinecraftVersion() {
+      return undefined;
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: false,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: ["Mojang client mappings are not available for this version."]
+      };
+    },
+    async findMapping() {
+      return {
+        resolved: true,
+        status: "resolved",
+        resolvedSymbol: { name: "net.minecraft.server.Main" },
+        candidates: [],
+        warnings: []
+      };
+    },
+    async checkSymbolExists() {
+      return { resolved: true, status: "resolved", candidates: [], warnings: [] };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "inline",
+      source: [
+        "import net.minecraft.server.Main;",
+        "import org.spongepowered.asm.mixin.Mixin;",
+        "",
+        "@Mixin(Main.class)",
+        "public abstract class MainMixin {}"
+      ].join("\n")
+    },
+    version: "1.21",
+    mapping: requestedMapping,
+    reportMode: "full"
+  });
+
+  return result.results[0]?.result;
+}
+
+test("SourceService validateMixin toolHealth.overallHealthy is true for requestedMapping='obfuscated' when only Mojang mappings are missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-health-gate-obf-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const single = await runMappingHealthGateCase(root, jarPath, "obfuscated");
+  assert.ok(single?.toolHealth);
+  assert.equal(single!.toolHealth!.overallHealthy, true);
+});
+
+test("SourceService validateMixin toolHealth.overallHealthy is true for requestedMapping='yarn' when only Mojang mappings are missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-health-gate-yarn-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const single = await runMappingHealthGateCase(root, jarPath, "yarn");
+  assert.ok(single?.toolHealth);
+  assert.equal(single!.toolHealth!.overallHealthy, true);
+});
+
+test("SourceService validateMixin toolHealth.overallHealthy is false for requestedMapping='mojang' when Mojang mappings are missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-health-gate-mojang-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const single = await runMappingHealthGateCase(root, jarPath, "mojang");
+  assert.ok(single?.toolHealth);
+  assert.equal(single!.toolHealth!.overallHealthy, false);
+});

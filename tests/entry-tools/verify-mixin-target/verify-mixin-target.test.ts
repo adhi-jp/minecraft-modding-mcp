@@ -324,6 +324,99 @@ test("C8: public method returns @Inject-only with reasoning", async () => {
   assert.match(result.accessorAdvice?.reasoning ?? "", /already visible/i);
 });
 
+test("C8b: public field returns @Shadow, not @Inject-only", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "health",
+          javaSignature: "public float health",
+          jvmDescriptor: "F",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "health" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.reasoning ?? "", /no @Accessor is needed/i);
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Shadow\nprivate <type> health;/);
+});
+
+test("C8c: protected field returns @Shadow with reasoning mentioning access from outside", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "airSupply",
+          javaSignature: "protected int airSupply",
+          jvmDescriptor: "I",
+          accessFlags: 0x0004,
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "airSupply" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.reasoning ?? "", /protected/);
+});
+
+test("C8d: public static field returns a @Shadow snippet that keeps the static modifier", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "INSTANCE",
+          javaSignature: "public static Owner INSTANCE",
+          jvmDescriptor: "LOwner;",
+          accessFlags: 0x0009, // public | static
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "INSTANCE" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Shadow\nprivate static <type> INSTANCE;/);
+});
+
+test("C8e: public static final field keeps both the static and @Final modifiers in the snippet", async () => {
+  const service = new VerifyMixinTargetService(
+    buildDeps({
+      fields: [
+        {
+          ownerFqn: "Owner",
+          name: "MAX_HEALTH",
+          javaSignature: "public static final float MAX_HEALTH",
+          jvmDescriptor: "F",
+          accessFlags: 0x0019, // public | static | final
+          isSynthetic: false
+        }
+      ]
+    })
+  );
+  const result = await service.execute({
+    ...baseInput,
+    member: { kind: "field", name: "MAX_HEALTH" }
+  });
+  assert.equal(result.accessorAdvice?.suggestedAnnotation, "@Shadow");
+  assert.match(result.accessorAdvice?.exampleSnippet ?? "", /@Shadow @Final\nprivate static <type> MAX_HEALTH;/);
+});
+
 test("C9: workspace target populates provenance.workspaceResolution", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({

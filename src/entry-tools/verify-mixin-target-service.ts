@@ -176,14 +176,16 @@ function buildExampleSnippet(
 ): string {
   const accessFlags = match?.accessFlags ?? [];
   const isFinal = accessFlags.includes("final");
+  const isStatic = accessFlags.includes("static");
   const targetName = member.name;
   if (annotation === "@Inject-only") {
-    return `// "${targetName}" is already visible to the mixin (target access: ${accessFlags.filter((f) => f === "public" || f === "protected" || f === "private" || f === "package-private")[0] ?? "unknown"}); use @Inject directly without @Shadow.`;
+    return `// "${targetName}" is already visible to the mixin (target access: ${accessFlags.filter((f) => f === "public" || f === "protected" || f === "private" || f === "package-private")[0] ?? "unknown"}); no @Invoker needed — use @Inject to hook it, or @Shadow to call it from mixin code.`;
   }
   if (annotation === "@Shadow") {
     if (member.kind === "field") {
       const finalTag = isFinal ? "@Shadow @Final\n" : "@Shadow\n";
-      return `${finalTag}private <type> ${targetName};`;
+      const modifiers = isStatic ? "private static" : "private";
+      return `${finalTag}${modifiers} <type> ${targetName};`;
     }
     return `@Shadow\nprivate <returnType> ${targetName}(<params>);`;
   }
@@ -206,9 +208,18 @@ function inferAnnotation(
 ): AccessorAdvice {
   const visibility = match ? deriveVisibility(match.accessFlags) : "private";
   if (visibility === "public" || visibility === "protected") {
+    if (member.kind === "field") {
+      // A visible field needs no @Accessor to be read/written from outside the
+      // mixin, but mixin code still needs @Shadow to reference the field.
+      return {
+        suggestedAnnotation: "@Shadow",
+        reasoning: `Target field "${member.name}" is ${visibility}; no @Accessor is needed to access it from outside, but the mixin still needs @Shadow to reference it.`,
+        exampleSnippet: buildExampleSnippet("@Shadow", member, match, mixinMemberName)
+      };
+    }
     return {
       suggestedAnnotation: "@Inject-only",
-      reasoning: `Target "${member.name}" is ${visibility}; it is already visible to the mixin without @Shadow. Use @Inject directly.`,
+      reasoning: `Target method "${member.name}" is ${visibility}; it is already visible to the mixin, so no @Invoker is needed. Use @Inject to hook it, or @Shadow to call it from mixin code.`,
       exampleSnippet: buildExampleSnippet("@Inject-only", member, match, mixinMemberName)
     };
   }

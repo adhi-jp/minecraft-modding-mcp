@@ -1146,3 +1146,44 @@ test("MappingService rejects class queries that include owner", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("MappingService checkMappingHealth reports memberRemapAvailable=true for obfuscated requests when the graph fails to load", async () => {
+  const { MappingService } = await import("../../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-graph-load-failure-"));
+  try {
+    const config = buildTestConfig(root, { sourceRepos: [] });
+    const versionServiceStub = {
+      async resolveVersionMappings(version: string) {
+        return {
+          version,
+          versionManifestUrl: "https://example.test/version_manifest_v2.json",
+          versionDetailUrl: `https://example.test/versions/${version}.json`,
+          mappingsUrl: undefined
+        };
+      }
+    };
+    const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
+    const service = new MappingService(config, versionServiceStub, fetchStub);
+
+    // Force the graph-load try/catch in checkMappingHealth (mapping-service.ts
+    // ~1587-1602) down its failure path regardless of what a real fetch/cache
+    // lookup would do.
+    (service as unknown as { loadGraph: (...args: unknown[]) => Promise<unknown> }).loadGraph = async () => {
+      throw new Error("simulated graph load failure");
+    };
+
+    // Obfuscated requests never need a remap path (the target is already
+    // obfuscated), so a failed graph load must not report memberRemapAvailable
+    // as false for them — same as the loaded-graph branch already does.
+    const obfHealth = await service.checkMappingHealth({ version: "1.21.10", requestedMapping: "obfuscated" });
+    assert.equal(obfHealth.memberRemapAvailable, true);
+    assert.equal(obfHealth.mojangMappingsAvailable, false);
+
+    // Yarn/intermediary/mojang requests do need a remap path, so a failed
+    // graph load must still report memberRemapAvailable=false for them.
+    const yarnHealth = await service.checkMappingHealth({ version: "1.21.10", requestedMapping: "yarn" });
+    assert.equal(yarnHealth.memberRemapAvailable, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

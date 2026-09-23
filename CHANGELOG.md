@@ -42,6 +42,8 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - The recovery advice after a mapping could not be applied suggests retrying against the workspace when `projectPath` is a Windows or UNC path on WSL, as it already did for a Linux path, instead of falling back to generic advice.
 - Loader detection for workspace targets and `validate-project` ignores commented-out Gradle lines, so a `// id 'fabric-loom'` line or an `accessTransformer` mention inside a block comment no longer counts as evidence of a loader.
 - `ERR_WORKSPACE_VERSION_UNRESOLVED` carries `exampleCalls` with a `target.kind: "version"` retry to fill in. It carried no retry suggestion at all, although the tool reference said it did. The tool reference now also names the `exampleCalls` field for `ERR_DEPENDENCY_VERSION_UNRESOLVED`.
+- `validate-mixin` reports its mapping health (`toolHealth.overallHealthy`) against the mappings the request actually needs: Mojang mappings for `mojang`, Tiny mappings for `yarn` and `intermediary`, and only the game jar for `obfuscated`. It reported unhealthy whenever Mojang mappings were missing, which lowered the confidence score and turned descriptor mismatches into warnings even for requests that never use them.
+- `verify-mixin-target` suggests `@Shadow` for a public or protected field, since mixin code needs `@Shadow` to reference any target field; it suggested `@Inject-only`, which applies only to methods. For a visible method the reasoning now says no `@Invoker` is needed and that `@Inject` hooks it while `@Shadow` calls it. The `@Shadow` example for a static field keeps `static`. The rule matrix in `docs/tool-reference.md` lists fields and methods separately.
 
 ### Documentation
 

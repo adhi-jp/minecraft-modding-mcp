@@ -244,14 +244,15 @@ Output shape:
 
 | # | `member.kind` | target visibility | `mixinMemberName` regex | `suggestedAnnotation` |
 |---|---|---|---|---|
-| 1 | any | `public` / `protected` | (any) | `"@Inject-only"` (target already visible to mixin) |
-| 2 | `field` | `private` / `package-private` | `^get[A-Z]\w*$` / `^set[A-Z]\w*$` / `^is[A-Z]\w*$` | `"@Accessor"` (target field name inferred via prefix removal) |
-| 3 | `field` | `private` / `package-private` | (anything else, including absent) | `"@Shadow"` (or `"@Shadow @Final"` when target is `final`) |
-| 4 | `method` | `private` / `package-private` | `^invoke[A-Z]\w*$` / `^call[A-Z]\w*$` | `"@Invoker"` |
-| 5 | `method` | `private` / `package-private` | any other non-empty value | `"@Shadow"` |
-| 6 | `method` | `private` / `package-private` | (absent) | `null` + `candidates: [@Shadow, @Invoker]` |
+| 1 | `field` | `public` / `protected` | (any) | `"@Shadow"` (no `@Accessor` needed for outside access, but the mixin still needs `@Shadow` to reference the field) |
+| 2 | `method` | `public` / `protected` | (any) | `"@Inject-only"` (target already visible to mixin; no `@Invoker` needed) |
+| 3 | `field` | `private` / `package-private` | `^get[A-Z]\w*$` / `^set[A-Z]\w*$` / `^is[A-Z]\w*$` | `"@Accessor"` (target field name inferred via prefix removal) |
+| 4 | `field` | `private` / `package-private` | (anything else, including absent) | `"@Shadow"` (or `"@Shadow @Final"` when target is `final`) |
+| 5 | `method` | `private` / `package-private` | `^invoke[A-Z]\w*$` / `^call[A-Z]\w*$` | `"@Invoker"` |
+| 6 | `method` | `private` / `package-private` | any other non-empty value | `"@Shadow"` |
+| 7 | `method` | `private` / `package-private` | (absent) | `null` + `candidates: [@Shadow, @Invoker]` |
 
-`"@Inject-only"` is a pseudo-tag, NOT a real Mixin annotation. It signals "no `@Shadow` is needed because the target is already accessible to the mixin"; the caller can use `@Inject` (or a direct method call) without declaring a shadow. `accessorAdvice.exampleSnippet` is a deterministic Java fragment built from the recommendation; the tool does NOT compile-check the snippet — run a Gradle build before committing.
+`"@Inject-only"` is a pseudo-tag, NOT a real Mixin annotation, and only applies to visible (`public`/`protected`) **methods**. It signals "no `@Invoker` is needed because the target method is already accessible to the mixin"; use `@Inject` to hook it, or `@Shadow` to call it directly from mixin code. A visible **field** gets a concrete `"@Shadow"` recommendation instead — no `@Accessor` is needed to read/write it from outside, but mixin code still needs `@Shadow` to reference it. `accessorAdvice.exampleSnippet` is a deterministic Java fragment built from the recommendation; the tool does NOT compile-check the snippet — run a Gradle build before committing.
 
 Errors:
 

@@ -1597,7 +1597,10 @@ export class MappingService {
       return {
         mojangMappingsAvailable: false,
         tinyMappingsAvailable: !needsTinyMappings,
-        memberRemapAvailable: false,
+        // Obfuscated requests never need a remap path (the target is already
+        // obfuscated), same as the loaded-graph branch below — a failed graph
+        // load does not degrade an obfuscated request's remap availability.
+        memberRemapAvailable: input.requestedMapping === "obfuscated",
         degradations: ["Mapping graph could not be loaded."]
       };
     }
