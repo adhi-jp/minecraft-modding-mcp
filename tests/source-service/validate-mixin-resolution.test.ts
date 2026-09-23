@@ -1285,3 +1285,203 @@ test("SourceService validateMixin discovers representative config and project la
     });
   }
 });
+
+test("SourceService validateMixin config mode validates a nested mixin entry inside its outer source file", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-nested-config-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [{
+          ownerFqn: "net.minecraft.server.Main",
+          name: "present",
+          javaSignature: "int present",
+          jvmDescriptor: "I",
+          accessFlags: 2,
+          isSynthetic: false
+        }],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const javaRoot = join(root, "src", "main", "java", "com", "example", "mixin");
+  const resourcesRoot = join(root, "src", "main", "resources");
+  await mkdir(javaRoot, { recursive: true });
+  await mkdir(resourcesRoot, { recursive: true });
+  const outerPath = join(javaRoot, "Outer.java");
+  await writeFile(
+    outerPath,
+    [
+      "package com.example.mixin;",
+      "",
+      "import net.minecraft.server.Main;",
+      "import org.spongepowered.asm.mixin.Mixin;",
+      "import org.spongepowered.asm.mixin.Shadow;",
+      "",
+      "@Mixin(Main.class)",
+      "public abstract class Outer {",
+      "  @Shadow private int outerMissing;",
+      "",
+      "  @Mixin(Main.class)",
+      "  public abstract static class Inner {",
+      "    @Shadow private int present;",
+      "    @Shadow private int innerMissing;",
+      "  }",
+      "",
+      "  public static class Holder {",
+      "    @Mixin(Main.class)",
+      "    public abstract static class Deep {",
+      "      @Shadow private int deepMissing;",
+      "    }",
+      "  }",
+      "",
+      "  @Mixin(Main.class)",
+      "  public abstract static class Unlisted {",
+      "    @Shadow private int unlistedMissing;",
+      "  }",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  const mixinConfigPath = join(resourcesRoot, "example.mixins.json");
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({
+      package: "com.example.mixin",
+      mixins: ["Outer$Inner", "Outer$Holder$Deep", "Outer", "Outer$Missing"]
+    }),
+    "utf8"
+  );
+
+  const result = await service.validateMixin({
+    input: { mode: "config", configPaths: [mixinConfigPath] },
+    projectPath: root,
+    version: "1.21",
+    mapping: "obfuscated"
+  } as never);
+
+  assert.equal(result.summary.total, 4);
+  assert.equal(result.summary.processingErrors, 1);
+  const [inner, deep, outer, missing] = result.results;
+  const missingMembers = (entry: typeof inner) =>
+    (entry.result?.issues ?? []).map((issue) => issue.target.split("#").at(-1)).sort();
+
+  assert.equal(inner.source.path, outerPath);
+  assert.equal(inner.error, undefined);
+  assert.equal(inner.result?.valid, false);
+  assert.deepEqual(missingMembers(inner), ["innerMissing"]);
+
+  assert.equal(deep.source.path, outerPath);
+  assert.deepEqual(missingMembers(deep), ["deepMissing"]);
+
+  assert.equal(outer.source.path, outerPath);
+  // An entry names one class: nested mixins, listed or not, are not validated under it.
+  assert.deepEqual(missingMembers(outer), ["outerMissing"]);
+
+  assert.equal(missing.result, undefined);
+  assert.match(missing.error ?? "", /Outer\$Missing/);
+  assert.match(missing.error ?? "", /Outer\.java/);
+});
+
+test("SourceService validateMixin config mode keeps the whole-file result for a top-level entry whose class has no @Mixin annotation", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-no-annotation-config-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+  (service as any).explorerService = {
+    async getSignature() {
+      return {
+        className: "net.minecraft.server.Main",
+        constructors: [],
+        methods: [],
+        fields: [],
+        warnings: []
+      };
+    }
+  };
+  (service as any).mappingService = {
+    async checkMappingHealth() {
+      return {
+        mojangMappingsAvailable: true,
+        tinyMappingsAvailable: true,
+        memberRemapAvailable: true,
+        degradations: []
+      };
+    }
+  };
+
+  const javaRoot = join(root, "src", "main", "java", "com", "example", "mixin");
+  const resourcesRoot = join(root, "src", "main", "resources");
+  await mkdir(javaRoot, { recursive: true });
+  await mkdir(resourcesRoot, { recursive: true });
+  const plainPath = join(javaRoot, "Plain.java");
+  await writeFile(
+    plainPath,
+    [
+      "package com.example.mixin;",
+      "",
+      "public class Plain {",
+      "}"
+    ].join("\n"),
+    "utf8"
+  );
+  const mixinConfigPath = join(resourcesRoot, "example.mixins.json");
+  await writeFile(
+    mixinConfigPath,
+    JSON.stringify({
+      package: "com.example.mixin",
+      mixins: ["Plain"]
+    }),
+    "utf8"
+  );
+
+  const result = await service.validateMixin({
+    input: { mode: "config", configPaths: [mixinConfigPath] },
+    projectPath: root,
+    version: "1.21",
+    mapping: "obfuscated",
+    // Full reporting so the per-entry warning survives aggregation/hoisting
+    // and stays directly observable on the entry, instead of being folded
+    // into aggregatedWarnings or hoisted to the top level and stripped.
+    reportMode: "full",
+    warningMode: "full"
+  } as never);
+
+  assert.equal(result.summary.total, 1);
+  assert.equal(result.summary.processingErrors, 0);
+  const [entry] = result.results;
+  assert.equal(entry.source.path, plainPath);
+  assert.equal(entry.error, undefined);
+  assert.ok(
+    entry.result?.warnings.some((warning) => warning.includes("No @Mixin annotation target found.")),
+    "the whole-file fallback must preserve the parser's no-target warning"
+  );
+});

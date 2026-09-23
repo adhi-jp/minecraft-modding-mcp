@@ -134,3 +134,57 @@ public abstract class PlayerMixin {
     [{ name: "p_health", targetName: "health", aliases: ["old)"] }]
   );
 });
+
+test("parseMixinSource skips an annotation with a parenthesis inside a string between @Shadow and its declaration", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @SuppressWarnings("unchecked(")
+  private int health;
+  @Shadow
+  @Deprecated(since = ")")
+  private int armor;
+  @Accessor
+  @SuppressWarnings("(")
+  abstract int getSpeed();
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.parseWarnings, []);
+  assert.deepEqual(
+    result.shadows.map((entry) => ({ kind: entry.kind, name: entry.name })),
+    [
+      { kind: "field", name: "health" },
+      { kind: "field", name: "armor" }
+    ]
+  );
+  assert.deepEqual(
+    result.accessors.map((entry) => ({ name: entry.name, targetName: entry.targetName })),
+    [{ name: "getSpeed", targetName: "speed" }]
+  );
+});
+
+test("parseMixinSource keeps a declaration that shares the closing line of a wrapped annotation after @Shadow", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  @SuppressWarnings(
+      "x("
+  ) private int health;
+  @Shadow private int armor;
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.parseWarnings, []);
+  assert.deepEqual(
+    result.shadows.map((entry) => ({ name: entry.name, line: entry.line })),
+    [
+      { name: "health", line: 4 },
+      { name: "armor", line: 8 }
+    ]
+  );
+});

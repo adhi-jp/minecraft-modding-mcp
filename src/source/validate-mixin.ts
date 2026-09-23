@@ -14,6 +14,7 @@ import {
   refreshMixinValidationOutcome,
   validateParsedMixin
 } from "../mixin-validator.js";
+import { selectNestedMixin } from "../mixin-parser.js";
 import { normalizePathForHost } from "../path-converter.js";
 import type { SourceService } from "../source-service.js";
 import type {
@@ -43,6 +44,11 @@ export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input" | "versi
   version: string;
   source?: string;
   sourcePath?: string;
+  /**
+   * Validate only the `@Mixin` class at this simple-name path from the source's top-level class
+   * down (`["Outer"]` for a config entry `Outer`, `["Outer", "Inner"]` for `Outer$Inner`).
+   */
+  nestedClassPath?: string[];
   batchCaches?: {
     classMappings: Map<string, Promise<MappingFindMappingOutput>>;
   };
@@ -58,6 +64,9 @@ export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input" | "versi
 type ValidateMixinConfigSource = {
   sourcePath: string;
   configPath: string;
+  /** The class the config entry names, as a path inside its source file; unset when no file was found. */
+  nestedClassPath?: string[];
+  entry: string;
 };
 
 type ResolvedValidateMixinConfigSources = {
@@ -378,11 +387,12 @@ async function runValidateMixinDispatcher(
     configSources.map((entry) => ({
       source: {
         kind: "config" as const,
-        label: entry.sourcePath,
+        label: (entry.nestedClassPath?.length ?? 0) > 1 ? `${entry.sourcePath} (${entry.entry})` : entry.sourcePath,
         path: entry.sourcePath,
         configPath: entry.configPath
       },
-      sourcePath: entry.sourcePath
+      sourcePath: entry.sourcePath,
+      nestedClassPath: entry.nestedClassPath
     })),
     resolvedInput,
     configWarnings,
@@ -542,6 +552,21 @@ async function runValidateMixinPipeline(svc: SourceService, seed: MixinPipelineS
   await runResolveStage(svc, ctx);
   await runMappingHealthStage(svc, ctx);
   await runParseStage(ctx);
+  const nestedClassPath = ctx.input.nestedClassPath;
+  if (nestedClassPath) {
+    const nested = selectNestedMixin(ctx.parsed, nestedClassPath);
+    // A top-level entry whose file has no located @Mixin class keeps the whole-file result.
+    const wholeFile = nestedClassPath.length === 1 && (ctx.parsed.mixins ?? []).length === 0;
+    if (!nested && !wholeFile) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message:
+          `No @Mixin class "${nestedClassPath.join("$")}" is declared in "${ctx.input.sourcePath ?? "<source>"}".`,
+        details: { failedStage: "parse" }
+      });
+    }
+    ctx.parsed = nested ?? ctx.parsed;
+  }
   await runTargetLookupStage(svc, ctx);
   return finalizeValidateMixinPipeline(svc, ctx);
 }
@@ -863,10 +888,13 @@ async function resolveMixinConfigSources(input: ValidateMixinInput): Promise<Res
       for (const candidateRoot of COMMON_SOURCE_ROOTS) {
         let foundInRoot = false;
         for (const className of classNames) {
-          const fqcn = pkg ? `${pkg}.${className}` : className;
-          const relative = fqcn.replace(/\./g, "/") + ".java";
-          if (await pathExists(resolvePath(projectBase, candidateRoot, relative))) {
-            foundInRoot = true;
+          for (const candidate of configEntrySourceCandidates(pkg, className)) {
+            if (await pathExists(resolvePath(projectBase, candidateRoot, candidate.relativePath))) {
+              foundInRoot = true;
+              break;
+            }
+          }
+          if (foundInRoot) {
             break;
           }
         }
@@ -878,19 +906,27 @@ async function resolveMixinConfigSources(input: ValidateMixinInput): Promise<Res
     }
 
     for (const cls of classNames) {
-      const fqcn = pkg ? `${pkg}.${cls}` : cls;
-      const relativePath = fqcn.replace(/\./g, "/") + ".java";
-      let sourcePath = resolvePath(projectBase, sourceRootCandidates[0], relativePath);
-      for (const root of sourceRootCandidates) {
-        const candidate = resolvePath(projectBase, root, relativePath);
-        if (await pathExists(candidate)) {
-          sourcePath = candidate;
+      // The entry's own file wins; a `$`-qualified entry without one is a nested class
+      // validated inside its outer file. An entry found nowhere keeps its own path.
+      const candidates = configEntrySourceCandidates(pkg, cls);
+      let resolved: { sourcePath: string; nestedClassPath?: string[] } | undefined;
+      for (const candidate of candidates) {
+        for (const root of sourceRootCandidates) {
+          const sourcePath = resolvePath(projectBase, root, candidate.relativePath);
+          if (await pathExists(sourcePath)) {
+            resolved = { sourcePath, nestedClassPath: candidate.nestedClassPath };
+            break;
+          }
+        }
+        if (resolved) {
           break;
         }
       }
       results.push({
-        sourcePath,
-        configPath: resolvedConfigPath
+        sourcePath: resolved?.sourcePath ?? resolvePath(projectBase, sourceRootCandidates[0], candidates[0].relativePath),
+        configPath: resolvedConfigPath,
+        nestedClassPath: resolved?.nestedClassPath,
+        entry: cls
       });
     }
   }
@@ -901,10 +937,35 @@ async function resolveMixinConfigSources(input: ValidateMixinInput): Promise<Res
   };
 }
 
+/**
+ * Source files a mixins-config entry may live in, in lookup order, each with the simple-name path
+ * of the entry's class inside it: the entry's own file (a one-element path, so nested mixins in
+ * that file are left to their own entries), then for a nested entry (`Outer$Inner`,
+ * `Outer$Mid$Inner`) the outer class's file.
+ */
+function configEntrySourceCandidates(
+  pkg: string,
+  cls: string
+): Array<{ relativePath: string; nestedClassPath?: string[] }> {
+  const fqcn = pkg ? `${pkg}.${cls}` : cls;
+  const lastDot = fqcn.lastIndexOf(".");
+  const candidates: Array<{ relativePath: string; nestedClassPath?: string[] }> = [
+    { relativePath: fqcn.replace(/\./g, "/") + ".java", nestedClassPath: [fqcn.slice(lastDot + 1)] }
+  ];
+  const classPath = fqcn.slice(lastDot + 1).split("$");
+  if (classPath.length > 1 && classPath.every((name) => name !== "")) {
+    candidates.push({
+      relativePath: `${fqcn.slice(0, lastDot + 1).replace(/\./g, "/")}${classPath[0]}.java`,
+      nestedClassPath: classPath
+    });
+  }
+  return candidates;
+}
+
 async function validateMixinMany(
   svc: SourceService,
   mode: "paths" | "config" | "project",
-  entries: Array<{ source: ValidateMixinResultSource; sourcePath: string }>,
+  entries: Array<{ source: ValidateMixinResultSource; sourcePath: string; nestedClassPath?: string[] }>,
   input: VersionedValidateMixinInput,
   additionalWarnings: string[],
   extras: {
@@ -926,6 +987,7 @@ async function validateMixinMany(
       const singleResult = await svc.validateMixinSingle({
         ...sharedInput,
         sourcePath: entry.sourcePath,
+        nestedClassPath: entry.nestedClassPath,
         warningMode: batchWarningMode,
         batchCaches,
         stageEmitter,

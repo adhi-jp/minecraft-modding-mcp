@@ -20,6 +20,14 @@ export type ParsedMixinClass = {
   startLine: number;
   /** 1-based line of the brace that closes the class body. */
   endLine: number;
+  /**
+   * Simple names from the file's top-level type down to this class (`["Outer", "Inner"]`, the
+   * nesting a mixins-config entry `Outer$Inner` names). Absent for a class declared inside a
+   * method, initializer or anonymous class body, which no such entry can name.
+   */
+  classPath?: string[];
+  /** This class's own `@Mixin(priority = ...)`, when given. */
+  priority?: number;
 };
 
 export type ParsedInjection = {
@@ -89,7 +97,6 @@ const IMPORT_RE = /^\s*import\s+([\w.]+)\s*;/;
 
 // @Mixin(Foo.class)  or  @Mixin({Foo.class, Bar.class})  or  @Mixin(value = Foo.class)
 // Also handles  @Mixin(value = {Foo.class, Bar.class}, priority = 900)
-const MIXIN_ANNOTATION_START_RE = /^\s*@Mixin\s*\(/;
 // A @Mixin annotation anywhere on a line; matched against comment- and literal-free text.
 const MIXIN_ANNOTATION_ANYWHERE_RE = /@Mixin\s*\(/g;
 // `$` is a legal Java identifier character (e.g. generated classes like My$Class);
@@ -132,23 +139,6 @@ const INVOKER_PREFIX_RE = /^(?:invoke|call)([A-Z].*)/;
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-function collectMultilineAnnotation(lines: string[], startIndex: number): { text: string; endIndex: number } {
-  let depth = 0;
-  let text = "";
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i];
-    text += (i === startIndex ? "" : "\n") + line;
-    for (const ch of line) {
-      if (ch === "(") depth++;
-      if (ch === ")") depth--;
-    }
-    if (depth <= 0) {
-      return { text, endIndex: i };
-    }
-  }
-  return { text, endIndex: lines.length - 1 };
-}
 
 /**
  * Blank out `/* *\/` block comments and `//` line comments (outside string and char
@@ -276,7 +266,8 @@ function blankLiterals(line: string): string {
 
 /**
  * The class decorated by the annotation whose `@` sits at `codeLines[startIndex][offset]`:
- * its simple name and the 0-based line of the brace closing its body, found by skipping the
+ * its simple name, the 0-based position of its declaration keyword and the 0-based line of
+ * the brace closing its body, found by skipping the
  * annotation's argument list, then the declaration keyword, then balancing braces. `codeLines`
  * carry no comments or literal contents, so only code braces count. Null when no class body
  * follows the annotation.
@@ -285,7 +276,7 @@ function findAnnotatedClassBody(
   codeLines: string[],
   startIndex: number,
   offset: number
-): { className: string; endIndex: number } | null {
+): { className: string; declLine: number; declColumn: number; endIndex: number } | null {
   let lineIndex = startIndex;
   let col = offset;
   let depth = 0;
@@ -310,10 +301,12 @@ function findAnnotatedClassBody(
   }
 
   let className: string | undefined;
+  let declColumn = 0;
   for (; lineIndex < codeLines.length; lineIndex++, col = 0) {
     const declMatch = TYPE_DECL_RE.exec(codeLines[lineIndex].slice(col));
     if (declMatch) {
       className = declMatch[1];
+      declColumn = col + declMatch.index;
       col += declMatch.index + declMatch[0].length;
       break;
     }
@@ -321,6 +314,7 @@ function findAnnotatedClassBody(
   if (className === undefined) {
     return null;
   }
+  const declLine = lineIndex;
 
   // The body opens at the first `{` outside the header's parentheses (annotation arguments
   // such as `extends @Mark({1, 2}) Base`) and type-argument brackets.
@@ -358,7 +352,7 @@ function findAnnotatedClassBody(
       } else if (text[col] === "}" && depth > 0) {
         depth--;
         if (depth === 0) {
-          return { className, endIndex: lineIndex };
+          return { className, declLine, declColumn, endIndex: lineIndex };
         }
       }
     }
@@ -370,13 +364,14 @@ function findAnnotatedClassBody(
  * Skip past annotations (including multi-line ones) starting at `startIndex`.
  * Returns the index of the first non-annotation line.
  * Lines with inline annotation + declaration (e.g. `@Nullable private int x;`)
- * are treated as declaration lines (not skipped).
+ * are treated as declaration lines (not skipped); `declText` then carries the text after
+ * the annotations with arguments, which may end a wrapped argument list on that line.
  */
 function isUpperCaseLetter(ch: string): boolean {
   return ch !== ch.toLowerCase() && ch === ch.toUpperCase();
 }
 
-function skipAnnotations(lines: string[], startIndex: number): number {
+function skipAnnotations(lines: string[], startIndex: number): { index: number; declText?: string } {
   let idx = startIndex;
   while (idx < lines.length) {
     const current = lines[idx];
@@ -406,25 +401,11 @@ function skipAnnotations(lines: string[], startIndex: number): number {
       break;
     }
     if (lines[idx].includes("(")) {
-      // Check if parentheses are unbalanced (multi-line annotation) — always skip
-      let depth = 0;
-      for (const ch of lines[idx]) {
-        if (ch === "(") depth++;
-        if (ch === ")") depth--;
+      const run = leadingAnnotationRun(lines, idx);
+      if (run.rest !== "") {
+        return { index: run.endIndex, declText: run.rest }; // declaration with inline annotation
       }
-      if (depth > 0) {
-        // Multi-line annotation — skip to its end
-        const { endIndex } = collectMultilineAnnotation(lines, idx);
-        idx = endIndex + 1;
-        continue;
-      }
-      // Single-line annotation with parens: check if declaration text remains
-      const stripped = stripInlineAnnotations(lines[idx]);
-      if (stripped === "") {
-        idx++;
-      } else {
-        break; // declaration with inline annotation
-      }
+      idx = run.endIndex + 1;
     } else {
       // Simple annotation like `@Final` — check for trailing declaration
       const stripped = lines[idx].replace(/^\s*@[\w$.]+\s*/, "").trim();
@@ -435,7 +416,7 @@ function skipAnnotations(lines: string[], startIndex: number): number {
       }
     }
   }
-  return idx;
+  return { index: idx };
 }
 
 /** Strip inline annotations (e.g. `@Final @Nullable`) from a declaration line. */
@@ -669,6 +650,34 @@ function collectAnnotationSpan(
 }
 
 /**
+ * The annotations that open `lines[startIndex]`, each extended over the lines its argument
+ * list spans (literal-aware, as in `collectAnnotationSpan`): the 0-based line where the last
+ * one ends and the trimmed text that follows it there. An argument list that never closes
+ * runs to the end of the file, leaving no text behind it.
+ */
+function leadingAnnotationRun(lines: string[], startIndex: number): { endIndex: number; rest: string } {
+  let lineIndex = startIndex;
+  let pos = lines[startIndex].search(/\S/);
+  while (pos >= 0 && lines[lineIndex][pos] === "@") {
+    const span = collectAnnotationSpan(lines, lineIndex, pos);
+    if (span.close >= 0) {
+      pos = span.endIndex === lineIndex
+        ? pos + span.close
+        : span.close - (span.text.lastIndexOf("\n") + 1);
+      lineIndex = span.endIndex;
+    } else if (/^@[\w$.]+\s*\(/.test(span.text)) {
+      return { endIndex: lines.length - 1, rest: "" };
+    } else {
+      pos += /^@[\w$.]*/.exec(span.text)![0].length;
+    }
+    while (pos < lines[lineIndex].length && /\s/.test(lines[lineIndex][pos])) {
+      pos++;
+    }
+  }
+  return { endIndex: lineIndex, rest: pos < 0 ? "" : lines[lineIndex].slice(pos).trim() };
+}
+
+/**
  * Build a @Shadow entry, resolving the member it targets: for a method, the declared name
  * with the annotation's prefix removed. A name that does not carry the prefix is left alone,
  * and a name that is *only* the prefix would leave nothing to look up, so it stays too.
@@ -711,6 +720,7 @@ function inferAccessorTarget(methodName: string): string {
 export function parseMixinSource(source: string): ParsedMixin {
   const lines = stripComments(source).split(/\r?\n/);
   const codeLines = lines.map(blankLiterals);
+  const typePaths = memberTypePaths(codeLines);
   const parseWarnings: string[] = [];
   const targets: ParsedMixinTarget[] = [];
   const mixins: ParsedMixinClass[] = [];
@@ -769,30 +779,31 @@ export function parseMixinSource(source: string): ParsedMixin {
         ownTargets.push({ className: targetName });
       }
     }
+    const priorityMatch = MIXIN_PRIORITY_RE.exec(mixinText);
+    const ownPriority = priorityMatch ? parseInt(priorityMatch[1], 10) : undefined;
+    if (ownPriority !== undefined) {
+      priority = ownPriority;
+    }
     const body = findAnnotatedClassBody(codeLines, lineIndex, offset);
     if (body) {
-      mixins.push({ className: body.className, targets: ownTargets, startLine: lineIndex + 1, endLine: body.endIndex + 1 });
-    }
-    const priorityMatch = MIXIN_PRIORITY_RE.exec(mixinText);
-    if (priorityMatch) {
-      priority = parseInt(priorityMatch[1], 10);
+      const classPath = typePaths.get(`${body.declLine}:${body.declColumn}`);
+      mixins.push({
+        className: body.className,
+        targets: ownTargets,
+        startLine: lineIndex + 1,
+        endLine: body.endIndex + 1,
+        ...(classPath ? { classPath } : {}),
+        ...(ownPriority !== undefined ? { priority: ownPriority } : {})
+      });
     }
   };
 
-  // A @Mixin that opens its line is read with the lines its argument list spans. One that
-  // follows other code on its line (`} @Mixin(B.class) abstract class B {`) is found in the
-  // comment- and literal-free text and read from its own offset; the rest of the line where
-  // its argument list closes is then scanned for another one.
+  // Every @Mixin is found in the comment- and literal-free text and read from its own offset
+  // over the lines its argument list spans; the rest of the line where that list closes is
+  // then scanned for another one (`@Mixin(A.class) class A {} @Mixin(B.class) class B {}`).
   let i = 0;
   let fromCol = 0;
   while (i < lines.length) {
-    if (fromCol === 0 && MIXIN_ANNOTATION_START_RE.test(lines[i])) {
-      const { text: mixinText, endIndex } = collectMultilineAnnotation(lines, i);
-      recordMixin(mixinText, i, lines[i].indexOf("@"));
-      i = endIndex + 1;
-      continue;
-    }
-
     if (fromCol === 0) {
       const classMatch = CLASS_DECL_RE.exec(lines[i]);
       if (classMatch && !className) {
@@ -907,9 +918,10 @@ export function parseMixinSource(source: string): ParsedMixin {
       // Advance past the @Shadow annotation to find the declaration
       let declLine = annotationEnd + 1;
       // Skip additional annotations between @Shadow and declaration (including multi-line)
-      declLine = skipAnnotations(lines, declLine);
+      const skipped = skipAnnotations(lines, declLine);
+      declLine = skipped.index;
       if (declLine < lines.length) {
-        const declText = stripInlineAnnotations(lines[declLine]);
+        const declText = stripInlineAnnotations(skipped.declText ?? lines[declLine]);
         const methodDeclMatch = METHOD_DECL_RE.exec(declText);
         const fieldDeclMatch = FIELD_DECL_RE.exec(declText);
         // Method if it has parentheses
@@ -958,9 +970,10 @@ export function parseMixinSource(source: string): ParsedMixin {
 
       // Find the method declaration following the annotation (skip multi-line annotations)
       let methodLine = i + 1;
-      methodLine = skipAnnotations(lines, methodLine);
+      const skipped = skipAnnotations(lines, methodLine);
+      methodLine = skipped.index;
       if (methodLine < lines.length) {
-        const methodDeclMatch = METHOD_DECL_RE.exec(stripInlineAnnotations(lines[methodLine]));
+        const methodDeclMatch = METHOD_DECL_RE.exec(stripInlineAnnotations(skipped.declText ?? lines[methodLine]));
         if (methodDeclMatch) {
           const methodName = methodDeclMatch[2];
           const targetName = explicitTarget ?? inferAccessorTarget(methodName);
@@ -1007,5 +1020,105 @@ export function parseMixinSource(source: string): ParsedMixin {
     shadows,
     accessors,
     parseWarnings
+  };
+}
+
+/**
+ * The nesting path of each type declared in `codeLines` (comment- and literal-free), keyed by
+ * the `line:column` of its declaration keyword: the simple names from the top-level type down
+ * to it. A type declared inside a method, initializer or anonymous class body has no such path
+ * (its binary name is `Outer$1Local`) and is left out, as is every type nested in it.
+ */
+function memberTypePaths(codeLines: string[]): Map<string, string[]> {
+  // TYPE_DECL_RE, plus annotation-type declarations (`@interface Name`), which enclose member
+  // types too; an annotation usage never has a declaration keyword after its `@`.
+  const declRe = /(?<![\w$.@])(?:@\s*)?(?:class|interface|enum|record)\s+([\w$]+)/g;
+  const paths = new Map<string, string[]>();
+  // One entry per open brace: the path of the type whose body it opens, or null for any other
+  // block (and for the body of a type that has no path).
+  const braces: Array<string[] | null> = [];
+  let parenDepth = 0;
+  let pending: { key: string; name: string; parenDepth: number } | undefined;
+  codeLines.forEach((text, lineIndex) => {
+    const declStarts = new Map<number, RegExpExecArray>();
+    for (const match of text.matchAll(declRe)) {
+      declStarts.set(match.index, match);
+    }
+    for (let col = 0; col < text.length; col++) {
+      const decl = declStarts.get(col);
+      if (decl) {
+        pending = { key: `${lineIndex}:${col}`, name: decl[1], parenDepth };
+        col += decl[0].length - 1;
+        continue;
+      }
+      const ch = text[col];
+      if (ch === "(") {
+        parenDepth++;
+      } else if (ch === ")" && parenDepth > 0) {
+        parenDepth--;
+      } else if (ch === ";" && pending?.parenDepth === parenDepth) {
+        pending = undefined;
+      } else if (ch === "{") {
+        let path: string[] | null = null;
+        if (pending?.parenDepth === parenDepth) {
+          if (braces.every((entry) => entry !== null)) {
+            path = [...(braces.at(-1) ?? []), pending.name];
+            paths.set(pending.key, path);
+          }
+          pending = undefined;
+        }
+        braces.push(path);
+      } else if (ch === "}") {
+        braces.pop();
+      }
+    }
+  });
+  return paths;
+}
+
+/**
+ * `parsed` narrowed to the nested `@Mixin` class at `classPath` (see `ParsedMixinClass.classPath`;
+ * `["Outer", "Inner"]` for a config entry `Outer$Inner`): its own targets and priority, and only
+ * the members and line-numbered parse warnings it owns. Undefined when no `@Mixin` class sits at
+ * that path.
+ */
+export function selectNestedMixin(parsed: ParsedMixin, classPath: readonly string[]): ParsedMixin | undefined {
+  const mixins = parsed.mixins ?? [];
+  const index = mixins.findIndex((mixin) =>
+    mixin.classPath?.length === classPath.length && mixin.classPath.every((name, n) => name === classPath[n])
+  );
+  if (index < 0) {
+    return undefined;
+  }
+  const mixin = mixins[index];
+  // The innermost @Mixin class whose span holds `line`, as for member ownership.
+  const ownerOf = (line: number): number | undefined => {
+    let owner: number | undefined;
+    mixins.forEach((candidate, candidateIndex) => {
+      if (
+        candidate.startLine <= line &&
+        line <= candidate.endLine &&
+        (owner === undefined || candidate.startLine > mixins[owner].startLine)
+      ) {
+        owner = candidateIndex;
+      }
+    });
+    return owner;
+  };
+  const own = <T extends { mixinIndex?: number }>(members: T[]): T[] =>
+    members.filter((member) => member.mixinIndex === index).map((member) => ({ ...member, mixinIndex: 0 }));
+  return {
+    ...parsed,
+    className: mixin.className,
+    targets: mixin.targets,
+    mixins: [mixin],
+    priority: mixin.priority,
+    injections: own(parsed.injections),
+    shadows: own(parsed.shadows),
+    accessors: own(parsed.accessors),
+    parseWarnings: parsed.parseWarnings.filter((warning) => {
+      const lineMatch = /^Line (\d+):/.exec(warning);
+      return !lineMatch || ownerOf(Number.parseInt(lineMatch[1], 10)) === index;
+    })
   };
 }

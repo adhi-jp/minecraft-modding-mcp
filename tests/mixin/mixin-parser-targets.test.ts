@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseMixinSource } from "../../src/mixin-parser.ts";
+import { parseMixinSource, selectNestedMixin } from "../../src/mixin-parser.ts";
 import { TARGET_CASES } from "./mixin-parser-fixtures.ts";
 
 test("parseMixinSource parses @Mixin targets across supported annotation forms", () => {
@@ -70,8 +70,14 @@ test("parseMixinSource records each nested @Mixin class and tags members with th
   assert.deepEqual(result.targets.map((entry) => entry.className), ["TargetA", "TargetB"]);
   assert.equal(result.className, "OuterMixin");
   assert.deepEqual(result.mixins, [
-    { className: "OuterMixin", targets: [{ className: "TargetA" }], startLine: 4, endLine: 26 },
-    { className: "InnerMixin", targets: [{ className: "TargetB" }], startLine: 8, endLine: 15 }
+    { className: "OuterMixin", targets: [{ className: "TargetA" }], startLine: 4, endLine: 26, classPath: ["OuterMixin"] },
+    {
+      className: "InnerMixin",
+      targets: [{ className: "TargetB" }],
+      startLine: 8,
+      endLine: 15,
+      classPath: ["OuterMixin", "InnerMixin"]
+    }
   ]);
   assert.deepEqual(
     result.shadows.map((entry) => ({ name: entry.name, mixinIndex: entry.mixinIndex })),
@@ -112,12 +118,13 @@ abstract class BMixin {
   );
   assert.equal(result.className, "AMixin");
   assert.deepEqual(result.mixins, [
-    { className: "AMixin", targets: [{ className: "TargetA" }], startLine: 2, endLine: 5 },
+    { className: "AMixin", targets: [{ className: "TargetA" }], startLine: 2, endLine: 5, classPath: ["AMixin"] },
     {
       className: "BMixin",
       targets: [{ className: "TargetB" }, { className: "example.TargetC" }],
       startLine: 7,
-      endLine: 11
+      endLine: 11,
+      classPath: ["BMixin"]
     }
   ]);
   assert.deepEqual(result.shadows.map((entry) => entry.mixinIndex), [0]);
@@ -142,7 +149,8 @@ public abstract class PlayerMixin {
       className: "PlayerMixin",
       targets: [{ className: "LivingEntity" }, { className: "PlayerEntity" }],
       startLine: 2,
-      endLine: 9
+      endLine: 9,
+      classPath: ["PlayerMixin"]
     }
   ]);
   assert.deepEqual(
@@ -166,8 +174,8 @@ abstract class Second<T extends Comparable<T>> implements @Ann(values = {"x"}) I
   const result = parseMixinSource(source);
 
   assert.deepEqual(result.mixins, [
-    { className: "First", targets: [{ className: "TargetA" }], startLine: 2, endLine: 5 },
-    { className: "Second", targets: [{ className: "TargetB" }], startLine: 7, endLine: 10 }
+    { className: "First", targets: [{ className: "TargetA" }], startLine: 2, endLine: 5, classPath: ["First"] },
+    { className: "Second", targets: [{ className: "TargetB" }], startLine: 7, endLine: 10, classPath: ["Second"] }
   ]);
   assert.deepEqual(
     result.shadows.map((entry) => ({ name: entry.name, mixinIndex: entry.mixinIndex })),
@@ -192,8 +200,8 @@ abstract class First {
 
   assert.deepEqual(result.targets.map((entry) => entry.className), ["TargetA", "TargetB"]);
   assert.deepEqual(result.mixins, [
-    { className: "First", targets: [{ className: "TargetA" }], startLine: 2, endLine: 6 },
-    { className: "Second", targets: [{ className: "TargetB" }], startLine: 6, endLine: 8 }
+    { className: "First", targets: [{ className: "TargetA" }], startLine: 2, endLine: 6, classPath: ["First"] },
+    { className: "Second", targets: [{ className: "TargetB" }], startLine: 6, endLine: 8, classPath: ["Second"] }
   ]);
   assert.deepEqual(
     result.shadows.map((entry) => ({ name: entry.name, mixinIndex: entry.mixinIndex })),
@@ -202,4 +210,115 @@ abstract class First {
       { name: "bField", mixinIndex: 1 }
     ]
   );
+});
+
+test("parseMixinSource records every @Mixin class on a line that starts with @Mixin", () => {
+  const source = `
+@Mixin(TargetA.class) abstract class A { @Shadow private int aField; } @Mixin(TargetB.class) abstract class B {}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.targets.map((entry) => entry.className), ["TargetA", "TargetB"]);
+  assert.deepEqual(result.mixins, [
+    { className: "A", targets: [{ className: "TargetA" }], startLine: 2, endLine: 2, classPath: ["A"] },
+    { className: "B", targets: [{ className: "TargetB" }], startLine: 2, endLine: 2, classPath: ["B"] }
+  ]);
+});
+
+test("parseMixinSource ends a line-start @Mixin span at its real closing parenthesis, not one inside a string", () => {
+  const source = `
+@Mixin(value = TargetA.class, targets = "pkg.Odd(") abstract class A {
+  @Shadow private int aField;
+}
+@Mixin(TargetB.class)
+abstract class B {
+  @Shadow private int bField;
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.targets.map((entry) => entry.className), ["TargetA", "pkg.Odd(", "TargetB"]);
+  assert.deepEqual(result.mixins, [
+    {
+      className: "A",
+      targets: [{ className: "TargetA" }, { className: "pkg.Odd(" }],
+      startLine: 2,
+      endLine: 4,
+      classPath: ["A"]
+    },
+    { className: "B", targets: [{ className: "TargetB" }], startLine: 5, endLine: 8, classPath: ["B"] }
+  ]);
+  assert.deepEqual(result.shadows.map((entry) => entry.mixinIndex), [0, 1]);
+});
+
+test("selectNestedMixin picks the nested class at the exact path when same-named classes close on one line", () => {
+  const source = `
+public class Outer {
+  static class Left { @Mixin(TargetL.class) static class Dup {
+    @Shadow private int l;
+  } } static class Right { @Mixin(TargetR.class) static class Dup {} }
+}
+`;
+  const parsed = parseMixinSource(source);
+
+  const left = selectNestedMixin(parsed, ["Outer", "Left", "Dup"]);
+  const right = selectNestedMixin(parsed, ["Outer", "Right", "Dup"]);
+
+  assert.deepEqual(left?.targets.map((entry) => entry.className), ["TargetL"]);
+  assert.deepEqual(left?.shadows.map((entry) => entry.name), ["l"]);
+  assert.deepEqual(right?.targets.map((entry) => entry.className), ["TargetR"]);
+  assert.deepEqual(right?.shadows, []);
+});
+
+test("selectNestedMixin does not address a local class declared inside a method body", () => {
+  const source = `
+public class Outer {
+  void register() {
+    @Mixin(TargetA.class)
+    abstract class Inner {
+      @Shadow private int a;
+    }
+  }
+  static { new Object() { @Mixin(TargetB.class) abstract class Anon {} }; }
+}
+`;
+  const parsed = parseMixinSource(source);
+
+  assert.equal(selectNestedMixin(parsed, ["Outer", "Inner"]), undefined);
+  assert.equal(selectNestedMixin(parsed, ["Outer", "Anon"]), undefined);
+});
+
+test("selectNestedMixin reports the nested class's own @Mixin priority", () => {
+  const source = `
+@Mixin(value = TargetA.class, priority = 100)
+public abstract class Outer {
+  @Mixin(value = TargetB.class, priority = 200)
+  abstract static class Inner {}
+  @Mixin(value = TargetC.class, priority = 300)
+  abstract static class Sibling {}
+  @Mixin(TargetD.class)
+  abstract static class Plain {}
+}
+`;
+  const parsed = parseMixinSource(source);
+
+  assert.equal(selectNestedMixin(parsed, ["Outer", "Inner"])?.priority, 200);
+  assert.equal(selectNestedMixin(parsed, ["Outer", "Sibling"])?.priority, 300);
+  assert.equal(selectNestedMixin(parsed, ["Outer", "Plain"])?.priority, undefined);
+});
+
+test("selectNestedMixin addresses a mixin class nested in an annotation type", () => {
+  const source = `
+public @interface Outer {
+  @Mixin(TargetA.class)
+  abstract class Inner {
+    @Shadow private int a;
+  }
+}
+`;
+  const parsed = parseMixinSource(source);
+
+  const inner = selectNestedMixin(parsed, ["Outer", "Inner"]);
+  assert.deepEqual(inner?.targets.map((entry) => entry.className), ["TargetA"]);
+  assert.deepEqual(inner?.shadows.map((entry) => entry.name), ["a"]);
 });
