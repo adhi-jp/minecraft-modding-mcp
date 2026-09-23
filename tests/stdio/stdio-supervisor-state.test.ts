@@ -5,6 +5,7 @@ import test from "node:test";
 import type { JSONRPCMessage, JSONRPCRequest } from "@modelcontextprotocol/server";
 
 import { StdioSupervisor } from "../../src/stdio-supervisor.ts";
+import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 
 type Harness = {
   child?: FakeChild;
@@ -25,6 +26,7 @@ type Harness = {
   currentRetryEpoch?: number;
   currentRetryReservation?: { epoch: number; notBefore: number; delayMs: number };
   clientInitialized?: boolean;
+  spawnsProcessGroupLeaders: boolean;
   handleClientMessage(message: JSONRPCMessage): void;
   handleValidateProjectDeadline(key: string): void;
   handleWorkerMessage(child: FakeChild, message: JSONRPCMessage): void;
@@ -1090,6 +1092,146 @@ test("timeout-first cancellation does not create a second terminal response", (t
     (responses[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code,
     "ERR_TOOL_TIMEOUT"
   );
+});
+
+/**
+ * Runs `body` with `process.kill` replaced by a recorder that never signals
+ * anything, so the production POSIX group-reap branch can be driven against
+ * fake pids. The replacement is installed and restored around a synchronous
+ * body, so no other test can observe it.
+ */
+function withRecordedProcessKill(
+  t: import("node:test").TestContext,
+  body: (signals: Array<[number, NodeJS.Signals | number | undefined]>) => void
+): void {
+  const signals: Array<[number, NodeJS.Signals | number | undefined]> = [];
+  const killMock = t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+    signals.push([pid, signal]);
+    return true;
+  });
+  try {
+    body(signals);
+  } finally {
+    killMock.mock.restore();
+  }
+}
+
+/**
+ * An unexpected worker exit (crash, external kill, OOM) must still reap the
+ * worker's process group: a Java grandchild left in that group has no other
+ * owner. The reap is fire-and-forget — it never becomes an in-flight cleanup
+ * that holds a live-generation slot or delays the replacement.
+ */
+test("unexpected worker exit reaps the exited worker's process group without delaying restart", async (t) => {
+  if (await skipWithoutCapability(t, "posix-process-groups")) return;
+  let now = 0;
+  const timers: FakeScheduledTimer[] = [];
+  const writes: string[] = [];
+  const events: Array<{ event: string; details?: Record<string, unknown> }> = [];
+  const children = Array.from({ length: 3 }, (_, index) =>
+    createLifecycleChild(99_999_900 + index, writes)
+  );
+  let spawnIndex = 0;
+  const supervisor = new StdioSupervisor({
+    entryFile: "fixture.ts",
+    clientWriter: () => {},
+    eventWriter: (_level, event, details) => { events.push({ event, details }); },
+    monotonicNow: () => now,
+    workerSpawner: () => children[spawnIndex++] as never,
+    timerScheduler: (callback, delayMs) => {
+      const timer = {
+        at: now + delayMs,
+        callback,
+        cleared: false,
+        unref() { return this; }
+      } as unknown as FakeScheduledTimer;
+      timers.push(timer);
+      return timer;
+    },
+    timerClearer: (timer) => { (timer as FakeScheduledTimer).cleared = true; }
+  } as never) as unknown as Harness;
+  // The fakes stand in for workers of the default spawner, which lead their
+  // own process group.
+  supervisor.spawnsProcessGroupLeaders = true;
+
+  withRecordedProcessKill(t, (signals) => {
+    // A READY generation crashes.
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(children[0]);
+    supervisor.adoptActiveChild();
+    supervisor.handleWorkerExit(children[0], 1, null);
+
+    assert.deepEqual(signals, [[-children[0].pid, "SIGKILL"]], "the crashed worker's group must be signalled once");
+    assert.ok(
+      events.some((entry) =>
+        entry.event === "supervisor.worker_exit_group_cleanup" &&
+        entry.details?.pid === children[0].pid &&
+        entry.details?.result === "signalled"
+      ),
+      "the reap outcome must be logged"
+    );
+    // Restart behavior is unchanged: nothing is left holding a cleanup slot and
+    // the ordinary 100 ms replacement is reserved.
+    assert.equal(supervisor.cleanupStates.has(children[0]), false);
+    assert.equal(supervisor.unresolvedTreeTokenCount, 0);
+    assert.equal(supervisor.liveCapOccupancy(), 0);
+    const retry = timers.find((timer) => timer.at === 100 && !timer.cleared);
+    assert.ok(retry, "the replacement must be scheduled at the ordinary backoff");
+    now = 100;
+    retry.callback();
+    assert.equal(supervisor.child, children[1]);
+
+    // A generation that dies BEFORE it was ever ready is reaped the same way.
+    supervisor.handleWorkerExit(children[1], null, "SIGSEGV");
+    assert.deepEqual(signals, [[-children[0].pid, "SIGKILL"], [-children[1].pid, "SIGKILL"]]);
+
+    // A supervisor-initiated termination already signalled the group; its exit
+    // must not signal it a second time.
+    const nextRetry = timers.find((timer) => !timer.cleared && timer.at > 100);
+    assert.ok(nextRetry);
+    now = nextRetry.at;
+    nextRetry.callback();
+    assert.equal(supervisor.child, children[2]);
+    supervisor.handleWorkerReady(children[2]);
+    supervisor.adoptActiveChild();
+    supervisor.handleWorkerProcessError(children[2], new Error("stream fault"));
+    const afterTermination = [
+      [-children[0].pid, "SIGKILL"],
+      [-children[1].pid, "SIGKILL"],
+      [-children[2].pid, "SIGKILL"]
+    ];
+    assert.deepEqual(signals, afterTermination);
+    supervisor.handleWorkerExit(children[2], null, "SIGKILL");
+    assert.deepEqual(
+      signals,
+      afterTermination,
+      "a supervisor-initiated termination must not be followed by a second group signal"
+    );
+  });
+});
+
+test("a worker's exit followed by its close signals the exited worker's group exactly once", async (t) => {
+  if (await skipWithoutCapability(t, "posix-process-groups")) return;
+  const child = createLifecycleChild(99_999_910, []);
+  const supervisor = new StdioSupervisor({
+    entryFile: "fixture.ts",
+    clientWriter: () => {},
+    eventWriter: () => {},
+    workerSpawner: () => child as never,
+    timerScheduler: () => ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+    timerClearer: () => {}
+  } as never) as unknown as Harness;
+  supervisor.spawnsProcessGroupLeaders = true;
+
+  withRecordedProcessKill(t, (signals) => {
+    supervisor.spawnWorker();
+    supervisor.handleWorkerReady(child);
+    // Node emits both for one process: "exit" when it ends, "close" once its
+    // stdio streams have closed too. Both are bound to the exit handler.
+    (child as unknown as EventEmitter).emit("exit", 1, null);
+    (child as unknown as EventEmitter).emit("close", 1, null);
+    assert.deepEqual(signals, [[-child.pid, "SIGKILL"]]);
+  });
 });
 
 function legacyInitialize(id: number): JSONRPCRequest {

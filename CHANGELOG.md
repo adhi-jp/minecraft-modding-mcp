@@ -55,6 +55,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` no longer creates members from `@Shadow`-like text inside a Java text block (`"""…"""`), and a `'"'` character literal no longer makes it misread the comments that follow.
 - `validate-mixin` reads `@Shadow`, `@Inject`-family, `@Accessor` and `@Invoker` annotations whose arguments wrap onto later lines or contain a parenthesis inside a string, such as `args = "stringValue=)"`. Such members were dropped, their `prefix` and `aliases` ignored, or their `method` reported missing.
 - `validate-project` with `task: "project-summary"` reports `status: "partial"`, counts them under `counts.processingErrors`, and says in the headline how many mixin inputs could not be processed when mixin sources fail to load. It reported `ok`.
+- When the server's worker process crashes or is killed from outside on Linux or macOS, the processes it started, such as a Java decompiler, are stopped with it instead of being left running. On Windows, processes started by a worker that has already exited are still not cleaned up.
 
 ### Documentation
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -55,6 +55,73 @@ test("POSIX process-group termination removes a worker and its descendant", { ti
   }
   assert.equal(await processExists(worker.pid ?? 0), false);
   assert.equal(await processExists(descendantPid ?? 0), false);
+});
+
+/**
+ * A worker that exits on its own (crash, OOM, external kill of the worker
+ * alone) leaves its descendants in the worker's process group. The supervisor's
+ * exit handler must signal that group, or a Java grandchild outlives the
+ * worker with no owner. This drives the REAL default spawner (detached group
+ * leader) against a fixture worker that forks a sleeping grandchild into its
+ * own group and then exits before it is ever ready.
+ */
+test("unexpected worker exit reaps a descendant left in the worker's process group", { timeout: 15_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "posix-process-groups")) {
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "stdio-supervisor-exit-reap-"));
+  const pidFile = join(root, "grandchild.pid");
+  const entryFile = join(root, "worker.cjs");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    entryFile,
+    "const{spawn}=require('node:child_process');const{writeFileSync}=require('node:fs');" +
+      "const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});" +
+      `writeFileSync(${JSON.stringify(pidFile)},String(c.pid));` +
+      "setTimeout(()=>process.exit(3),200);"
+  );
+
+  const events: Array<{ event: string; details?: Record<string, unknown> }> = [];
+  const supervisor = new supervisorModule.StdioSupervisor({
+    entryFile,
+    clientWriter: () => {},
+    eventWriter: (_level, event, details) => { events.push({ event, details }); },
+    // Inert timers: no startup watchdog and no replacement spawn, so the only
+    // thing that can signal the group is the exit handler under test.
+    timerScheduler: () => ({ unref() { return this; } }) as unknown as NodeJS.Timeout,
+    timerClearer: () => {}
+  }) as unknown as { spawnWorker(): void; child?: { pid?: number; once(event: "exit", listener: () => void): void } };
+  supervisor.spawnWorker();
+  const worker = supervisor.child;
+  const workerPid = worker?.pid;
+  assert.equal(typeof workerPid, "number", "the default spawner must start a real worker");
+  t.after(() => {
+    // allow-direct-sigkill: safety net over the fixture's detached group if the reap under test failed
+    try { process.kill(-(workerPid ?? 0), "SIGKILL"); } catch { /* already gone */ }
+  });
+  const exited = new Promise<void>((resolve) => worker?.once("exit", () => resolve()));
+
+  let grandchildPid: number | undefined;
+  const reportDeadline = Date.now() + 5_000;
+  while (Date.now() < reportDeadline && grandchildPid === undefined) {
+    grandchildPid = await readFile(pidFile, "utf8").then((value) => Number(value.trim()) || undefined, () => undefined);
+    if (grandchildPid === undefined) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(typeof grandchildPid, "number", "the fixture worker never reported its grandchild");
+
+  await exited;
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline && await processExists(grandchildPid ?? 0)) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(
+    await processExists(grandchildPid ?? 0),
+    false,
+    "the grandchild must not outlive the worker that exited unexpectedly"
+  );
+  const cleanup = events.find((entry) => entry.event === "supervisor.worker_exit_group_cleanup");
+  assert.equal(cleanup?.details?.pid, workerPid);
+  assert.equal(cleanup?.details?.result, "signalled", "the group still had the grandchild in it");
 });
 
 /**

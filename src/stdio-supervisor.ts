@@ -943,6 +943,15 @@ export class StdioSupervisor {
   private readonly restartBackoff = new RestartBackoffState();
   private readonly terminalChildren = new WeakSet<ChildProcessWithoutNullStreams>();
   /**
+   * Workers started by the DEFAULT spawner on POSIX, which spawns them
+   * detached — so each one leads its own process group and `-pid` names
+   * exactly that group. Only these are group-signalled after an unexpected
+   * exit: a child handed in by an injected spawner carries no such guarantee,
+   * and its pid may not be a group id this supervisor owns.
+   */
+  private readonly processGroupLeaders = new WeakSet<ChildProcessWithoutNullStreams>();
+  private readonly spawnsProcessGroupLeaders: boolean;
+  /**
    * Monotonic worker-generation counter (incremented per successful spawn).
    * Recorded into finality tombstones so retention can be bounded per
    * generation; hand-injected children in tests that bypass spawnWorker run
@@ -1105,6 +1114,7 @@ export class StdioSupervisor {
     this.monotonicNow = options.monotonicNow ?? (() => performance.now());
     this.timerScheduler = options.timerScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.timerClearer = options.timerClearer ?? ((timer) => clearTimeout(timer));
+    this.spawnsProcessGroupLeaders = options.workerSpawner === undefined && process.platform !== "win32";
     this.workerSpawner = options.workerSpawner ?? (() => spawn(process.execPath, [...process.execArgv, this.entryFile], {
       env: {
         ...process.env,
@@ -2380,6 +2390,7 @@ export class StdioSupervisor {
 
     this.child = child;
     this.liveChildren.add(child);
+    if (this.spawnsProcessGroupLeaders) this.processGroupLeaders.add(child);
     this.workerReaders.set(child, new JsonRpcFrameReader());
     const generation = ++this.workerGeneration;
     // "close" fires only once the process has ended AND its stdio streams are
@@ -2790,6 +2801,10 @@ export class StdioSupervisor {
     const wasReady = this.childReady;
     const readyAt = this.childReadyAt;
     this.detachCurrentChild();
+    // The worker ended on its own (crash, OOM, an external kill of the worker
+    // alone): no supervisor-initiated termination ran, so any descendant it
+    // forked is still alive in its process group with no other owner.
+    this.reapExitedWorkerGroup(child, childPid);
 
     if (this.shuttingDown) {
       return;
@@ -3352,6 +3367,54 @@ export class StdioSupervisor {
       child.stderr.removeAllListeners("data");
       child.stdin.removeAllListeners("error");
     }
+  }
+
+  /**
+   * Signals the process group of a worker that exited UNEXPECTEDLY, so the
+   * descendants it leaves behind (a Java grandchild above all) are not
+   * orphaned.
+   *
+   * PID reuse: this runs from the worker's `exit` event, after the worker
+   * itself was reaped, so its pid is free again. The kernel still refuses to
+   * hand that number out as a new pid or pgid while ANY member of the old
+   * group is alive — so while there is something left to reap, `-pid` names
+   * exactly that group. The residual race (the group already empty AND the
+   * number reused by a new group leader in between) is accepted as negligible.
+   * pidfd-based group signalling would close it but needs Linux 6.9+.
+   *
+   * Fire-and-forget by design: it is not recorded as an in-flight cleanup, so
+   * it never occupies a live-generation slot or delays the replacement.
+   *
+   * Windows: `taskkill /T` walks the tree from its root, and the root has
+   * already exited here, so there is nothing it can find. Descendants of a
+   * crashed worker are not reaped on Windows (known limitation).
+   *
+   * Logged `result`: "signalled" (the group had members and was signalled),
+   * "group-empty" (ESRCH — nothing was left), or "failed".
+   */
+  private reapExitedWorkerGroup(child: ChildProcessWithoutNullStreams, pid: number | undefined): void {
+    if (pid === undefined) return;
+    const report = (result: "signalled" | "group-empty" | "failed") => {
+      this.eventWriter(result === "failed" ? "warn" : "info", "supervisor.worker_exit_group_cleanup", {
+        pid,
+        result
+      });
+    };
+    if (process.platform === "win32") {
+      debugSupervisor("worker_exit_group_unreachable", { pid });
+      return;
+    }
+    if (!this.processGroupLeaders.has(child)) return;
+    let groupEmpty = false;
+    const signalled = terminatePosixProcessGroup(pid, (target, signal) => {
+      try {
+        process.kill(target, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ESRCH") groupEmpty = true;
+        throw error;
+      }
+    });
+    report(!signalled ? "failed" : groupEmpty ? "group-empty" : "signalled");
   }
 
   private recoverTimedOutWorker(): void {
