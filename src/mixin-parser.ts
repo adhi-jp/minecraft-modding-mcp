@@ -7,10 +7,31 @@ export type ParsedMixinTarget = {
   className: string;
 };
 
+/**
+ * One `@Mixin`-annotated class in the file. A file can hold several (nested or top-level),
+ * and each member is validated only against the targets of the class that owns it.
+ */
+export type ParsedMixinClass = {
+  /** Simple name of the annotated class. */
+  className: string;
+  /** Targets named by this class's own `@Mixin` annotation. */
+  targets: ParsedMixinTarget[];
+  /** 1-based line of the `@Mixin` annotation. */
+  startLine: number;
+  /** 1-based line of the brace that closes the class body. */
+  endLine: number;
+};
+
 export type ParsedInjection = {
   annotation: string;
   method: string;
   line: number;
+  /**
+   * Index into `ParsedMixin.mixins` of the innermost `@Mixin` class enclosing this member
+   * (a member of a nested non-mixin class belongs to the nearest enclosing `@Mixin` class).
+   * Absent when no `@Mixin` class encloses it; such a member is checked against every target.
+   */
+  mixinIndex?: number;
 };
 
 export type ParsedShadow = {
@@ -25,6 +46,8 @@ export type ParsedShadow = {
   aliases?: string[];
   descriptor?: string;
   line: number;
+  /** Owning `@Mixin` class; see `ParsedInjection.mixinIndex`. */
+  mixinIndex?: number;
 };
 
 export type ParsedAccessor = {
@@ -32,11 +55,19 @@ export type ParsedAccessor = {
   name: string;
   targetName: string;
   line: number;
+  /** Owning `@Mixin` class; see `ParsedInjection.mixinIndex`. */
+  mixinIndex?: number;
 };
 
 export type ParsedMixin = {
   className: string;
+  /** Every target named by any `@Mixin` annotation in the file, first occurrence first. */
   targets: ParsedMixinTarget[];
+  /**
+   * Each `@Mixin` class whose body could be located, in source order. Absent on a parse
+   * result built without ownership, whose members are then checked against every target.
+   */
+  mixins?: ParsedMixinClass[];
   priority?: number;
   imports: Map<string, string>;
   injections: ParsedInjection[];
@@ -49,6 +80,8 @@ export type ParsedMixin = {
 /*  Regex patterns                                                     */
 /* ------------------------------------------------------------------ */
 
+// A type declaration keyword and its name; `.class` literals and `@interface` are not declarations.
+const TYPE_DECL_RE = /(?<![\w$.@])(?:class|interface|enum|record)\s+([\w$]+)/;
 const CLASS_DECL_RE = /^\s*(?:@[\w$.]+(?:\([^)]*\))?\s+)*(?:public\s+|final\s+|abstract\s+|sealed\s+)*\b(?:class|interface)\s+(\w+)/;
 
 // import statements for FQCN resolution
@@ -57,6 +90,8 @@ const IMPORT_RE = /^\s*import\s+([\w.]+)\s*;/;
 // @Mixin(Foo.class)  or  @Mixin({Foo.class, Bar.class})  or  @Mixin(value = Foo.class)
 // Also handles  @Mixin(value = {Foo.class, Bar.class}, priority = 900)
 const MIXIN_ANNOTATION_START_RE = /^\s*@Mixin\s*\(/;
+// A @Mixin annotation anywhere on a line; matched against comment- and literal-free text.
+const MIXIN_ANNOTATION_ANYWHERE_RE = /@Mixin\s*\(/g;
 // `$` is a legal Java identifier character (e.g. generated classes like My$Class);
 // without it the capture would start mid-name and yield a wrong target.
 const MIXIN_TARGET_RE = /([\w$][\w.$]*?)\.class/g;
@@ -211,6 +246,124 @@ function stripComments(source: string): string {
     out += ch;
   }
   return out;
+}
+
+/**
+ * `line` with the contents of its string and char literals blanked and its quotes kept, so a
+ * brace, parenthesis or keyword inside a literal is never read as code. Positions are kept.
+ * Applied to `stripComments` output, where no literal spans a line.
+ */
+function blankLiterals(line: string): string {
+  let out = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    out += ch;
+    if (ch !== '"' && ch !== "'") {
+      continue;
+    }
+    i++;
+    while (i < line.length && line[i] !== ch) {
+      const width = line[i] === "\\" && i + 1 < line.length ? 2 : 1;
+      out += " ".repeat(width);
+      i += width;
+    }
+    if (i < line.length) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * The class decorated by the annotation whose `@` sits at `codeLines[startIndex][offset]`:
+ * its simple name and the 0-based line of the brace closing its body, found by skipping the
+ * annotation's argument list, then the declaration keyword, then balancing braces. `codeLines`
+ * carry no comments or literal contents, so only code braces count. Null when no class body
+ * follows the annotation.
+ */
+function findAnnotatedClassBody(
+  codeLines: string[],
+  startIndex: number,
+  offset: number
+): { className: string; endIndex: number } | null {
+  let lineIndex = startIndex;
+  let col = offset;
+  let depth = 0;
+  let argsClosed = false;
+  argsScan: for (; lineIndex < codeLines.length; lineIndex++, col = 0) {
+    const text = codeLines[lineIndex];
+    for (; col < text.length; col++) {
+      if (text[col] === "(") {
+        depth++;
+      } else if (text[col] === ")" && depth > 0) {
+        depth--;
+        if (depth === 0) {
+          col++;
+          argsClosed = true;
+          break argsScan;
+        }
+      }
+    }
+  }
+  if (!argsClosed) {
+    return null;
+  }
+
+  let className: string | undefined;
+  for (; lineIndex < codeLines.length; lineIndex++, col = 0) {
+    const declMatch = TYPE_DECL_RE.exec(codeLines[lineIndex].slice(col));
+    if (declMatch) {
+      className = declMatch[1];
+      col += declMatch.index + declMatch[0].length;
+      break;
+    }
+  }
+  if (className === undefined) {
+    return null;
+  }
+
+  // The body opens at the first `{` outside the header's parentheses (annotation arguments
+  // such as `extends @Mark({1, 2}) Base`) and type-argument brackets.
+  let parenDepth = 0;
+  let angleDepth = 0;
+  let bodyOpen = false;
+  headerScan: for (; lineIndex < codeLines.length; lineIndex++, col = 0) {
+    const text = codeLines[lineIndex];
+    for (; col < text.length; col++) {
+      const ch = text[col];
+      if (ch === "(") {
+        parenDepth++;
+      } else if (ch === ")" && parenDepth > 0) {
+        parenDepth--;
+      } else if (parenDepth === 0 && ch === "<") {
+        angleDepth++;
+      } else if (parenDepth === 0 && ch === ">" && angleDepth > 0) {
+        angleDepth--;
+      } else if (parenDepth === 0 && angleDepth === 0 && ch === "{") {
+        bodyOpen = true;
+        break headerScan;
+      }
+    }
+  }
+  if (!bodyOpen) {
+    return null;
+  }
+
+  depth = 0;
+  for (; lineIndex < codeLines.length; lineIndex++, col = 0) {
+    const text = codeLines[lineIndex];
+    for (; col < text.length; col++) {
+      if (text[col] === "{") {
+        depth++;
+      } else if (text[col] === "}" && depth > 0) {
+        depth--;
+        if (depth === 0) {
+          return { className, endIndex: lineIndex };
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -557,8 +710,10 @@ function inferAccessorTarget(methodName: string): string {
 
 export function parseMixinSource(source: string): ParsedMixin {
   const lines = stripComments(source).split(/\r?\n/);
+  const codeLines = lines.map(blankLiterals);
   const parseWarnings: string[] = [];
   const targets: ParsedMixinTarget[] = [];
+  const mixins: ParsedMixinClass[] = [];
   const injections: ParsedInjection[] = [];
   const shadows: ParsedShadow[] = [];
   const accessors: ParsedAccessor[] = [];
@@ -579,52 +734,89 @@ export function parseMixinSource(source: string): ParsedMixin {
     }
   }
 
-  // --- Pass 1: find @Mixin annotation and class name ---
+  // --- Pass 1: find @Mixin annotations and class name ---
+  const recordMixin = (mixinText: string, lineIndex: number, offset: number): void => {
+    // `value` (class literals) and `targets` (string names) are both contributed
+    // when both are present, so the string form is collected alongside the class
+    // literals rather than only as a fallback.
+    const annotationTargets: string[] = [];
+    MIXIN_TARGET_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = MIXIN_TARGET_RE.exec(mixinText)) !== null) {
+      annotationTargets.push(match[1]);
+    }
+    // targets = "..." or targets = {"a", "b"} string form
+    const targetsStringMatch = MIXIN_TARGETS_STRING_RE.exec(mixinText);
+    if (targetsStringMatch) {
+      const arrayContent = targetsStringMatch[1]; // {..."..."...} content
+      const singleTarget = targetsStringMatch[2]; // single "..." content
+      if (arrayContent) {
+        MIXIN_TARGETS_STRING_ITEM_RE.lastIndex = 0;
+        let itemMatch: RegExpExecArray | null;
+        while ((itemMatch = MIXIN_TARGETS_STRING_ITEM_RE.exec(arrayContent)) !== null) {
+          annotationTargets.push(itemMatch[1]);
+        }
+      } else if (singleTarget) {
+        annotationTargets.push(singleTarget);
+      }
+    }
+    const ownTargets: ParsedMixinTarget[] = [];
+    for (const targetName of annotationTargets) {
+      if (!targets.some((entry) => entry.className === targetName)) {
+        targets.push({ className: targetName });
+      }
+      if (!ownTargets.some((entry) => entry.className === targetName)) {
+        ownTargets.push({ className: targetName });
+      }
+    }
+    const body = findAnnotatedClassBody(codeLines, lineIndex, offset);
+    if (body) {
+      mixins.push({ className: body.className, targets: ownTargets, startLine: lineIndex + 1, endLine: body.endIndex + 1 });
+    }
+    const priorityMatch = MIXIN_PRIORITY_RE.exec(mixinText);
+    if (priorityMatch) {
+      priority = parseInt(priorityMatch[1], 10);
+    }
+  };
+
+  // A @Mixin that opens its line is read with the lines its argument list spans. One that
+  // follows other code on its line (`} @Mixin(B.class) abstract class B {`) is found in the
+  // comment- and literal-free text and read from its own offset; the rest of the line where
+  // its argument list closes is then scanned for another one.
   let i = 0;
+  let fromCol = 0;
   while (i < lines.length) {
-    if (MIXIN_ANNOTATION_START_RE.test(lines[i])) {
+    if (fromCol === 0 && MIXIN_ANNOTATION_START_RE.test(lines[i])) {
       const { text: mixinText, endIndex } = collectMultilineAnnotation(lines, i);
-      // `value` (class literals) and `targets` (string names) are both contributed
-      // when both are present, so the string form is collected alongside the class
-      // literals rather than only as a fallback.
-      const annotationTargets: string[] = [];
-      MIXIN_TARGET_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = MIXIN_TARGET_RE.exec(mixinText)) !== null) {
-        annotationTargets.push(match[1]);
-      }
-      // targets = "..." or targets = {"a", "b"} string form
-      const targetsStringMatch = MIXIN_TARGETS_STRING_RE.exec(mixinText);
-      if (targetsStringMatch) {
-        const arrayContent = targetsStringMatch[1]; // {..."..."...} content
-        const singleTarget = targetsStringMatch[2]; // single "..." content
-        if (arrayContent) {
-          MIXIN_TARGETS_STRING_ITEM_RE.lastIndex = 0;
-          let itemMatch: RegExpExecArray | null;
-          while ((itemMatch = MIXIN_TARGETS_STRING_ITEM_RE.exec(arrayContent)) !== null) {
-            annotationTargets.push(itemMatch[1]);
-          }
-        } else if (singleTarget) {
-          annotationTargets.push(singleTarget);
-        }
-      }
-      for (const targetName of annotationTargets) {
-        if (!targets.some((entry) => entry.className === targetName)) {
-          targets.push({ className: targetName });
-        }
-      }
-      const priorityMatch = MIXIN_PRIORITY_RE.exec(mixinText);
-      if (priorityMatch) {
-        priority = parseInt(priorityMatch[1], 10);
-      }
+      recordMixin(mixinText, i, lines[i].indexOf("@"));
       i = endIndex + 1;
       continue;
     }
 
-    const classMatch = CLASS_DECL_RE.exec(lines[i]);
-    if (classMatch && !className) {
-      className = classMatch[1];
+    if (fromCol === 0) {
+      const classMatch = CLASS_DECL_RE.exec(lines[i]);
+      if (classMatch && !className) {
+        className = classMatch[1];
+      }
     }
+    MIXIN_ANNOTATION_ANYWHERE_RE.lastIndex = fromCol;
+    const inlineMixin = MIXIN_ANNOTATION_ANYWHERE_RE.exec(codeLines[i]);
+    if (inlineMixin) {
+      const span = collectAnnotationSpan(lines, i, inlineMixin.index);
+      if (span.close >= 0) {
+        recordMixin(span.text.slice(0, span.close), i, inlineMixin.index);
+        fromCol = span.endIndex === i
+          ? inlineMixin.index + span.close
+          : span.close - (span.text.lastIndexOf("\n") + 1);
+        i = span.endIndex;
+      } else {
+        recordMixin(span.text, i, inlineMixin.index);
+        fromCol = 0;
+        i++;
+      }
+      continue;
+    }
+    fromCol = 0;
     i++;
   }
 
@@ -784,9 +976,31 @@ export function parseMixinSource(source: string): ParsedMixin {
     i++;
   }
 
+  // Ownership: the innermost @Mixin class whose span holds the member's annotation line.
+  // Nested class spans nest, so the containing span that starts last is the innermost.
+  const assignOwner = (member: { line: number; mixinIndex?: number }): void => {
+    let owner: number | undefined;
+    mixins.forEach((mixin, index) => {
+      if (
+        mixin.startLine <= member.line &&
+        member.line <= mixin.endLine &&
+        (owner === undefined || mixin.startLine > mixins[owner].startLine)
+      ) {
+        owner = index;
+      }
+    });
+    if (owner !== undefined) {
+      member.mixinIndex = owner;
+    }
+  };
+  injections.forEach(assignOwner);
+  shadows.forEach(assignOwner);
+  accessors.forEach(assignOwner);
+
   return {
     className,
     targets,
+    mixins,
     priority,
     imports,
     injections,

@@ -11,6 +11,15 @@ import {
   makeParsedMixin,
   makeProvenance
 } from "../helpers/mixin-validator-fixtures.ts";
+import { parseMixinSource, type ParsedMixin } from "../../src/mixin-parser.ts";
+import {
+  ACCESSOR_CASES,
+  INJECTION_CASES,
+  INVOKER_CASES,
+  SHADOW_CASES,
+  TARGET_CASES,
+  WARNING_CASES
+} from "./mixin-parser-fixtures.ts";
 
 test("validateParsedMixin reports representative member-validation outcomes", () => {
   const cases = [
@@ -755,4 +764,130 @@ test("validateParsedMixin skips regex target selectors as unverifiable", () => {
   assert.equal(result.issues.length, 0, JSON.stringify(result.issues));
   const skipped = result.resolvedMembers!.filter((m) => m.status === "skipped");
   assert.deepEqual(skipped.map((m) => m.line), [10, 11]);
+});
+
+const TWO_MIXIN_SOURCE = `
+@Mixin(TargetA.class)
+public abstract class OuterMixin {
+  @Shadow private int aField;
+  @Inject(method = "aTick", at = @At("HEAD"))
+  private void onA(CallbackInfo ci) {}
+
+  @Mixin(TargetB.class)
+  public abstract static class InnerMixin {
+    @Shadow private int bField;
+    @Shadow private int missingField;
+    @Invoker("bRun")
+    abstract void callRun();
+  }
+}
+`;
+
+function twoMixinTargets(): Map<string, ResolvedTargetMembers> {
+  return new Map<string, ResolvedTargetMembers>([
+    ["TargetA", makeTargetMembers("TargetA", { methods: ["aTick"], fields: ["aField"] })],
+    ["TargetB", makeTargetMembers("TargetB", { methods: ["bRun"], fields: ["bField"] })]
+  ]);
+}
+
+test("validateParsedMixin checks each member only against the targets of its own @Mixin class", () => {
+  const result = validateParsedMixin(parseMixinSource(TWO_MIXIN_SOURCE), twoMixinTargets(), []);
+
+  assert.deepEqual(
+    result.issues.map((issue) => ({ kind: issue.kind, target: issue.target, line: issue.line })),
+    [{ kind: "field-not-found", target: "TargetB#missingField", line: 11 }]
+  );
+  assert.deepEqual(result.targets, ["TargetA", "TargetB"]);
+  assert.deepEqual(
+    result.resolvedMembers?.map((member) => ({ name: member.name, status: member.status })),
+    [
+      { name: "aTick", status: "resolved" },
+      { name: "aField", status: "resolved" },
+      { name: "bField", status: "resolved" },
+      { name: "missingField", status: "not-found" },
+      { name: "bRun", status: "resolved" }
+    ]
+  );
+});
+
+test("validateParsedMixin marks only the owning mixin's members skipped when its target is unmapped", () => {
+  const targetMembers = twoMixinTargets();
+  targetMembers.delete("TargetA");
+
+  const result = validateParsedMixin(
+    parseMixinSource(TWO_MIXIN_SOURCE),
+    targetMembers,
+    [],
+    undefined,
+    undefined,
+    new Set(["TargetA"])
+  );
+
+  assert.deepEqual(
+    result.issues.map((issue) => ({ kind: issue.kind, target: issue.target })),
+    [
+      { kind: "target-mapping-failed", target: "TargetA" },
+      { kind: "field-not-found", target: "TargetB#missingField" }
+    ]
+  );
+  const skipped = result.resolvedMembers!.filter((member) => member.status === "skipped");
+  assert.deepEqual(skipped.map((member) => member.name), ["aTick", "aField"]);
+});
+
+/** The parse result with its per-mixin ownership removed: every member checked against every target. */
+function withoutOwnership(parsed: ParsedMixin): ParsedMixin {
+  const strip = <T extends { mixinIndex?: number }>(member: T): T => {
+    const { mixinIndex: _mixinIndex, ...rest } = member;
+    return rest as T;
+  };
+  return {
+    ...parsed,
+    mixins: undefined,
+    injections: parsed.injections.map(strip),
+    shadows: parsed.shadows.map(strip),
+    accessors: parsed.accessors.map(strip)
+  };
+}
+
+test("validateParsedMixin gives single-@Mixin fixtures the same result with or without ownership", () => {
+  const sources = [
+    ...TARGET_CASES,
+    ...INJECTION_CASES,
+    ...SHADOW_CASES,
+    ...ACCESSOR_CASES,
+    ...INVOKER_CASES,
+    ...WARNING_CASES
+  ].map((testCase) => testCase.source);
+  sources.push(`
+@Mixin({LivingEntity.class, PlayerEntity.class, MissingEntity.class, UnmappedEntity.class})
+public abstract class MultiTargetMixin {
+  @Shadow private int health;
+  @Shadow private int hunger;
+  @Inject(method = "tick", at = @At("HEAD"))
+  private void onTick(CallbackInfo ci) {}
+  @Accessor("speed")
+  int getSpeed();
+}
+`);
+
+  for (const source of sources) {
+    const parsed = parseMixinSource(source);
+    const targetMembers = new Map<string, ResolvedTargetMembers>();
+    parsed.targets.forEach((target, index) => {
+      if (index === 0) {
+        targetMembers.set(target.className, makeTargetMembers(target.className, {
+          methods: ["tick", "getMainHandItem"],
+          fields: ["health"]
+        }));
+      } else if (index === 1) {
+        targetMembers.set(target.className, makeTargetMembers(target.className, { fields: ["hunger"] }));
+      }
+    });
+    const unmapped = new Set(parsed.targets.slice(3).map((target) => target.className));
+
+    const scoped = validateParsedMixin(parsed, targetMembers, [], undefined, undefined, unmapped);
+    const unscoped = validateParsedMixin(withoutOwnership(parsed), targetMembers, [], undefined, undefined, unmapped);
+
+    assert.deepEqual(scoped, unscoped, source);
+  }
 });

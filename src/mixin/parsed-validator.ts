@@ -47,6 +47,21 @@ export function validateParsedMixin(
   const issues: ValidationIssue[] = [];
   const targetNames = parsed.targets.map((t) => t.className);
 
+  // A member is checked only against the targets of the @Mixin class that owns it; a member
+  // without an owner is checked against every target.
+  const ownerTargets = (parsed.mixins ?? []).map((mixin) => new Set(mixin.targets.map((t) => t.className)));
+  const targetsOf = (member: { mixinIndex?: number }, names: string[]): string[] => {
+    const owned = member.mixinIndex === undefined ? undefined : ownerTargets[member.mixinIndex];
+    return owned ? names.filter((name) => owned.has(name)) : names;
+  };
+  // The members that a failed target leaves unvalidated: those whose owner targets it.
+  const membersOf = (targetName: string): ParsedMixin => ({
+    ...parsed,
+    injections: parsed.injections.filter((member) => targetsOf(member, [targetName]).length > 0),
+    shadows: parsed.shadows.filter((member) => targetsOf(member, [targetName]).length > 0),
+    accessors: parsed.accessors.filter((member) => targetsOf(member, [targetName]).length > 0)
+  });
+
   const confidenceReason = confidence === "uncertain"
     ? `Mapping fallback: requested "${provenance?.requestedMapping}" but applied "${provenance?.mappingApplied}".`
     : confidence === "likely"
@@ -72,7 +87,7 @@ export function validateParsedMixin(
           resolutionPath: "target-mapping-failed",
           falsePositiveRisk: healthReport?.overallHealthy === false ? "high" : "medium"
         });
-        addSkippedMembers(parsed, resolvedMembers);
+        addSkippedMembers(membersOf(target.className), resolvedMembers);
       } else if (symbolExistsButSignatureFailed?.has(target.className)) {
         // Symbol exists in mapping graph but getSignature failed — tool limitation, not code issue
         issues.push({
@@ -88,11 +103,11 @@ export function validateParsedMixin(
           issueOrigin: "tool_issue",
           falsePositiveRisk: "high"
         });
-        addSkippedMembers(parsed, resolvedMembers);
+        addSkippedMembers(membersOf(target.className), resolvedMembers);
       } else if (deferredBudgetTargets?.has(target.className)) {
         // Deferred by stage budget; the targetOutcomes entry already records
         // this, so skip member validation rather than emit a not-found error.
-        addSkippedMembers(parsed, resolvedMembers);
+        addSkippedMembers(membersOf(target.className), resolvedMembers);
       } else if (signatureFailedTargets?.has(target.className)) {
         issues.push({
           severity: "warning",
@@ -107,7 +122,7 @@ export function validateParsedMixin(
           issueOrigin: "tool_issue",
           falsePositiveRisk: "high"
         });
-        addSkippedMembers(parsed, resolvedMembers);
+        addSkippedMembers(membersOf(target.className), resolvedMembers);
       } else {
         issues.push({
           severity: "error",
@@ -128,15 +143,15 @@ export function validateParsedMixin(
   const resolvedTargetNames = targetNames.filter((t) => targetMembers.has(t));
 
   for (const inj of parsed.injections) {
-    validateInjection(inj, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
+    validateInjection(inj, targetMembers, targetsOf(inj, resolvedTargetNames), issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   for (const shadow of parsed.shadows) {
-    validateShadow(shadow, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
+    validateShadow(shadow, targetMembers, targetsOf(shadow, resolvedTargetNames), issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   for (const accessor of parsed.accessors) {
-    validateAccessor(accessor, targetMembers, resolvedTargetNames, issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
+    validateAccessor(accessor, targetMembers, targetsOf(accessor, resolvedTargetNames), issues, resolvedMembers, confidence, confidenceReason, remapFailedMembers, signatureFailedTargets, healthReport);
   }
 
   // Add parse warnings — escalate @Accessor/@Invoker/@Shadow parse failures to issues
