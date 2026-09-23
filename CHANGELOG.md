@@ -37,6 +37,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - `validate-mixin` in config mode rejects a config that is not a JSON object, whose `mixins`, `client` or `server` is not an array of strings, or whose `package` is not a string, with `ERR_INVALID_INPUT` naming the config path and the offending key. Such configs previously crashed with `ERR_INTERNAL` or were silently misread.
 - `get-signature` and every tool built on it report a truncated or corrupted class file, including a bad magic number, an unsupported constant-pool tag, a class cut short inside its last attribute, or a malformed member descriptor found in the bytecode, as `ERR_CLASS_NOT_FOUND` naming the class and jar. These cases answered `ERR_INTERNAL`, `ERR_INVALID_INPUT` (blaming the caller for a third-party jar's content), or parsed the truncated class as if it were complete.
 - `find-mapping` with `signatureMode: "exact"` and `resolve-method-mapping-exact` resolve a Mojang-to-Yarn method whose mappings are split across separate per-namespace files (a Mojang ProGuard file plus `official → intermediary` and `intermediary → named` Tiny files). The method's descriptor in the last hop is in intermediary names, which the exact lookup did not accept, so it answered `not_found`.
+- A Java subprocess (the decompiler and the other Java helpers) that is stopped for exceeding its time limit but ignores the stop request is now force-killed after 3 seconds. It was previously left running.
 
 ## [7.1.0] - 2026-09-19
 

@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
 import {
+  JAVA_PROCESS_KILL_GRACE_MS,
   assertJavaAvailable,
   resetJavaAvailabilityCacheForTests,
   runJavaProcess
@@ -42,6 +43,23 @@ function isPidAlive(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Last-resort test cleanup: if a liveness assertion on `pid` ever fails, the
+ * fake java child would otherwise be left running forever (it deliberately
+ * hangs / ignores SIGTERM). Never throws — this is best-effort only, run
+ * from a `finally`, and must not mask the assertion failure it follows.
+ */
+function killIfAlive(pid: number): void {
+  if (!isPidAlive(pid)) {
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Already gone, or we lack permission to signal it — nothing more to do.
   }
 }
 
@@ -184,6 +202,7 @@ setTimeout(() => process.exit(0), 30000);
   const originalPath = process.env.PATH ?? "";
   process.env.PATH = `${binDir}${delimiter}${originalPath}`;
 
+  let childPid: number | undefined;
   try {
     await assert.rejects(
       () =>
@@ -205,7 +224,7 @@ setTimeout(() => process.exit(0), 30000);
     // on schedule (with the kill call deleted) would still pass everything
     // above. Poll the recorded pid until it's actually gone, well inside that
     // 30s window, so a missing kill shows up as this assertion failing.
-    const childPid = Number(readFileSync(pidFilePath, "utf8"));
+    childPid = Number(readFileSync(pidFilePath, "utf8"));
     const deadline = Date.now() + 5_000;
     let alive = isPidAlive(childPid);
     while (alive && Date.now() < deadline) {
@@ -219,6 +238,83 @@ setTimeout(() => process.exit(0), 30000);
     );
   } finally {
     process.env.PATH = originalPath;
+    // Best-effort: if the liveness assertion above ever fails, don't leave
+    // the fake java process running past this test.
+    if (childPid !== undefined) {
+      killIfAlive(childPid);
+    }
+  }
+});
+
+test("runJavaProcess escalates to SIGKILL when the process ignores SIGTERM past the grace period", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), "java-process-sigkill-"));
+  const binDir = join(root, "bin");
+  const fakeJavaPath = join(binDir, "java");
+  const pidFilePath = join(root, "child.pid");
+  mkdirSync(binDir, { recursive: true });
+
+  // Fake `java` that explicitly ignores SIGTERM, so only a SIGKILL escalation
+  // can end it before the test's own deadline. The handler is installed before
+  // the pid file is written: a pid file therefore proves SIGTERM was already
+  // being ignored, and an early SIGTERM leaves no pid file (the test fails).
+  writeFileSync(
+    fakeJavaPath,
+    `#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+require("node:fs").writeFileSync(${JSON.stringify(pidFilePath)}, String(process.pid));
+setInterval(() => {}, 1000);
+`,
+    "utf8"
+  );
+  chmodSync(fakeJavaPath, 0o755);
+
+  const originalPath = process.env.PATH ?? "";
+  process.env.PATH = `${binDir}${delimiter}${originalPath}`;
+
+  let childPid: number | undefined;
+  try {
+    await assert.rejects(
+      () =>
+        runJavaProcess({
+          jarPath: "/tmp/whatever.jar",
+          args: [],
+          timeoutMs: 300
+        }),
+      (error: unknown) => {
+        const appError = error as { code?: string; details?: { reason?: string } };
+        assert.equal(appError.code, ERROR_CODES.JAVA_PROCESS_FAILED);
+        assert.equal(appError.details?.reason, "timeout");
+        return true;
+      }
+    );
+
+    // SIGTERM alone does nothing here (the fake java ignores it), so the
+    // process must only die once the grace timer's SIGKILL fires. Poll well
+    // past the grace period to give the escalation room to land.
+    childPid = Number(readFileSync(pidFilePath, "utf8"));
+    const deadline = Date.now() + JAVA_PROCESS_KILL_GRACE_MS + 5_000;
+    let alive = isPidAlive(childPid);
+    while (alive && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      alive = isPidAlive(childPid);
+    }
+    assert.equal(
+      alive,
+      false,
+      "a process that ignores SIGTERM must still be gone after the SIGKILL grace period"
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    // Best-effort: this fake java ignores SIGTERM, so if the assertion above
+    // ever fails (e.g. a regressed escalation), it would otherwise become an
+    // immortal orphan. SIGKILL is the only signal it cannot ignore.
+    if (childPid !== undefined) {
+      killIfAlive(childPid);
+    }
   }
 });
 

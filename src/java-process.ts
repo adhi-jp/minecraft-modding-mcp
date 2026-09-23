@@ -5,6 +5,11 @@ import { normalizePathForHost } from "./path-converter.js";
 
 const JAVA_CHECK_TIMEOUT_MS = 2_000;
 export const MAX_STDIO_SNAPSHOT = 6_240;
+// How long to wait after SIGTERM before escalating to SIGKILL on a timed-out
+// Java process. This is a single leaf process (not a process tree — the
+// supervisor's tree-termination path is a separate concern), so a direct
+// SIGKILL here is the sanctioned escalation, not a workaround.
+export const JAVA_PROCESS_KILL_GRACE_MS = 3_000;
 
 let javaAvailabilitySpawn: typeof spawn = spawn;
 let javaAvailabilityPromise: Promise<void> | undefined;
@@ -146,8 +151,15 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
 
     let stdout = "";
     let stderr = "";
+    let killTimer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       proc.kill();
+      killTimer = setTimeout(() => {
+        // The process ignored SIGTERM past the grace period; escalate to
+        // SIGKILL so a hung JVM cannot outlive the timeout indefinitely.
+        proc.kill("SIGKILL");
+      }, JAVA_PROCESS_KILL_GRACE_MS);
+      killTimer.unref();
       reject(
         createError({
           code: ERROR_CODES.JAVA_PROCESS_FAILED,
@@ -173,6 +185,7 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
 
     proc.once("error", (error) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       reject(
         createError({
           code: ERROR_CODES.JAVA_PROCESS_FAILED,
@@ -187,6 +200,7 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
 
     proc.once("close", (code) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       resolve({
         exitCode: code ?? -1,
         stdoutTail: limitStdio(stdout),
