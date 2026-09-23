@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { mapWithConcurrencyLimit } from "../../../concurrency.js";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
-import { ERROR_CODES, createError } from "../../../errors.js";
+import { ERROR_CODES, createError, isAppError } from "../../../errors.js";
 import { buildSuggestedCall } from "../../../build-suggested-call.js";
 import type { StageEmitter } from "../../../stage-emitter.js";
 import type { ValidateProjectInput } from "../../validate-project-service.js";
@@ -281,6 +281,7 @@ const mixinDurationStart = Date.now();
 let validMixins = 0;
 let partialMixins = 0;
 let invalidMixins = 0;
+let mixinProcessingErrors = 0;
 let mixinCaughtErrors = 0;
 await safeEmit(options.stageEmitter,"validate-project:mixin-validation", {
   targetTotal: mixinConfigs.length
@@ -296,6 +297,7 @@ type MixinUnitResult = {
   valid: number;
   partial: number;
   invalid: number;
+  processingErrors: number;
   caught: number;
   warnings: string[];
 };
@@ -338,11 +340,14 @@ const mixinResults = await mapWithConcurrencyLimit(
         valid?: number;
         partial?: number;
         invalid?: number;
+        processingErrors?: number;
       } | undefined;
       return {
         valid: summary?.valid ?? 0,
         partial: summary?.partial ?? 0,
         invalid: summary?.invalid ?? 0,
+        // Mixin sources that failed to load count in none of valid/partial/invalid.
+        processingErrors: summary?.processingErrors ?? 0,
         caught: 0,
         warnings: Array.isArray(mixinResult.warnings) ? [...mixinResult.warnings] : []
       };
@@ -351,6 +356,7 @@ const mixinResults = await mapWithConcurrencyLimit(
         valid: 0,
         partial: 0,
         invalid: 1,
+        processingErrors: 0,
         caught: 1,
         warnings: error instanceof Error ? [`${configPath}: ${error.message}`] : []
       };
@@ -361,6 +367,7 @@ for (const result of mixinResults) {
   validMixins += result.valid;
   partialMixins += result.partial;
   invalidMixins += result.invalid;
+  mixinProcessingErrors += result.processingErrors;
   mixinCaughtErrors += result.caught;
   warnings.push(...result.warnings);
 }
@@ -370,6 +377,7 @@ const awDurationStart = Date.now();
 let validAw = 0;
 let invalidAw = 0;
 let awCaughtErrors = 0;
+let awProcessingErrors = 0;
 await safeEmit(options.stageEmitter,"validate-project:access-widener-validation", {
   targetTotal: accessWideners.length
 });
@@ -399,6 +407,12 @@ for (const [awIndex, awPath] of accessWideners.entries()) {
       warnings.push(...output.warnings);
     }
   } catch (error) {
+    if (isAppError(error) && error.details?.unsupportedFormat === "classTweaker") {
+      // A format this server does not read is not a verdict on the file.
+      awProcessingErrors += 1;
+      warnings.push(`${awPath}: ${error.message}`);
+      continue;
+    }
     invalidAw += 1;
     awCaughtErrors += 1;
     if (error instanceof Error) {
@@ -458,7 +472,12 @@ const atDurationMs = Date.now() - atDurationStart;
 
 const invalidCount = invalidMixins + invalidAw + invalidAt;
 const partialCount = partialMixins;
-const status = invalidCount > 0 ? "invalid" : partialCount > 0 ? "partial" : "ok";
+const processingErrors = mixinProcessingErrors + awProcessingErrors;
+const status = invalidCount > 0
+  ? "invalid"
+  : partialCount > 0 || processingErrors > 0
+    ? "partial"
+    : "ok";
 const nothingToValidate =
   mixinConfigs.length === 0 && accessWideners.length === 0 && accessTransformers.length === 0
     ? describeNothingToValidate(discover, projectPath)
@@ -475,7 +494,9 @@ const baseResult = buildEntryToolResult({
     status,
     headline:
       nothingToValidate?.headline ??
-      `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s).`,
+      `Validated ${mixinConfigs.length} mixin config(s), ${accessWideners.length} access widener(s), and ${accessTransformers.length} access transformer(s)${
+        mixinProcessingErrors > 0 ? `; ${mixinProcessingErrors} mixin input(s) could not be processed` : ""
+      }${awProcessingErrors > 0 ? `; ${awProcessingErrors} access widener(s) could not be processed` : ""}.`,
     subject: createSummarySubject({
       task: "project-summary",
       kind: input.subject.kind,
@@ -489,7 +510,8 @@ const baseResult = buildEntryToolResult({
     counts: {
       valid: validMixins + validAw + validAt,
       partial: partialCount,
-      invalid: invalidCount
+      invalid: invalidCount,
+      processingErrors
     }
   },
   blocks: {
@@ -497,7 +519,8 @@ const baseResult = buildEntryToolResult({
       summary: {
         valid: validMixins + validAw + validAt,
         partial: partialCount,
-        invalid: invalidCount
+        invalid: invalidCount,
+        processingErrors
       }
     },
     workspace: {

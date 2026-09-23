@@ -1636,7 +1636,7 @@
 0	ok	validateParsedMixin provenance includes resolutionNotes when present
 0	ok	validateParsedMixin provenance supports enriched fields
 0	ok	validateParsedMixin reports representative member-validation outcomes
-0	ok	validateParsedMixin resolves a prefix quantifier selector with no exact-name member
+0	ok	validateParsedMixin rejects a quantifier selector whose exact name matches no member
 0	ok	validateParsedMixin resolves an @Inject whose descriptor matches an overload
 0	ok	validateParsedMixin resolves quantifier method selectors by name and skips bare wildcards
 0	ok	validateParsedMixin result supports unfilteredSummary field

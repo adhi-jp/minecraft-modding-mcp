@@ -523,7 +523,9 @@ test("validateParsedMixin resolves quantifier method selectors by name and skips
   assert.equal(skipped[0].name, "*");
 });
 
-test("validateParsedMixin resolves a prefix quantifier selector with no exact-name member", () => {
+// A quantifier counts matches of an EXACT name (Mixin has no prefix glob), so render*/render+
+// against a target with only renderItem/renderBlock are reported as method-not-found.
+test("validateParsedMixin rejects a quantifier selector whose exact name matches no member", () => {
   const parsed = makeParsedMixin({
     injections: [
       { annotation: "Inject", method: "render*", line: 10 },
@@ -545,6 +547,212 @@ test("validateParsedMixin resolves a prefix quantifier selector with no exact-na
 
   const result = validateParsedMixin(parsed, targetMembers, warnings);
 
+  assert.equal(result.valid, false);
+  assert.deepEqual(
+    result.issues.map((issue) => ({ kind: issue.kind, line: issue.line })),
+    [
+      { kind: "method-not-found", line: 10 },
+      { kind: "method-not-found", line: 11 }
+    ],
+    JSON.stringify(result.issues)
+  );
+  assert.ok(result.issues[0].message.includes('"render"'), result.issues[0].message);
+});
+
+function tickOverloads(...descriptors: string[]): Map<string, ResolvedTargetMembers> {
+  return new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: descriptors.map((jvmDescriptor) =>
+        makeMember({ name: "tick", ownerFqn: "PlayerEntity", jvmDescriptor })
+      ),
+      fields: []
+    }]
+  ]);
+}
+
+test("validateParsedMixin keeps the descriptor check for a quantified selector", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "tick*(D)V", line: 10 },
+      { annotation: "Inject", method: "tick+(I)V", line: 11 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("(I)V"), []);
+
+  assert.deepEqual(
+    result.issues.map((issue) => ({ kind: issue.kind, line: issue.line })),
+    [{ kind: "descriptor-mismatch", line: 10 }],
+    JSON.stringify(result.issues)
+  );
+  const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
+  assert.deepEqual(resolved.map((m) => m.line), [11]);
+});
+
+test("validateParsedMixin flags a counted quantifier shortfall as an uncertain warning", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "tick{2}", line: 10 },
+      { annotation: "Inject", method: "tick{2,}", line: 11 },
+      { annotation: "Inject", method: "tick{1,3}", line: 12 },
+      { annotation: "Inject", method: "tick+", line: 13 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("(I)V"), []);
+
+  assert.deepEqual(
+    result.issues.map((issue) => ({
+      kind: issue.kind,
+      severity: issue.severity,
+      confidence: issue.confidence,
+      line: issue.line
+    })),
+    [
+      { kind: "method-not-found", severity: "warning", confidence: "uncertain", line: 10 },
+      { kind: "method-not-found", severity: "warning", confidence: "uncertain", line: 11 }
+    ],
+    JSON.stringify(result.issues)
+  );
+  assert.match(result.issues[0].message, /at least 2/);
+  assert.match(result.issues[0].message, /bridge/);
+  assert.equal(result.valid, true, "an uncertain shortfall must not invalidate the mixin");
+  const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
+  assert.deepEqual(resolved.map((m) => m.line), [12, 13]);
+});
+
+test("validateParsedMixin does not call a quantifier shortfall definite when a bridge may fill it", () => {
+  // Comparable<Foo>.compareTo(LFoo;)I plus its synthetic bridge compareTo(Ljava/lang/Object;)I
+  // satisfies "compareTo{2}" in Mixin, but the member listing omits the bridge.
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "compareTo{2}", line: 10 }]
+  });
+  const targetMembers = new Map<string, ResolvedTargetMembers>([
+    ["PlayerEntity", {
+      className: "PlayerEntity",
+      constructors: [],
+      methods: [makeMember({ name: "compareTo", ownerFqn: "PlayerEntity", jvmDescriptor: "(LFoo;)I" })],
+      fields: []
+    }]
+  ]);
+
+  const result = validateParsedMixin(parsed, targetMembers, []);
+
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].confidence, "uncertain");
+  assert.match(result.issues[0].message, /synthetic\/bridge/);
+});
+
+test("validateParsedMixin ignores whitespace inside a quantifier and warns on a malformed one", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "tick{1, 3}", line: 10 },
+      { annotation: "Inject", method: "tick{ 2 , }", line: 11 },
+      { annotation: "Inject", method: "tick{}", line: 12 },
+      { annotation: "Inject", method: "tick{0}", line: 13 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("(I)V", "(D)V"), []);
+
+  const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
+  assert.deepEqual(resolved.map((m) => m.line), [10, 11]);
+  assert.deepEqual(
+    result.issues.map((issue) => ({ severity: issue.severity, line: issue.line })),
+    [
+      { severity: "warning", line: 12 },
+      { severity: "warning", line: 13 }
+    ],
+    JSON.stringify(result.issues)
+  );
+  for (const issue of result.issues) {
+    assert.match(issue.message, /malformed quantifier/);
+  }
+});
+
+test("validateParsedMixin treats a quantifier whose max is below its min as requiring the min", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "tick{3,1}", line: 10 },
+      { annotation: "Inject", method: "tick{2,1}", line: 11 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("(I)V", "(D)V"), []);
+
+  const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
+  assert.deepEqual(resolved.map((m) => m.line), [11]);
+  assert.deepEqual(
+    result.issues.map((issue) => ({ kind: issue.kind, severity: issue.severity, line: issue.line })),
+    [{ kind: "method-not-found", severity: "warning", line: 10 }],
+    JSON.stringify(result.issues)
+  );
+  assert.match(result.issues[0].message, /at least 3/);
+  assert.doesNotMatch(result.issues[0].message, /malformed/);
+});
+
+test("validateParsedMixin applies the descriptor and count of an empty-name quantified selector", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "*(D)V", line: 10 },
+      { annotation: "Inject", method: "*(I)V", line: 11 },
+      { annotation: "Inject", method: "{2}", line: 12 },
+      { annotation: "Inject", method: "+", line: 13 },
+      { annotation: "Inject", method: "*", line: 14 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("(I)V"), []);
+
+  assert.deepEqual(
+    result.issues.map((issue) => ({
+      kind: issue.kind,
+      severity: issue.severity,
+      confidence: issue.confidence,
+      line: issue.line
+    })),
+    [
+      { kind: "descriptor-mismatch", severity: "error", confidence: "definite", line: 10 },
+      { kind: "method-not-found", severity: "warning", confidence: "uncertain", line: 12 }
+    ],
+    JSON.stringify(result.issues)
+  );
+  assert.match(result.issues[1].message, /bridge/);
+  const byStatus = (status: string) =>
+    result.resolvedMembers!.filter((m) => m.status === status).map((m) => m.line);
+  assert.deepEqual(byStatus("resolved"), [11, 13]);
+  assert.deepEqual(byStatus("skipped"), [14]);
+});
+
+test("validateParsedMixin flags a bare + selector against a class with no methods as uncertain", () => {
+  const parsed = makeParsedMixin({
+    injections: [{ annotation: "Inject", method: "+", line: 10 }]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads(), []);
+
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].severity, "warning");
+  assert.equal(result.issues[0].confidence, "uncertain");
+});
+
+test("validateParsedMixin skips regex target selectors as unverifiable", () => {
+  const parsed = makeParsedMixin({
+    injections: [
+      { annotation: "Inject", method: "/^render.*$/", line: 10 },
+      { annotation: "Inject", method: "name=/render/ desc=/\\(\\)V/", line: 11 }
+    ]
+  });
+
+  const result = validateParsedMixin(parsed, tickOverloads("()V"), []);
+
   assert.equal(result.valid, true);
   assert.equal(result.issues.length, 0, JSON.stringify(result.issues));
+  const skipped = result.resolvedMembers!.filter((m) => m.status === "skipped");
+  assert.deepEqual(skipped.map((m) => m.line), [10, 11]);
 });

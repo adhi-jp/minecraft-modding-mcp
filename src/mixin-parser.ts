@@ -72,9 +72,6 @@ const MIXIN_TARGETS_STRING_ITEM_RE = /"([^"]+)"/g;
 // not the first token on its line is still recognised.
 const INJECTION_ANNOTATION_RE =
   /^@(Inject|Redirect|ModifyArg|ModifyVariable|ModifyConstant|ModifyExpressionValue|WrapOperation|WrapWithCondition|ModifyReturnValue)\s*\(/;
-const METHOD_ATTR_RE = /method\s*=\s*"([^"]+)"/;
-const METHOD_ATTR_ARRAY_RE = /method\s*=\s*\{([^}]+)\}/;
-const METHOD_ATTR_ITEM_RE = /"([^"]+)"/g;
 
 // @Shadow field / method
 const SHADOW_ANNOTATION_RE = /^@Shadow\b/;
@@ -82,9 +79,6 @@ const SHADOW_ANNOTATION_RE = /^@Shadow\b/;
 // to "shadow$" and lets `prefix = "..."` override it — including with "", which means
 // strip nothing. `aliases` adds fallback names.
 const SHADOW_DEFAULT_PREFIX = "shadow$";
-const SHADOW_PREFIX_RE = /@Shadow\s*\([^)]*\bprefix\s*=\s*"([^"]*)"/;
-const SHADOW_ALIASES_RE = /@Shadow\s*\([^)]*\baliases\s*=\s*(?:\{([^}]+)\}|"([^"]+)")/;
-const SHADOW_ALIAS_ITEM_RE = /"([^"]+)"/g;
 const FIELD_DECL_RE =
   /(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?(?:volatile\s+)?([\w.][\w<>,.\s?\[\]]*?)\s+([\w$]+)\s*[;=]/;
 const METHOD_DECL_RE =
@@ -122,14 +116,17 @@ function collectMultilineAnnotation(lines: string[], startIndex: number): { text
 }
 
 /**
- * Blank out `/* *\/` block comments and `//` line comments (outside string literals)
- * while preserving line count and line numbers, so the annotation scans never match
- * inside commented-out code.
+ * Blank out `/* *\/` block comments and `//` line comments (outside string and char
+ * literals) while preserving line count and line numbers, so the annotation scans never
+ * match inside commented-out code. A Java text block (`"""..."""`) spans lines, so its
+ * body is blanked too, behind an empty `""` literal: the line-based scans would otherwise
+ * read annotation-shaped text inside it as live code.
  */
 function stripComments(source: string): string {
   let out = "";
   let inBlock = false;
   let inString = false;
+  let inTextBlock = false;
   for (let i = 0; i < source.length; i++) {
     const ch = source[i];
     const next = source[i + 1];
@@ -138,6 +135,20 @@ function stripComments(source: string): string {
         out += "  ";
         i++;
         inBlock = false;
+      } else {
+        out += ch === "\n" ? "\n" : " ";
+      }
+      continue;
+    }
+    if (inTextBlock) {
+      if (ch === "\\" && next !== undefined) {
+        // An escape (including `\"""`) never closes the block; `\<newline>` keeps its line.
+        out += next === "\n" ? " \n" : "  ";
+        i++;
+      } else if (ch === '"' && next === '"' && source[i + 2] === '"') {
+        out += "   ";
+        i += 2;
+        inTextBlock = false;
       } else {
         out += ch === "\n" ? "\n" : " ";
       }
@@ -153,9 +164,35 @@ function stripComments(source: string): string {
       }
       continue;
     }
+    if (ch === '"' && next === '"' && source[i + 2] === '"') {
+      out += '"" ';
+      i += 2;
+      inTextBlock = true;
+      continue;
+    }
     if (ch === '"') {
       inString = true;
       out += ch;
+      continue;
+    }
+    if (ch === "'") {
+      // Copy a char literal through its closing quote, so '"' does not open a string.
+      out += ch;
+      i++;
+      while (i < source.length && source[i] !== "'" && source[i] !== "\n") {
+        if (source[i] === "\\" && i + 1 < source.length && source[i + 1] !== "\n") {
+          out += source[i] + source[i + 1];
+          i += 2;
+          continue;
+        }
+        out += source[i];
+        i++;
+      }
+      if (source[i] === "'") {
+        out += "'";
+      } else {
+        i--; // unterminated on this line: let the newline be handled normally
+      }
       continue;
     }
     if (ch === "/" && next === "*") {
@@ -358,22 +395,124 @@ function matchLineAnnotation(
   return null;
 }
 
-function parseShadowAliases(annotationText: string): string[] | undefined {
-  const aliasesMatch = SHADOW_ALIASES_RE.exec(annotationText);
-  if (!aliasesMatch) {
+/**
+ * Argument list of the annotation that opens `annotationText` (the text between its
+ * parentheses), or undefined when it has none. String and char literals are skipped while
+ * looking for the closing parenthesis; an argument list that never closes yields the rest.
+ */
+function annotationArguments(annotationText: string): string | undefined {
+  const open = /^@[\w$.]+\s*\(/.exec(annotationText);
+  if (!open) {
     return undefined;
   }
-  const arrayContent = aliasesMatch[1]; // {..."..."...} content
-  if (!arrayContent) {
-    return [aliasesMatch[2]];
+  const start = open[0].length;
+  const close = skipAnnotationArgs(annotationText, start - 1);
+  return close < 0 ? annotationText.slice(start) : annotationText.slice(start, close - 1);
+}
+
+/**
+ * Split `text` at its top-level commas. Commas inside string or char literals, `{...}`
+ * arrays and nested `(...)` annotations do not split.
+ */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'") {
+      i++;
+      while (i < text.length && text[i] !== ch) {
+        i += text[i] === "\\" ? 2 : 1;
+      }
+      continue;
+    }
+    if (ch === "(" || ch === "{") {
+      depth++;
+    } else if (ch === ")" || ch === "}") {
+      depth--;
+    } else if (ch === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
   }
-  const aliases: string[] = [];
-  SHADOW_ALIAS_ITEM_RE.lastIndex = 0;
-  let itemMatch: RegExpExecArray | null;
-  while ((itemMatch = SHADOW_ALIAS_ITEM_RE.exec(arrayContent)) !== null) {
-    aliases.push(itemMatch[1]);
+  parts.push(text.slice(start));
+  return parts;
+}
+
+/**
+ * Top-level `name = value` pairs of an annotation argument list, so a selector such as
+ * `"tick{2}"` or `"a)b"` stays inside its attribute. A bare value is keyed `value`.
+ */
+function annotationAttributes(args: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  for (const part of splitTopLevel(args)) {
+    const named = /^\s*([\w$]+)\s*=\s*([\s\S]*?)\s*$/.exec(part);
+    if (named) {
+      attributes.set(named[1], named[2]);
+    } else if (part.trim() !== "") {
+      attributes.set("value", part.trim());
+    }
   }
-  return aliases.length > 0 ? aliases : undefined;
+  return attributes;
+}
+
+/** Contents of `text` when it is exactly one string literal (escapes left as written). */
+function exactStringLiteral(text: string): string | undefined {
+  return /^\s*"((?:[^"\\\n]|\\.)*)"\s*$/.exec(text)?.[1];
+}
+
+/**
+ * Read an attribute value that is one string literal or an array of them. Anything else —
+ * a constant, a concatenation, a method call — cannot be read statically and is counted in
+ * `unreadable` (per array element) instead of contributing a string.
+ */
+function readStringValues(value: string): { isArray: boolean; values: string[]; unreadable: number } {
+  const trimmed = value.trim();
+  const isArray = trimmed.startsWith("{") && trimmed.endsWith("}");
+  const elements = isArray
+    ? splitTopLevel(trimmed.slice(1, -1)).filter((element) => element.trim() !== "")
+    : [trimmed];
+  const values: string[] = [];
+  let unreadable = 0;
+  for (const element of elements) {
+    const literal = exactStringLiteral(element);
+    if (literal === undefined) {
+      unreadable++;
+    } else {
+      values.push(literal);
+    }
+  }
+  return { isArray, values, unreadable };
+}
+
+/**
+ * The annotation that starts at `offset` on `lines[startIndex]`, extended over later lines
+ * until its argument list closes; string and char literals are skipped while balancing the
+ * parentheses. `close` indexes just past the closing `)` in `text`. An annotation without
+ * an argument list, or one whose list never closes, spans only its own line (`close` -1).
+ */
+function collectAnnotationSpan(
+  lines: string[],
+  startIndex: number,
+  offset: number
+): { text: string; endIndex: number; close: number } {
+  const first = lines[startIndex].slice(offset);
+  const open = /^@[\w$.]+\s*\(/.exec(first);
+  if (!open) {
+    return { text: first, endIndex: startIndex, close: -1 };
+  }
+  let text = first;
+  let end = startIndex;
+  let close = skipAnnotationArgs(text, open[0].length - 1);
+  while (close < 0 && end + 1 < lines.length) {
+    end++;
+    text += "\n" + lines[end];
+    close = skipAnnotationArgs(text, open[0].length - 1);
+  }
+  return close < 0
+    ? { text: first, endIndex: startIndex, close: -1 }
+    : { text, endIndex: end, close };
 }
 
 /**
@@ -503,29 +642,32 @@ export function parseMixinSource(source: string): ParsedMixin {
     const injMatched = matchLineAnnotation(line, INJECTION_ANNOTATION_RE);
     if (injMatched) {
       const annotation = injMatched.match[1];
-      const { text: collected, endIndex } = collectMultilineAnnotation(lines, i);
       // Read the attributes from this annotation's own span; a preceding annotation on the
       // same line may carry a `method` attribute of its own.
-      const fullAnnotation = collected.slice(injMatched.offset);
-      const methodMatch = METHOD_ATTR_RE.exec(fullAnnotation);
-      if (methodMatch) {
-        injections.push({ annotation, method: methodMatch[1], line: lineNum });
+      const { text: fullAnnotation, endIndex } = collectAnnotationSpan(lines, i, injMatched.offset);
+      const methodValue = annotationAttributes(annotationArguments(fullAnnotation) ?? "").get("method");
+      if (methodValue === undefined) {
+        parseWarnings.push(`Line ${lineNum}: @${annotation} missing method attribute.`);
       } else {
-        // Try array form: method = {"m1", "m2"}
-        const arrayMatch = METHOD_ATTR_ARRAY_RE.exec(fullAnnotation);
-        if (arrayMatch) {
-          const inner = arrayMatch[1];
-          METHOD_ATTR_ITEM_RE.lastIndex = 0;
-          let itemMatch: RegExpExecArray | null;
-          let found = false;
-          while ((itemMatch = METHOD_ATTR_ITEM_RE.exec(inner)) !== null) {
-            injections.push({ annotation, method: itemMatch[1], line: lineNum });
-            found = true;
+        const { isArray, values, unreadable } = readStringValues(methodValue);
+        const selectors = values.filter((selector) => selector !== "");
+        for (const selector of selectors) {
+          injections.push({ annotation, method: selector, line: lineNum });
+        }
+        if (isArray) {
+          for (let n = 0; n < unreadable; n++) {
+            parseWarnings.push(
+              `Line ${lineNum}: @${annotation} could not parse method array element (not a string literal).`
+            );
           }
-          if (!found) {
+          if (selectors.length === 0 && unreadable === 0) {
             parseWarnings.push(`Line ${lineNum}: @${annotation} method array is empty.`);
           }
-        } else {
+        } else if (unreadable > 0) {
+          parseWarnings.push(
+            `Line ${lineNum}: @${annotation} could not parse method attribute (not a string literal).`
+          );
+        } else if (selectors.length === 0) {
           parseWarnings.push(`Line ${lineNum}: @${annotation} missing method attribute.`);
         }
       }
@@ -536,26 +678,42 @@ export function parseMixinSource(source: string): ParsedMixin {
     // --- @Shadow ---
     const shadowMatched = matchLineAnnotation(line, SHADOW_ANNOTATION_RE);
     if (shadowMatched) {
-      const shadowText = line.slice(shadowMatched.offset);
+      let shadowText = line.slice(shadowMatched.offset);
+      // Declaration text sharing a line with the annotation (e.g. `@Shadow @Final private
+      // int x;`, or `) private int x;` closing a wrapped `@Shadow(` argument list).
+      let inlineDecl = stripInlineAnnotations(line);
+      let annotationEnd = i;
+      // prefix/aliases are read from the whole argument list, even when it wraps.
+      const span = collectAnnotationSpan(lines, i, shadowMatched.offset);
+      if (span.close >= 0) {
+        shadowText = span.text;
+        inlineDecl = stripInlineAnnotations(span.text.slice(span.close));
+        annotationEnd = span.endIndex;
+      }
       // An explicit `prefix = ""` means strip nothing, so absent and empty must stay apart.
-      const prefixMatch = SHADOW_PREFIX_RE.exec(shadowText);
-      const prefix = prefixMatch ? prefixMatch[1] : SHADOW_DEFAULT_PREFIX;
-      const aliases = parseShadowAliases(shadowText);
-      // Try same-line declaration first (e.g. `@Shadow @Final private int x;`)
-      const inlineDecl = stripInlineAnnotations(line);
+      const shadowAttributes = annotationAttributes(annotationArguments(shadowText) ?? "");
+      const prefixValue = shadowAttributes.get("prefix");
+      const prefix = prefixValue === undefined
+        ? SHADOW_DEFAULT_PREFIX
+        : exactStringLiteral(prefixValue) ?? SHADOW_DEFAULT_PREFIX;
+      const aliasesValue = shadowAttributes.get("aliases");
+      const aliasList = aliasesValue === undefined
+        ? []
+        : readStringValues(aliasesValue).values.filter((alias) => alias !== "");
+      const aliases = aliasList.length > 0 ? aliasList : undefined;
       const inlineMethodMatch = inlineDecl.includes("(") ? METHOD_DECL_RE.exec(inlineDecl) : null;
       const inlineFieldMatch = !inlineMethodMatch ? FIELD_DECL_RE.exec(inlineDecl) : null;
       if (inlineMethodMatch) {
         shadows.push(makeShadow("method", inlineMethodMatch[2], lineNum, prefix, aliases));
-        i++;
+        i = annotationEnd + 1;
         continue;
       } else if (inlineFieldMatch) {
         shadows.push(makeShadow("field", inlineFieldMatch[2], lineNum, prefix, aliases));
-        i++;
+        i = annotationEnd + 1;
         continue;
       }
-      // Advance past @Shadow line to find the declaration
-      let declLine = i + 1;
+      // Advance past the @Shadow annotation to find the declaration
+      let declLine = annotationEnd + 1;
       // Skip additional annotations between @Shadow and declaration (including multi-line)
       declLine = skipAnnotations(lines, declLine);
       if (declLine < lines.length) {
@@ -585,10 +743,10 @@ export function parseMixinSource(source: string): ParsedMixin {
       let explicitTarget = accessorMatched?.match[2];
 
       if (!explicitTarget && accessorStartMatched) {
-        const { text: collected, endIndex } = collectMultilineAnnotation(lines, i);
-        // Read from this annotation's own "@" so a string argument of a preceding
+        // Read from this annotation's own arguments so a string argument of a preceding
         // annotation on the same line is not mistaken for the explicit target.
-        const explicitMatch = ACCESSOR_EXPLICIT_RE.exec(collected.slice(accessorStartMatched.offset));
+        const { text: collected, endIndex } = collectAnnotationSpan(lines, i, accessorStartMatched.offset);
+        const explicitMatch = ACCESSOR_EXPLICIT_RE.exec(annotationArguments(collected) ?? "");
         if (explicitMatch) {
           explicitTarget = explicitMatch[1];
         }

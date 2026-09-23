@@ -75,3 +75,27 @@ public abstract class MinecraftMixin {
   );
   assert.equal(invokerResult.parseWarnings.length, 0);
 });
+
+test("parseMixinSource ends a wrapped @Accessor at its real closing parenthesis, not one inside a string", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public interface PlayerAccessor {
+  @Accessor(
+      value = "weird(name"
+  )
+  int getX();
+
+  @Accessor("y") int getY();
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.parseWarnings, []);
+  assert.deepEqual(
+    result.accessors.map((entry) => ({ name: entry.name, targetName: entry.targetName })),
+    [
+      { name: "getX", targetName: "weird(name" },
+      { name: "getY", targetName: "y" }
+    ]
+  );
+});
