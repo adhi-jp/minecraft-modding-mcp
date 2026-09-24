@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { createCacheRegistry, pathContainsVersion, readDownloadEntryIdentity } from "../../src/cache-registry.ts";
 import { discardCachedDownload, downloadSidecarPath } from "../../src/repo-downloader.ts";
+import { openDatabase } from "../../src/storage/db.ts";
 import { runMigrations } from "../../src/storage/migrations.ts";
 import Database from "../../src/storage/sqlite.ts";
 
@@ -308,6 +309,41 @@ test("cache registry matches artifact-index entries by mapping, scope, and proje
   });
 
   assert.deepEqual(result.entries.map((entry) => entry.entryId), ["artifact-merged"]);
+});
+
+test("cache registry reports healthy artifact-index entries while the WAL database is open", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-open-artifact-"));
+  const sqlitePath = join(root, "source-cache.db");
+  const binaryJarPath = join(root, "artifact.jar");
+  await writeFile(binaryJarPath, "jar");
+
+  const db = openDatabase({ sqlitePath }).db;
+  try {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO artifacts (
+        artifact_id, origin, binary_jar_path, is_decompiled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run("artifact-open", "local-jar", binaryJarPath, 0, now, now);
+    assert.equal(existsSync(`${sqlitePath}-wal`), true);
+
+    const registry = createCacheRegistry({ cacheDir: root, sqlitePath });
+    const verified = await registry.verifyEntries({ cacheKinds: ["artifact-index"] });
+    assert.equal(verified.checkedEntries, 1);
+    assert.equal(verified.unhealthyEntries, 0);
+
+    const healthy = await registry.listEntries({
+      cacheKinds: ["artifact-index"], selector: { status: "healthy" }
+    });
+    assert.deepEqual(healthy.entries.map((entry) => entry.entryId), ["artifact-open"]);
+
+    const inUse = await registry.listEntries({
+      cacheKinds: ["artifact-index"], selector: { status: "in_use" }
+    });
+    assert.deepEqual(inUse.entries, []);
+  } finally {
+    db.close();
+  }
 });
 
 test("cache registry backs up and recovers a corrupt artifact-index database while listing", async () => {

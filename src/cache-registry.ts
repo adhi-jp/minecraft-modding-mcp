@@ -517,7 +517,6 @@ async function artifactIndexEntries(config: CacheRegistryConfig): Promise<CacheE
       ORDER BY artifacts.updated_at DESC
     `).all();
 
-    const dbInUse = existsSync(`${config.sqlitePath}-wal`) || existsSync(`${config.sqlitePath}-journal`);
     return rows.map((row) => {
       const qualityFlags = parseStringArray(row.quality_flags_json);
       const binaryJarPath = row.binary_jar_path ?? undefined;
@@ -540,7 +539,9 @@ async function artifactIndexEntries(config: CacheRegistryConfig): Promise<CacheE
           projectPath: inferProjectPath(binaryJarPath ?? sourceJarPath, config.pathRuntimeInfo),
           scope: inferScope(binaryJarPath, sourceJarPath, ...qualityFlags) ?? "vanilla",
           partial: qualityFlags.some((flag) => flag.includes("partial")),
-          inUse: dbInUse
+          // A WAL file only shows that a connection (usually ours) has the database open.
+          // SQLite transactions already serialize row deletes; it says nothing about this entry.
+          inUse: false
         }
       };
     });
