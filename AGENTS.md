@@ -16,17 +16,17 @@
 
 ## Change Coupling Rules (MUST)
 - Any user-visible or public API change MUST update `CHANGELOG.md` and the relevant tests in the same change set.
-- `README.md` and `docs/tool-reference.md` MUST be updated in the same change set when the change touches something they already document — a tool, parameter, response field, error code, environment variable, or setup step. Both are shipped in the package, so a stale statement there reaches users. A change with no counterpart in either file does not need an edit to it.
+- `README.md`, `docs/README-ja.md`, and `docs/tool-reference.md` MUST be updated in the same change set when the change touches something they already document — a tool, parameter, response field, error code, environment variable, or setup step. The Japanese overview needs an edit only where it already documents the item. All three are shipped in the package, so a stale statement there reaches users. A change with no counterpart in a file does not need an edit to it.
 - Do not defer documentation or test updates to follow-up commits.
 
 ## Verification Gate (MUST)
 - Before claiming completion for production changes, run the verification appropriate to what actually changed — not reflexively the full matrix below, and never less than what the change touches.
-- When `src/**` or `tests/**` changed, run:
+- When `src/**`, `tests/**`, `scripts/**`, `package.json`, `pnpm-lock.yaml`, `tsconfig.json`, `README.md`, `CHANGELOG.md`, `docs/**`, or `.github/workflows/**` changed, run the following unless the `CHANGELOG.md`/`version` exemption below applies (tests read non-code files too):
   - `pnpm check`
   - `pnpm test`
 - When MCP transport/tool registration or manual workflows change, also run `pnpm test:manual:stdio-smoke` when environment permits.
-- For search, index, or performance-sensitive changes, also run `pnpm test:perf`.
-- When a change is confined to `CHANGELOG.md` content and/or the `version` field in `package.json`, with no other `src/**` or `tests/**` edits, `pnpm check`/`pnpm test` are not required; run `pnpm check:changelog` and any test that asserts against the changed value directly (for example, a test comparing the server version or the changelog-to-package-version header). Any accompanying `src/**` or `tests/**` edit brings the change back under the full gate above. This exemption does not cover a release commit: Release Safety requires `pnpm test` on the Node major the publish workflow pins before the release commit is created.
+- For search, index, or performance-sensitive changes, also run `pnpm test:perf`. Keep a performance-motivated change only if it is at least 20% faster overall against its base on real cached artifacts at default configuration, and otherwise remove it. Record the before/after medians and the dataset in the commit rationale.
+- When a change is confined to `CHANGELOG.md` content and/or the `version` field in `package.json`, `pnpm check`/`pnpm test` are not required; run `pnpm check:changelog` and any test that asserts against the changed value directly (for example, a test comparing the server version or the changelog-to-package-version header). Any accompanying edit to another path listed above brings the change back under the full gate. This exemption does not cover a release commit: Release Safety requires `pnpm test` on the Node major the publish workflow pins before the release commit is created.
 - Do not re-run a verification command solely to re-confirm a result already produced for the current, unchanged tree. If a later run — your own or a delegated worker's — reports an outcome that contradicts a fresh prior run with no tree change in between, diagnose the discrepancy before re-running the full suite again; a concurrent invocation sharing the same working tree is a common non-code cause.
 - Do not claim "done", "fixed", or "passing" without fresh command output evidence.
 
@@ -34,7 +34,8 @@
 - Release and publish workflows MUST use a clean build to prevent stale `dist` artifacts from being shipped.
 - `package.json` release-facing contracts (`files`, `engines`, `bin`, and release scripts) MUST match implemented behavior and tests.
 - Baseline runtime/tooling for this repository is Node.js 22.13.0+ and `pnpm`. `engines.node` and `packageManager` in `package.json` are the source of truth for both. The Node floor is not a preference: 22.0–22.12 fail at process start, because `node:sqlite` stayed behind `--experimental-sqlite` until 22.13.0 and the symbol index needs a statement API added in the same release.
-- Before the release commit is created, `pnpm test` MUST pass on the Node.js major that `.github/workflows/publish.yml` pins as `node-version` (currently 22), not only on the local default `node`. The publish workflow runs the full suite on that major after the tag is pushed, and test behavior can differ between majors: the first 7.1.0 publish run failed on a test that passed locally on Node 24 but was cancelled on Node 22, and the tag had to be deleted and pushed again. When the local default is another major, run `pnpm test` with a `node` of the pinned major first on `PATH`, confirm it with `node --version`, and record that version in the release commit's `Verification:` section. This applies even when the release commit changes only `CHANGELOG.md` and `package.json`.
+- Before the release commit is created, `pnpm test` MUST pass on the Node.js major that `.github/workflows/publish.yml` pins as `node-version` (currently 22), not only on the local default `node`. The publish workflow runs the full suite on that major after the tag is pushed; 7.1.0 passed locally on Node 24 but failed on Node 22 before publishing. When the local default is another major, run `pnpm test` with a `node` of the pinned major first on `PATH`, confirm it with `node --version`, and record that version in the release commit's `Verification:` section. This applies even when the release commit changes only `CHANGELOG.md` and `package.json`.
+- If the publish workflow fails and the version never reached npm, move the tag to the fixing commit on `main` only with explicit user approval: push `main` first, then the re-created tag. Once the version is on npm, never move or delete that tag; ship the fix as a new patch release.
 - The release commit (`chore(release): {version}`) MUST be created on `main`. A release cut on a side branch leaves the tag pointing at a commit that `main` does not contain, and `main` then has to be fast-forwarded after the fact. When release work was done on a branch, first confirm the branch is a pure fast-forward of `origin/main` (`git rev-list --left-right --count origin/main...HEAD` shows `0` on the left), fast-forward `main` to it, and create the release commit there.
 - Push `main` together with the release tag, as one release step: `git push origin main` and then `git push origin v{version}`. Pushing the tag alone publishes the package from a commit that no branch on `origin` reaches, which is exactly the state that treating `origin` release tags as the source of truth is meant to rule out. Before calling the release done, verify that `git branch -r --contains v{version}` lists `origin/main`.
 
@@ -81,7 +82,6 @@
 - CHANGELOG entries MUST describe user-facing changes only.
 - Do NOT record CI/CD pipeline changes, internal refactoring notes, implementation memos, workflow tweaks, or other changes that are invisible to end users.
 - Examples of entries to exclude: "Added a CHANGELOG gate workflow", "Moved internal scripts to pnpm", "Added a mandatory AGENTS release-prep step", internal build script changes.
-- Write such examples as actions rather than states. A state goes stale on its own: this list previously read "Codecov workflow temporarily disabled", which stopped being true once that workflow was re-enabled.
 
 ### Work-log detail and the release cut (MUST)
 - While work is in flight, `## [Unreleased]` MAY carry work-log-grade detail: root-cause narratives, measured internals, and the evidence that made the entry writable. Recording it there is allowed.
@@ -106,5 +106,4 @@
 ## Prohibitions
 - Do not introduce public naming changes (tool names or parameters) without explicit migration documentation.
 - Do not ship temporary behavior toggles without documented removal criteria.
-- Do not promote `## [Unreleased]` entries into a dated release section verbatim; the release cut MUST restructure them for end users.
 - Do not change repository policy in code without updating this file in the same change set.
