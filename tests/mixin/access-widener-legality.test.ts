@@ -113,3 +113,26 @@ test("legal v2 transitive entries stay valid", () => {
     true
   );
 });
+
+test("a malformed line before the header makes the file invalid", () => {
+  const parsed = parseAccessWidener(
+    ["# comment", "", "garbage", "accessWidener v2 named", "accessible class net/minecraft/server/MinecraftServer"].join("\n")
+  );
+  assert.equal(parsed.headerVersion, "v2");
+  assert.ok(
+    parsed.parseWarnings.some((w) => /line 3/i.test(w) && /Expected accessWidener header/.test(w)),
+    `expected the pre-header warning, got: ${JSON.stringify(parsed.parseWarnings)}`
+  );
+  const result = validateParsedAccessWidener(parsed, membersFor("net.minecraft.server.MinecraftServer"), []);
+  assert.equal(result.valid, false, "the accessWidener header must be the first non-comment line");
+});
+
+test("blank lines and comments before the header keep the file valid", () => {
+  const parsed = parseAccessWidener(
+    ["# comment", "", "  # indented comment", "accessWidener v2 named", "accessible class net/minecraft/server/MinecraftServer"].join("\n")
+  );
+  assert.deepEqual(parsed.parseWarnings, []);
+  assert.equal(parsed.rejectedEntryCount, 0);
+  const result = validateParsedAccessWidener(parsed, membersFor("net.minecraft.server.MinecraftServer"), []);
+  assert.equal(result.valid, true, `expected valid, got: ${JSON.stringify(result)}`);
+});

@@ -25,8 +25,9 @@ export type ParsedAccessWidener = {
   parseWarnings: string[];
   /**
    * Count of entry lines the parser had to drop for malformed syntax (unknown
-   * kind/target kind, incomplete entry, missing descriptor). Excludes the
-   * purely informational header-line warnings. A caller-visible validator
+   * kind/target kind, incomplete entry, missing descriptor), plus any
+   * non-comment line preceding the header. Excludes the header-line warnings
+   * of a file that has no header at all. A caller-visible validator
    * uses this to force its verdict invalid even when `entries` is empty.
    * Optional (defaults to 0) so hand-built `ParsedAccessWidener` fixtures
    * that predate this field keep working.
@@ -52,6 +53,8 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
   let namespace = "";
   let rejectedEntryCount = 0;
   let headerLine: number | undefined;
+  // Fabric requires the header first, so lines before a later header are rejected once it appears.
+  let preHeaderLineCount = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i].trim();
@@ -67,8 +70,10 @@ export function parseAccessWidener(content: string): ParsedAccessWidener {
         headerVersion = parts[1];
         namespace = parts[2];
         headerLine = lineNum;
+        rejectedEntryCount += preHeaderLineCount;
       } else {
         parseWarnings.push(`Line ${lineNum}: Expected accessWidener header, got: "${raw}"`);
+        preHeaderLineCount++;
       }
       continue;
     }
