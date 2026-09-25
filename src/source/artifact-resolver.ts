@@ -390,8 +390,9 @@ function tokenPositionNamesMinecraft(segments: string[], index: number): boolean
 /**
  * Minecraft version a runtime jar path carries, or undefined when the path
  * names none. Loom lays its cache out as
- * `<gradle>/caches/fabric-loom/<mcVersion>/...`, so the first token of the path
- * that names a Minecraft version is the version the jar was built for — in
+ * `<gradle>/caches/fabric-loom/<mcVersion>/...`, so the first token of the
+ * tool-written part of the path ({@link runtimeJarLayoutTail}; the whole path
+ * when it enters no layout root) that names a Minecraft version is the version the jar was built for — in
  * either id family, and a pre-release names itself and not the release it
  * precedes. Reading only `1.x[.y]` left every 26.x jar versionless, so no
  * approximation was ever reported for one.
@@ -401,8 +402,9 @@ function tokenPositionNamesMinecraft(segments: string[], index: number): boolean
  * {@link tokenPositionNamesMinecraft} says Minecraft's version sits.
  */
 export function inferRuntimeJarMinecraftVersion(path: string): string | undefined {
-  const normalizedPath = normalizePathStyle(path);
-  const segments = normalizedPath.toLowerCase().split("/");
+  // A path that enters no layout root, such as a custom Gradle home's `loom-cache`, is read whole.
+  const normalizedPath = runtimeJarLayoutTail(path) ?? normalizePathStyle(path).toLowerCase();
+  const segments = normalizedPath.split("/");
   for (const match of normalizedPath.matchAll(RUNTIME_JAR_VERSION_TOKEN_REGEX)) {
     const token = match[1];
     if (!token) {
@@ -478,6 +480,11 @@ const RUNTIME_JAR_LAYOUT_ROOT_RE = /^(?:\.[^/]*|caches|build)$/;
  * loader for an artifact that names none.
  */
 function runtimeJarLayoutRelativePath(path: string): string {
+  return runtimeJarLayoutTail(path) ?? normalizePathStyle(path).toLowerCase().split("/").filter(Boolean).at(-1) ?? "";
+}
+
+/** Everything below the deepest layout root, or undefined when the path enters none. */
+function runtimeJarLayoutTail(path: string): string | undefined {
   const segments = normalizePathStyle(path)
     .toLowerCase()
     .split("/")
@@ -487,7 +494,7 @@ function runtimeJarLayoutRelativePath(path: string): string {
       return segments.slice(index + 1).join("/");
     }
   }
-  return segments[segments.length - 1] ?? "";
+  return undefined;
 }
 
 /**

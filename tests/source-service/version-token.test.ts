@@ -265,6 +265,28 @@ test("inferRuntimeJarMinecraftVersion keeps the 26.1+ layouts that do name Minec
   );
 });
 
+test("inferRuntimeJarMinecraftVersion reads no version from the user's own ancestor directories", () => {
+  const moddevJar = "/home/u/dev/mymod-1.21/build/moddev/artifacts/neoforge-21.1.77-merged.jar";
+  assert.equal(inferRuntimeJarMinecraftVersion(moddevJar), undefined);
+  const served = describeServedRuntimeJar({ jarPath: moddevJar, requestedVersion: "1.21.1" });
+  assert.equal(served.version, "1.21.1");
+  assert.equal(served.versionApproximated, undefined);
+  assert.deepEqual(served.notes, []);
+
+  assert.equal(
+    inferRuntimeJarMinecraftVersion(
+      "/home/u/dev/minecraft-mod-26.1/.gradle/loom-cache/minecraftMaven/net/minecraft/minecraft-merged-abc/26.2/minecraft-merged-abc-26.2.jar"
+    ),
+    "26.2"
+  );
+  assert.equal(
+    inferRuntimeJarMinecraftVersion("/home/u-1.20/.gradle/caches/fabric-loom/1.21.1/minecraft-merged.jar"),
+    "1.21.1"
+  );
+  // A custom Gradle home enters no layout root, so the whole path is still read.
+  assert.equal(inferRuntimeJarMinecraftVersion("/srv/gradle-home/loom-cache/1.21.1/minecraft-merged.jar"), "1.21.1");
+});
+
 test("resolveAccessTransformerRuntimeArtifact does not report a Forge version as Minecraft's", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "at-forge-anchored-"));
