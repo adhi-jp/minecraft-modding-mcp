@@ -18,6 +18,156 @@ import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import { type SourceServiceFixture } from "../helpers/source-service-fixtures.ts";
 
+test("SourceService validateMixin resolves a synthetic lambda method in target bytecode", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-synthetic-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {
+    "net/minecraft/server/Main.class": buildClassFile({
+      internalName: "net/minecraft/server/Main",
+      methods: [
+        { name: "tick", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "lambda$tick$0", descriptor: "()V", accessFlags: 0x1002 },
+        { name: "compareTo", descriptor: "(Lnet/minecraft/server/Main;)I", accessFlags: 0x0001 },
+        { name: "compareTo", descriptor: "(Ljava/lang/Object;)I", accessFlags: 0x1041 }
+      ]
+    })
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  (service as any).versionService = {
+    async resolveVersionJar(version: string) {
+      return { version, jarPath };
+    }
+  };
+
+  const result = await service.validateMixin({
+    input: {
+      mode: "inline",
+      source: [
+        "import net.minecraft.server.Main;",
+        "import org.spongepowered.asm.mixin.Mixin;",
+        "import org.spongepowered.asm.mixin.injection.Inject;",
+        "import org.spongepowered.asm.mixin.injection.At;",
+        "@Mixin(Main.class)",
+        "public abstract class MainMixin {",
+        '  @Inject(method = "lambda$tick$0", at = @At("HEAD"))',
+        "  private void onTick() {}",
+        "",
+        '  @Inject(method = "compareTo{2}", at = @At("HEAD"))',
+        "  private void onCompareTo() {}",
+        "}"
+      ].join("\n")
+    },
+    version: "1.21",
+    mapping: "obfuscated",
+    reportMode: "full"
+  });
+
+  const single = result.results[0]?.result;
+  assert.equal(single?.valid, true, JSON.stringify(single?.issues));
+  assert.equal(single?.issues.some((issue) => issue.kind === "method-not-found"), false);
+});
+
+test("SourceService validateMixin does not degrade confidence when only a synthetic target member fails to remap", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-validate-mixin-synthetic-remap-"));
+  const jarPath = join(root, "client.jar");
+  await createJar(jarPath, {});
+
+  const run = async (unmappedMethod: { name: string; accessFlags: number }) => {
+    const service = new SourceService(buildTestConfig(root));
+    (service as any).versionService = {
+      async resolveVersionJar(version: string) {
+        return { version, jarPath };
+      }
+    };
+    (service as any).mappingService = {
+      async checkMappingHealth() {
+        return { mojangMappingsAvailable: true, tinyMappingsAvailable: true, memberRemapAvailable: true, degradations: [] };
+      },
+      async findMapping(query: { kind: string; name: string; sourceMapping: string }) {
+        if (query.kind === "class") {
+          const name = query.sourceMapping === "obfuscated" ? "net.minecraft.server.Main" : "a";
+          return { resolved: true, status: "resolved", resolvedSymbol: { name }, candidates: [] };
+        }
+        if (query.name === unmappedMethod.name) {
+          return { resolved: false, status: "not_found", candidates: [] };
+        }
+        return { resolved: true, status: "resolved", resolvedSymbol: { name: query.name }, candidates: [] };
+      }
+    };
+    (service as any).explorerService = {
+      async getSignature() {
+        const method = (name: string, accessFlags: number) => ({
+          name,
+          javaSignature: `void ${name}()`,
+          jvmDescriptor: "()V",
+          ownerFqn: "a",
+          accessFlags,
+          isSynthetic: (accessFlags & 0x1000) !== 0
+        });
+        return {
+          className: "a",
+          constructors: [],
+          methods: [method("tick", 0x0001), method(unmappedMethod.name, unmappedMethod.accessFlags)],
+          fields: [],
+          warnings: []
+        };
+      }
+    };
+    const result = await service.validateMixin({
+      input: {
+        mode: "inline",
+        source: [
+          "import net.minecraft.server.Main;",
+          "import org.spongepowered.asm.mixin.Mixin;",
+          "import org.spongepowered.asm.mixin.injection.Inject;",
+          "import org.spongepowered.asm.mixin.injection.At;",
+          "@Mixin(Main.class)",
+          "public abstract class MainMixin {",
+          '  @Inject(method = "tick", at = @At("HEAD"))',
+          "  private void onTick() {}",
+          "",
+          // A missing method's issue carries the result-wide confidence.
+          '  @Inject(method = "absent", at = @At("HEAD"))',
+          "  private void onAbsent() {}",
+          "}"
+        ].join("\n")
+      },
+      version: "1.21",
+      mapping: "mojang",
+      reportMode: "full"
+    });
+    const single = result.results[0]?.result;
+    assert.ok(single);
+    return single;
+  };
+
+  const synthetic = await run({ name: "lambda$tick$0", accessFlags: 0x1002 });
+  assert.equal(
+    synthetic.resolvedMembers?.find((member) => member.name === "tick")?.status,
+    "resolved",
+    JSON.stringify(synthetic.resolvedMembers)
+  );
+  assert.equal(synthetic.issues.find((issue) => issue.kind === "method-not-found")?.confidence, "definite");
+  assert.equal(synthetic.provenance?.remapFailures, undefined);
+  assert.equal(synthetic.warnings.some((warning) => warning.startsWith("Could not remap")), false);
+  assert.deepEqual(
+    synthetic.targetOutcomes?.map((outcome) => outcome.status),
+    ["ok"]
+  );
+
+  const ordinary = await run({ name: "helper", accessFlags: 0x0002 });
+  assert.equal(ordinary.issues.find((issue) => issue.kind === "method-not-found")?.confidence, "likely");
+  assert.equal(ordinary.provenance?.remapFailures, 1);
+  assert.ok(ordinary.warnings.some((warning) => warning.startsWith("Could not remap 1 method")), JSON.stringify(ordinary.warnings));
+  assert.deepEqual(
+    ordinary.targetOutcomes?.map((outcome) => [outcome.status, outcome.reason]),
+    [["tool-issue", "member-remap-failed"]]
+  );
+});
+
 test("SourceService validateMixin handles representative scope and mapping resolution flows", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");
 

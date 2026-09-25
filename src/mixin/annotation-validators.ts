@@ -195,20 +195,19 @@ export function validateInjection(
           status: "not-found"
         });
       } else if (matchCount < minMatches) {
-        // "+" and "{n}"/"{n,}"/"{n,m}" demand at least n matching members. Mixin also counts
-        // synthetic/bridge methods, which the member listing omits, so a shortfall is only
-        // ever uncertain.
+        // "+" and "{n}"/"{n,}"/"{n,m}" demand at least n matching members. A shortfall stays
+        // uncertain: if a remap ran, a member whose name could not be remapped may not be counted.
         issues.push({
           severity: "warning",
           kind: "method-not-found",
           annotation: `@${inj.annotation}`,
           target: `${targetName}#${inj.method}`,
-          message: `Selector "${rawMethodName}" requires at least ${minMatches} matching method(s)${anyName ? "" : ` named "${methodName}"`} in target class "${targetName}" but found ${matchCount} (synthetic/bridge methods are not counted here and may make up the difference).${mappingDegraded ? " (mapping degraded; may be a remap artifact)" : ""}`,
+          message: `Selector "${rawMethodName}" requires at least ${minMatches} matching method(s)${anyName ? "" : ` named "${methodName}"`} in target class "${targetName}" but found ${matchCount}.${mappingDegraded ? " (mapping degraded; may be a remap artifact)" : ""}`,
           line: inj.line,
           confidence: "uncertain",
           confidenceReason: mappingDegraded
             ? `Member remap/signature degraded; the overload count may be a tooling artifact.`
-            : `Synthetic and bridge methods are excluded from the member listing but count toward a Mixin quantifier.`,
+            : `Counted from the listed members; a member whose name could not be remapped, if any, is not counted.`,
           resolutionPath,
           falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, "uncertain")
         });

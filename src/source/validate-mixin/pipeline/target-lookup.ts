@@ -132,10 +132,13 @@ export async function processSingleMixinTarget(
   }
 
   try {
+    // Mixin can target synthetic members (lambda bodies, bridges, $VALUES, this$0) and counts
+    // synthetic methods in quantifiers.
     const sig = await svc.explorerService.getSignature({
       fqn: obfuscatedName,
       jarPath: ctx.jarPath,
-      access: "all"
+      access: "all",
+      includeSynthetic: true
     });
     ctx.warnings.push(...sig.warnings);
     ctx.resolutionTrace?.push({ target: target.className, step: "signature", input: obfuscatedName, output: `${sig.methods.length} methods, ${sig.fields.length} fields`, success: true });
@@ -145,45 +148,32 @@ export async function processSingleMixinTarget(
     let fields = sig.fields;
 
     if (ctx.requestedMapping !== ctx.signatureLookupMapping) {
+      const remap = (members: typeof sig.methods, kind: "method" | "field", warnings: string[]) =>
+        svc.remapSignatureMembers(
+          members,
+          kind,
+          ctx.version,
+          ctx.signatureLookupMapping,
+          ctx.requestedMapping,
+          ctx.currentSourcePriority,
+          warnings,
+          ctx.input.projectPath,
+          ctx.input.gradleUserHome
+        );
+      // Unnamed lambdas routinely have no mapping; a synthetic member that fails to remap
+      // stays listed under its source name without degrading the target or the result.
+      const syntheticWarnings: string[] = [];
       try {
-        const [ctorResult, methodResult, fieldResult] = await Promise.all([
-          svc.remapSignatureMembers(
-            sig.constructors,
-            "method",
-            ctx.version,
-            ctx.signatureLookupMapping,
-            ctx.requestedMapping,
-            ctx.currentSourcePriority,
-            ctx.warnings,
-            ctx.input.projectPath,
-            ctx.input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.methods,
-            "method",
-            ctx.version,
-            ctx.signatureLookupMapping,
-            ctx.requestedMapping,
-            ctx.currentSourcePriority,
-            ctx.warnings,
-            ctx.input.projectPath,
-            ctx.input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.fields,
-            "field",
-            ctx.version,
-            ctx.signatureLookupMapping,
-            ctx.requestedMapping,
-            ctx.currentSourcePriority,
-            ctx.warnings,
-            ctx.input.projectPath,
-            ctx.input.gradleUserHome
-          )
+        const [ctorResult, methodResult, fieldResult, syntheticMethodResult, syntheticFieldResult] = await Promise.all([
+          remap(sig.constructors, "method", ctx.warnings),
+          remap(sig.methods.filter((member) => !member.isSynthetic), "method", ctx.warnings),
+          remap(sig.fields.filter((member) => !member.isSynthetic), "field", ctx.warnings),
+          remap(sig.methods.filter((member) => member.isSynthetic), "method", syntheticWarnings),
+          remap(sig.fields.filter((member) => member.isSynthetic), "field", syntheticWarnings)
         ]);
         constructors = ctorResult.members;
-        methods = methodResult.members;
-        fields = fieldResult.members;
+        methods = [...methodResult.members, ...syntheticMethodResult.members];
+        fields = [...fieldResult.members, ...syntheticFieldResult.members];
 
         const targetFailed = new Set<string>();
         for (const n of ctorResult.failedNames) targetFailed.add(n);

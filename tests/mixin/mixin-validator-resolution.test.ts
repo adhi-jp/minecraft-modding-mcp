@@ -626,15 +626,15 @@ test("validateParsedMixin flags a counted quantifier shortfall as an uncertain w
     JSON.stringify(result.issues)
   );
   assert.match(result.issues[0].message, /at least 2/);
-  assert.match(result.issues[0].message, /bridge/);
   assert.equal(result.valid, true, "an uncertain shortfall must not invalidate the mixin");
   const resolved = result.resolvedMembers!.filter((m) => m.status === "resolved");
   assert.deepEqual(resolved.map((m) => m.line), [12, 13]);
 });
 
-test("validateParsedMixin does not call a quantifier shortfall definite when a bridge may fill it", () => {
+test("validateParsedMixin keeps a quantifier shortfall uncertain when the listing lacks a matching method", () => {
   // Comparable<Foo>.compareTo(LFoo;)I plus its synthetic bridge compareTo(Ljava/lang/Object;)I
-  // satisfies "compareTo{2}" in Mixin, but the member listing omits the bridge.
+  // satisfies "compareTo{2}" in Mixin, but this hand-built listing omits the bridge, so the
+  // shortfall is reported as uncertain rather than a definite miss.
   const parsed = makeParsedMixin({
     injections: [{ annotation: "Inject", method: "compareTo{2}", line: 10 }]
   });
@@ -653,7 +653,7 @@ test("validateParsedMixin does not call a quantifier shortfall definite when a b
   assert.equal(result.issues.length, 1);
   assert.equal(result.issues[0].severity, "warning");
   assert.equal(result.issues[0].confidence, "uncertain");
-  assert.match(result.issues[0].message, /synthetic\/bridge/);
+  assert.match(result.issues[0].message, /requires at least 2 matching method/);
 });
 
 test("validateParsedMixin ignores whitespace inside a quantifier and warns on a malformed one", () => {
@@ -730,7 +730,7 @@ test("validateParsedMixin applies the descriptor and count of an empty-name quan
     ],
     JSON.stringify(result.issues)
   );
-  assert.match(result.issues[1].message, /bridge/);
+  assert.match(result.issues[1].message, /requires at least 2 matching method/);
   const byStatus = (status: string) =>
     result.resolvedMembers!.filter((m) => m.status === status).map((m) => m.line);
   assert.deepEqual(byStatus("resolved"), [11, 13]);
