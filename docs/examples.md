@@ -35,7 +35,7 @@ Start with these top-level workflow tools when possible. They cover the common w
     "task": "map",
     "subject": {
       "kind": "method",
-      "owner": "net.minecraft.server.Main",
+      "owner": "net.minecraft.server.MinecraftServer",
       "name": "tickServer"
     },
     "version": "1.21.10",
@@ -170,8 +170,8 @@ Start with these top-level workflow tools when possible. They cover the common w
 {
   "tool": "trace-symbol-lifecycle",
   "arguments": {
-    "symbol": "net.minecraft.server.Main.tickServer",
-    "descriptor": "()V",
+    "symbol": "net.minecraft.server.MinecraftServer.tickServer",
+    "descriptor": "(Ljava/util/function/BooleanSupplier;)V",
     "fromVersion": "1.20.1",
     "toVersion": "1.21.10",
     "includeTimeline": true
@@ -410,7 +410,7 @@ obfuscated, set `autoRemap: true` to translate them automatically in one call:
   "arguments": {
     "target": { "kind": "version", "value": "1.21.10" },
     "owner": "net.minecraft.world.entity.LivingEntity",
-    "member": { "kind": "method", "name": "tickServer", "descriptor": "()V" },
+    "member": { "kind": "method", "name": "tick", "descriptor": "()V" },
     "mapping": "mojang",
     "autoRemap": true
   }
@@ -474,7 +474,7 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 {
   "tool": "validate-access-transformer",
   "arguments": {
-    "content": "public net.minecraft.server.MinecraftServer\nprotected net.minecraft.server.MinecraftServer tickServer()V",
+    "content": "public net.minecraft.server.MinecraftServer\nprotected net.minecraft.server.MinecraftServer tickServer(Ljava/util/function/BooleanSupplier;)V",
     "version": "1.21.10",
     "projectPath": "/workspace/example-neoforge-mod",
     "scope": "loader",

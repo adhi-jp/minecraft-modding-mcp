@@ -34,7 +34,7 @@ stdio で動作し、Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini
 要件:
 
 - Node.js 22.13.0+
-- Java は `remap-mod-jar` と、Vineflower または tiny-remapper を必要とするデコンパイル / リマップ処理でのみ必要です
+- デコンパイル / リマップ処理には、`PATH` 上の Java 17+ が必要です（Loom のソース jar がないバージョンの Minecraft ソースの読み取り、Mod JAR のデコンパイル、`remap-mod-jar`）。既定の Vineflower は Java 17 を必要としますが、サーバーは `java` が起動できるかだけを確認し、バージョンは確認しません。`get-registry-data` と、`compare-versions` / `compare-minecraft` のレジストリ差分は Minecraft サーバーのデータジェネレーターを実行するため、その Minecraft リリースが必要とする Java バージョン（1.21.x では Java 21）が必要です。
 
 ローカルでサーバーを起動:
 
@@ -136,6 +136,8 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 }
 ```
 
+ビルドが既定以外の Gradle User Home を使っている場合は、キャッシュを使うソース / マッピング / 検証 / ワークフローの呼び出しで `gradleUserHome` を指定してください。呼び出し単位の Gradle User Home として扱われ、MCP プロセスの Gradle User Home の代わりに `<gradleUserHome>/loom-cache` と `<gradleUserHome>/caches/fabric-loom` を検索します。`projectPath` 配下のプロジェクトローカルなキャッシュは引き続き検索対象です。
+
 ## まずここから
 
 以下の 6 つのトップレベルワークフローツールは、よく使う作業をカバーし、要約優先の結果を返します。エージェントや MCP クライアントの既定の入口として使ってください。
@@ -156,7 +158,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 ここでは、オンボーディング中によく迷う判断だけを扱います。完全な注意点一覧、正確な契約、移行メモ、環境変数は [tool-reference.md](tool-reference.md) を参照してください。
 
 - `search-class-source` は既定で `queryMode="auto"` を使い、`foo.bar`、`foo_bar`、`foo$bar` のような区切り文字付きクエリもインデックス経路のまま扱います。明示的な全文部分文字列スキャンが必要な場合は `queryMode="literal"` を使ってください。
-- アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の `task` を維持したまま返ります。
+- アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。`subject.focus` は文字列ではなくオブジェクトで、`{ "kind": "class", "className": "..." }`、`{ "kind": "search", "query": "..." }`、`{ "kind": "file", "filePath": "..." }` のいずれかの形で指定します。`task="auto"` は `subject.kind` と `focus.kind` だけで処理を振り分けるもので、自然言語から判断するプランナーではありません。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の `task` を維持したまま返ります。
 - `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密なオーバーロード指定は別フィールドの `descriptor` を使ってください。
 - ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
 - `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
@@ -164,6 +166,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 - `validate-project task="project-summary"` は `version` を省略すると `gradle.properties` から Minecraft バージョンを推定し、推定したバージョンを `warnings` に示します。推定を止めるには `preferProjectVersion: false` を指定します。その場合、`version` のない呼び出しは `status: "blocked"` を返します。解決したバージョン（明示指定または推定）は、検出したすべての Mixin / Access Widener / Access Transformer の検証に渡されます。ファイルを検出したのにバージョンを推定できない場合は、推測せずに、明示的な `version` を求める再試行案付きで `status: "blocked"` を返します。
 - `validate-project task="project-summary"` が検証対象のファイルを 1 つも検出しなかった場合、`status` は `"ok"` のままですが、headline が `Nothing to validate: ...` となり、`warnings` にも何も検証していないことが示されます。`"ok"` だけでは、いずれかのファイルが検証に通ったことを意味しません。
 - `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。追加の `tasks` フィールドを省きたい場合は `VALIDATE_PROJECT_TASKS_OFF=1` を使います。
+- アーティファクトのダウンロードは 1 件あたり 512 MiB（`MCP_MAX_DOWNLOAD_BYTES`）、ネストした JAR のエントリは展開後 1 件あたり 64 MiB（`MCP_MAX_NESTED_JAR_ENTRY_BYTES`）が上限です。上限を超えるダウンロードは失敗し、すべてのリポジトリで上限を超えた場合は `ERR_REPO_FETCH_FAILED` が返り、その `context.repoFailureCode` は `ERR_LIMIT_EXCEEDED` です。上限を超えるネストした JAR はエラーも警告もなくスキップされ、ほかのネストした JAR は引き続き解決されます。`validate-project` にはキュー待ちを含めて 120 秒の期限があり（`MCP_VALIDATE_PROJECT_TIMEOUT_MS` で 10000〜600000 ミリ秒の範囲で変更可能）、超えると `ERR_TOOL_TIMEOUT` で失敗します。詳細は [tool-reference.md](tool-reference.md) を参照してください。
 
 ### あるバージョンの Minecraft ソースを確認する
 
@@ -196,13 +199,14 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
     "task": "map",
     "subject": {
       "kind": "method",
-      "owner": "net.minecraft.server.Main",
+      "owner": "net.minecraft.server.MinecraftServer",
       "name": "tickServer"
     },
     "version": "1.21.10",
     "sourceMapping": "mojang",
     "targetMapping": "intermediary",
-    "signatureMode": "name-only"
+    "signatureMode": "name-only",
+    "detail": "standard"
   }
 }
 ```
@@ -247,7 +251,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 この日本語版はオンボーディング向けの概要です。詳細な例と完全なリファレンスは現時点では英語ドキュメントを参照してください。
 
 - [詳細なリクエスト例（英語）](examples.md)
-- [ツール / 設定リファレンス（英語）](tool-reference.md)
+- [ツール / 設定リファレンス（英語）](tool-reference.md)。どのツールを呼ぶべきか迷ったときは、まず [Which Tool for Which Question](tool-reference.md#which-tool-for-which-question) の判断表を確認してください。
 - [英語版 README](../README.md)
 
 ## ツール一覧
@@ -285,6 +289,8 @@ Minecraft バージョンの参照、ソースアーティファクトの解決�
 | `index-artifact` | 既存アーティファクトのインデックスメタデータを再構築する |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
+`26.1+` のような難読化されていないリリースでは、`obfuscated` はランタイム jar に含まれるままの名前を指し、それはすでに Mojang 名です。`obfuscated` と `mojang` のどちらも受け付け、こうしたアーティファクトには `provenance.unobfuscatedRuntime: true` が付きます。Mojang 名を `obfuscated` と呼ぶのは既知の問題で、互換性のため将来のメジャーリリースで修正されるまで現状のままです。詳しくは [tool-reference.md → Known issue: obfuscated label on unobfuscated runtimes](tool-reference.md#known-issue-obfuscated-label-on-unobfuscated-runtimes) を参照してください。
+
 ### バージョン比較とシンボル追跡
 
 Minecraft バージョン間でのクラス / レジストリ変更比較と、時系列でのシンボル存在追跡を行うツール群です。
@@ -311,7 +317,7 @@ Minecraft バージョン間でのクラス / レジストリ変更比較と、�
 | `check-symbol-exists` | 名前空間内でクラス、フィールド、メソッドが存在するかを確認する |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-複数の参照系ツールは、短いレスポンスを返すための `compact` 出力に対応しています。既定値とツールごとのフィールド一覧は [tool-reference.md](tool-reference.md) を参照してください。
+参照系ツール（`resolve-artifact`、`find-mapping`、`resolve-method-mapping-exact`、`resolve-workspace-symbol`、`check-symbol-exists`、`get-class-source`、`get-class-members`、`search-class-source`、`list-artifact-files`）と 4 つの `batch-*` ツールは、短いレスポンスを返すための `detail`（`summary` | `standard` | `full`）と `include[]` に対応しています。以前のツールごとの `compact` フラグは廃止されました。既定値とツールごとのフィールド一覧は [tool-reference.md](tool-reference.md) を参照してください。
 
 ### NBT ユーティリティ
 
@@ -384,7 +390,7 @@ Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Tran
 
 - Node.js 22.13.0+
 - `pnpm`
-- ローカルでリマップやデコンパイルを実行する場合は Java
+- ローカルでリマップやデコンパイルを実行する場合は Java 17+
 
 リポジトリをセットアップして起動:
 

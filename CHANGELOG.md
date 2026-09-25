@@ -7,6 +7,15 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Documentation
+
+- The requirements now say Java 17+ on `PATH`: the default Vineflower decompiler needs Java 17, and the server checks only that `java` runs, not its version. Reading Minecraft source for a version that has no Loom sources jar decompiles the game jar, so it needs Java as well. `get-registry-data` and registry diffs in `compare-versions` and `compare-minecraft` run the Minecraft server's data generator, so they need the Java version that Minecraft release requires. The docs named no minimum Java version and did not say that reading a version's source can trigger a decompile or that registry generation needs a release-specific Java version.
+- A per-call `gradleUserHome` replaces the MCP process's Gradle User Home for Loom and Forge/NeoForge cache lookups; project-local caches under `projectPath` are still searched. `README.md` and `docs/tool-reference.md` said it was searched before the process default.
+- The `detail` (`summary` | `standard` | `full`) + `include[]` response contract applies to the lookup tools `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, `check-symbol-exists`, `get-class-source`, `get-class-members`, `search-class-source` and `list-artifact-files`, and to the four `batch-*` tools; other expert tools do not take it. The docs said every expert and batch tool shared it.
+- `README.md` no longer says an empty `find-class` result proves a class is absent. A nested JAR that cannot be read or exceeds the nested-entry size cap is skipped, and when the artifact's source coverage excludes `net.minecraft` and the query is a Minecraft-style class name, the empty result carries a warning and a `suggestedCall` to `get-class-source`.
+- The `tickServer` examples in `README.md`, `docs/README-ja.md`, and `docs/examples.md` name `net.minecraft.server.MinecraftServer` and its `(Ljava/util/function/BooleanSupplier;)V` descriptor; they placed it on `net.minecraft.server.Main` or `LivingEntity`, or gave it a `()V` descriptor, and no such method exists. The `verify-mixin-target` example checks `LivingEntity.tick()V` instead.
+- The Japanese README (`docs/README-ja.md`) now describes the `detail` + `include[]` contract that replaced the removed `compact` flag, the known issue of the `obfuscated` label on 26.1+ runtimes, the object shape of `subject.focus`, `gradleUserHome`, the download and nested-JAR size caps, and the `validate-project` deadline, and links the tool-selection table in `docs/tool-reference.md`.
+
 ## [7.1.1] - 2026-09-25
 
 ### Fixed

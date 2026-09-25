@@ -44,7 +44,7 @@ Wire-level details — era selection, the rejection and version-negotiation tabl
 Requirements:
 
 - Node.js 22.13.0+
-- Java is only required for `remap-mod-jar` and decompile or remap flows that need Vineflower or tiny-remapper
+- Java 17+ on `PATH` for decompile and remap flows: reading Minecraft source for a version that has no Loom sources jar, decompiling mod JARs, and `remap-mod-jar`. The default Vineflower needs Java 17; the server checks only that `java` runs, not its version. `get-registry-data` and registry diffs in `compare-versions` and `compare-minecraft` run the Minecraft server's data generator, so they need the Java version that Minecraft release requires (Java 21 for 1.21.x).
 
 Start the server locally:
 
@@ -144,7 +144,7 @@ Pass environment variables to override defaults:
 }
 ```
 
-When a build used a non-default Gradle User Home, pass `gradleUserHome` on cache-backed source, mapping, validation, and workflow calls. The server treats it as a per-call Gradle User Home and searches `<gradleUserHome>/loom-cache` and `<gradleUserHome>/caches/fabric-loom` before the MCP process default. It does not accept arbitrary Loom cache directories.
+When a build used a non-default Gradle User Home, pass `gradleUserHome` on cache-backed source, mapping, validation, and workflow calls. The server treats it as a per-call Gradle User Home and searches `<gradleUserHome>/loom-cache` and `<gradleUserHome>/caches/fabric-loom` instead of the MCP process's Gradle User Home; project-local roots under `projectPath` still apply. It does not accept arbitrary Loom cache directories.
 
 ## Start Here
 
@@ -212,7 +212,7 @@ These notes cover high-frequency decisions during onboarding. For the full pitfa
     "task": "map",
     "subject": {
       "kind": "method",
-      "owner": "net.minecraft.server.Main",
+      "owner": "net.minecraft.server.MinecraftServer",
       "name": "tickServer"
     },
     "version": "1.21.10",
@@ -300,7 +300,7 @@ Tools for browsing Minecraft versions, resolving source artifacts, and reading o
 | `index-artifact` | Rebuild indexed metadata for an existing artifact |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
-`find-class` accepts either an `artifactId` or the shared object `target` shape. For a workspace-relative dependency, pass `target: { kind: "dependency", group, name, versionFromProject: true }` with top-level `projectPath`. Fabric-style umbrella JARs are searched through their nested `.class` inventories; a top-level class match can then be passed to `get-class-source` or `get-class-members`, which resolve the containing nested JAR. Dotted inner-class matches are also readable through `get-class-source`. An empty result still means that the requested class name is absent from the resolved dependency version.
+`find-class` accepts either an `artifactId` or the shared object `target` shape. For a workspace-relative dependency, pass `target: { kind: "dependency", group, name, versionFromProject: true }` with top-level `projectPath`. Fabric-style umbrella JARs are searched through their nested `.class` inventories; a top-level class match can then be passed to `get-class-source` or `get-class-members`, which resolve the containing nested JAR. Dotted inner-class matches are also readable through `get-class-source`. An empty result means no match in the class inventories that could be read: a nested JAR that cannot be read or exceeds the nested-entry size cap is skipped without a warning, and when the artifact's source coverage excludes `net.minecraft` and the query is a Minecraft-style class name, `warnings` says so and `suggestedCall` points to `get-class-source`.
 
 For unobfuscated releases such as `26.1+`, `obfuscated` names the runtime jar's names as shipped, which are already Mojang names: both `obfuscated` and `mojang` are accepted, `mappingApplied` reports the label you asked for, and `provenance.unobfuscatedRuntime: true` marks the artifact. `mapping="mojang"` uses the runtime/decompile path directly and skips Loom source-jar discovery, while `intermediary` and `yarn` fall back to `obfuscated` with a warning. This applies to version targets, Minecraft runtime coordinates, and JAR targets whose own contents (a top-level `version.json` with a 26.1+ `id`, `net/minecraft/SharedConstants.class`, and no `.java` sources) prove a 26.1+ Minecraft runtime jar; see [docs/tool-reference.md → Lookup Rules](docs/tool-reference.md#lookup-rules). Labelling these Mojang names `obfuscated` is a known issue, kept unchanged for compatibility until a future major release corrects it; see [docs/tool-reference.md → Known issue: obfuscated label on unobfuscated runtimes](docs/tool-reference.md#known-issue-obfuscated-label-on-unobfuscated-runtimes).
 
@@ -330,7 +330,7 @@ Tools for converting symbol names between namespaces and checking symbol existen
 | `check-symbol-exists` | Check whether a class, field, or method exists in a namespace |
 <!-- END GENERATED TOOL TABLE: mapping-symbols -->
 
-Expert and batch tools share the `detail` (`summary` | `standard` | `full`) + `include[]` response contract for shorter responses (replacing the old per-tool `compact` flag). See [docs/tool-reference.md](docs/tool-reference.md) for per-tool defaults and the full field list.
+The lookup tools `resolve-artifact`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, `check-symbol-exists`, `get-class-source`, `get-class-members`, `search-class-source`, and `list-artifact-files`, plus the four `batch-*` tools, share the `detail` (`summary` | `standard` | `full`) + `include[]` response contract for shorter responses (replacing the old per-tool `compact` flag); other expert tools do not take it. See [docs/tool-reference.md](docs/tool-reference.md) for per-tool defaults and the full field list.
 
 ### NBT Utilities
 
@@ -405,7 +405,7 @@ Repository requirements:
 
 - Node.js 22.13.0+
 - `pnpm`
-- Java when running remap or decompile flows locally
+- Java 17+ when running remap or decompile flows locally
 
 Setup and run the repository:
 
