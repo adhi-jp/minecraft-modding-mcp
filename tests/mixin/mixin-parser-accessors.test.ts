@@ -99,3 +99,43 @@ public interface PlayerAccessor {
     ]
   );
 });
+
+test("parseMixinSource reads a declaration on the closing line of a wrapped @Accessor or @Invoker", () => {
+  const source = `
+@Mixin(Foo.class)
+public interface FooAccessor {
+  @Accessor(
+      "present"
+  ) int getPresent();
+  @Accessor("missing") int getMissing();
+  @Invoker(
+      "run"
+  ) void callRun();
+  @Invoker("stop") void callStop();
+  @Accessor(
+      "after"
+  )
+  int getAfter();
+  @Accessor("last") int getLast();
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.parseWarnings, []);
+  assert.deepEqual(
+    result.accessors.map((entry) => ({
+      annotation: entry.annotation,
+      name: entry.name,
+      targetName: entry.targetName,
+      line: entry.line
+    })),
+    [
+      { annotation: "Accessor", name: "getPresent", targetName: "present", line: 4 },
+      { annotation: "Accessor", name: "getMissing", targetName: "missing", line: 7 },
+      { annotation: "Invoker", name: "callRun", targetName: "run", line: 8 },
+      { annotation: "Invoker", name: "callStop", targetName: "stop", line: 11 },
+      { annotation: "Accessor", name: "getAfter", targetName: "after", line: 12 },
+      { annotation: "Accessor", name: "getLast", targetName: "last", line: 16 }
+    ]
+  );
+});

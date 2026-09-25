@@ -750,9 +750,11 @@ export function parseMixinSource(source: string): ParsedMixin {
     // when both are present, so the string form is collected alongside the class
     // literals rather than only as a fallback.
     const annotationTargets: string[] = [];
+    // Class literals are read with string contents blanked, so `targets = "a.class_1"` adds no `a`.
+    const mixinCode = mixinText.split("\n").map(blankLiterals).join("\n");
     MIXIN_TARGET_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = MIXIN_TARGET_RE.exec(mixinText)) !== null) {
+    while ((match = MIXIN_TARGET_RE.exec(mixinCode)) !== null) {
       annotationTargets.push(match[1]);
     }
     // targets = "..." or targets = {"a", "b"} string form
@@ -945,20 +947,25 @@ export function parseMixinSource(source: string): ParsedMixin {
     if (accessorMatched || accessorStartMatched) {
       const annotation = (accessorMatched?.match[1] ?? accessorStartMatched?.match[1]) as "Accessor" | "Invoker";
       let explicitTarget = accessorMatched?.match[2];
+      // Declaration text sharing a line with the annotation (e.g. `@Accessor("x") int getX();`,
+      // or `) int getX();` closing a wrapped `@Accessor(` argument list).
+      let inlineDecl = stripInlineAnnotations(line);
 
       if (!explicitTarget && accessorStartMatched) {
         // Read from this annotation's own arguments so a string argument of a preceding
         // annotation on the same line is not mistaken for the explicit target.
-        const { text: collected, endIndex } = collectAnnotationSpan(lines, i, accessorStartMatched.offset);
-        const explicitMatch = ACCESSOR_EXPLICIT_RE.exec(annotationArguments(collected) ?? "");
+        const span = collectAnnotationSpan(lines, i, accessorStartMatched.offset);
+        const explicitMatch = ACCESSOR_EXPLICIT_RE.exec(annotationArguments(span.text) ?? "");
         if (explicitMatch) {
           explicitTarget = explicitMatch[1];
         }
-        i = endIndex;
+        if (span.close >= 0) {
+          inlineDecl = stripInlineAnnotations(span.text.slice(span.close));
+        }
+        i = span.endIndex;
       }
 
-      // Try same-line declaration first (e.g. `@Accessor("x") int getX();`)
-      const inlineDecl = stripInlineAnnotations(line);
+      // Try same-line declaration first
       const inlineMethodMatch = inlineDecl.includes("(") ? METHOD_DECL_RE.exec(inlineDecl) : null;
       if (inlineMethodMatch) {
         const methodName = inlineMethodMatch[2];

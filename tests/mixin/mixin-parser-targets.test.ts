@@ -322,3 +322,20 @@ public @interface Outer {
   assert.deepEqual(inner?.targets.map((entry) => entry.className), ["TargetA"]);
   assert.deepEqual(inner?.shadows.map((entry) => entry.name), ["a"]);
 });
+
+test("parseMixinSource reads no class literal from inside a string target", () => {
+  const targetsOf = (annotation: string): string[] =>
+    parseMixinSource(`${annotation}\npublic abstract class SomeMixin {}\n`).targets.map((entry) => entry.className);
+
+  assert.deepEqual(
+    targetsOf('@Mixin(targets = "net.minecraft.class_1234$class_5678")'),
+    ["net.minecraft.class_1234$class_5678"]
+  );
+  assert.deepEqual(targetsOf('@Mixin(targets = "com.foo.classes.Bar")'), ["com.foo.classes.Bar"]);
+  assert.deepEqual(
+    targetsOf('@Mixin(targets = {"a.class_1", "b.classes.C"})'),
+    ["a.class_1", "b.classes.C"]
+  );
+  assert.deepEqual(targetsOf('@Mixin(value = Foo.class, targets = "pkg.Bar")'), ["Foo", "pkg.Bar"]);
+  assert.deepEqual(targetsOf("@Mixin({A.class, B.class})"), ["A", "B"]);
+});
