@@ -159,6 +159,8 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 - `search-class-source` は既定で `queryMode="auto"` を使い、`foo.bar`、`foo_bar`、`foo$bar` のような区切り文字付きクエリもインデックス経路のまま扱います。明示的な全文部分文字列スキャンが必要な場合は `queryMode="literal"` を使ってください。
 - アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。`subject.focus` は文字列ではなくオブジェクトで、`{ "kind": "class", "className": "..." }`、`{ "kind": "search", "query": "..." }`、`{ "kind": "file", "filePath": "..." }` のいずれかの形で指定します。`task="auto"` は `subject.kind` と `focus.kind` だけで処理を振り分けるもので、自然言語から判断するプランナーではありません。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の `task` を維持したまま返ります。
+- `inspect-minecraft task="search"` では、`detail: "summary", include: ["samples"]` で先頭 5 件までのヒットを `result.search` に返します（該当なしなら `hits: []`）。取得したページ全体を見るには `detail: "standard"` または `"full"` を使います。カーソルはサンプルの直後ではなく、そのページの後へ進みます。
+- `detail` の効果はタスクによって異なります。`inspect-minecraft task="class-source", detail="full"` でもソースはスニペットです。ファイル全体は `get-class-source mode="full"`、後続の範囲は `mode="snippet"` と行範囲を指定して取得します。メンバーのシグネチャには `task="class-members"` を使います。対応する `include` とソース検索の文脈は [inspection response controls](tool-reference.md#inspection-response-controls) を参照してください。
 - `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密なオーバーロード指定は別フィールドの `descriptor` を使ってください。
 - ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
 - `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。

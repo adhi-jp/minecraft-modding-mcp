@@ -65,6 +65,32 @@ Start here when you are not sure which tool to reach for. In every row, the left
 - Heavy analysis tools are serialized in-process to protect stdio stability. Queue overflow returns `ERR_LIMIT_EXCEEDED`.
 - All tools and JSON resources use the standard `{ result?, error?, meta }` envelope. `class-source` and `artifact-file` resources return raw text on success and structured JSON on failure.
 
+## Inspection response controls
+
+`include[]` support depends on the tool and task: it can retain optional result blocks or affect what is fetched. `meta.includeApplied` echoes the normalized, deduplicated request; it does not guarantee that every requested group produced a block. For example, `inspect-minecraft task="class-overview"` does not return a member list or a detailed provenance block, even with `detail: "full"` or those include groups. For signatures, select `task: "class-members", detail: "standard", include: ["descriptors"]`; at summary detail, also include `"members"` to retain the member block.
+
+For `inspect-minecraft task="search"`, `detail: "summary", include: ["samples"]` retains `result.search` with the first zero to five hits in the existing rank order, including `hits: []` on a miss. Summary without samples omits this block. `result.summary.counts.hits` counts the fetched hits; `meta.pagination.returnedCount` counts the displayed samples. Seven fetched hits therefore report seven hits, five samples, and `hasMore: false` when no further page exists. `result.search.nextCursor` and `meta.pagination.nextCursor` keep the original page continuation: they advance after the fetched page and cannot recover its undisplayed sixth and seventh hits. Repeat the same subject, limit and input cursor with `detail: "standard"` or `"full"` to see that whole fetched page, with or without samples.
+
+Response detail and source mode are separate controls. `inspect-minecraft task="class-source"` requests source metadata by default; `include: ["source"]` or `detail: "full"` requests a snippet, not the whole file. To read later lines deliberately, call `get-class-source` with the returned artifact ID, the original requested class name and mapping, and explicit ranges, for example:
+
+```json
+{
+  "tool": "get-class-source",
+  "arguments": {
+    "target": { "kind": "artifact", "artifactId": "<resolved-artifact-id>" },
+    "className": "net.minecraft.world.item.Item",
+    "mapping": "mojang",
+    "mode": "snippet",
+    "startLine": 201,
+    "endLine": 400
+  }
+}
+```
+
+Use the mapping from your original lookup rather than substituting the returned class name's namespace. Carry forward applicable `projectPath`, `gradleUserHome` and `sourcePriority` context when making later low-level reads. If the original mapping was omitted, source/member lookup can inherit the resolved artifact's stored mapping. Use `get-class-source mode="full"` when you explicitly want the whole file.
+
+For `analyze-symbol task="workspace"`, read `result.workspace.mappingApplied` for the applied workspace mapping (`detail: "standard"` or `include: ["workspace"]` retains it). `result.summary.subject.sourceMapping` echoes the requested source mapping.
+
 ## inspect-minecraft workspace focus
 
 Use `subject.kind="workspace"` when `inspect-minecraft` should resolve Minecraft artifact context from a project. Its `focus` is a structured object, not a string:

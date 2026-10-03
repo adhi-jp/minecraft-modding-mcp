@@ -119,3 +119,100 @@ test("InspectMinecraftService auto routes workspace search focus through project
     }
   ]);
 });
+
+for (const subjectKind of ["workspace", "search"] as const) {
+  for (const page of [
+    { hitCount: 0, nextCursor: undefined },
+    { hitCount: 3, nextCursor: undefined },
+    { hitCount: 7, nextCursor: undefined },
+    { hitCount: 7, nextCursor: "cursor-after-fetched-page" }
+  ]) {
+    test(`inspect-minecraft ${subjectKind} summary samples retain ${Math.min(page.hitCount, 5)} of ${page.hitCount} hits and the original ${page.nextCursor ? "continuation" : "page end"}`, async () => {
+      const hits = ["Zulu", "Alpha", "Echo", "Bravo", "Delta", "Foxtrot", "Charlie"]
+        .slice(0, page.hitCount)
+        .map((name, index) => ({
+          filePath: `net/minecraft/${name}.java`,
+          score: 100 - index,
+          matchedIn: "content" as const,
+          preview: "sampleQuery"
+        }));
+      const artifactContents = {
+        sourceKind: "source-jar" as const,
+        indexedContentKinds: ["sources"],
+        resourcesIncluded: false,
+        sourceCoverage: "full" as const
+      };
+      const service = new InspectMinecraftService(buildInspectDeps({
+        resolveArtifact: async () => ({
+          artifactId: "artifact-samples",
+          origin: "local-jar",
+          isDecompiled: false,
+          requestedMapping: "mojang",
+          mappingApplied: "mojang",
+          version: "1.21.10",
+          provenance: { requestedTarget: { kind: "workspace" } },
+          qualityFlags: [],
+          artifactContents,
+          warnings: []
+        }),
+        searchClassSource: async (input) => {
+          assert.equal(input.artifactId, "artifact-samples");
+          assert.equal(input.query, "sampleQuery");
+          assert.equal(input.limit, 10);
+          assert.equal(input.cursor, "cursor-requested-page");
+          return {
+            artifactId: input.artifactId,
+            query: input.query,
+            hits,
+            nextCursor: page.nextCursor,
+            mappingApplied: "mojang",
+            returnedNamespace: "mojang",
+            artifactContents,
+            warnings: []
+          };
+        }
+      }));
+      const subject = subjectKind === "workspace"
+        ? {
+            kind: "workspace" as const,
+            projectPath: "/workspace/sample-mod",
+            mapping: "mojang" as const,
+            focus: { kind: "search" as const, query: "sampleQuery" }
+          }
+        : {
+            kind: "search" as const,
+            query: "sampleQuery",
+            artifact: { type: "resolved-id" as const, artifactId: "artifact-samples" }
+          };
+      const request = { task: "search" as const, subject, limit: 10, cursor: "cursor-requested-page" };
+      const sampled = await service.execute({ ...request, detail: "summary", include: ["samples"] });
+      const sampledSearch = sampled.search as { hits: typeof hits; nextCursor?: string } | undefined;
+
+      assert.ok(sampledSearch, "summary with samples must expose the existing search block, including on a miss");
+      const expectedPaths = page.hitCount === 0 ? [] : page.hitCount === 3
+        ? ["net/minecraft/Zulu.java", "net/minecraft/Alpha.java", "net/minecraft/Echo.java"]
+        : ["net/minecraft/Zulu.java", "net/minecraft/Alpha.java", "net/minecraft/Echo.java", "net/minecraft/Bravo.java", "net/minecraft/Delta.java"];
+      assert.deepEqual(sampledSearch.hits.map((hit) => hit.filePath), expectedPaths);
+      assert.equal(sampled.summary.counts?.hits, page.hitCount);
+      assert.equal(sampled.summary.status, page.hitCount === 0 ? "not_found" : "ok");
+      assert.equal(sampledSearch.nextCursor, page.nextCursor);
+      assert.deepEqual(sampled.meta?.pagination, {
+        returnedCount: expectedPaths.length,
+        hasMore: page.nextCursor !== undefined,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {})
+      });
+
+      const summary = await service.execute({ ...request, detail: "summary" });
+      assert.equal(summary.search, undefined);
+      assert.deepEqual(summary.summary, sampled.summary);
+      assert.deepEqual(summary.meta?.pagination, sampled.meta?.pagination);
+      for (const detail of ["standard", "full"] as const) {
+        for (const include of [undefined, ["samples"]]) {
+          const complete = await service.execute({ ...request, detail, include });
+          assert.deepEqual(complete.search, { query: "sampleQuery", hits, nextCursor: page.nextCursor });
+          assert.equal((complete.meta?.pagination as { returnedCount: number }).returnedCount, page.hitCount);
+        }
+      }
+    });
+  }
+}

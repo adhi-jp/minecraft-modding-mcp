@@ -162,12 +162,11 @@ deps: InspectMinecraftDeps,
           nextCursor: search.nextCursor
         }
       },
-      alwaysBlocks: ["subject"]
+      alwaysBlocks: include.includes("samples") ? ["subject", "search"] : ["subject"]
     }),
     warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])],
-    // Always surface continuation state in meta, even in summary mode where the
-    // search block (and its nextCursor) is omitted, so callers never stop early
-    // believing they have all results.
+    // Keep continuation visible even when summary omits search. The cursor
+    // continues after the fetched page, not after its displayed samples.
     meta: {
       pagination: {
         returnedCount,

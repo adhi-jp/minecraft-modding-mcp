@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Fixed
+
+- `inspect-minecraft` search with `detail: "summary", include: ["samples"]` now returns up to five hits in `result.search`, including an empty hits array on a miss. The block was omitted even when samples were requested. Use standard or full detail to recover the whole fetched page; the cursor still advances past that page.
+
 ### Documentation
 
 - The requirements now say Java 17+ on `PATH`: the default Vineflower decompiler needs Java 17, and the server checks only that `java` runs, not its version. Reading Minecraft source for a version that has no Loom sources jar decompiles the game jar, so it needs Java as well. `get-registry-data` and registry diffs in `compare-versions` and `compare-minecraft` run the Minecraft server's data generator, so they need the Java version that Minecraft release requires. The docs named no minimum Java version and did not say that reading a version's source can trigger a decompile or that registry generation needs a release-specific Java version.
