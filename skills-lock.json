@@ -47,7 +47,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-coding/SKILL.md",
-      "computedHash": "ded22af5ff0e640a6d4c8d397093c5488d16831b607a370367f8ae2d686484a1"
+      "computedHash": "ecab15cceb0567d7866da03be968520eedfa4b5900c7d872114e7db23db76971"
     },
     "vibe-commit": {
       "source": "adhi-jp/agent-skills",
@@ -59,7 +59,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-debug/SKILL.md",
-      "computedHash": "722cd9c6ad5e270b52c509825c1da21525d5f65e806616ce12b48bf4dc7228d2"
+      "computedHash": "c4a5fec521601f9aeef0425f19da0f49fb433f996122dc9a237ec07c1b4b1c7b"
     },
     "vibe-goal-alignment": {
       "source": "adhi-jp/agent-skills",
@@ -71,13 +71,13 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-orchestrate/SKILL.md",
-      "computedHash": "470c2ae4eb8eb0bddd59e5c9e19bc15d9e23bab2e682e1b2498fb40f0137f41d"
+      "computedHash": "427b0423e3d74b8ef51412b9036117c40ca74ead38246938653277523fd26f81"
     },
     "vibe-plan-execution": {
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-plan-execution/SKILL.md",
-      "computedHash": "8d4d68f09a6782b2e0aeaa5adea48a1bec058eb4e2f549bf785fd84c2c439f0d"
+      "computedHash": "b36856e4bc7b6a0838b60f254bd2eed6d3251cdf5371c6ccef26027ad541c808"
     },
     "vibe-plan-review": {
       "source": "adhi-jp/agent-skills",
@@ -89,7 +89,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-planning/SKILL.md",
-      "computedHash": "8873fb5469c2ff0ea3b121c4ed32b91b41bdf71bccd669788c84dcefee9c7498"
+      "computedHash": "cbd5e077c1fab5f7c7602e8ffd4fe28a3cd395b8975648145e997593bcd8ad51"
     },
     "vibe-requirements-spec": {
       "source": "adhi-jp/agent-skills",
@@ -101,7 +101,7 @@
       "source": "adhi-jp/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/vibe-review/SKILL.md",
-      "computedHash": "615c5e860ba39ef739ae8ea539f906a93a6c53b7f3ca72f388514980afe235c1"
+      "computedHash": "f8eb620f02b134445143f0c9e2532202ce499ac2b5a7f96047b9b5e4a0bbe3fd"
     },
     "vibe-writing": {
       "source": "adhi-jp/agent-skills",
