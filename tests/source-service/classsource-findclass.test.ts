@@ -775,76 +775,10 @@ test("a members lookup on a tool-resolved artifact with no binary jar is publish
   assert.equal(problem.context?.issueOrigin, undefined);
 });
 
-// The sibling of the test above, and previously the opposite verdict. A bare
-// `artifactId` used to read as "the caller named this artifact", so this arm
-// asserted `code_issue`. It is not a wire field at all: `get-class-members`
-// offers `target: { kind: "artifact", artifactId }`, which
-// `normalizeSourceLookupTarget` flattens to this shape before the service runs,
-// so its presence records a request SHAPE and never who chose the artifact. An
-// artifactId is an opaque handle whose holder cannot know whether it carries a
-// binary jar and - `resolveArtifactTargetSchema` taking no artifactId - cannot
-// re-resolve it either, so the failure is the tool's to own. `code_issue`
-// survives only where the request could genuinely have chosen otherwise: a
-// `kind:"jar"` target, or an explicit `artifactSelectedBy: "caller"`.
-test("a members lookup on an artifactId the request could not have vetted is a tool issue", async () => {
-  const { SourceService } = await import("../../src/source-service.ts");
-  const { mapErrorToProblem } = await import("../../src/tool-guidance.ts");
-  const { issueOriginForErrorCode } = await import("../../src/error-mapping.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-members-no-binary-artifact-id-"));
-  const sourceJarPath = join(root, "source-only.jar");
-  await createJar(sourceJarPath, {
-    "com/example/Demo.java": "package com.example;\npublic class Demo {}"
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-  seedIndexedArtifact(service, {
-    artifactId: "source-only-artifact",
-    origin: "local-m2",
-    requestedMapping: "obfuscated",
-    mappingApplied: "obfuscated",
-    qualityFlags: [],
-    sourceJarPath,
-    files: [{ filePath: "com/example/Demo.java", content: "package com.example;\npublic class Demo {}" }],
-    symbols: []
-  });
-
-  const caught = await (service as unknown as {
-    getClassMembers: (input: { artifactId: string; className: string }) => Promise<unknown>;
-  })
-    .getClassMembers({ artifactId: "source-only-artifact", className: "com.example.Demo" })
-    .then(
-      () => undefined,
-      (error: unknown) => error
-    );
-
-  assert.equal((caught as { code?: string } | undefined)?.code, ERROR_CODES.CONTEXT_UNRESOLVED);
-
-  const problem = mapErrorToProblem(caught, "members-no-binary-artifact-id-req") as {
-    code: string;
-    issueOrigin: string;
-    context?: Record<string, unknown>;
-  };
-  assert.equal(
-    problem.issueOrigin,
-    "tool_issue",
-    "an opaque artifactId cannot tell its holder whether the artifact carries a binary jar, so the miss is not their input to fix"
-  );
-  // Guard against this passing for the wrong reason: the verdict above must come
-  // from THIS site's per-throw override, not from the code-keyed default having
-  // drifted to `tool_issue` for every ERR_CONTEXT_UNRESOLVED.
-  assert.equal(
-    issueOriginForErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED),
-    "code_issue",
-    "the code-keyed default must stay code_issue so the override is what is being observed"
-  );
-  // The override key must not ride out in the public primitive context blob.
-  assert.equal(problem.context?.issueOrigin, undefined);
-});
-
 // The one shape the inference still reads as caller-named, and the only arm of
-// this decision that keeps the code-keyed `code_issue` default. The two tests
-// above pin a TOOL-resolved coordinate target and a bare `artifactId`, both
-// `tool_issue`; a `kind:"jar"` target names the exact jar on the wire, so a
+// this decision that keeps the code-keyed `code_issue` default. The coordinate
+// test above and the target-kind matrix below cover tool-owned misses;
+// a `kind:"jar"` target names the exact jar on the wire, so a
 // missing binary companion really is input the caller can change.
 test("a members lookup on a caller-named jar target with no binary jar stays a code issue", async () => {
   const { SourceService } = await import("../../src/source-service.ts");

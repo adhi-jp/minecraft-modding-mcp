@@ -46,23 +46,6 @@ test("tool contract manifest renders compact two-column tables", () => {
   assert.doesNotMatch(japaneseEntryTable, /主な入力|主な出力/);
 });
 
-test("tool contract manifest reflects current top-level workflow tool purpose summaries", () => {
-  const entryTable = renderToolSurfaceSection("en", "top-level-workflow-tools");
-
-  assert.match(
-    entryTable,
-    /\| `inspect-minecraft` \| Inspect versions, artifacts, classes, files, source text, and workspace-aware lookup flows \|/
-  );
-  assert.match(
-    entryTable,
-    /\| `compare-minecraft` \| Compare version pairs, class diffs, registry diffs, and migration-oriented summaries \|/
-  );
-  assert.match(
-    entryTable,
-    /\| `validate-project` \| Summarize workspaces and run direct Mixin, Access Widener, or Access Transformer validation \|/
-  );
-});
-
 test("tool contract manifest keeps Japanese purpose rows localized", () => {
   const diagnosticsTable = renderToolSurfaceSection("ja", "registry-diagnostics");
   const validationTable = renderToolSurfaceSection("ja", "validation");

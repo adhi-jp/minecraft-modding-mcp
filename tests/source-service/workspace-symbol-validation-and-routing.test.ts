@@ -257,7 +257,12 @@ test("SourceService resolveWorkspaceSymbol routes by kind once a workspace mappi
     assert.equal(recorded.gradleUserHome, join(root, "gh"));
     assert.equal(recorded.maxCandidates, 3);
 
+    assert.equal(result.resolved, true);
     assert.equal(result.status, "resolved");
+    assert.equal(result.mappingContext.targetMapping, "mojang");
+    assert.equal(result.resolvedSymbol?.name, "remove");
+    assert.equal(result.resolvedSymbol?.owner, "com.example.ValueOutput");
+    assert.equal(result.resolvedSymbol?.descriptor, "(I)V");
     assert.deepEqual(result.warnings, ["workspace warning", "exact warning"]);
     assert.equal(result.workspaceDetection.mappingApplied, "mojang");
   });
@@ -292,17 +297,27 @@ test("SourceService resolveWorkspaceSymbol routes by kind once a workspace mappi
 
   await t.test("normalizes slashed class identities to dotted names in the resolved candidate", async () => {
     const { service, base } = await createFixture("workspace-symbol-class-resolved-");
-    injectDetection(service, { resolved: true, mappingApplied: "mojang", evidence: [], warnings: [] });
+    injectDetection(service, { resolved: true, mappingApplied: "mojang", evidence: [], warnings: ["workspace warning"] });
     injectMappingService(service, {
-      async getClassApiMatrix() {
-        return { classIdentity: { mojang: "com/example/ValueOutput" }, rows: [], warnings: [] };
+      async getClassApiMatrix(input: Record<string, unknown>) {
+        assert.equal(input.className, "a.b.c");
+        assert.equal(input.classNameMapping, "obfuscated");
+        assert.equal(input.sourcePriority, "maven-first");
+        return { classIdentity: { mojang: "com/example/ValueOutput" }, rows: [], warnings: ["matrix warning"] };
       }
     });
 
-    const result = await service.resolveWorkspaceSymbol({ ...base, kind: "class", name: "a.b.c" });
+    const result = await service.resolveWorkspaceSymbol({
+      ...base,
+      kind: "class",
+      name: "a.b.c",
+      sourcePriority: "maven-first"
+    });
 
     assert.equal(result.resolved, true);
     assert.equal(result.status, "resolved");
+    assert.equal(result.mappingContext.targetMapping, "mojang");
+    assert.deepEqual(result.warnings, ["workspace warning", "matrix warning"]);
     assert.deepEqual(result.resolvedSymbol, {
       kind: "class",
       name: "com.example.ValueOutput",
