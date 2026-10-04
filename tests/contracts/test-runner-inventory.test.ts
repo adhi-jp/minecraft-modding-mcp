@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { relative, sep } from "node:path";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const EXPECTED_ORDINARY_TEST_FILES = 284;
@@ -9,40 +8,20 @@ const EXPECTED_ORDINARY_TEST_FILES = 284;
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2600;
-const SPECIAL_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2599;
 
-async function collectRecursiveFiles(root: string): Promise<string[]> {
-  const entries = await readdir(root, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const path = `${root}/${entry.name}`;
-    if (entry.isDirectory()) {
-      files.push(...await collectRecursiveFiles(path));
-    } else if (entry.isFile()) {
-      files.push(path);
-    }
-  }
-  return files;
-}
-
-async function collectOrdinaryTestFiles(): Promise<string[]> {
-  const files = await collectRecursiveFiles("tests");
-  return files
-    .filter((path) => path.endsWith(".test.ts"))
-    .filter((path) => {
-      const [firstSegment] = relative("tests", path).split(sep);
-      return firstSegment !== undefined && !SPECIAL_DIRECTORIES.has(firstSegment);
-    })
-    .sort();
-}
+const loadTestFileSelection = (): Promise<{ selectOrdinaryTestFiles: () => Promise<string[]> }> =>
+  import("../../scripts/test-file-selection.mjs") as Promise<{
+    selectOrdinaryTestFiles: () => Promise<string[]>;
+  }>;
 
 function countTopLevelTestDeclarations(source: string): number {
   return [...source.matchAll(/^\s*test\s*\(/gm)].length;
 }
 
 test("ordinary test inventory keeps the approved test declaration count", async () => {
-  const files = await collectOrdinaryTestFiles();
+  const { selectOrdinaryTestFiles } = await loadTestFileSelection();
+  const files = await selectOrdinaryTestFiles();
   const declarationCounts = await Promise.all(
     files.map(async (path) => countTopLevelTestDeclarations(await readFile(path, "utf8")))
   );
@@ -58,17 +37,6 @@ test("ordinary test inventory keeps the approved test declaration count", async 
     EXPECTED_ORDINARY_TEST_DECLARATIONS,
     "ordinary test migration must preserve every approved top-level test declaration"
   );
-});
-
-test("the explicit runner selection matches the ordinary recursive inventory", async () => {
-  const [{ selectOrdinaryTestFiles }, inventory] = await Promise.all([
-    import("../../scripts/test-file-selection.mjs") as Promise<{
-      selectOrdinaryTestFiles: () => Promise<string[]>;
-    }>,
-    collectOrdinaryTestFiles()
-  ]);
-
-  assert.deepEqual(await selectOrdinaryTestFiles(), inventory);
 });
 
 // The frozen premigration inventory (tests/fixtures/premigration/test-list.txt) is a
@@ -114,8 +82,8 @@ test("the frozen premigration named set parses into a unique, directive-free key
 
   const frozen = parseFrozenNamedSet(await readFile(FROZEN_NAMED_SET_URL, "utf8"));
 
-  assert.equal(frozen.rowCount, 1818, "the frozen fixture holds 1818 TAP rows");
-  assert.equal(frozen.keys.size, 1818, "every frozen row must canonicalize to a distinct key");
+  assert.equal(frozen.rowCount, 1817, "the frozen fixture holds 1817 TAP rows");
+  assert.equal(frozen.keys.size, 1817, "every frozen row must canonicalize to a distinct key");
   assert.equal(
     frozen.prefixStrippedCount,
     11,

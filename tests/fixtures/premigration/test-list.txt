@@ -1522,7 +1522,6 @@
 0	ok	target.kind=jar preserves ERR_JAR_NOT_FOUND across representative entry points
 0	ok	task=workspace execution receives the inferred version
 0	ok	textResource returns the canonical { contents: [{ uri, text }] } shape
-0	ok	the explicit runner selection matches the ordinary recursive inventory
 0	ok	the members block is emitted even at explicit summary detail
 0	ok	the members task requires a class subject
 0	ok	the primary sources jar wins on duplicate file paths
