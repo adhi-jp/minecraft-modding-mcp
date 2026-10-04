@@ -1,22 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
-import { withGradleUserHome } from "../helpers/env.ts";
 import { buildInnerJarBytes, createShellJar } from "../helpers/nested-jar.ts";
 import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService returns class source with line range filtering", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -591,11 +585,7 @@ test("SourceService getClassSource rejects representative invalid input combinat
               startLine: 10,
               endLine: 2
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.INVALID_LINE_RANGE
+          expectAppErrorCode(ERROR_CODES.INVALID_LINE_RANGE)
         );
       }
     },
@@ -613,11 +603,7 @@ test("SourceService getClassSource rejects representative invalid input combinat
               },
               className: "net.minecraft.server.Main"
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+          expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
         );
       }
     }
@@ -672,11 +658,7 @@ test("SourceService getClassMembers rejects representative unresolved preconditi
               className: "net.minecraft.server.Main",
               mapping: "mojang"
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
+          expectAppErrorCode(ERROR_CODES.MAPPING_NOT_APPLIED)
         );
       }
     },
@@ -720,11 +702,7 @@ test("SourceService getClassMembers rejects representative unresolved preconditi
               artifactId: resolved.artifactId,
               className: "com.example.Demo"
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
+          expectAppErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED)
         );
       }
     }

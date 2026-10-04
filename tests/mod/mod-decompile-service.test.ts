@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";

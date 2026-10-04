@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
-import { buildClassFile } from "../helpers/classfile.ts";
-import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
+  readCacheAccountingMetrics
 } from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
@@ -23,6 +18,7 @@ import {
   createCacheAccountingFixture,
   instrumentCacheAccountingRepo
 } from "../helpers/source-service-fixtures.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService backfills alias on warm-cache resolveArtifact", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -92,14 +88,7 @@ test("SourceService evicts oldest artifacts when maxArtifacts is exceeded", asyn
         artifactId: first.artifactId,
         className: "a.A"
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
   );
 });
 
@@ -395,14 +384,7 @@ test("SourceService reports representative cache byte-accounting states", async 
               artifactId: first.artifactId,
               className: "a.A"
             }),
-          (error: unknown) => {
-            return (
-              typeof error === "object" &&
-              error !== null &&
-              "code" in error &&
-              (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
-            );
-          }
+          expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
         );
 
         const metrics = readCacheAccountingMetrics(service);

@@ -1,9 +1,10 @@
 /**
- * Predicate factory for asserting AppError-shaped throws in `assert.throws`.
+ * Predicate factory for asserting AppError-shaped throws in `assert.throws`
+ * and `assert.rejects`.
  *
  * Replaces the `typeof error === "object" && error !== null && "code" in error
- * && (error as { code: string }).code === ...` block duplicated across the NBT
- * test files. Optionally matches selected `details` fields (e.g. jsonPointer).
+ * && (error as { code: string }).code === ...` block that tests would otherwise
+ * repeat inline. Optionally matches selected `details` fields (e.g. jsonPointer).
  */
 export function expectAppErrorCode(
   code: string,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 

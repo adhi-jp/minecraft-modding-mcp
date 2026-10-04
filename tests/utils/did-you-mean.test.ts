@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
 import { SourceService } from "../../src/source-service.ts";
 import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";

@@ -24,6 +24,7 @@ import {
   TEST_TINY_YARN_2COL,
   TEST_MOJANG_CLIENT_MAPPINGS
 } from "../helpers/mapping-service-fixtures.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 installGradleUserHomeIsolation();
 
@@ -85,11 +86,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
             signatureMode: "exact"
           })
         ),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
 
     const methodExists = await withCwd(root, () =>
@@ -186,11 +183,7 @@ test("MappingService.findMapping honors nameMode=auto for dotless non-obfuscated
           targetMapping: "obfuscated",
           nameMode: "fqcn"
         }),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -653,11 +646,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
           // Default signatureMode is now name-only; assert the strict descriptor-required path.
           signatureMode: "exact"
         }),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
 
     await assert.rejects(
@@ -669,11 +658,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
           name: "a.b.C",
           sourceMapping: "obfuscated"
         }),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -834,11 +819,7 @@ test("MappingService rejects class queries that include owner", async () => {
           sourceMapping: "obfuscated",
           targetMapping: "mojang"
         }),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { applyMappingPipeline } from "../../src/mapping-pipeline-service.ts";
 import type { SourceMapping } from "../../src/types.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("applyMappingPipeline keeps mojang for unobfuscated decompiled runtime artifacts", () => {
   const result = applyMappingPipeline({
@@ -99,14 +100,7 @@ test("applyMappingPipeline still throws MAPPING_NOT_APPLIED when binary-only art
           resolvedAt: new Date().toISOString()
         }
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === "ERR_MAPPING_NOT_APPLIED"
-      );
-    }
+    expectAppErrorCode("ERR_MAPPING_NOT_APPLIED")
   );
 });
 
@@ -132,14 +126,7 @@ test("applyMappingPipeline throws MAPPING_UNAVAILABLE for an unsupported mapping
           resolvedAt: new Date().toISOString()
         }
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === "ERR_MAPPING_UNAVAILABLE"
-      );
-    }
+    expectAppErrorCode("ERR_MAPPING_UNAVAILABLE")
   );
 });
 
@@ -161,13 +148,6 @@ test("applyMappingPipeline ignores allowBinaryRemap when binary jar path is also
           resolvedAt: new Date().toISOString()
         }
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === "ERR_MAPPING_NOT_APPLIED"
-      );
-    }
+    expectAppErrorCode("ERR_MAPPING_NOT_APPLIED")
   );
 });

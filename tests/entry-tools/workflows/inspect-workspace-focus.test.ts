@@ -3,8 +3,7 @@ import test from "node:test";
 
 import { createError, ERROR_CODES } from "../../../src/errors.ts";
 import {
-  InspectMinecraftService,
-  inspectMinecraftSchema
+  InspectMinecraftService
 } from "../../../src/entry-tools/inspect-minecraft-service.ts";
 import { buildInspectDeps } from "../../helpers/inspect-deps.ts";
 

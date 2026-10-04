@@ -1,22 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
-import { buildClassFile } from "../helpers/classfile.ts";
-import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import { stubVersionService } from "../helpers/source-service-fixtures.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
-import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService diffClassSignatures returns member added/removed/modified deltas", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -449,13 +440,6 @@ test("SourceService diffClassSignatures validates version range order", async ()
         fromVersion: "1.0.2",
         toVersion: "1.0.0"
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });

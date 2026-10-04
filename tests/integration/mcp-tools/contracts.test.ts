@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { EXPECTED_TOOLS } from "../../helpers/expected-tools.ts";
-import { validateMixinSchema, getClassSourceSchema, getClassMembersSchema } from "../../../src/tool-schemas.ts";
 import { listTools, type ToolSchema } from "../../helpers/mcp-tools-harness.ts";
 
 function schemaDeclaresProperty(schema: unknown, key: string): boolean {

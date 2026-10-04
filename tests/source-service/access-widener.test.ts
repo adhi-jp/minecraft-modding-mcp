@@ -4,18 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService validateAccessWidener chooses the expected mapping namespace", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -406,11 +400,7 @@ test("SourceService validateAccessWidener runtime-aware mode fails when no runti
         projectPath: root,
         scope: "merged"
       }),
-      (error: unknown) =>
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
+      expectAppErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED)
     );
   });
 });
@@ -557,11 +547,7 @@ test("SourceService validateAccessTransformer requires explicit atNamespace with
       content: "public net.minecraft.server.MinecraftServer",
       version: "1.21.10"
     }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 

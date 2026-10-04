@@ -1,22 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
-import { buildClassFile } from "../helpers/classfile.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { withVersionManifestStub } from "../helpers/source-service-fixtures.ts";
 import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService resolves version target through manifest and downloads client jar", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -526,14 +519,7 @@ test("SourceService fails mojang mapping when only decompiled source is availabl
         mapping: "mojang",
         allowDecompile: false
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.MAPPING_NOT_APPLIED)
   );
 });
 
@@ -575,13 +561,6 @@ test("SourceService rejects mojang binary-remap on jar inputs because the gate i
         mapping: "mojang",
         allowDecompile: true
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.MAPPING_NOT_APPLIED
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.MAPPING_NOT_APPLIED)
   );
 });

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { buildArtifactAlias, DEFAULTS, loadConfig, stableArtifactId } from "../../src/config.ts";
 import { ERROR_CODES } from "../../src/errors.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void | Promise<void>) {
   const baseline = { ...process.env };
@@ -234,14 +235,7 @@ test("loadConfig rejects malformed path values with structured error", async () 
   }, () => {
     assert.throws(
       () => loadConfig(),
-      (error: unknown) => {
-        return (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-        );
-      }
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   });
 });

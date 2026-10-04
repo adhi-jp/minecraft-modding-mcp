@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import {
   readListFilesDurationMetric,
   readSearchIoMetrics,
@@ -469,14 +470,7 @@ test("SourceService searchClassSource handles representative edge cases", async 
     artifactId: string;
   };
 
-  function isInvalidInputError(error: unknown): boolean {
-    return (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-    );
-  }
+  const isInvalidInputError = expectAppErrorCode(ERROR_CODES.INVALID_INPUT);
 
   async function createSearchEdgeCaseFixture(input: {
     rootPrefix: string;

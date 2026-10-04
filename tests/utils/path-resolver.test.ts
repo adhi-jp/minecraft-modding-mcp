@@ -7,18 +7,11 @@ import { normalizeJarPath } from "../../src/path-resolver.ts";
 test("normalizeJarPath rejects malformed windows-drive path format", () => {
   assert.throws(
     () => normalizeJarPath("C:bad\\minecraft.jar"),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 
-import { mkdtemp, mkdir, writeFile, symlink, realpath } from "node:fs/promises";
+import { mkdtemp, writeFile, symlink, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +22,7 @@ import {
   resolveJarPathWithSymlinkCheck,
   validateAndNormalizeJarPath
 } from "../../src/path-resolver.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 // --- normalizeJarPath happy paths and structured errors --------------------
 

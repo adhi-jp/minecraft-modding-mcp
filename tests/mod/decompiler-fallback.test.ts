@@ -8,18 +8,12 @@ import test, { mock } from "node:test";
 import { ERROR_CODES, isAppError } from "../../src/errors.ts";
 import { decompileBinaryJar } from "../../src/decompiler/vineflower.ts";
 import { mockJavaRunner } from "../helpers/java-runner-mock.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("decompileBinaryJar returns ERR_DECOMPILER_UNAVAILABLE when vineflower path is missing", async () => {
   await assert.rejects(
     () => decompileBinaryJar("/tmp/example.jar", "/tmp/cache"),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.DECOMPILER_UNAVAILABLE
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.DECOMPILER_UNAVAILABLE)
   );
 });
 
@@ -29,14 +23,7 @@ test("decompileBinaryJar rejects non-jar input path", async () => {
       decompileBinaryJar("/tmp/example.txt", "/tmp/cache", {
         vineflowerJarPath: "/tmp/vineflower.jar"
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.DECOMPILER_UNAVAILABLE
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.DECOMPILER_UNAVAILABLE)
   );
 });
 

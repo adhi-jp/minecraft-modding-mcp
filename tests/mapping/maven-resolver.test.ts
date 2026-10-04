@@ -24,14 +24,7 @@ test("parseCoordinate supports 3 and 4 segment forms", () => {
 test("parseCoordinate rejects invalid coordinates with structured code", () => {
   assert.throws(
     () => parseCoordinate("bad-coordinate"),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.COORDINATE_PARSE_FAILED
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.COORDINATE_PARSE_FAILED)
   );
 });
 
@@ -58,6 +51,7 @@ import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("parseCoordinate rejects 5+ segment coordinates", () => {
   assert.throws(

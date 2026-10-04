@@ -9,7 +9,6 @@ import {
   type MappingHealthReport
 } from "../../src/mixin-validator.ts";
 import {
-  makeMember,
   makeTargetMembers,
   makeParsedMixin,
   makeProvenance,

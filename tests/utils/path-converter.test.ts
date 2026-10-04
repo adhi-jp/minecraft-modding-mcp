@@ -8,6 +8,7 @@ import {
   isWslMountPath,
   normalizePathForHost
 } from "../../src/path-converter.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 const WSL_RUNTIME = {
   platform: "linux",
@@ -54,27 +55,13 @@ test("normalizePathForHost converts wsl.localhost UNC paths to Linux paths under
 test("normalizePathForHost rejects UNC WSL paths targeting a different distro", () => {
   assert.throws(
     () => normalizePathForHost("\\\\wsl$\\Debian\\home\\adhi\\mod.jar", WSL_RUNTIME),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 
 test("normalizePathForHost rejects malformed windows drive paths", () => {
   assert.throws(
     () => normalizePathForHost("C:bad\\minecraft.jar", WSL_RUNTIME),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });

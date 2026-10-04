@@ -1,22 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
-import { buildClassFile } from "../helpers/classfile.ts";
-import { withGradleUserHome } from "../helpers/env.ts";
-import { fakeExplorerContext, seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
+import { fakeExplorerContext, stubExplorer } from "../helpers/seed-artifact.ts";
 import { stubVersionService } from "../helpers/source-service-fixtures.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
-import { createJar } from "../helpers/zip.ts";
 
 test("SourceService traces symbol lifecycle across versions and reports gaps", async () => {
   const { SourceService } = await import("../../src/source-service.ts");

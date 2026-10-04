@@ -10,7 +10,6 @@ import {
   type ResolutionPath
 } from "../../src/mixin-validator.ts";
 import {
-  makeMember,
   makeTargetMembers,
   makeParsedMixin,
   makeProvenance

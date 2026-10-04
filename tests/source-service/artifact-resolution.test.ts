@@ -1,21 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService resolves/searches/reads class source through artifactId flow", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -256,11 +250,7 @@ test("SourceService targetKind=jar handles representative sibling sources-jar ad
               target: { kind: "jar", value: binaryJarPath },
               allowDecompile: false
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
+          expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
         );
       }
     },
@@ -319,26 +309,12 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
 
   await assert.rejects(
     () => analyzeModJar(missingJarPath),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 
   await assert.rejects(
     () => service.decompileModJar({ jarPath: missingJarPath }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 
   await assert.rejects(
@@ -347,14 +323,7 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
         jarPath: missingJarPath,
         className: "com.example.Missing"
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 
   await assert.rejects(
@@ -363,14 +332,7 @@ test("SourceService mod APIs align missing-jar existence errors with analyze-mod
         jarPath: missingJarPath,
         query: "Missing"
       }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
-      );
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 

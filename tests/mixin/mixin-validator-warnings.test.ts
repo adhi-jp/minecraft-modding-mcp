@@ -8,7 +8,6 @@ import {
   type MixinValidationProvenance
 } from "../../src/mixin-validator.ts";
 import {
-  makeMember,
   makeTargetMembers,
   makeParsedMixin,
   makeProvenance,

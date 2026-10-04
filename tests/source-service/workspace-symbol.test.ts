@@ -1,22 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createError, ERROR_CODES } from "../../src/errors.ts";
-import type { Config } from "../../src/types.ts";
-import { buildClassFile } from "../helpers/classfile.ts";
+import { ERROR_CODES } from "../../src/errors.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
-import {
-  readCacheAccountingMetrics,
-  readSearchModeMetrics,
-  readSearchPathMetrics
-} from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import { type SourceServiceFixture } from "../helpers/source-service-fixtures.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 test("SourceService resolveWorkspaceSymbol handles representative compile-visible symbol flows", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -65,11 +58,7 @@ test("SourceService resolveWorkspaceSymbol handles representative compile-visibl
               name: "a.b.C",
               sourceMapping: "obfuscated"
             }),
-          (error: unknown) =>
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            (error as { code: string }).code === ERROR_CODES.INVALID_INPUT
+          expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
         );
       }
     },

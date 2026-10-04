@@ -6,6 +6,7 @@ import {
   parseProguardMethod,
   proguardTypeToJvm
 } from "../../src/mapping/parsers/proguard.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 // NOTE: ProGuard / Mojang client mappings are emitted post-type-erasure. Generic type
 // arguments are already erased to their raw class (so `List<String>` arrives as
@@ -135,13 +136,6 @@ test("parseClientMappings strips line-info prefixes and indexes both directions"
 test("parseClientMappings throws MAPPING_UNAVAILABLE when no class mappings are present", () => {
   assert.throws(
     () => parseClientMappings("# only comments\nnot a class mapping line"),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === "ERR_MAPPING_UNAVAILABLE"
-      );
-    }
+    expectAppErrorCode("ERR_MAPPING_UNAVAILABLE")
   );
 });

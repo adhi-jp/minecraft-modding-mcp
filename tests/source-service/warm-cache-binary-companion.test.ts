@@ -8,6 +8,7 @@ import { buildClassFile } from "../helpers/classfile.ts";
 import { withTempDir } from "../helpers/temp-dir.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 /**
  * A binary companion jar that appears in ~/.m2 AFTER the artifact row was first
@@ -160,10 +161,6 @@ test("a sources-only artifact still refuses an artifactId-only members lookup", 
         className: "com.example.Demo",
         mapping: "obfuscated"
       }),
-    (error: unknown) =>
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code: string }).code === ERROR_CODES.CONTEXT_UNRESOLVED
+    expectAppErrorCode(ERROR_CODES.CONTEXT_UNRESOLVED)
   );
 });
