@@ -455,7 +455,7 @@ The optional `error.exampleCalls?: Array<{ tool: string; params: Record<string, 
 
 ## Operational toggles
 
-These environment variables are read once at worker startup. Each one switches off a feature or restores an earlier behaviour, as its Effect column describes. Switching them requires reconnecting the MCP server (no per-request override).
+These environment variables are process-level settings with no per-request override. Each one switches off a feature or restores an earlier behaviour, as its Effect column describes. Some are read once when the server starts and others on every operation that uses them, and `SUPERVISOR_STRUCTURED_RESTART_OFF` is read by the supervisor process, so set them in the server's environment before starting it and reconnect the MCP server to change them.
 
 | Env | Effect | Acceptance test |
 |---|---|---|
@@ -690,11 +690,11 @@ Tooling note: `pnpm test:manual:stdio-smoke` runs against the production supervi
 
 The legacy public namespace name `official` was removed. Requests that still send `official` now fail validation and should be updated to `obfuscated`.
 
-On an unobfuscated runtime (`26.1+`), the runtime's names as shipped are Mojang names, so a namespace field that would report `obfuscated` reports `mojang` instead. A request that omits `mapping` or passes `mapping="obfuscated"` therefore reports `"mojang"`, exactly as `mapping="mojang"` does, and both read the same names. Other reported values are unchanged: an `intermediary` or `yarn` request reports `mojang` only where the resolver falls back to the runtime names, which happens when an artifact or class tool resolves a 26.1+ target; on the lifecycle tools, and on an already-resolved `artifactId`, an explicit `intermediary` or `yarn` keeps being reported as requested. The rule covers:
+On an unobfuscated runtime (`26.1+`), the runtime's names as shipped are Mojang names, so a namespace field that would report `obfuscated` reports `mojang` instead. A request that omits `mapping` or passes `mapping="obfuscated"` therefore reports `"mojang"`, exactly as `mapping="mojang"` does, and both read the same names. Other reported values are unchanged: an `intermediary` or `yarn` request reports `mojang` only where the resolver falls back to the runtime names, which happens when an artifact or class tool resolves a 26.1+ target; the lifecycle tools keep reporting an explicit `intermediary` or `yarn` as requested. An explicit `intermediary` or `yarn` sent with an already-resolved `artifactId` skips that resolution, and the fields differ by tool: `get-class-source` reports `mojang` in both `mappingApplied` and `returnedNamespace`; `get-class-members` reports `mojang` in `mappingApplied` but keeps the requested `intermediary` or `yarn` in `returnedNamespace` and `context.mappingNamespace`; each `batch-class-members` entry forwards the explicit `mapping` and so reports what `get-class-members` does. The rule covers:
 
 - `mappingApplied` from `resolve-artifact`, `inspect-minecraft task="artifact"`, `get-class-source`, `get-class-members`, `search-class-source`, `get-artifact-file`, `list-artifact-files`, `index-artifact`, and the batch tools, including `target.kind="workspace"` on a 26.1+ project that declares no `mappings` line.
 - `returnedNamespace` from the tools above that return it, including `inspect-minecraft task="class-overview"`, and `context.mappingNamespace` from `get-class-members`.
-- `query.mapping` from `diff-class-signatures` and `compare-minecraft task="class-diff"` when both versions are `26.1+`, and from `trace-symbol-lifecycle` when every scanned version is `26.1+`. A comparison or scan that reaches a pre-26.1 version reports the requested mapping, as before.
+- `query.mapping` from `diff-class-signatures` when both versions are `26.1+`, `result.comparison.mapping` from `compare-minecraft task="class-diff"` when both versions are `26.1+` (the `comparison` block is returned at `detail: "standard"` or `"full"`, not at the default `summary`), and `query.mapping` from `trace-symbol-lifecycle` when every scanned version is `26.1+`. A comparison or scan that reaches a pre-26.1 version reports the requested mapping, as before.
 - `mapping` in the `tasks["minecraft.artifact.resolved"]` entry of `validate-project`.
 - `resolvedOwner.mapping` and `provenance.mappingNamespace` from `verify-mixin-target`, and `provenance.mappingApplied` from `validate-mixin`.
 
