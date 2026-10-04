@@ -178,7 +178,6 @@ test("ManageCacheService normalizes read-only actions to preview mode and blocks
       inspectEntries: async () => [],
       deleteEntries: async () => ({ deletedEntries: 0, deletedBytes: 0, warnings: [] }),
       pruneEntries: async () => ({ deletedEntries: 0, deletedBytes: 0, warnings: [] }),
-      rebuildEntries: async () => ({ rebuiltEntries: 0, warnings: [] }),
       verifyEntries: async () => ({ checkedEntries: 1, unhealthyEntries: 0, warnings: [] })
     }
   });
@@ -270,7 +269,6 @@ test("ManageCacheService preview delete includes summary.subject and apply follo
       inspectEntries: async () => [],
       deleteEntries: async () => ({ deletedEntries: 2, deletedBytes: 64, warnings: [] }),
       pruneEntries: async () => ({ deletedEntries: 0, deletedBytes: 0, warnings: [] }),
-      rebuildEntries: async () => ({ rebuiltEntries: 0, warnings: [] }),
       verifyEntries: async () => ({ checkedEntries: 0, unhealthyEntries: 0, warnings: [] })
     }
   });

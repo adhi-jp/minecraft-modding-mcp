@@ -96,18 +96,6 @@ export type IndexArtifactOutput = {
   mappingApplied: import("../types.js").SourceMapping;
 };
 
-function chunkArray<T>(items: T[], chunkSize: number): T[][] {
-  const size = Math.max(1, Math.trunc(chunkSize));
-  if (items.length === 0) {
-    return [];
-  }
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
-}
-
 export async function indexArtifact(svc: SourceService, input: IndexArtifactInput): Promise<IndexArtifactOutput> {
   const artifactId = input.artifactId?.trim();
   if (!artifactId) {
@@ -221,7 +209,6 @@ export async function rebuildAndPersistArtifactIndex(
 ): Promise<RebuiltArtifactData> {
   const rebuilt = await buildRebuiltArtifactData(svc, resolved);
   const timestamp = new Date().toISOString();
-  const chunkSize = Math.max(1, svc.config.indexInsertChunkSize ?? 200);
 
   const tx = svc.db.transaction(() => {
     svc.artifactsRepo.upsertArtifact({
@@ -242,13 +229,9 @@ export async function rebuildAndPersistArtifactIndex(
       timestamp
     });
     svc.filesRepo.clearFilesForArtifact(resolved.artifactId);
-    for (const chunk of chunkArray(rebuilt.files, chunkSize)) {
-      svc.filesRepo.insertFilesForArtifact(resolved.artifactId, chunk);
-    }
+    svc.filesRepo.insertFilesForArtifact(resolved.artifactId, rebuilt.files);
     svc.symbolsRepo.clearSymbolsForArtifact(resolved.artifactId);
-    for (const chunk of chunkArray(rebuilt.symbols, chunkSize)) {
-      svc.symbolsRepo.insertSymbolsForArtifact(resolved.artifactId, chunk);
-    }
+    svc.symbolsRepo.insertSymbolsForArtifact(resolved.artifactId, rebuilt.symbols);
     svc.indexMetaRepo.upsert({
       artifactId: resolved.artifactId,
       artifactSignature: resolved.artifactSignature,

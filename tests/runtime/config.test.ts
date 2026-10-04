@@ -58,7 +58,6 @@ test("loadConfig applies defaults for missing environment variables", async () =
     assert.equal(config.sqliteMmapSize, DEFAULTS.sqliteMmapSize);
     assert.equal(config.searchScanPageSize, DEFAULTS.searchScanPageSize);
     assert.equal(config.searchScanMaxBytes, DEFAULTS.searchScanMaxBytes);
-    assert.equal(config.indexInsertChunkSize, DEFAULTS.indexInsertChunkSize);
     assert.equal(config.maxMappingGraphCache, DEFAULTS.maxMappingGraphCache);
     assert.equal(config.maxSignatureCache, DEFAULTS.maxSignatureCache);
     assert.equal(config.maxVersionDetailCache, DEFAULTS.maxVersionDetailCache);
@@ -145,7 +144,6 @@ test("loadConfig falls back for malformed numeric values", async () => {
     MCP_FETCH_TIMEOUT_MS: "100",
     MCP_FETCH_RETRIES: "99",
     MCP_SEARCH_SCAN_PAGE_SIZE: "0",
-    MCP_INDEX_INSERT_CHUNK_SIZE: "0",
     MCP_CACHE_GRAPH_MAX: "0",
     MCP_CACHE_SIGNATURE_MAX: "0",
     MCP_CACHE_VERSION_DETAIL_MAX: "0",
@@ -165,7 +163,6 @@ test("loadConfig falls back for malformed numeric values", async () => {
     assert.equal(config.fetchRetries, DEFAULTS.fetchRetries);
     assert.equal(config.searchScanPageSize, DEFAULTS.searchScanPageSize);
     assert.equal(config.searchScanMaxBytes, DEFAULTS.searchScanMaxBytes);
-    assert.equal(config.indexInsertChunkSize, DEFAULTS.indexInsertChunkSize);
     assert.equal(config.maxMappingGraphCache, DEFAULTS.maxMappingGraphCache);
     assert.equal(config.maxSignatureCache, DEFAULTS.maxSignatureCache);
     assert.equal(config.maxVersionDetailCache, DEFAULTS.maxVersionDetailCache);

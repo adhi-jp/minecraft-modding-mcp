@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,40 +181,4 @@ test("unknown tool name fails open: passes the caller payload through (registry-
   assert.equal(out.suggestedCall!.tool, "definitely-not-a-real-tool");
   assert.deepEqual(out.suggestedCall!.params, { foo: "bar" });
   assert.equal(out._suggestedCallPrimaryDropped, undefined);
-});
-
-test("D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation (subprocess; module-load read)", () => {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "-e",
-      `
-        const { buildSuggestedCall } = await import("./src/build-suggested-call.ts");
-        const buggyParams = {
-          target: {
-            type: "resolve",
-            kind: "coordinate",
-            value: "{\\\"type\\\": \\\"resolve\\\", \\\"kind\\\": \\\"version\\\", \\\"value\\\": \\\"1.21.10\\\"}"
-          }
-        };
-        const out = buildSuggestedCall({ tool: "get-class-members", params: buggyParams });
-        process.stdout.write(JSON.stringify(out));
-      `
-    ],
-    {
-      env: { ...process.env, SUGGESTED_CALL_VALIDATE_OFF: "1" },
-      encoding: "utf8"
-    }
-  );
-  assert.equal(result.status, 0, `subprocess failed: ${result.stderr}`);
-  const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-  assert.ok(parsed.suggestedCall, "expected suggestedCall under bypass");
-  const suggested = parsed.suggestedCall as { tool: string; params: Record<string, unknown> };
-  assert.equal(suggested.tool, "get-class-members");
-  // Bug-shaped payload emerges unchanged: target.value still holds the JSON string.
-  const target = suggested.params.target as { value: unknown };
-  assert.match(String(target.value), /^\{/);
-  assert.equal(parsed.exampleCalls, undefined);
 });

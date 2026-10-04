@@ -16,8 +16,6 @@ import type {
   SourceMapping
 } from "../types.js";
 
-export const BATCH_TOOLS_OFF = process.env.BATCH_TOOLS_OFF === "1";
-
 export type BatchEntryOk<TResult> = {
   index: number;
   status: "ok";

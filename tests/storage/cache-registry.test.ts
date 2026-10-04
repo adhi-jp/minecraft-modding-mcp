@@ -864,3 +864,39 @@ test("cache registry ignores the leftover of an interrupted download sidecar wri
     "inventory is read-only: listing must never delete files"
   );
 });
+
+test("cache registry delete does not open the artifact index when no artifact-index entry is selected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cache-registry-no-open-"));
+  const cacheDir = join(root, "cache");
+  const downloadsDir = join(cacheDir, "downloads");
+  await mkdir(downloadsDir, { recursive: true });
+  const jarPath = join(downloadsDir, "client.jar");
+  await writeFile(jarPath, "jar");
+
+  // Not a SQLite database at all: opening it runs the consistency check, which
+  // fails and moves the file aside. Leaving these bytes untouched is the
+  // observable proof that a downloads-only delete never opened the index.
+  const sqlitePath = join(cacheDir, "source-cache.db");
+  const sentinel = "this is not a sqlite database";
+  await writeFile(sqlitePath, sentinel);
+
+  const registry = createCacheRegistry({ cacheDir, sqlitePath });
+  const result = await registry.deleteEntries({
+    cacheKinds: ["downloads"],
+    selector: { entryId: "client.jar" },
+    executionMode: "apply"
+  });
+
+  assert.equal(result.deletedEntries, 1);
+  assert.equal(existsSync(jarPath), false);
+  assert.equal(
+    (await readFile(sqlitePath, "utf8")).slice(0, sentinel.length),
+    sentinel,
+    "the artifact index must not have been opened, checked or rebuilt"
+  );
+  assert.equal(
+    (await readdir(cacheDir)).some((entry) => entry.includes(".corrupted.")),
+    false,
+    "opening the index would have moved the unreadable file aside"
+  );
+});

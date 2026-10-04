@@ -24,7 +24,6 @@ function buildTestConfig(root: string): Config {
     mappingSourcePriority: "loom-first",
     searchScanPageSize: 250,
     searchScanMaxBytes: 67_108_864,
-    indexInsertChunkSize: 200,
     maxMappingGraphCache: 16,
     maxSignatureCache: 2_000,
     maxVersionDetailCache: 256,

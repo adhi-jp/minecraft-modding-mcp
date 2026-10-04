@@ -3657,7 +3657,6 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
           "inspect",
           "delete",
           "prune",
-          "rebuild",
           "verify"
         ]
       },

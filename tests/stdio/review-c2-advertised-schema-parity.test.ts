@@ -33,10 +33,6 @@ import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
  * differ between the pinned draft-07 bytes and zod's current output.
  */
 
-// Default flag configuration: an inherited *_OFF=1 would shift this file onto a
-// non-default registry and hide tools from the comparison.
-delete process.env.BATCH_TOOLS_OFF;
-delete process.env.VERIFY_MIXIN_TARGET_OFF;
 const root = mkdtempSync(join(tmpdir(), "review-c2-schema-parity-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");

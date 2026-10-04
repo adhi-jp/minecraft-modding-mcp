@@ -38,11 +38,9 @@ import { legacyHandshake, startInProcessSession, type InProcessSession } from ".
  * operates on in-memory clones only.
  */
 
-// Default flag configuration + fresh cache, mirroring the capture env
-// (fixtures record only MCP_CACHE_DIR/MCP_SQLITE_PATH/pid file; no feature
-// flags, no manifest override).
-delete process.env.BATCH_TOOLS_OFF;
-delete process.env.VERIFY_MIXIN_TARGET_OFF;
+// Fresh cache, mirroring the capture env (fixtures record only
+// MCP_CACHE_DIR/MCP_SQLITE_PATH/pid file; no feature flags, no manifest
+// override).
 delete process.env.MCP_VERSION_MANIFEST_URL;
 const root = mkdtempSync(join(tmpdir(), "problemdetails-goldens-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");

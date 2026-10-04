@@ -469,56 +469,6 @@ test("C10: owner not found rethrows ERR_CLASS_NOT_FOUND with find-class suggeste
   );
 });
 
-test("C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls", async () => {
-  const { spawnSync } = await import("node:child_process");
-  const script = `
-    import assert from "node:assert/strict";
-    import { VerifyMixinTargetService, VERIFY_MIXIN_TARGET_OFF } from "./src/entry-tools/verify-mixin-target-service.ts";
-    assert.equal(VERIFY_MIXIN_TARGET_OFF, true);
-    const service = new VerifyMixinTargetService({
-      resolveArtifact: async () => { throw new Error("should not be called"); },
-      getSignature: async () => { throw new Error("should not be called"); }
-    });
-    let threw = false;
-    try {
-      await service.execute({
-        owner: "Owner",
-        member: { kind: "method", name: "tick" },
-        target: { kind: "version", value: "1.21.10" }
-      });
-    } catch (error) {
-      threw = true;
-      assert.match((error).message, /VERIFY_MIXIN_TARGET_OFF/);
-    }
-    assert.equal(threw, true);
-
-    // tools/list path: importing index.ts must not register verify-mixin-target.
-    // Drive the real factory through the public in-process transport; the
-    // specifier resolves against the subprocess cwd (repo root).
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    process.env.MCP_CACHE_DIR ??= join(tmpdir(), "verify-mixin-target-off-cache");
-    const { startInProcessSession, legacyHandshake } = await import("./tests/stdio/inprocess-era-serve.ts");
-    const session = await startInProcessSession();
-    const handshake = await legacyHandshake(session, undefined, "c11-init");
-    assert.equal(handshake.error, undefined);
-    const frame = await session.request({ jsonrpc: "2.0", id: "c11-tools-list", method: "tools/list", params: {} });
-    assert.equal(frame.error, undefined);
-    assert.ok(Array.isArray(frame.result?.tools));
-    const names = frame.result.tools.map((t) => t.name);
-    assert.equal(names.includes("verify-mixin-target"), false);
-    await session.close();
-    console.log("OK");
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, VERIFY_MIXIN_TARGET_OFF: "1" },
-    encoding: "utf8"
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /OK/);
-});
-
 test("C19: @Accessor setter template emits void with parameter (not zero-arg)", async () => {
   const service = new VerifyMixinTargetService(
     buildDeps({

@@ -10,9 +10,8 @@ import type { CacheHint } from "@modelcontextprotocol/server";
  *
  * ttlMs by surface, with the rationale each row stands on:
  *  - tools/list and server/discover: 0 — the SDK default; deliberately NOT
- *    configured. The advertised tool set depends on process feature flags
- *    (BATCH_TOOLS_OFF, VERIFY_MIXIN_TARGET_OFF), so caching would risk
- *    serving a stale flag-dependent tool set across a reconfiguration.
+ *    configured. Caching would risk serving a stale tool set to a client
+ *    after the server is upgraded or restarted with a different configuration.
  *  - resources/list and resources/templates/list: 1 hour. The resource
  *    registry is process-stable registration metadata (fixed 2+7 set); a
  *    cached copy may briefly outlive a changed configuration, which is

@@ -45,10 +45,6 @@ import {
  * operates on in-memory clones only.
  */
 
-// Default flag configuration: clear both feature flags so an inherited
-// *_OFF=1 cannot shift this file onto a non-default registry.
-delete process.env.BATCH_TOOLS_OFF;
-delete process.env.VERIFY_MIXIN_TARGET_OFF;
 const root = mkdtempSync(join(tmpdir(), "tool-contract-snapshots-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");

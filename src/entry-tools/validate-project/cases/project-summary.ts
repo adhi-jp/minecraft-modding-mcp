@@ -132,7 +132,7 @@ if (!input.version && input.preferProjectVersion === false) {
   );
   return {
     ...baseResult,
-    ...(tasks ? { tasks } : {}),
+    tasks,
     warnings: []
   };
 }
@@ -220,7 +220,7 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
   const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, gradleUserHome);
   return {
     ...baseResult,
-    ...(tasks ? { tasks } : {}),
+    tasks,
     warnings: [
       "Could not resolve Minecraft version from gradle.properties for discovered workspace validators."
     ]
@@ -265,7 +265,7 @@ if (!resolvedVersion) {
   const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, gradleUserHome);
   return {
     ...baseResult,
-    ...(tasks ? { tasks } : {}),
+    tasks,
     warnings: [nothingToValidate.warning]
   };
 }
@@ -559,7 +559,7 @@ const tasks = await buildFullTaskStatusReport(deps, {
 });
 return {
   ...baseResult,
-  ...(tasks ? { tasks } : {}),
+  tasks,
   warnings
 };
 }

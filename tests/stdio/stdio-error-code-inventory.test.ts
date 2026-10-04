@@ -21,10 +21,6 @@ import test, { after, before } from "node:test";
  *    continuing wire accuracy is pinned by the named committed suite.
  */
 
-// BATCH_TOOLS_OFF removes the batch tools from registration for THIS test
-// process only — the disabled-tool row needs it. Must be set before the
-// harness's first src/index.ts import.
-process.env.BATCH_TOOLS_OFF = "1";
 const root = mkdtempSync(join(tmpdir(), "p3-error-codes-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");
@@ -48,6 +44,10 @@ import {
   buildValidateProjectTimeoutReply,
   buildWorkerRestartReply
 } from "../../src/stdio-supervisor.ts";
+
+// A tool name that no registration path ever produces, so tools/call answers
+// the registry-miss shape on every era.
+const UNREGISTERED_TOOL = "no-such-tool-error-inventory";
 
 type WireError = { error?: { code?: number; message?: string; data?: unknown }; result?: unknown };
 
@@ -159,7 +159,7 @@ test("an unmatched resource URI answers JSON-RPC -32602, both eras", async () =>
   assert.equal(modernFrame.error?.code, -32602);
 });
 
-test("disabled tool (BATCH_TOOLS_OFF): legacy answers the restored premigration isError envelope; modern keeps the raw -32602", async () => {
+test("unregistered tool: legacy answers the restored premigration isError envelope; modern keeps the raw -32602", async () => {
   // Restored via the supervisor intercept: the premigration legacy contract
   // returned a SUCCESSFUL isError result for an unregistered tool name, and
   // the supervisor synthesizes exactly that envelope for LEGACY-era registry
@@ -204,21 +204,21 @@ test("disabled tool (BATCH_TOOLS_OFF): legacy answers the restored premigration 
     jsonrpc: "2.0",
     id: id(),
     method: "tools/call",
-    params: { name: "batch-class-source", arguments: {} }
+    params: { name: UNREGISTERED_TOOL, arguments: {} }
   });
   assert.equal(legacyWorker.result, undefined, "the bare worker surface answers no result envelope");
   assert.equal(legacyWorker.error?.code, -32602);
-  assert.equal(legacyWorker.error?.message, "Tool batch-class-source not found");
+  assert.equal(legacyWorker.error?.message, `Tool ${UNREGISTERED_TOOL} not found`);
 
   const modernFrame = await modern.request({
     jsonrpc: "2.0",
     id: id(),
     method: "tools/call",
-    params: { _meta: MODERN_META, name: "batch-class-source", arguments: {} }
+    params: { _meta: MODERN_META, name: UNREGISTERED_TOOL, arguments: {} }
   });
   assert.equal(modernFrame.result, undefined, "the modern era keeps the raw error");
   assert.equal(modernFrame.error?.code, -32602);
-  assert.equal(modernFrame.error?.message, "Tool batch-class-source not found");
+  assert.equal(modernFrame.error?.message, `Tool ${UNREGISTERED_TOOL} not found`);
 });
 
 test("the per-path inventory table matches the observed/builder/baseline codes", () => {

@@ -27,7 +27,6 @@ const DEFAULTS = {
   fetchRetries: 2,
   searchScanPageSize: 250,
   searchScanMaxBytes: 67_108_864,
-  indexInsertChunkSize: 200,
   maxMappingGraphCache: 16,
   maxSignatureCache: 2_000,
   maxVersionDetailCache: 256,
@@ -54,8 +53,6 @@ const SEARCH_SCAN_PAGE_SIZE_LOWER_BOUND = 1;
 const SEARCH_SCAN_PAGE_SIZE_UPPER_BOUND = 10_000;
 const SEARCH_SCAN_MAX_BYTES_LOWER_BOUND = 1_024;
 const SEARCH_SCAN_MAX_BYTES_UPPER_BOUND = 4_294_967_296;
-const INDEX_INSERT_CHUNK_SIZE_LOWER_BOUND = 1;
-const INDEX_INSERT_CHUNK_SIZE_UPPER_BOUND = 20_000;
 const CACHE_ENTRIES_LOWER_BOUND = 1;
 const CACHE_ENTRIES_UPPER_BOUND = 100_000;
 
@@ -253,12 +250,6 @@ export function loadConfig(): Config {
       DEFAULTS.searchScanMaxBytes,
       SEARCH_SCAN_MAX_BYTES_LOWER_BOUND,
       SEARCH_SCAN_MAX_BYTES_UPPER_BOUND
-    ),
-    indexInsertChunkSize: parseNumber(
-      process.env.MCP_INDEX_INSERT_CHUNK_SIZE,
-      DEFAULTS.indexInsertChunkSize,
-      INDEX_INSERT_CHUNK_SIZE_LOWER_BOUND,
-      INDEX_INSERT_CHUNK_SIZE_UPPER_BOUND
     ),
     maxMappingGraphCache: parseNumber(
       process.env.MCP_CACHE_GRAPH_MAX,

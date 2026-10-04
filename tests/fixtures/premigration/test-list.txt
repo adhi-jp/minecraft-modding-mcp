@@ -30,9 +30,7 @@
 0	ok	ArtifactsRepo.setAlias backfills a NULL alias on a legacy row
 0	ok	ArtifactsRepo.setAlias is idempotent and rotates an existing alias
 0	ok	ArtifactsRepo.upsertArtifact updates alias on conflict for same artifact_id
-0	ok	BATCH_TOOLS_OFF env gate is true only when BATCH_TOOLS_OFF=1 at module load
 0	ok	C10: owner not found rethrows ERR_CLASS_NOT_FOUND with find-class suggestedCall
-0	ok	C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls
 0	ok	C12: exampleSnippet is deterministic for given (annotation, kind, accessFlags)
 0	ok	C13: explicit input.mapping that differs from resolved.mappingApplied throws ERR_NAMESPACE_MISMATCH
 0	ok	C14: autoRemap translates owner+member across namespaces instead of throwing
@@ -79,7 +77,6 @@
 0	ok	CompatStdioServerTransport reports malformed Content-Length headers and recovers
 0	ok	CompatStdioServerTransport waits until full Content-Length body is available
 0	ok	D10: bug-shaped suggestedCall is dropped and error.hints carries the fallback line
-0	ok	D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation (subprocess; module-load read)
 0	ok	D12: no raw `suggestedCall: { ... }` or `.suggestedCall = { ... }` construction remains in src/
 0	ok	D13: byte-identical envelope for valid suggestions (no key additions, no defaults injected)
 0	ok	D14: a non-AppError throw maps to a non-retryable server fault (retryClass=server)
@@ -961,7 +958,6 @@
 0	ok	inspect-minecraft class-source without artifact context returns retryable suggestedCall
 0	ok	inspect-minecraft focus recovery preserves only valid workspace fields
 0	ok	inspect-minecraft preserves focus recovery examples when preflight also rejects official mapping
-0	ok	inspect-minecraft rollback mode suppresses invalid suggestedCall when focus recovery applies
 0	ok	inspect-minecraft search without artifact context returns retryable suggestedCall
 0	ok	inspect-minecraft string workspace focus returns validated class/search/file recovery examples
 0	ok	inspect-minecraft tools/list schema explains structured workspace focus dispatch
@@ -1209,9 +1205,6 @@
 0	ok	read-only tools do not expose file-writing fields
 0	ok	read-through content is capped at 512 KiB with the truncation flag set
 0	ok	reads path-mode input from the file and forwards its content to the access transformer validator
-0	ok	rebuild in apply mode with a selector reports changed with rebuilt counts and no preview follow-up
-0	ok	rebuild in apply mode without a selector is rejected with ERR_INVALID_INPUT before calling the registry
-0	ok	rebuild preview reports unchanged with rebuilt counts and offers the apply follow-up call
 0	ok	reconcile: a missing version is a no-op (cannot prove unobfuscated)
 0	ok	reconcile: an already-identity mojang/mojang pair is unchanged
 0	ok	reconcile: obfuscated (legacy) version is left untouched
@@ -1523,7 +1516,6 @@
 0	ok	validate-project tasks A3: minecraft.artifact.resolved error preserves actual validator outcomes, loom independent
 0	ok	validate-project tasks A3b: lightweight artifact probe failure returns task error
 0	ok	validate-project tasks A4: discovery 0 paths sets corresponding entry to missing
-0	ok	validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks field
 0	ok	validate-project tasks A6: detail=summary or include without workspace strips evidence/buildScripts/counts
 0	ok	validate-project tasks A7: callers ignoring tasks see byte-identical other fields
 0	ok	validate-project tasks reports explicit gradleUserHome Loom cache after schema parsing

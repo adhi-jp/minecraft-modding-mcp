@@ -287,8 +287,6 @@ Errors:
 - Workspace targets without a detectable Minecraft version still raise `ERR_WORKSPACE_VERSION_UNRESOLVED` (inherited from `resolve-artifact`).
 - Namespace mismatch raises `ERR_NAMESPACE_MISMATCH` when an explicit `mapping` argument differs from the resolved artifact's `mappingApplied`. The tool does NOT yet auto-translate `owner` / `member.name` / `descriptor` between namespaces; supply them in the artifact's namespace, or omit `mapping` so the resolver picks the namespace automatically. `details` carries `requestedMapping` and `mappingApplied` so callers can branch programmatically. Auto-translation (per-member name + descriptor remap matching the `get-class-members` flow) is a planned follow-up; until then the explicit error replaces silent `ERR_CLASS_NOT_FOUND` / `exists:false` regressions when the namespaces diverge.
 
-Set `VERIFY_MIXIN_TARGET_OFF=1` at process start to remove the tool from `tools/list` entirely and reject direct calls. Use as a rollback path while the accessor-inference rules stabilize.
-
 ## compare-minecraft migration-overview: `libraries`
 
 `compare-minecraft` with `task="migration-overview"` includes a `migration.libraries` block (the `migration` block is returned at `detail: "standard"` or `"full"`) diffing the two versions' per-version JSON `libraries` array — the dependencies Minecraft itself ships with (LWJGL, Netty, etc.), which a class or registry diff cannot see. This is how a library swap such as LWJGL's GLFW binding being replaced by SDL surfaces, instead of silently changing behavior underneath a migration.
@@ -362,8 +360,6 @@ Per-entry retry semantics: each `error.suggestedCall` proposes the **matching si
 Every per-entry `suggestedCall` is validated through the same `tool-schema-registry` gate as single-tool errors (see `## Errors → suggestedCall schema validation gate`).
 
 If the **shared resolution itself** fails (e.g. `target.kind="version"` with an unknown version), the batch returns a top-level error envelope (no `results[]`). `failFast` does not apply because no entries ran.
-
-Rollback: `BATCH_TOOLS_OFF=1` removes all four batch tools from `tools/list`. Direct `tools/call` for any of them is answered per era: legacy clients receive a SUCCESSFUL tool-result envelope (`{ content: [{ type: "text", text: "MCP error -32602: Tool <name> not found" }], isError: true }`, no `structuredContent` key), while modern clients receive a raw JSON-RPC `-32602` error (see `## MCP Protocol Support` → Rejection and error table). Neither shape carries `ProblemDetails`, so callers cannot rely on `error.code === "ERR_*"` for disabled tools.
 
 ### batch-class-source
 
@@ -459,7 +455,7 @@ The optional `error.exampleCalls?: Array<{ tool: string; params: Record<string, 
 
 ## Operational toggles
 
-These environment variables are read once at worker startup and provide rollback paths to legacy behaviour. Switching them requires reconnecting the MCP server (no per-request override).
+These environment variables are read once at worker startup. Each one switches off a feature or restores an earlier behaviour, as its Effect column describes. Switching them requires reconnecting the MCP server (no per-request override).
 
 | Env | Effect | Acceptance test |
 |---|---|---|
@@ -469,11 +465,7 @@ These environment variables are read once at worker startup and provide rollback
 | `WORKSPACE_TARGET_OFF=1` | Rejects `target.kind="workspace"` on `resolve-artifact`, `get-class-source`, and `get-class-members` with `ERR_INVALID_INPUT`. Restores the pre-workspace-target behaviour where callers must always supply `target.kind="version"`/`"jar"`/`"coordinate"`. An `inspect-minecraft` workspace subject is not rejected: it falls back to the previous `{ kind: "version" }` routing instead, as described under `inspect-minecraft` above. | `tests/source-service/workspace-target.test.ts` (`synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set`) |
 | `DEPENDENCY_TARGET_OFF=1` | Rejects `target.kind="dependency"` on the same three tools with `ERR_INVALID_INPUT`. | `tests/source-service/dependency-target.test.ts` (`synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set`) |
 | `WORKSPACE_FALLBACK_LEGACY=1` | Forces the `ERR_MAPPING_NOT_APPLIED` `suggestedCall` back to the pre-workspace shape (`{ target, mapping: "obfuscated" }` with the legacy scope flip on `vanilla`+`mojang`). Use when an integration relies on the legacy retry payload. | `tests/source-service/mapping-not-applied-fallback.test.ts` (`buildMappingFallbackSuggestedCall returns the legacy obfuscated retry when WORKSPACE_FALLBACK_LEGACY is set`) |
-| `VALIDATE_PROJECT_TASKS_OFF=1` | Omits the additive `tasks` per-probe status report from `validate-project task="project-summary"` results. The headline `result.summary.status`, `result.project`, and `result.workspace` blocks are unchanged. Use as a rollback path while the per-probe contract stabilizes. | `tests/entry-tools/validate-project/validate-project-tasks.test.ts` (`validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks field`) |
 | `MEMBERS_STATUS_LEGACY=1` | Omits the additive `status` / `unavailableReason` / `suggestedCall` fields from `get-class-members` results. Restores the pre-status response shape for callers that pre-date the new enum. | `tests/source-service/get-class-members-status.test.ts` (`MEMBERS_STATUS_LEGACY=1 strips the new fields`) |
-| `VERIFY_MIXIN_TARGET_OFF=1` | Removes `verify-mixin-target` from `tools/list` and rejects direct invocations with `ERR_INVALID_INPUT`. Use as a rollback path while the accessor-inference rules stabilize. | `tests/entry-tools/verify-mixin-target/verify-mixin-target.test.ts` (`C11: VERIFY_MIXIN_TARGET_OFF=1 hides the tool from tools/list and rejects direct calls`) |
-| `SUGGESTED_CALL_VALIDATE_OFF=1` | Bypasses the `ProblemDetails.suggestedCall` schema validation gate. Raw caller-supplied payloads are emitted unchanged (matching the pre-gate behaviour); `error.hints` does not gain the fallback line. Use only as an emergency rollback if the gate causes unexpected drops in production. | `tests/contracts/build-suggested-call.test.ts` (`D11: SUGGESTED_CALL_VALIDATE_OFF=1 bypasses validation`) |
-| `BATCH_TOOLS_OFF=1` | Removes the 4 batch lookup tools (`batch-class-source`, `batch-class-members`, `batch-symbol-exists`, `batch-mappings`) from `tools/list`. Direct calls answer per era: legacy gets the successful `isError: true` "Tool not found" envelope, modern gets a raw JSON-RPC `-32602` (no `ProblemDetails` in either shape; see `## MCP Protocol Support`). Use as an emergency rollback while the batch contract stabilizes. | `tests/manual/stdio-client-smoke.manual.ts` (`runBatchToolsOffProbe`); `tests/stdio/stdio-error-code-inventory.test.ts` |
 
 
 ## Migration Notes
@@ -505,7 +497,7 @@ These environment variables are read once at worker startup and provide rollback
 
   Status precedence (top wins): `error` (item-level caught) > `ok` (validators ran) > `skipped` (upstream env blocked AND no items ran) > `missing` (no items, upstream `ok`).
 
-  Output projection: with `detail: "summary"` (or when `include` does not contain `"workspace"`), each `tasks[*]` entry is slimmed to `status`, `error?`, and `warnings?` only — `evidence` / `buildScripts` / `counts` / `propertiesPath` / `cachePath` / `artifactId` / `mapping` / `durationMs` are stripped. With `detail: "full"` (or `"standard"`) AND `include` containing `"workspace"`, every sub-field is preserved. Set `VALIDATE_PROJECT_TASKS_OFF=1` at process start to omit the field entirely (legacy shape). Use `resolve-artifact` directly when a follow-up source lookup needs a fully indexed artifact.
+  Output projection: with `detail: "summary"` (or when `include` does not contain `"workspace"`), each `tasks[*]` entry is slimmed to `status`, `error?`, and `warnings?` only — `evidence` / `buildScripts` / `counts` / `propertiesPath` / `cachePath` / `artifactId` / `mapping` / `durationMs` are stripped. With `detail: "full"` (or `"standard"`) AND `include` containing `"workspace"`, every sub-field is preserved. Use `resolve-artifact` directly when a follow-up source lookup needs a fully indexed artifact.
 - `validate-access-widener` keeps vanilla validation when `projectPath`, `scope`, and `preferProjectVersion` are omitted. Supplying Loom workspace context switches it into runtime-aware mode, which returns `provenance` and per-entry runtime access evidence without changing the existing summary shape.
 - `validate-access-transformer` accepts `atNamespace="srg" | "mojang" | "obfuscated"`. When `projectPath` points at a Forge or NeoForge workspace, the tool can infer that namespace automatically and validate against loader/runtime artifacts for `scope="loader"`.
 - Start with `manage-cache` for cache inventory and safe cleanup. Use `executionMode="preview"` before `executionMode="apply"`.
@@ -580,7 +572,7 @@ The legacy wire contract is byte-compatible with the pre-migration (SDK v1) serv
 
 - `tools/call` with `arguments` omitted reaches the application validator as `{}`. Three outcome arms: (a) input-free tools succeed (`get-runtime-metrics`); (b) required-field schemas answer per-field `ERR_INVALID_INPUT` (`analyze-mod`); (c) a `{}`-accepting schema whose handler requires input answers that tool's own handler-level ProblemDetails — `json-to-nbt` answers `ERR_NBT_INVALID_TYPED_JSON` (status 400, `isError: true`) instead of the pre-migration validation-layer `ERR_INVALID_INPUT`.
 - Legacy `tools/list` entries omit the v1-only `execution: {"taskSupport":"forbidden"}` field (SDK v2 does not emit it); the migration introduced no other drift, and the `inputSchema` bytes are served verbatim from the frozen pre-migration contracts in `tests/fixtures/premigration/tool-contracts/` (through the generated `src/v1-parity-schemas.ts`, which `tools/list` advertises in preference to the zod shape). Those frozen contracts are deliberately extended when a tool genuinely gains a parameter in a later release — 7.0.0-rc.2 added `projectPath` to four of the flat-`artifactId` tools — so "identical to the pre-migration snapshots" describes the migration, not a promise that a tool's schema never changes across releases.
-- An unknown or disabled tool is answered immediately at the supervisor, before queueing: the reply bytes are identical to v1, but the reply consumes no queue slot and no worker round-trip, so reply ordering and queue-overflow outcomes can differ from v1 under concurrent load.
+- An unknown tool is answered immediately at the supervisor, before queueing: the reply bytes are identical to v1, but the reply consumes no queue slot and no worker round-trip, so reply ordering and queue-overflow outcomes can differ from v1 under concurrent load.
 - The unmatched-resource-URI error keeps the raw JSON-RPC `-32602` code, but its message changed from the pre-migration `MCP error -32602: Resource <uri> not found` to `Resource not found: <uri>`, and the error carries a `data.uri` field (SDK v2 wording).
 - The `initialize` result advertises `resources: { listChanged: false }` and `tools: { listChanged: false }`, where the pre-migration server advertised `true` for both. The suppression is deliberate and is NOT era-gated — both eras read one `getCapabilities()`, so gating it would leave one process advertising two different contracts; the reasoning is under the modern-era capability paragraph below. Every other byte of the `initialize` result is unchanged.
 
@@ -654,8 +646,8 @@ The ProblemDetails row takes precedence over the resource-class rows; otherwise 
 | worker (SDK) | modern-locked; shallow-valid claim with a deep-invalid `_meta` value | forwarded requests | `-32602` | data-less; message starts `Invalid _meta envelope for protocol revision 2026-07-28:` (pinned example: `Invalid _meta envelope for protocol revision 2026-07-28: Invalid input: expected object, received number`) |
 | worker (SDK) | params-schema violation, for example non-object `tools/call` `arguments` | both eras | `-32602` | data-less; message starts `Invalid tools/call request:`; the request never reaches the application validator |
 | worker (SDK) | unmatched resource URI | `resources/read`, both eras | `-32602` | message `Resource not found: <uri>` with `data.uri` (the pre-migration server answered `MCP error -32602: Resource <uri> not found` without `data` — code unchanged, message family changed) |
-| worker (SDK) | unknown or disabled tool, MODERN era | `tools/call` | `-32602` | raw JSON-RPC error (sanctioned modern contract; the modern era never had a v1 contract here) |
-| supervisor | unknown or disabled tool, LEGACY era | `tools/call` | none | SUCCESSFUL `CallToolResult` with `isError: true`, text `MCP error -32602: Tool <name> not found`, and NO `structuredContent` key — the missing `structuredContent` is the discriminator against a genuine tool failure |
+| worker (SDK) | unknown tool, MODERN era | `tools/call` | `-32602` | raw JSON-RPC error (sanctioned modern contract; the modern era never had a v1 contract here) |
+| supervisor | unknown tool, LEGACY era | `tools/call` | none | SUCCESSFUL `CallToolResult` with `isError: true`, text `MCP error -32602: Tool <name> not found`, and NO `structuredContent` key — the missing `structuredContent` is the discriminator against a genuine tool failure |
 | supervisor | `initialize` that is not a valid MCP initialize request | `initialize` | `-32602` | `data.kind: "invalid_initialize"` with `data.required[]` and `data.eraSelected: false` — the era is NOT locked, so the client may retry a well-formed `initialize` or select the modern era instead |
 | supervisor | modern-locked; `initialize` arrives | `initialize` | `-32601` | `data.kind: "era_conflict"`, `selectedEra: "modern"`, `requestedEra: "legacy"`, `supported[]` = all six versions |
 | supervisor | legacy-locked; modern-claim request arrives | any modern-claim request | `-32600` | `data.kind: "era_conflict"`, `selectedEra: "legacy"`, `requestedEra: "modern"` |
@@ -683,7 +675,7 @@ A `Content-Length` header block ends at its FIRST EMPTY LINE. A header line ends
 
 The 2026-07-28 revision does not mandate specific mixed-era conflict rules or unselected-state behavior for one stdio process. The era-conflict codes, `missing_meta` rejections, one-way lock, and discover neutrality documented here are this server's adopted policy, pinned by the committed wire suites (`tests/stdio/stdio-supervisor-era-state.test.ts`, `tests/stdio/stdio-supervisor-era-wire.test.ts`, `tests/stdio/stdio-supervisor-era-lifecycle.test.ts`). If a future protocol revision defines normative rules for these cases, those rules supersede this policy.
 
-Tooling note: `pnpm test:manual:stdio-smoke` runs against the production supervisor by default; its direct-worker bridge fallback mode bypasses the supervisor and therefore observes the worker-level raw `-32602` for disabled tools instead of the restored legacy `isError` envelope.
+Tooling note: `pnpm test:manual:stdio-smoke` runs against the production supervisor by default; its direct-worker bridge fallback mode bypasses the supervisor and therefore observes the worker-level raw `-32602` for unknown tools instead of the restored legacy `isError` envelope.
 
 ## Mapping Policy
 
@@ -804,7 +796,6 @@ Whether a cached jar is re-checked depends on the coordinate's **version**, not 
 | `MCP_SEARCH_SCAN_PAGE_SIZE` | `250` | Page size used by literal scan fallbacks |
 | `MCP_SEARCH_SCAN_MAX_BYTES` | `67108864` | Maximum bytes read by literal scan fallbacks before the scan stops |
 | `MCP_LOOM_TINY_MAX_INDEX_ENTRIES` | derived from the live V8 heap limit | Hard cap on index slots one Loom `.tiny` load may accumulate before it stops and warns instead of exhausting the heap. Unset, the budget is derived from free heap (so raising `--max-old-space-size` raises it automatically) and clamped to 1,000,000–64,000,000 slots. An override must be ASCII decimal digits: `1e9`, `2_000_000`, `10M` and `1.9` are ignored and fall back to the derived budget instead of being read as 1, 2, 10 and 1. An accepted override gets no floor — it may be deliberately small. |
-| `MCP_INDEX_INSERT_CHUNK_SIZE` | `200` | Batch size for SQLite index inserts |
 | `MCP_MAX_ARTIFACTS` | `200` | Maximum cached artifacts |
 | `MCP_MAX_CACHE_BYTES` | `2147483648` | Maximum total cache size in bytes |
 | `MCP_CACHE_GRAPH_MAX` | `16` | Mapping graph cache size |

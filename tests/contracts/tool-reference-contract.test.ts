@@ -84,10 +84,7 @@ test("tool-reference.md documents the operational env toggles", async () => {
     "MIXIN_STAGE_PROGRESS_OFF",
     "WORKSPACE_TARGET_OFF",
     "DEPENDENCY_TARGET_OFF",
-    "WORKSPACE_FALLBACK_LEGACY",
-    "VALIDATE_PROJECT_TASKS_OFF",
-    "SUGGESTED_CALL_VALIDATE_OFF",
-    "BATCH_TOOLS_OFF"
+    "WORKSPACE_FALLBACK_LEGACY"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
   }
@@ -182,8 +179,7 @@ test("tool-reference.md documents the verify-mixin-target tool and accessorAdvic
     "accessorAdvice",
     "@Inject-only",
     "@Accessor",
-    "@Invoker",
-    "VERIFY_MIXIN_TARGET_OFF"
+    "@Invoker"
   ]) {
     assert.ok(doc.includes(token), `tool-reference.md must mention verify-mixin-target token "${token}"`);
   }

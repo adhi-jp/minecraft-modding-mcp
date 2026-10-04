@@ -500,8 +500,7 @@ describe("buildSyntheticCallToolResult", () => {
   });
 
   test("buildSyntheticCallToolResult drops suggestedCall when toolName is unregistered (typo / disabled / version-skewed)", async () => {
-    // An unregistered tool name (typo, BATCH_TOOLS_OFF=1 /
-    // VERIFY_MIXIN_TARGET_OFF=1 disabled tool, version-skew from an older
+    // An unregistered tool name (typo, version-skew from an older
     // server run) cannot produce a re-callable payload. The supervisor must
     // check `getToolSchema` itself because `buildSuggestedCall` fails open
     // for unregistered names by design.

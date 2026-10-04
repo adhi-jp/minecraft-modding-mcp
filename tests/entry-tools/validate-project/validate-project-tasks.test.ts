@@ -263,41 +263,6 @@ test("validate-project tasks A4: discovery 0 paths sets corresponding entry to m
   assert.equal(tasks["accessTransformers.validated"].status, "missing");
 });
 
-test("validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks field", async () => {
-  // The flag is read at module load time. Spawn a child Node process to evaluate it.
-  const root = await makeWorkspace("validate-project-tasks-a5-");
-  await writeBareGradleWorkspace(root);
-
-  const { spawnSync } = await import("node:child_process");
-  const script = `
-    import { ValidateProjectService } from "./src/entry-tools/validate-project-service.ts";
-    const service = new ValidateProjectService({
-      validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
-      validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
-      discoverMixins: async () => [],
-      discoverAccessWideners: async () => [],
-      discoverAccessTransformers: async () => [],
-      probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
-    });
-    const result = await service.execute({
-      task: "project-summary",
-      detail: "full",
-      include: ["workspace"],
-      version: "1.21.10",
-      subject: { kind: "workspace", projectPath: ${JSON.stringify(root)} }
-    });
-    console.log(JSON.stringify({ hasTasks: "tasks" in result }));
-  `;
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: process.cwd(),
-    env: { ...process.env, VALIDATE_PROJECT_TASKS_OFF: "1" },
-    encoding: "utf8"
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const out = JSON.parse(result.stdout.trim());
-  assert.equal(out.hasTasks, false);
-});
-
 test("validate-project tasks A6: detail=summary or include without workspace strips evidence/buildScripts/counts", async () => {
   const root = await makeWorkspace("validate-project-tasks-a6-");
   await writeBareGradleWorkspace(root);

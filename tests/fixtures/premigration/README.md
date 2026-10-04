@@ -81,24 +81,29 @@ from the edited files afterward, so the advertised `inputSchema` bytes and the
 parity baseline still agree — but a byte comparison of those two against a
 fresh capture from the untouched v1 build would not match on that variant.
 
+`tool-contracts/manage-cache.json` had the `rebuild` value removed from its
+advertised `action` enum for this major release, which removed that action;
+`src/v1-parity-schemas.ts` was regenerated from the edited file, and a byte
+comparison against a fresh capture from the untouched v1 build would not match
+on that enum.
+
 ## Fixture families
 
 ### `tools-list-order.<flag-config>.json`
 
 RAW legacy `tools/list` name order (registration order — legacy golden),
-one file per flag configuration:
+one file per flag configuration. Only the `default` configuration (no flags)
+remains; the other captured configurations existed only for toggles that have
+since been removed, and their files were deleted with them.
 
 | config | env |
 | --- | --- |
 | `default` | (none) |
-| `verify-mixin-target-off` | `VERIFY_MIXIN_TARGET_OFF=1` (drops `verify-mixin-target`; 40 tools) |
-| `batch-tools-off` | `BATCH_TOOLS_OFF=1` (drops the 4 `batch-*` tools; 37 tools) |
-| `both-off` | both vars (36 tools) |
 
 Harness validation at capture time (raw report not committed): two consecutive
 fresh-process runs produced identical raw order per config, and the sorted
-form equals the sorted `EXPECTED_TOOLS` (adjusted for flag membership) pinned
-by `tests/helpers/expected-tools.ts` /
+form equals the sorted `EXPECTED_TOOLS` pinned by
+`tests/helpers/expected-tools.ts` /
 `tests/integration/mcp-tools/contracts.test.ts`.
 
 ### `synthetic-shapes/*.json`

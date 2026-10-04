@@ -80,11 +80,7 @@ import {
   manageCacheSchema,
   manageCacheShape
 } from "./entry-tools/manage-cache-service.js";
-import {
-  VerifyMixinTargetService,
-  VERIFY_MIXIN_TARGET_OFF
-} from "./entry-tools/verify-mixin-target-service.js";
-import { BATCH_TOOLS_OFF } from "./entry-tools/batch-runner.js";
+import { VerifyMixinTargetService } from "./entry-tools/verify-mixin-target-service.js";
 import { BatchClassSourceService } from "./entry-tools/batch-class-source-service.js";
 import { BatchClassMembersService } from "./entry-tools/batch-class-members-service.js";
 import { BatchSymbolExistsService } from "./entry-tools/batch-symbol-exists-service.js";
@@ -856,72 +852,68 @@ registerAppTool(server, "manage-cache",
 );
 registerToolSchema("manage-cache", manageCacheSchema);
 
-if (!VERIFY_MIXIN_TARGET_OFF) {
-  registerAppTool(server, "verify-mixin-target",
-    "Single-call probe: does this target owner / member exist and which @Shadow / @Accessor / @Invoker should the mixin use? Reuses target.kind workspace/version/coordinate/dependency/jar.",
-    verifyMixinTargetShape,
-    { readOnlyHint: true },
-    async (args) => runTool("verify-mixin-target", args, verifyMixinTargetSchema, async (input) =>
-      verifyMixinTargetService.execute({
-        owner: input.owner,
-        member: input.member,
-        mixinMemberName: input.mixinMemberName,
-        mapping: input.mapping,
-        autoRemap: input.autoRemap,
-        sourcePriority: input.sourcePriority,
-        projectPath: input.projectPath,
-        gradleUserHome: input.gradleUserHome,
-        target: input.target as ResolveArtifactTargetInput,
-        scope: input.scope,
-        preferProjectVersion: input.preferProjectVersion,
-        strictVersion: input.strictVersion
-      }) as unknown as Promise<Record<string, unknown>>
-    )
-  );
-  registerToolSchema("verify-mixin-target", verifyMixinTargetSchema);
-}
+registerAppTool(server, "verify-mixin-target",
+  "Single-call probe: does this target owner / member exist and which @Shadow / @Accessor / @Invoker should the mixin use? Reuses target.kind workspace/version/coordinate/dependency/jar.",
+  verifyMixinTargetShape,
+  { readOnlyHint: true },
+  async (args) => runTool("verify-mixin-target", args, verifyMixinTargetSchema, async (input) =>
+    verifyMixinTargetService.execute({
+      owner: input.owner,
+      member: input.member,
+      mixinMemberName: input.mixinMemberName,
+      mapping: input.mapping,
+      autoRemap: input.autoRemap,
+      sourcePriority: input.sourcePriority,
+      projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
+      target: input.target as ResolveArtifactTargetInput,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion
+    }) as unknown as Promise<Record<string, unknown>>
+  )
+);
+registerToolSchema("verify-mixin-target", verifyMixinTargetSchema);
 
-if (!BATCH_TOOLS_OFF) {
-  registerAppTool(server, "batch-class-source",
-    "Batch get-class-source for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary. Not read-only: per-entry outputFile writes to disk.",
-    batchClassSourceShape,
-    { readOnlyHint: false },
-    async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
-      batchClassSourceService.execute(input as z.infer<typeof batchClassSourceSchema>) as unknown as Promise<Record<string, unknown>>
-    )
-  );
-  registerToolSchema("batch-class-source", batchClassSourceSchema);
+registerAppTool(server, "batch-class-source",
+  "Batch get-class-source for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary. Not read-only: per-entry outputFile writes to disk.",
+  batchClassSourceShape,
+  { readOnlyHint: false },
+  async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
+    batchClassSourceService.execute(input as z.infer<typeof batchClassSourceSchema>) as unknown as Promise<Record<string, unknown>>
+  )
+);
+registerToolSchema("batch-class-source", batchClassSourceSchema);
 
-  registerAppTool(server, "batch-class-members",
-    "Batch get-class-members for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary.",
-    batchClassMembersShape,
-    { readOnlyHint: true },
-    async (args) => runTool("batch-class-members", args, batchClassMembersSchema, async (input) =>
-      batchClassMembersService.execute(input as z.infer<typeof batchClassMembersSchema>) as unknown as Promise<Record<string, unknown>>
-    )
-  );
-  registerToolSchema("batch-class-members", batchClassMembersSchema);
+registerAppTool(server, "batch-class-members",
+  "Batch get-class-members for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary.",
+  batchClassMembersShape,
+  { readOnlyHint: true },
+  async (args) => runTool("batch-class-members", args, batchClassMembersSchema, async (input) =>
+    batchClassMembersService.execute(input as z.infer<typeof batchClassMembersSchema>) as unknown as Promise<Record<string, unknown>>
+  )
+);
+registerToolSchema("batch-class-members", batchClassMembersSchema);
 
-  registerAppTool(server, "batch-symbol-exists",
-    "Batch check-symbol-exists for many symbols against one shared Minecraft version (target.kind=version or workspace only).",
-    batchSymbolExistsShape,
-    { readOnlyHint: true },
-    async (args) => runTool("batch-symbol-exists", args, batchSymbolExistsSchema, async (input) =>
-      batchSymbolExistsService.execute(input as z.infer<typeof batchSymbolExistsSchema>) as unknown as Promise<Record<string, unknown>>
-    )
-  );
-  registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
+registerAppTool(server, "batch-symbol-exists",
+  "Batch check-symbol-exists for many symbols against one shared Minecraft version (target.kind=version or workspace only).",
+  batchSymbolExistsShape,
+  { readOnlyHint: true },
+  async (args) => runTool("batch-symbol-exists", args, batchSymbolExistsSchema, async (input) =>
+    batchSymbolExistsService.execute(input as z.infer<typeof batchSymbolExistsSchema>) as unknown as Promise<Record<string, unknown>>
+  )
+);
+registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
 
-  registerAppTool(server, "batch-mappings",
-    "Batch find-mapping: resolve many symbols across mapping namespaces with one shared Minecraft version.",
-    batchMappingsShape,
-    { readOnlyHint: true },
-    async (args) => runTool("batch-mappings", args, batchMappingsSchema, async (input) =>
-      batchMappingsService.execute(input as z.infer<typeof batchMappingsSchema>) as unknown as Promise<Record<string, unknown>>
-    )
-  );
-  registerToolSchema("batch-mappings", batchMappingsSchema);
-}
+registerAppTool(server, "batch-mappings",
+  "Batch find-mapping: resolve many symbols across mapping namespaces with one shared Minecraft version.",
+  batchMappingsShape,
+  { readOnlyHint: true },
+  async (args) => runTool("batch-mappings", args, batchMappingsSchema, async (input) =>
+    batchMappingsService.execute(input as z.infer<typeof batchMappingsSchema>) as unknown as Promise<Record<string, unknown>>
+  )
+);
+registerToolSchema("batch-mappings", batchMappingsSchema);
 
 registerExpertTool(server, "resolve-artifact",
   "Resolve a source artifact and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted.",

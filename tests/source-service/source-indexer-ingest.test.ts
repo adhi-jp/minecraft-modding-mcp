@@ -72,8 +72,7 @@ test("ingestIfNeeded shares an in-flight rebuild for the same artifact", async (
         cacheDir: root,
         maxArtifacts: 100,
         maxCacheBytes: Number.MAX_SAFE_INTEGER,
-        maxContentBytes: 1_000_000,
-        indexInsertChunkSize: 200
+        maxContentBytes: 1_000_000
       },
       state: new SourceServiceState(),
       db: {

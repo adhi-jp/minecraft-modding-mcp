@@ -6,8 +6,6 @@ import { buildVersionSourceSearchRoots } from "../../gradle-paths.js";
 import type { StageEmitter } from "../../stage-emitter.js";
 import type { ArtifactScope, SourceMapping } from "../../types.js";
 
-const VALIDATE_PROJECT_TASKS_OFF = process.env.VALIDATE_PROJECT_TASKS_OFF === "1";
-
 type TaskStatus = "ok" | "skipped" | "missing" | "error";
 
 type TaskEntryBase = {
@@ -346,10 +344,7 @@ export async function buildEarlyTasksForBlocked(
   detail: "summary" | "standard" | "full",
   include: string[],
   gradleUserHome?: string
-): Promise<TaskStatusReport | undefined> {
-  if (VALIDATE_PROJECT_TASKS_OFF) {
-    return undefined;
-  }
+): Promise<TaskStatusReport> {
   const { workspace, gradle, loom } = await runUpstreamProbes(projectPath, gradleUserHome);
   const minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"] = {
     status: "skipped"
@@ -393,10 +388,7 @@ export async function buildFullTaskStatusReport(
     atDurationMs: number;
     stageEmitter?: StageEmitter;
   }
-): Promise<TaskStatusReport | undefined> {
-  if (VALIDATE_PROJECT_TASKS_OFF) {
-    return undefined;
-  }
+): Promise<TaskStatusReport> {
   const { workspace, gradle, loom } = await runUpstreamProbes(args.projectPath, args.gradleUserHome);
   let minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"];
   if (workspace.status !== "ok" || gradle.status !== "ok") {

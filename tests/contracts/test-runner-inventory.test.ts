@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 280;
+const EXPECTED_ORDINARY_TEST_FILES = 276;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2530;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2514;
 
 const loadTestFileSelection = (): Promise<{ selectOrdinaryTestFiles: () => Promise<string[]> }> =>
   import("../../scripts/test-file-selection.mjs") as Promise<{
@@ -82,8 +82,8 @@ test("the frozen premigration named set parses into a unique, directive-free key
 
   const frozen = parseFrozenNamedSet(await readFile(FROZEN_NAMED_SET_URL, "utf8"));
 
-  assert.equal(frozen.rowCount, 1743, "the frozen fixture holds 1743 TAP rows");
-  assert.equal(frozen.keys.size, 1743, "every frozen row must canonicalize to a distinct key");
+  assert.equal(frozen.rowCount, 1735, "the frozen fixture holds 1735 TAP rows");
+  assert.equal(frozen.keys.size, 1735, "every frozen row must canonicalize to a distinct key");
   assert.equal(
     frozen.prefixStrippedCount,
     11,
@@ -99,7 +99,7 @@ test("the frozen premigration named set parses into a unique, directive-free key
   );
   assert.equal(
     frozenNames.filter((name) => /^C[0-9]+[a-z]?: /.test(name)).length,
-    30,
+    29,
     "C-nn names are real live names and must survive prefix handling untouched"
   );
   assert.ok(

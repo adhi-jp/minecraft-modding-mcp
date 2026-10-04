@@ -13,8 +13,8 @@ import {
 
 /**
  * tools/list ordering, per era (adopted ordering policy):
- *  - legacy era: registration order — FROZEN by the four premigration golden
- *    configs (tests/fixtures/premigration/tools-list-order.*.json);
+ *  - legacy era: registration order — FROZEN by the premigration golden
+ *    config (tests/fixtures/premigration/tools-list-order.default.json);
  *  - modern era: raw tool-name-ascending (plain code-unit string order).
  *
  * Live probe @664604f: the SDK v2 tools/list handler emits registration
@@ -24,11 +24,6 @@ import {
  * legacy order must remain byte-identical.
  */
 
-// Default flag configuration: clear both feature flags so an inherited
-// *_OFF=1 in the runner's environment cannot silently shift this file onto a
-// non-default registry and the wrong fixture.
-delete process.env.BATCH_TOOLS_OFF;
-delete process.env.VERIFY_MIXIN_TARGET_OFF;
 const root = mkdtempSync(join(tmpdir(), "p3-tools-order-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");

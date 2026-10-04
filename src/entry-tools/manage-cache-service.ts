@@ -28,7 +28,7 @@ import { nonEmptyString } from "../tool-schemas.js";
 const INCLUDE_GROUPS = ["warnings", "cacheEntries", "paths", "owners", "health", "preview", "timings"] as const;
 
 export const manageCacheShape = {
-  action: z.enum(["summary", "list", "inspect", "delete", "prune", "rebuild", "verify"]),
+  action: z.enum(["summary", "list", "inspect", "delete", "prune", "verify"]),
   cacheKinds: z.array(z.enum(PUBLIC_CACHE_KINDS)).optional(),
   selector: z.object({
     artifactId: nonEmptyString.optional(),
@@ -67,10 +67,7 @@ export class ManageCacheService {
       selector: input.selector
     });
 
-    if (
-      executionMode === "apply" &&
-      (input.action === "delete" || input.action === "prune" || input.action === "rebuild")
-    ) {
+    if (executionMode === "apply" && (input.action === "delete" || input.action === "prune")) {
       requireNonEmptyObject(
         input.selector as Record<string, unknown> | undefined,
         `${input.action} apply requires a non-empty selector.`
@@ -241,44 +238,6 @@ export class ManageCacheService {
                 executionMode,
                 deletedEntries: output.deletedEntries,
                 deletedBytes: output.deletedBytes
-              }
-            },
-            alwaysBlocks: ["operation"]
-          }),
-          warnings: output.warnings
-        };
-      }
-      case "rebuild": {
-        const output = await this.deps.registry.rebuildEntries({
-          cacheKinds,
-          selector: input.selector,
-          executionMode
-        });
-        return {
-          ...buildEntryToolResult({
-            task: "rebuild",
-            detail,
-            include,
-            summary: {
-              status: output.rebuiltEntries > 0 && executionMode === "apply" ? "changed" : "unchanged",
-              // Neither headline may read as work done: rebuild is not
-              // implemented for any cache kind, so apply changes nothing and
-              // preview has nothing to promise.
-              headline: executionMode === "apply"
-                ? `Rebuild is not implemented for ${cacheKinds.length} cache kind(s); nothing changed.`
-                : `Previewed rebuild for ${cacheKinds.length} cache kind(s): nothing would change.`,
-              subject: summarySubject,
-              counts: {
-                rebuiltEntries: output.rebuiltEntries
-              }
-              // No apply follow-up: rebuild is not implemented for any cache
-              // kind, so advertising one would promise a call that changes
-              // nothing. The registry's warning names what to do instead.
-            },
-            blocks: {
-              operation: {
-                executionMode,
-                rebuiltEntries: output.rebuiltEntries
               }
             },
             alwaysBlocks: ["operation"]

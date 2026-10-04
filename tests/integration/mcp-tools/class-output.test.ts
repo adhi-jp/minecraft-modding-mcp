@@ -230,6 +230,28 @@ test("manage-cache summary normalizes apply to preview at the public contract", 
   assert.equal(result.structuredContent?.result?.operation?.executionMode, "preview");
 });
 
+test("manage-cache rejects the removed rebuild action with ERR_INVALID_INPUT", async () => {
+  const result = await callTool("manage-cache", {
+    action: "rebuild",
+    cacheKinds: ["downloads"]
+  }) as {
+    isError?: boolean;
+    structuredContent?: {
+      error?: {
+        code?: string;
+        fieldErrors?: Array<{ path?: string }>;
+      };
+    };
+  };
+
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.error?.code, "ERR_INVALID_INPUT");
+  assert.ok(
+    result.structuredContent?.error?.fieldErrors?.some((entry) => entry.path === "action"),
+    "the rejected field must be the action enum"
+  );
+});
+
 test("expert and batch tools expose detail/include and no longer expose compact", async () => {
   const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
   const detailTools = [

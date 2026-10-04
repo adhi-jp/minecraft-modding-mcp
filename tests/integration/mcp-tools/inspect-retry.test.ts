@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { inspectMinecraftSchema } from "../../../src/entry-tools/inspect-minecraft-service.ts";
@@ -257,68 +256,6 @@ test("inspect-minecraft preserves focus recovery examples when preflight also re
   assert.equal(byKind.get("class")?.params?.task, "class-source");
   assert.equal(byKind.get("search")?.params?.task, "auto");
   assert.equal(byKind.get("file")?.params?.task, "auto");
-});
-
-test("inspect-minecraft rollback mode suppresses invalid suggestedCall when focus recovery applies", () => {
-  const subprocess = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "-e",
-      `
-        const { callTool } = await import("./tests/helpers/mcp-tools-harness.ts");
-        const result = await callTool("inspect-minecraft", {
-          task: "class-source",
-          mapping: "official",
-          subject: {
-            kind: "workspace",
-            projectPath: "/tmp/example",
-            mapping: "mojang",
-            focus: "Item"
-          }
-        });
-        process.stdout.write(JSON.stringify(result.structuredContent?.error));
-      `
-    ],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, SUGGESTED_CALL_VALIDATE_OFF: "1" },
-      encoding: "utf8"
-    }
-  );
-
-  assert.equal(subprocess.status, 0, `subprocess failed: ${subprocess.stderr}`);
-  const error = JSON.parse(subprocess.stdout) as {
-    code?: string;
-    hints?: string[];
-    suggestedCall?: unknown;
-    exampleCalls?: Array<{
-      params?: {
-        subject?: { focus?: { kind?: string } };
-      };
-    }>;
-  };
-
-  assert.equal(error.code, "ERR_INVALID_INPUT");
-  assert.equal(error.suggestedCall, undefined, "focus guidance must suppress the invalid primary call");
-  assert.ok(error.hints?.some((hint) => /focus.*object.*not.*string/i.test(hint)));
-  assert.equal(
-    error.hints?.some((hint) => /suggested call payload failed schema validation/i.test(hint)),
-    false,
-    "rollback mode must not claim that schema validation dropped the primary call"
-  );
-
-  const examples = error.exampleCalls ?? [];
-  assert.equal(examples.length, 3);
-  assert.deepEqual(
-    examples.map((example) => example.params?.subject?.focus?.kind).sort(),
-    ["class", "file", "search"]
-  );
-  for (const example of examples) {
-    assert.equal(inspectMinecraftSchema.safeParse(example.params).success, true);
-  }
 });
 
 test("inspect-minecraft focus recovery preserves only valid workspace fields", async () => {

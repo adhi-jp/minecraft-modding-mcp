@@ -188,7 +188,6 @@ export interface Config {
   fetchRetries: number;
   searchScanPageSize: number;
   searchScanMaxBytes: number;
-  indexInsertChunkSize: number;
   maxMappingGraphCache: number;
   maxSignatureCache: number;
   maxVersionDetailCache: number;

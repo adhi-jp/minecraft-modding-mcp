@@ -1,8 +1,5 @@
 import { getToolSchema, validateToolParams } from "./tool-schema-registry.js";
 
-export const SUGGESTED_CALL_VALIDATE_OFF =
-  process.env.SUGGESTED_CALL_VALIDATE_OFF === "1";
-
 export type SuggestedCallExample = {
   params: unknown;
   reason: string;
@@ -69,9 +66,6 @@ export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput
   // is schema-valid: those belong in `exampleCalls` as templates, not as a
   // call the caller can replay verbatim.
   if (primaryParams && !containsPlaceholderSentinel(primaryParams)) {
-    if (SUGGESTED_CALL_VALIDATE_OFF) {
-      return { suggestedCall: { tool: spec.tool, params: primaryParams } };
-    }
     // Unknown-tool fail-open: the registry is populated at index.ts startup;
     // service-level tests that do not boot index.ts run with an empty
     // registry and rely on this pass-through. Callers that synthesize a tool
@@ -94,7 +88,7 @@ export function buildSuggestedCall(spec: SuggestedCallSpec): SuggestedCallOutput
     // schema-shape is checked. Mirror the primary path's unknown-tool
     // fail-open so service-level tests with an unpopulated registry still
     // surface templates instead of silently dropping them.
-    const exampleSchemaUnavailable = SUGGESTED_CALL_VALIDATE_OFF || !getToolSchema(spec.tool);
+    const exampleSchemaUnavailable = !getToolSchema(spec.tool);
     const validated = spec.examples
       .map((example): ValidatedExampleCall | null => {
         const exampleParams = asParamsRecord(example.params);

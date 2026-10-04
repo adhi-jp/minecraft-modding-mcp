@@ -106,30 +106,3 @@ test("runBatch attaches the synthesized per-entry suggestedCall to a failed entr
   const error = (out.results[0] as { error: { suggestedCall?: { tool: string; params: Record<string, unknown> } } }).error;
   assert.deepEqual(error.suggestedCall, { tool: "demo-tool", params: { id: "boom" } });
 });
-
-test("BATCH_TOOLS_OFF env gate is true only when BATCH_TOOLS_OFF=1 at module load", async () => {
-  // The flag is read at module-load time, so it cannot be flipped in-process.
-  // Spawn child Node processes to evaluate it under different env values.
-  const { spawnSync } = await import("node:child_process");
-  const script = `
-    import { BATCH_TOOLS_OFF } from "./src/entry-tools/batch-runner.ts";
-    console.log(JSON.stringify({ off: BATCH_TOOLS_OFF }));
-  `;
-  const run = (value?: string): boolean => {
-    const env = { ...process.env };
-    delete env.BATCH_TOOLS_OFF;
-    if (value !== undefined) env.BATCH_TOOLS_OFF = value;
-    const res = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
-      { cwd: process.cwd(), env, encoding: "utf8" }
-    );
-    assert.equal(res.status, 0, res.stderr);
-    return (JSON.parse(res.stdout.trim()) as { off: boolean }).off;
-  };
-
-  assert.equal(typeof run(undefined), "boolean");
-  assert.equal(run("1"), true);
-  assert.equal(run(undefined), false);
-  assert.equal(run("0"), false);
-});

@@ -804,11 +804,6 @@ export interface CacheRegistry {
     selector?: CacheSelector;
     executionMode: "preview" | "apply";
   }): Promise<{ deletedEntries: number; deletedBytes: number; warnings: string[] }>;
-  rebuildEntries(input: {
-    cacheKinds?: PublicCacheKind[];
-    selector?: CacheSelector;
-    executionMode: "preview" | "apply";
-  }): Promise<{ rebuiltEntries: number; warnings: string[] }>;
 }
 
 export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry {
@@ -993,22 +988,6 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
 
     async pruneEntries(input) {
       return this.deleteEntries(input);
-    },
-
-    async rebuildEntries(input) {
-      // No cache kind knows how to rebuild itself from here: the previous
-      // implementation only counted the entries a selector matched and reported
-      // that count as "rebuilt", so apply mode claimed a change it never made.
-      // Validate the selector the way every other action does - the inventory
-      // itself would be thrown away - then say what actually happened.
-      prepareSelector(input.selector, config.pathRuntimeInfo);
-      const selectedKinds = input.cacheKinds?.length ? input.cacheKinds : [...PUBLIC_CACHE_KINDS];
-      return {
-        rebuiltEntries: 0,
-        warnings: [
-          `rebuild is not implemented for cache kind(s): ${selectedKinds.join(", ")}. Nothing was rebuilt. Delete the matching entries instead (manage-cache action="delete"); each one is rebuilt from source the next time it is needed.`
-        ]
-      };
     }
   };
 }

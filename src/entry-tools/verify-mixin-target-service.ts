@@ -12,8 +12,6 @@ import type {
   WorkspaceResolutionProvenance
 } from "../types.js";
 
-export const VERIFY_MIXIN_TARGET_OFF = process.env.VERIFY_MIXIN_TARGET_OFF === "1";
-
 export type VerifyMixinTargetInput = {
   owner: string;
   member:
@@ -266,13 +264,6 @@ export class VerifyMixinTargetService {
   constructor(private readonly deps: VerifyMixinTargetDeps) {}
 
   async execute(input: VerifyMixinTargetInput): Promise<VerifyMixinTargetOutput> {
-    if (VERIFY_MIXIN_TARGET_OFF) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "verify-mixin-target is disabled by VERIFY_MIXIN_TARGET_OFF=1.",
-        details: { fieldErrors: [{ path: "tool", message: "verify-mixin-target is disabled." }] }
-      });
-    }
     if (!input.target) {
       throw createError({
         code: ERROR_CODES.INVALID_INPUT,

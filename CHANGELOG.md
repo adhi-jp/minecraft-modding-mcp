@@ -9,6 +9,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- **Breaking — the `SUGGESTED_CALL_VALIDATE_OFF`, `BATCH_TOOLS_OFF`, `VERIFY_MIXIN_TARGET_OFF` and `VALIDATE_PROJECT_TASKS_OFF` environment variables are removed.** They were temporary rollback switches. The four `batch-*` tools and `verify-mixin-target` are always listed, `suggestedCall` values are always checked against the target tool's schema, and `validate-project` `project-summary` always returns its `tasks` report. Setting one of these variables now has no effect.
+- **Breaking — `manage-cache` no longer accepts `action: "rebuild"`.** It never rebuilt anything; it only returned a warning. A call with it now fails with `ERR_INVALID_INPUT`. Use `action: "delete"`; deleted entries are rebuilt on demand.
+- **Breaking — the `MCP_INDEX_INSERT_CHUNK_SIZE` environment variable is removed.** It never changed how the index is written, because inserts already run in one transaction, and setting it now has no effect.
 - `diff-class-signatures` and the class diff in `compare-minecraft` report remap failures for modified members as one warning per compared version, such as `Could not remap 3 fields from obfuscated to intermediary (f_a, f_b, f_c).`, instead of one warning per member.
 - **Breaking — internal modules and service members of the Node package changed.** Modules under `dist/` other than the package entry, such as `dist/mixin-validator.js`, and the members of the exported `sourceService` and `config` objects no longer carry helpers, repository methods and options that the server does not use. Clients that talk to the server over stdio are unaffected; code that imported these internals must stop relying on them.
 

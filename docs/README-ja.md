@@ -167,7 +167,7 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 - `validate-mixin` と `validate-project` は、`obfuscated` / `mojang` 検証では `mapping-health` を軽量に保ちます。`intermediary` / `yarn` 名前空間を要求しない限り、完全な Tiny マッピンググラフは読み込みません。
 - `validate-project task="project-summary"` は `version` を省略すると `gradle.properties` から Minecraft バージョンを推定し、推定したバージョンを `warnings` に示します。推定を止めるには `preferProjectVersion: false` を指定します。その場合、`version` のない呼び出しは `status: "blocked"` を返します。解決したバージョン（明示指定または推定）は、検出したすべての Mixin / Access Widener / Access Transformer の検証に渡されます。ファイルを検出したのにバージョンを推定できない場合は、推測せずに、明示的な `version` を求める再試行案付きで `status: "blocked"` を返します。
 - `validate-project task="project-summary"` が検証対象のファイルを 1 つも検出しなかった場合、`status` は `"ok"` のままですが、headline が `Nothing to validate: ...` となり、`warnings` にも何も検証していないことが示されます。`"ok"` だけでは、いずれかのファイルが検証に通ったことを意味しません。
-- `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。追加の `tasks` フィールドを省きたい場合は `VALIDATE_PROJECT_TASKS_OFF=1` を使います。
+- `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。
 - アーティファクトのダウンロードは 1 件あたり 512 MiB（`MCP_MAX_DOWNLOAD_BYTES`）、ネストした JAR のエントリは展開後 1 件あたり 64 MiB（`MCP_MAX_NESTED_JAR_ENTRY_BYTES`）が上限です。上限を超えるダウンロードは失敗し、すべてのリポジトリで上限を超えた場合は `ERR_REPO_FETCH_FAILED` が返り、その `context.repoFailureCode` は `ERR_LIMIT_EXCEEDED` です。上限を超えるネストした JAR はエラーも警告もなくスキップされ、ほかのネストした JAR は引き続き解決されます。`validate-project` にはキュー待ちを含めて 120 秒の期限があり（`MCP_VALIDATE_PROJECT_TIMEOUT_MS` で 10000〜600000 ミリ秒の範囲で変更可能）、超えると `ERR_TOOL_TIMEOUT` で失敗します。詳細は [tool-reference.md](tool-reference.md) を参照してください。
 
 ### あるバージョンの Minecraft ソースを確認する

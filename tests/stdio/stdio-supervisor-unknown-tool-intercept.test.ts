@@ -32,7 +32,7 @@ import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wi
  * legacy wire regressed to a raw JSON-RPC -32602.
  *
  * Restore semantics: a LEGACY-era-admitted tools/call whose params.name has
- * no tool-schema registry entry (the same env-flag-gated registry the
+ * no tool-schema registry entry (the same registry the
  * synthetic builders consult; populated in the supervisor process because
  * src/cli.ts imports ./index.js before the supervisor starts) is answered
  * pre-forward/pre-queue with the frozen v1 envelope, in the originating
@@ -79,7 +79,7 @@ const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 type Frame = Record<string, unknown> & { id?: unknown };
 
 function startWireSupervisor(root: string): WireSession {
-  return startWireSession(root, { extraEnv: { BATCH_TOOLS_OFF: "1", MCP_SUPERVISOR_DEBUG: "1" } });
+  return startWireSession(root, { extraEnv: { MCP_SUPERVISOR_DEBUG: "1" } });
 }
 
 async function wireReply(session: { frames: Frame[] }, id: number | string, label: string): Promise<Frame> {
@@ -87,7 +87,7 @@ async function wireReply(session: { frames: Frame[] }, id: number | string, labe
   return session.frames.find((frame) => frame.id === id)!;
 }
 
-test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both answer the frozen v1 isError envelope, indistinguishably", { timeout: 150_000 }, async (t) => {
+test("wire legacy: two distinct unregistered tools/call names both answer the frozen v1 isError envelope", { timeout: 150_000 }, async (t) => {
   if (await skipWithoutCapability(t, "native-stdio-pipes")) {
     return;
   }
@@ -145,14 +145,17 @@ test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both an
   }
 
   // id 2 matches the frozen baseline row's request id, so the WHOLE reply
-  // object must deep-equal the frozen premigration fixture reply verbatim.
-  session.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "batch-class-source", arguments: {} } });
-  const disabled = await wireReply(session, 2, "flag-disabled tool reply");
+  // object must deep-equal the frozen premigration fixture reply once the
+  // baseline's tool name is swapped for the one called here.
+  session.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "no-such-tool-p3-unregistered", arguments: {} } });
+  const disabled = await wireReply(session, 2, "unregistered tool reply");
   assert.ok(FROZEN_DISABLED_TOOL_REPLY, "the frozen baseline must carry the disabled-tool reply");
   assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(FROZEN_DISABLED_TOOL_REPLY).replaceAll("batch-class-source", "no-such-tool-p3-unregistered")
+    ),
     disabled,
-    FROZEN_DISABLED_TOOL_REPLY,
-    "the flag-disabled tools/call must answer the FROZEN premigration reply verbatim"
+    "the unregistered tools/call must answer the FROZEN premigration reply shape verbatim"
   );
   const disabledResult = disabled.result as Record<string, unknown>;
   assert.equal("structuredContent" in disabledResult, false, "the frozen envelope carries no structuredContent");
@@ -166,8 +169,8 @@ test("wire legacy (BATCH_TOOLS_OFF=1): flag-disabled and typo tools/call both an
     "the typo tools/call must answer the same frozen envelope shape"
   );
 
-  // Indistinguishability: modulo the tool name, both results are identical.
-  assert.deepEqual(disabledResult, frozenNotFoundResult("batch-class-source"));
+  // Modulo the tool name, both results are identical.
+  assert.deepEqual(disabledResult, frozenNotFoundResult("no-such-tool-p3-unregistered"));
 });
 
 test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -32602 (sanctioned modern contract)", { timeout: 150_000 }, async (t) => {
@@ -188,13 +191,13 @@ test("wire modern guard: a registry-miss tools/call keeps the raw JSON-RPC -3260
     method: "tools/call",
     params: {
       _meta: { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES_KEY]: {} },
-      name: "batch-class-source",
+      name: "no-such-tool-p3-modern",
       arguments: {}
     }
   });
   const reply = await wireReply(session, 1, "modern registry-miss reply");
   assert.equal(reply.result, undefined, "the modern era must NOT synthesize the legacy envelope");
-  assert.deepEqual(reply.error, { code: -32602, message: "Tool batch-class-source not found" });
+  assert.deepEqual(reply.error, { code: -32602, message: "Tool no-such-tool-p3-modern not found" });
 
   for (const [id, name] of [
     [2, "get-runtime-metrics"],

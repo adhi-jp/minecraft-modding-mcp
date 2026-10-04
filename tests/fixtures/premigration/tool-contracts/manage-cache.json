@@ -25,7 +25,6 @@
             "inspect",
             "delete",
             "prune",
-            "rebuild",
             "verify"
           ]
         },
