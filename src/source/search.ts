@@ -14,7 +14,7 @@ import type {
   SearchSourceHit,
   SymbolKind
 } from "../source-service.js";
-import { normalizePathStyle } from "./shared-utils.js";
+import { clampLimit, normalizePathStyle, rememberCachedRegex } from "./shared-utils.js";
 
 type SearchIntent = "symbol" | "text" | "path";
 type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -34,31 +34,12 @@ interface IndexedSymbolHit {
 const SYMBOL_KINDS: SymbolKind[] = ["class", "interface", "enum", "record", "method", "field"];
 const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
-const MAX_HELPER_REGEX_CACHE = 128;
 const GLOB_REGEX_CACHE = new Map<string, RegExp>();
 
 export { MAX_REGEX_QUERY_LENGTH, MAX_REGEX_RESULT_LIMIT };
 
-function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
-  if (cache.size >= MAX_HELPER_REGEX_CACHE) {
-    const oldestKey = cache.keys().next().value as string | undefined;
-    if (oldestKey) {
-      cache.delete(oldestKey);
-    }
-  }
-  cache.set(key, regex);
-  return regex;
-}
-
 function isSymbolKind(value: string): value is SymbolKind {
   return SYMBOL_KINDS.includes(value as SymbolKind);
-}
-
-function clampLimit(limit: number | undefined, fallback: number, max: number): number {
-  if (!Number.isFinite(limit) || limit == null) {
-    return fallback;
-  }
-  return Math.max(1, Math.min(max, Math.trunc(limit)));
 }
 
 export function normalizeIntent(intent: SearchIntent | undefined): SearchIntent {
@@ -73,28 +54,6 @@ export function normalizeMatch(match: SearchMatch | undefined): SearchMatch {
     return match;
   }
   return "prefix";
-}
-
-export function canUseIndexedSearchPath(
-  indexedSearchEnabled: boolean,
-  intent: SearchIntent,
-  match: SearchMatch,
-  _scope: SearchScope | undefined
-): boolean {
-  if (!indexedSearchEnabled) {
-    return false;
-  }
-  if (intent !== "text" && intent !== "path") {
-    return false;
-  }
-  if (match === "regex") {
-    return false;
-  }
-
-  // packagePrefix and a fileGlob's literal directory prefix narrow the indexed
-  // candidate query (see indexedScopePathPrefix); both scope filters are also
-  // checked exactly on every candidate.
-  return true;
 }
 
 export function buildGlobRegex(pattern: string): RegExp {
@@ -307,12 +266,6 @@ export function scorePathMatch(match: SearchMatch, index: number): number {
   return matchBase + Math.max(0, 100 - Math.min(100, index));
 }
 
-export function matchRegexIndex(target: string, regex: RegExp): number {
-  regex.lastIndex = 0;
-  const result = regex.exec(target);
-  return result?.index ?? -1;
-}
-
 export async function searchClassSource(svc: SourceService, input: SearchClassSourceInput): Promise<SearchClassSourceOutput> {
   const startedAt = Date.now();
   try {
@@ -480,6 +433,13 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     };
     const tokenOnlyTextIntent = intent === "text" && queryMode === "token";
     let indexedWindowFull = false;
+    const runFullScan = (): void => {
+      if (intent === "path") {
+        searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+      } else {
+        searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
+      }
+    };
     if (intent === "symbol") {
       searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
@@ -489,13 +449,12 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       svc.metrics.recordIndexedDisabled();
       if (!tokenOnlyTextIntent) {
         svc.metrics.recordSearchFallback();
-        if (intent === "path") {
-          searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
-        } else {
-          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
-        }
+        runFullScan();
       }
-    } else if (canUseIndexedSearchPath(indexedSearchEnabled, intent, match, scope)) {
+    } else if (match !== "regex") {
+      // packagePrefix and a fileGlob's literal directory prefix narrow the indexed
+      // candidate query (see indexedScopePathPrefix); both scope filters are also
+      // checked exactly on every candidate.
       try {
         indexedWindowFull = intent === "path"
           ? searchPathIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit)
@@ -510,21 +469,13 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
           reason: caughtError instanceof Error ? caughtError.message : String(caughtError)
         });
         if (!tokenOnlyTextIntent) {
-          if (intent === "path") {
-            searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
-          } else {
-            searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
-          }
+          runFullScan();
         }
       }
     } else {
       if (!tokenOnlyTextIntent) {
         svc.metrics.recordSearchFallback();
-        if (intent === "path") {
-          searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
-        } else {
-          searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
-        }
+        runFullScan();
       }
     }
     svc.metrics.recordSearchIntentDuration(intent, Date.now() - intentStartedAt);
@@ -758,10 +709,7 @@ export function searchTextIntent(
     checkPackagePrefix(filePath, scope?.packagePrefix) && (!glob || glob.test(filePath));
 
   const emitIfMatch = (filePath: string, content: string): void => {
-    const contentIndex =
-      match === "regex"
-        ? matchRegexIndex(content, regexPattern as RegExp)
-        : findContentMatchIndex(content, query, match);
+    const contentIndex = findContentMatchIndex(content, query, match, regexPattern);
     if (contentIndex < 0) {
       return;
     }
@@ -790,7 +738,7 @@ export function searchTextIntent(
     // The prefilter caps candidates at candidateLimit ordered by file_path. Below the
     // cap the candidate set is exhaustive, so the JS post-verify yields exactly the old
     // full-scan hits. AT the cap more matches may exist beyond the path-ordered cut, and
-    // dropping them would change the scored top-K page and totalApprox/cursor — so fall
+    // dropping them would change the scored top-K page and its cursor — so fall
     // through to the exhaustive paged scan below to preserve identical results.
     if (scannedRows < candidateLimit) {
       svc.metrics.recordSearchLikePrefilter();
@@ -877,10 +825,7 @@ export function searchPathIntent(
         continue;
       }
 
-      const pathIndex =
-        match === "regex"
-          ? matchRegexIndex(filePath, regexPattern as RegExp)
-          : findMatchIndex(filePath, query, match);
+      const pathIndex = findMatchIndex(filePath, query, match, regexPattern);
       if (pathIndex < 0) {
         continue;
       }
@@ -969,10 +914,7 @@ export function findSymbolHits(
       continue;
     }
 
-    const index =
-      match === "regex"
-        ? matchRegexIndex(symbol.symbolName, regexPattern as RegExp)
-        : findMatchIndex(symbol.symbolName, query, match);
+    const index = findMatchIndex(symbol.symbolName, query, match, regexPattern);
     if (index < 0) {
       continue;
     }

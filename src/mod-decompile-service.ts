@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
@@ -9,7 +9,7 @@ import { decompileBinaryJar } from "./decompiler/vineflower.js";
 import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { analyzeModJar, type ModAnalysisResult } from "./mod-analyzer.js";
 import { buildJarSignature, validateAndNormalizeJarPath } from "./path-resolver.js";
-import { sliceToMaxCharsSafe } from "./text-truncate.js";
+import { sliceToMaxCharsSafe, writeSourceToOutputFile } from "./text-truncate.js";
 import type { Config } from "./types.js";
 
 export type DecompileModJarInput = {
@@ -210,19 +210,7 @@ export class ModDecompileService {
 
     // Write to outputFile if specified (after maxLines/maxChars truncation, if any)
     if (input.outputFile) {
-      const outPath = isAbsolute(input.outputFile)
-        ? input.outputFile
-        : resolvePath(input.outputFile);
-      try {
-        await writeFile(outPath, content, "utf8");
-      } catch (writeError) {
-        const errno = (writeError as NodeJS.ErrnoException | undefined)?.code;
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `outputFile "${outPath}" could not be written (${errno ?? "unknown error"}).`,
-          details: { field: "outputFile", value: outPath, osErrorCode: errno }
-        });
-      }
+      const outPath = await writeSourceToOutputFile(input.outputFile, content);
       outputFilePath = outPath;
       content = `[Written to ${outPath}]`;
     }

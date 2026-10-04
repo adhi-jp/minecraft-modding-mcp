@@ -221,7 +221,28 @@ function readEntryStream(
   });
 }
 
-function decodeUtf8OrThrow(contentBuffer: Buffer, jarPath: string, entryPath: string): string {
+/** Normalizes `entryPath` to forward slashes, rejecting traversal-shaped or absolute paths. */
+function normalizeEntryPathOrThrow(jarPath: string, entryPath: string): string {
+  const normalizedTargetPath = entryPath.replaceAll("\\", "/");
+  if (!isSecureJarEntryPath(normalizedTargetPath)) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: `Entry path "${normalizedTargetPath}" is not allowed.`,
+      details: { jarPath, entryPath: normalizedTargetPath }
+    });
+  }
+  return normalizedTargetPath;
+}
+
+function entryNotFoundError(jarPath: string, normalizedTargetPath: string): Error {
+  return createError({
+    code: ERROR_CODES.SOURCE_NOT_FOUND,
+    message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
+    details: { jarPath, entryPath: normalizedTargetPath }
+  });
+}
+
+export function decodeUtf8OrThrow(contentBuffer: Buffer, jarPath: string, entryPath: string): string {
   try {
     return UTF8_DECODER.decode(contentBuffer);
   } catch {
@@ -373,24 +394,13 @@ export async function readJarEntryAsBuffer(
   maxBytes?: number,
   deps: JarReaderOpenDeps = {}
 ): Promise<Buffer> {
-  const normalizedTargetPath = entryPath.replaceAll("\\", "/");
-  if (!isSecureJarEntryPath(normalizedTargetPath)) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: `Entry path "${normalizedTargetPath}" is not allowed.`,
-      details: { jarPath, entryPath: normalizedTargetPath }
-    });
-  }
+  const normalizedTargetPath = normalizeEntryPathOrThrow(jarPath, entryPath);
 
   return withZipFile(jarPath, async (zipFile) => {
     while (true) {
       const entry = await readNextEntry(zipFile);
       if (!entry) {
-        throw createError({
-          code: ERROR_CODES.SOURCE_NOT_FOUND,
-          message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
-          details: { jarPath, entryPath: normalizedTargetPath }
-        });
+        throw entryNotFoundError(jarPath, normalizedTargetPath);
       }
       if (!isSecureJarEntryPath(entry.fileName)) {
         continue;
@@ -428,24 +438,13 @@ export async function readJarEntryCapped(
   entryPath: string,
   maxBytes: number
 ): Promise<CappedJarEntry> {
-  const normalizedTargetPath = entryPath.replaceAll("\\", "/");
-  if (!isSecureJarEntryPath(normalizedTargetPath)) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: `Entry path "${normalizedTargetPath}" is not allowed.`,
-      details: { jarPath, entryPath: normalizedTargetPath }
-    });
-  }
+  const normalizedTargetPath = normalizeEntryPathOrThrow(jarPath, entryPath);
 
   return withZipFile(jarPath, async (zipFile) => {
     while (true) {
       const entry = await readNextEntry(zipFile);
       if (!entry) {
-        throw createError({
-          code: ERROR_CODES.SOURCE_NOT_FOUND,
-          message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
-          details: { jarPath, entryPath: normalizedTargetPath }
-        });
+        throw entryNotFoundError(jarPath, normalizedTargetPath);
       }
       if (!isSecureJarEntryPath(entry.fileName)) {
         continue;
@@ -512,10 +511,6 @@ function readEntryStreamPrefix(
   });
 }
 
-export function decodeJarEntryUtf8OrThrow(contentBuffer: Buffer, jarPath: string, entryPath: string): string {
-  return decodeUtf8OrThrow(contentBuffer, jarPath, entryPath);
-}
-
 export interface JarEntryReader {
   getEntryBuffer(entryPath: string): Promise<Buffer>;
   close(): void;
@@ -555,21 +550,10 @@ export async function createJarEntryReader(jarPath: string): Promise<JarEntryRea
 
   return {
     async getEntryBuffer(entryPath: string): Promise<Buffer> {
-      const normalizedTargetPath = entryPath.replaceAll("\\", "/");
-      if (!isSecureJarEntryPath(normalizedTargetPath)) {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `Entry path "${normalizedTargetPath}" is not allowed.`,
-          details: { jarPath, entryPath: normalizedTargetPath }
-        });
-      }
+      const normalizedTargetPath = normalizeEntryPathOrThrow(jarPath, entryPath);
       const entry = index.get(normalizedTargetPath);
       if (!entry) {
-        throw createError({
-          code: ERROR_CODES.SOURCE_NOT_FOUND,
-          message: `Entry "${normalizedTargetPath}" was not found in "${jarPath}".`,
-          details: { jarPath, entryPath: normalizedTargetPath }
-        });
+        throw entryNotFoundError(jarPath, normalizedTargetPath);
       }
       return readEntryStream(zipFile, entry, jarPath);
     },
@@ -587,8 +571,30 @@ export async function collectMatchedJarEntriesAsUtf8(
   predicate: (entryPath: string) => boolean,
   options: CollectMatchedJarEntriesOptions = {}
 ): Promise<JarEntryText[]> {
+  return collectMatchedJarEntries<JarEntryText>(
+    jarPath,
+    predicate,
+    options,
+    {},
+    (filePath, buffer) => ({ filePath, content: decodeUtf8OrThrow(buffer, jarPath, filePath) })
+  );
+}
+
+/**
+ * Opens the jar once and walks it, reading and converting every safe entry the
+ * predicate accepts. A read or conversion failure either aborts the walk or,
+ * with `continueOnError`, skips the entry; `maxEntries` counts only successful
+ * conversions and is checked before `stopWhen`.
+ */
+async function collectMatchedJarEntries<T>(
+  jarPath: string,
+  predicate: (entryPath: string) => boolean,
+  options: CollectMatchedJarEntriesOptions & { stopWhen?: (collected: readonly T[]) => boolean },
+  deps: JarReaderOpenDeps,
+  convert: (filePath: string, buffer: Buffer) => T
+): Promise<T[]> {
   return withZipFile(jarPath, async (zipFile) => {
-    const entries: JarEntryText[] = [];
+    const entries: T[] = [];
     const maxEntries =
       options.maxEntries == null ? undefined : Math.max(1, Math.trunc(options.maxEntries));
     while (true) {
@@ -605,11 +611,11 @@ export async function collectMatchedJarEntriesAsUtf8(
 
       try {
         const contentBuffer = await readEntryStream(zipFile, entry, jarPath, options.maxBytes);
-        entries.push({
-          filePath: entry.fileName,
-          content: decodeUtf8OrThrow(contentBuffer, jarPath, entry.fileName)
-        });
+        entries.push(convert(entry.fileName, contentBuffer));
         if (maxEntries != null && entries.length >= maxEntries) {
+          return entries;
+        }
+        if (options.stopWhen?.(entries)) {
           return entries;
         }
       } catch (error) {
@@ -618,7 +624,7 @@ export async function collectMatchedJarEntriesAsUtf8(
         }
       }
     }
-  });
+  }, deps);
 }
 
 export interface JarEntryBuffer {
@@ -662,42 +668,13 @@ export async function collectMatchedJarEntriesAsBuffers(
   options: CollectMatchedJarEntriesAsBuffersOptions = {},
   deps: JarReaderOpenDeps = {}
 ): Promise<JarEntryBuffer[]> {
-  const open = deps.openZipFile ?? openZipFile;
-  const zipFile = await open(jarPath);
-  try {
-    const entries: JarEntryBuffer[] = [];
-    const maxEntries =
-      options.maxEntries == null ? undefined : Math.max(1, Math.trunc(options.maxEntries));
-    while (true) {
-      const entry = await readNextEntry(zipFile);
-      if (!entry) {
-        return entries;
-      }
-      if (!isSecureJarEntryPath(entry.fileName)) {
-        continue;
-      }
-      if (!predicate(entry.fileName)) {
-        continue;
-      }
-
-      try {
-        const contentBuffer = await readEntryStream(zipFile, entry, jarPath, options.maxBytes);
-        entries.push({ filePath: entry.fileName, content: contentBuffer });
-        if (maxEntries != null && entries.length >= maxEntries) {
-          return entries;
-        }
-        if (options.stopWhen?.(entries)) {
-          return entries;
-        }
-      } catch (error) {
-        if (!options.continueOnError) {
-          throw error;
-        }
-      }
-    }
-  } finally {
-    zipFile.close();
-  }
+  return collectMatchedJarEntries<JarEntryBuffer>(
+    jarPath,
+    predicate,
+    options,
+    deps,
+    (filePath, content) => ({ filePath, content })
+  );
 }
 
 export async function* iterateJavaEntriesAsUtf8(
@@ -740,20 +717,6 @@ export async function* iterateJavaEntriesAsUtf8(
   } finally {
     zipFile.close();
   }
-}
-
-export async function readAllJavaEntriesAsUtf8(
-  jarPath: string, maxBytes?: number
-): Promise<JavaEntryText[]> {
-  const entries: JavaEntryText[] = [];
-  for await (const entry of iterateJavaEntriesAsUtf8(jarPath, maxBytes)) {
-    entries.push({
-      filePath: entry.filePath,
-      content: entry.content
-    });
-  }
-
-  return entries;
 }
 
 function countMatches(input: string, pattern: RegExp): number {

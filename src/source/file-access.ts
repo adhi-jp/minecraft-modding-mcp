@@ -4,7 +4,7 @@ import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError, isAppError } from "../errors.js";
 import { log } from "../logger.js";
 import {
-  decodeJarEntryUtf8OrThrow,
+  decodeUtf8OrThrow,
   listJarEntries,
   readJarEntryCapped,
   type CappedJarEntry
@@ -193,12 +193,7 @@ function truncateUtf8ToMaxBytes(content: string, maxBytes: number): string {
   if (Buffer.byteLength(content, "utf8") <= maxBytes) {
     return content;
   }
-  const buffer = Buffer.from(content, "utf8");
-  let cut = Math.min(maxBytes, buffer.length);
-  while (cut > 0 && (buffer[cut] & 0xc0) === 0x80) {
-    cut -= 1;
-  }
-  return buffer.slice(0, cut).toString("utf8");
+  return trimToUtf8Boundary(Buffer.from(content, "utf8"), maxBytes).toString("utf8");
 }
 
 export async function getArtifactFile(svc: SourceService, input: GetArtifactFileInput): Promise<GetArtifactFileOutput> {
@@ -376,7 +371,7 @@ async function readFileThroughJar(
 
   const content = truncated
     ? trimmed.toString("utf8")
-    : decodeJarEntryUtf8OrThrow(capped.buffer, binaryJarPath, filePath);
+    : decodeUtf8OrThrow(capped.buffer, binaryJarPath, filePath);
   return {
     ...base,
     content,

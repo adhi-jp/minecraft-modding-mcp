@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 
-import { buildSuggestedCall } from "../../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../../errors.js";
 import type { ParsedMixin } from "../../mixin-parser.js";
 import type {
@@ -181,27 +180,4 @@ export function createMixinPipelineContext(seed: MixinPipelineSeed): MutableMixi
   };
 
   return ctx;
-}
-
-export function normalizeMapping(mapping: SourceMapping | undefined): SourceMapping {
-  if (mapping == null) {
-    return "obfuscated";
-  }
-  if (
-    mapping === "obfuscated" ||
-    mapping === "mojang" ||
-    mapping === "intermediary" ||
-    mapping === "yarn"
-  ) {
-    return mapping;
-  }
-  throw createError({
-    code: ERROR_CODES.MAPPING_UNAVAILABLE,
-    message: `Unsupported mapping "${mapping}".`,
-    details: {
-      mapping,
-      nextAction: "Try mapping=obfuscated which is always available.",
-      ...buildSuggestedCall({ tool: "resolve-artifact", params: { mapping: "obfuscated" } })
-    }
-  });
 }

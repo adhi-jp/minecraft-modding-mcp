@@ -1426,7 +1426,6 @@
 0	ok	sourceJarReader can continue collecting matched utf-8 entries after unreadable matches
 0	ok	sourceJarReader can detect matching entries without materializing every match
 0	ok	sourceJarReader can iterate java entries without materializing upfront
-0	ok	sourceJarReader can read all java entries in one call
 0	ok	sourceJarReader checks .java suffix without lowercasing every entry name
 0	ok	sourceJarReader lists entries and filters java sources
 0	ok	sourceJarReader reads a single entry as utf-8

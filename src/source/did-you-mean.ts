@@ -13,14 +13,14 @@ export interface DidYouMeanCandidate {
   artifactId?: string;
 }
 
-const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
+export const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
 const MAX_CANDIDATES = 8;
 // Near-miss candidates come from a bounded prefix pool: typos inside the
 // first characters are rare compared to suffix/mid-word slips, and an
 // unbounded scan over every type symbol would not stay index-backed.
 const EDIT_DISTANCE_POOL_PREFIX = 4;
 
-function fqnOfRow(row: { qualifiedName?: string; filePath: string }): string {
+export function fqnOfRow(row: { qualifiedName?: string; filePath: string }): string {
   return row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
 }
 

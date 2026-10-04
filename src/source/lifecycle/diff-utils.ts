@@ -4,7 +4,7 @@ import type {
   DiffMemberChange
 } from "../../source-service.js";
 
-type DiffMemberChangedField = "accessFlags" | "isSynthetic" | "javaSignature" | "jvmDescriptor";
+type DiffMemberChangedField = DiffMemberChange["changed"][number];
 
 export function sortDiffMembers(members: DiffMember[]): DiffMember[] {
   return [...members].sort((left, right) => {

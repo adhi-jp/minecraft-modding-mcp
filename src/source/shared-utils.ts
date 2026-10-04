@@ -87,3 +87,29 @@ export function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
   }
   return deduped;
 }
+
+export const MAX_HELPER_REGEX_CACHE = 128;
+
+/** Stores `regex` under `key`, evicting the oldest entry once the cache is full. */
+export function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
+  if (cache.size >= MAX_HELPER_REGEX_CACHE) {
+    const oldestKey = cache.keys().next().value as string | undefined;
+    if (oldestKey) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(key, regex);
+  return regex;
+}
+
+/** Non-finite or missing limits fall back; anything else is truncated and clamped to 1..max. */
+export function clampLimit(limit: number | undefined, fallback: number, max: number): number {
+  if (!Number.isFinite(limit) || limit == null) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(max, Math.trunc(limit)));
+}
+
+export function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
+  return qualityFlags.includes("partial-source-no-net-minecraft");
+}

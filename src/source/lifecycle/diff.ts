@@ -1,7 +1,7 @@
-import { buildSuggestedCall } from "../../build-suggested-call.js";
 import { ERROR_CODES, createError, isAppError } from "../../errors.js";
 import type { SignatureMember } from "../../minecraft-explorer-service.js";
 import type {
+  DiffClassChange,
   DiffClassMemberDelta,
   DiffClassSignaturesInput,
   DiffClassSignaturesOutput,
@@ -13,12 +13,9 @@ import {
   emptyDiffDelta,
   sortDiffMembers
 } from "./diff-utils.js";
-import {
-  normalizeMapping,
-  resolveToObfuscatedClassName
-} from "./mapping-helpers.js";
-
-type DiffClassChange = "added" | "removed" | "present_in_both" | "absent_in_both";
+import { normalizeMapping } from "../shared-utils.js";
+import { resolveToObfuscatedClassName } from "./mapping-helpers.js";
+import { resolveManifestRange } from "./range.js";
 
 type SignatureSnapshot = {
   constructors: SignatureMember[];
@@ -46,51 +43,7 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
 
   const mapping = normalizeMapping(input.mapping);
 
-  const manifestOrder = await svc.versionService.listVersionIds();
-  if (manifestOrder.length === 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: "No Minecraft versions were returned by manifest.",
-      details: {
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-
-  const chronological = [...manifestOrder].reverse();
-  const fromIndex = chronological.indexOf(fromVersion);
-  const toIndex = chronological.indexOf(toVersion);
-
-  if (fromIndex < 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: `fromVersion "${fromVersion}" was not found in manifest.`,
-      details: {
-        fromVersion,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-  if (toIndex < 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: `toVersion "${toVersion}" was not found in manifest.`,
-      details: {
-        toVersion,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-  if (fromIndex > toIndex) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "fromVersion must be older than or equal to toVersion.",
-      details: { fromVersion, toVersion }
-    });
-  }
+  await resolveManifestRange(svc, { fromVersion, toVersion });
 
   const mappingWarnings: string[] = [];
   const obfuscatedFromClassName = await resolveToObfuscatedClassName(
@@ -183,109 +136,78 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     warnings: []
   };
 
-  const constructors =
-    classChange === "added"
-      ? {
-          added: sortDiffMembers(toMembers.constructors),
-          removed: [],
-          modified: []
-        }
-      : classChange === "removed"
-        ? {
-            added: [],
-            removed: sortDiffMembers(fromMembers.constructors),
-            modified: []
-          }
-        : classChange === "absent_in_both"
-          ? emptyDiffDelta()
-          : diffMembersByKey(fromMembers.constructors, toMembers.constructors, (member) => member.jvmDescriptor, false);
-
-  const methods =
-    classChange === "added"
-      ? {
-          added: sortDiffMembers(toMembers.methods),
-          removed: [],
-          modified: []
-        }
-      : classChange === "removed"
-        ? {
-            added: [],
-            removed: sortDiffMembers(fromMembers.methods),
-            modified: []
-          }
-        : classChange === "absent_in_both"
-          ? emptyDiffDelta()
-          : diffMembersByKey(
-              fromMembers.methods,
-              toMembers.methods,
-              (member) => `${member.name}#${member.jvmDescriptor}`,
-              false
-            );
-
-  const fields =
-    classChange === "added"
-      ? {
-          added: sortDiffMembers(toMembers.fields),
-          removed: [],
-          modified: []
-        }
-      : classChange === "removed"
-        ? {
-            added: [],
-            removed: sortDiffMembers(fromMembers.fields),
-            modified: []
-          }
-        : classChange === "absent_in_both"
-          ? emptyDiffDelta()
-          : diffMembersByKey(fromMembers.fields, toMembers.fields, (member) => member.name, true);
+  const constructors = buildMemberDelta(
+    classChange,
+    fromMembers.constructors,
+    toMembers.constructors,
+    (member) => member.jvmDescriptor,
+    false
+  );
+  const methods = buildMemberDelta(
+    classChange,
+    fromMembers.methods,
+    toMembers.methods,
+    (member) => `${member.name}#${member.jvmDescriptor}`,
+    false
+  );
+  const fields = buildMemberDelta(classChange, fromMembers.fields, toMembers.fields, (member) => member.name, true);
 
   // Remap diff delta members for non-obfuscated mappings
+  // One remap call per version side, so remap-failure warnings aggregate across
+  // added/removed and modified members instead of one line per modified member.
   const remapDelta = async (
     delta: DiffClassMemberDelta,
     kind: "field" | "method"
   ): Promise<DiffClassMemberDelta> => {
-    const [addedResult, removedResult] = await Promise.all([
-      svc.remapSignatureMembers(delta.added, kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome),
-      svc.remapSignatureMembers(delta.removed, kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome)
+    const modifiedPairs = delta.modified.map((change) => {
+      if (!change.from || !change.to) {
+        throw createError({
+          code: ERROR_CODES.INTERNAL,
+          message: "Modified diff members are missing before remap.",
+          details: {
+            key: change.key,
+            kind,
+            fromVersion,
+            toVersion,
+            mapping
+          }
+        });
+      }
+      return { from: change.from, to: change.to };
+    });
+    const [fromSide, toSide] = await Promise.all([
+      svc.remapSignatureMembers(
+        [...delta.removed, ...modifiedPairs.map((pair) => pair.from)],
+        kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome
+      ),
+      svc.remapSignatureMembers(
+        [...delta.added, ...modifiedPairs.map((pair) => pair.to)],
+        kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome
+      )
     ]);
-    const remappedModified = await Promise.all(
-      delta.modified.map(async (change) => {
-        if (!change.from || !change.to) {
-          throw createError({
-            code: ERROR_CODES.INTERNAL,
-            message: "Modified diff members are missing before remap.",
-            details: {
-              key: change.key,
-              kind,
-              fromVersion,
-              toVersion,
-              mapping
-            }
-          });
-        }
-        const [fromResult, toResult] = await Promise.all([
-          svc.remapSignatureMembers([change.from], kind, fromVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome),
-          svc.remapSignatureMembers([change.to], kind, toVersion, "obfuscated", mapping, input.sourcePriority, warnings, undefined, input.gradleUserHome)
-        ]);
-        const fromMember = fromResult.members[0];
-        const toMember = toResult.members[0];
-        if (!fromMember || !toMember) {
-          throw createError({
-            code: ERROR_CODES.INTERNAL,
-            message: "Failed to remap modified diff members.",
-            details: {
-              key: change.key,
-              kind,
-              fromVersion,
-              toVersion,
-              mapping
-            }
-          });
-        }
-        return { ...change, from: fromMember, to: toMember };
-      })
-    );
-    return { added: addedResult.members, removed: removedResult.members, modified: remappedModified };
+    const remappedModified = delta.modified.map((change, index) => {
+      const fromMember = fromSide.members[delta.removed.length + index];
+      const toMember = toSide.members[delta.added.length + index];
+      if (!fromMember || !toMember) {
+        throw createError({
+          code: ERROR_CODES.INTERNAL,
+          message: "Failed to remap modified diff members.",
+          details: {
+            key: change.key,
+            kind,
+            fromVersion,
+            toVersion,
+            mapping
+          }
+        });
+      }
+      return { ...change, from: fromMember, to: toMember };
+    });
+    return {
+      added: toSide.members.slice(0, delta.added.length),
+      removed: fromSide.members.slice(0, delta.removed.length),
+      modified: remappedModified
+    };
   };
 
   const [remappedConstructors, remappedMethods, remappedFields] = await Promise.all([
@@ -294,26 +216,17 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     remapDelta(fields, "field")
   ]);
 
+  const constructorCounts = countDelta(remappedConstructors);
+  const methodCounts = countDelta(remappedMethods);
+  const fieldCounts = countDelta(remappedFields);
   const summary = {
-    constructors: {
-      added: remappedConstructors.added.length,
-      removed: remappedConstructors.removed.length,
-      modified: remappedConstructors.modified.length
-    },
-    methods: {
-      added: remappedMethods.added.length,
-      removed: remappedMethods.removed.length,
-      modified: remappedMethods.modified.length
-    },
-    fields: {
-      added: remappedFields.added.length,
-      removed: remappedFields.removed.length,
-      modified: remappedFields.modified.length
-    },
+    constructors: constructorCounts,
+    methods: methodCounts,
+    fields: fieldCounts,
     total: {
-      added: remappedConstructors.added.length + remappedMethods.added.length + remappedFields.added.length,
-      removed: remappedConstructors.removed.length + remappedMethods.removed.length + remappedFields.removed.length,
-      modified: remappedConstructors.modified.length + remappedMethods.modified.length + remappedFields.modified.length
+      added: constructorCounts.added + methodCounts.added + fieldCounts.added,
+      removed: constructorCounts.removed + methodCounts.removed + fieldCounts.removed,
+      modified: constructorCounts.modified + methodCounts.modified + fieldCounts.modified
     }
   };
 
@@ -335,4 +248,28 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
     summary,
     warnings
   };
+}
+
+/** The member delta for one member kind, given how the class itself changed. */
+function buildMemberDelta(
+  classChange: DiffClassChange,
+  fromList: SignatureMember[],
+  toList: SignatureMember[],
+  keyFn: (member: SignatureMember) => string,
+  includeDescriptor: boolean
+): DiffClassMemberDelta {
+  if (classChange === "added") {
+    return { added: sortDiffMembers(toList), removed: [], modified: [] };
+  }
+  if (classChange === "removed") {
+    return { added: [], removed: sortDiffMembers(fromList), modified: [] };
+  }
+  if (classChange === "absent_in_both") {
+    return emptyDiffDelta();
+  }
+  return diffMembersByKey(fromList, toList, keyFn, includeDescriptor);
+}
+
+function countDelta(delta: DiffClassMemberDelta): { added: number; removed: number; modified: number } {
+  return { added: delta.added.length, removed: delta.removed.length, modified: delta.modified.length };
 }

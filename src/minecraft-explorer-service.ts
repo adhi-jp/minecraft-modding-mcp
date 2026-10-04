@@ -2,9 +2,10 @@ import { realpathSync } from "node:fs";
 
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 import { loadConfig } from "./config.js";
+import { LruList } from "./lru-list.js";
 import { normalizeJarPath, readJarStatStamp } from "./path-resolver.js";
 import { createJarEntryReader } from "./source-jar-reader.js";
-import { artifactIdNamesMinecraftRuntime } from "./source/artifact-resolver.js";
+import { artifactIdNamesMinecraftRuntime, firstMinecraftVersionToken } from "./source/artifact-resolver.js";
 import { matchesMemberPattern } from "./source/member-pattern.js";
 import { normalizePathStyle } from "./source/shared-utils.js";
 import type { Config } from "./types.js";
@@ -390,7 +391,8 @@ const GRADLE_FILES_SEGMENT_RE = /^files-\d+\.\d+\//;
 /**
  * Minecraft version a jar path carries, or undefined when the path names none.
  *
- * This is a crude "first N.N substring" read, and it only means anything for a jar
+ * This is a crude "first version-shaped token" read (release, pre-release/rc, or
+ * YYwNNa snapshot id), and it only means anything for a jar
  * stored under a version-numbered directory — which is the vanilla case. A jar
  * served out of a DEPENDENCY store yields either that store's layout constant
  * (Gradle's `.../files-2.1/...` reads as "2.1") or the library's own release
@@ -422,9 +424,9 @@ function extractVersionFromPath(inputPath: string, localM2Path?: string): string
     if (!pathNamesMinecraftRuntime(storeRelativePath)) {
       return undefined;
     }
-    return storeRelativePath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
+    return firstMinecraftVersionToken(storeRelativePath);
   }
-  return inputPath.match(/(\d+\.\d+(?:\.\d+)?)/)?.[1];
+  return firstMinecraftVersionToken(normalizedPath);
 }
 
 /**
@@ -467,94 +469,6 @@ const KNOWN_ABSENT_PLATFORM_PREFIXES = [
   "sun/",
   "com/mojang/serialization/"
 ];
-
-type SignatureCacheNode = {
-  key: string;
-  value: CachedSignatureOutput;
-  older?: SignatureCacheNode;
-  newer?: SignatureCacheNode;
-};
-
-class SignatureCacheStore {
-  private readonly nodes = new Map<string, SignatureCacheNode>();
-  private oldest?: SignatureCacheNode;
-  private newest?: SignatureCacheNode;
-
-  constructor(private readonly maxEntries: number) {}
-
-  get(key: string): CachedSignatureOutput | undefined {
-    const node = this.nodes.get(key);
-    if (!node) {
-      return undefined;
-    }
-
-    this.promote(node);
-    return node.value;
-  }
-
-  set(key: string, value: CachedSignatureOutput): void {
-    const existing = this.nodes.get(key);
-    if (existing) {
-      existing.value = value;
-      this.promote(existing);
-      return;
-    }
-
-    const node: SignatureCacheNode = { key, value, older: this.newest };
-    if (this.newest) {
-      this.newest.newer = node;
-    } else {
-      this.oldest = node;
-    }
-    this.newest = node;
-    this.nodes.set(key, node);
-
-    while (this.nodes.size > this.maxEntries) {
-      this.evictOldest();
-    }
-  }
-
-  private promote(node: SignatureCacheNode): void {
-    if (this.newest === node) {
-      return;
-    }
-
-    if (node.older) {
-      node.older.newer = node.newer;
-    } else {
-      this.oldest = node.newer;
-    }
-
-    if (node.newer) {
-      node.newer.older = node.older;
-    }
-
-    node.older = this.newest;
-    node.newer = undefined;
-    if (this.newest) {
-      this.newest.newer = node;
-    } else {
-      this.oldest = node;
-    }
-    this.newest = node;
-  }
-
-  private evictOldest(): void {
-    const node = this.oldest;
-    if (!node) {
-      return;
-    }
-
-    this.oldest = node.newer;
-    if (this.oldest) {
-      this.oldest.older = undefined;
-    } else {
-      this.newest = undefined;
-    }
-
-    this.nodes.delete(node.key);
-  }
-}
 
 class ByteReader {
   private offset = 0;
@@ -905,11 +819,12 @@ function parseClassFile(buffer: Buffer): ParsedClassFile {
 
 export class MinecraftExplorerService {
   private readonly config: Config;
-  private readonly signatureCache: SignatureCacheStore;
+  private readonly signatureCache = new LruList<CachedSignatureOutput>();
+  private readonly maxSignatureCacheEntries: number;
 
   constructor(explicitConfig?: Config) {
     this.config = explicitConfig ?? loadConfig();
-    this.signatureCache = new SignatureCacheStore(Math.max(1, this.config.maxSignatureCache ?? 2_000));
+    this.maxSignatureCacheEntries = Math.max(1, this.config.maxSignatureCache ?? 2_000);
   }
 
   public async getSignature(input: GetSignatureInput): Promise<GetSignatureOutput> {
@@ -934,7 +849,7 @@ export class MinecraftExplorerService {
       includeInherited ? "1" : "0",
       memberPattern ?? ""
     ].join("|");
-    const cached = this.signatureCache.get(cacheKey);
+    const cached = this.signatureCache.touch(cacheKey);
     if (cached) {
       return {
         classAccessFlags: cached.classAccessFlags,
@@ -1225,7 +1140,14 @@ export class MinecraftExplorerService {
       fields,
       warnings
     };
-    this.signatureCache.set(cacheKey, output);
+    this.signatureCache.upsert(cacheKey, output);
+    while (this.signatureCache.size > this.maxSignatureCacheEntries) {
+      const oldest = this.signatureCache.peekOldest();
+      if (!oldest) {
+        break;
+      }
+      this.signatureCache.remove(oldest.key);
+    }
     return {
       classAccessFlags: output.classAccessFlags,
       constructors: output.constructors,
@@ -1237,9 +1159,10 @@ export class MinecraftExplorerService {
   }
 
   private contextForJar(jarPath: string, dependencyOrigin = false): ResponseContext {
-    // extractVersionFromPath grabs the first "N.N(.N)" substring anywhere in the
-    // path, which only means anything for vanilla jars stored under
-    // version-numbered directories. A dependency jar's path yields either a
+    // extractVersionFromPath takes the first version-shaped token (release,
+    // pre-release/rc, or YYwNNa snapshot id) anywhere in the path, which only
+    // means anything for vanilla jars stored under version-numbered
+    // directories. A dependency jar's path yields either a
     // cache-layout constant (Gradle's ".../files-2.1/...") or the dependency's
     // OWN coordinate version — both plausible-looking and both wrong. Report the
     // established "we don't know" sentinel rather than a confident wrong value.

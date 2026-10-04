@@ -1,8 +1,6 @@
 import type { SourceService } from "../../../source-service.js";
-import {
-  type MutableMixinPipelineContext,
-  normalizeMapping
-} from "../pipeline-context.js";
+import { normalizeMapping } from "../../shared-utils.js";
+import type { MutableMixinPipelineContext } from "../pipeline-context.js";
 
 export async function runResolveStage(svc: SourceService, ctx: MutableMixinPipelineContext): Promise<void> {
   const resolveStartedAt = await ctx.enterStage("resolve");

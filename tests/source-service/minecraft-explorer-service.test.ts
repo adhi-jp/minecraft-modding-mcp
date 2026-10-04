@@ -626,7 +626,7 @@ test("MinecraftExplorerService reuses cached signatures but refreshes response c
 test("MinecraftExplorerService avoids delete/set churn and spread copies on cache hits", async () => {
   const source = await readFile(new URL("../../src/minecraft-explorer-service.ts", import.meta.url), "utf8");
   const block =
-    source.match(/const cached = this\.signatureCache\.get\(cacheKey\);[\s\S]*?const classEntryPath =/)?.[0] ?? "";
+    source.match(/const cached = this\.signatureCache\.touch\(cacheKey\);[\s\S]*?const classEntryPath =/)?.[0] ?? "";
 
   assert.doesNotMatch(block, /this\.signatureCache\.delete\(cacheKey\);\s*this\.signatureCache\.set\(cacheKey, cached\);/);
   assert.doesNotMatch(block, /return\s*\{\s*\.\.\.cached,/);
@@ -908,6 +908,49 @@ test("MinecraftExplorerService still reports a Minecraft version for a vanilla j
   );
 
   assert.equal(version, "1.21.10");
+});
+
+async function signatureContextForJarPath(
+  root: string,
+  jarPath: string,
+  internalName: string
+): Promise<{ minecraftVersion: string; mappingNamespace: string }> {
+  await mkdir(dirname(jarPath), { recursive: true });
+  await createJar(jarPath, {
+    [`${internalName}.class`]: buildClassFile({
+      internalName,
+      methods: [{ name: "<init>", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const signature = await createService(root).getSignature({
+    jarPath,
+    fqn: internalName.replace(/\//g, ".")
+  });
+  return signature.context;
+}
+
+test("MinecraftExplorerService reports the full pre-release id for a vanilla pre-release jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-vanilla-prerelease-"));
+  const context = await signatureContextForJarPath(
+    root,
+    join(root, "versions", "26.2-pre-6", "26.2-pre-6.jar"),
+    "net/minecraft/client/Minecraft"
+  );
+
+  assert.equal(context.minecraftVersion, "26.2-pre-6", "a pre-release names itself, not the release it precedes");
+  assert.equal(context.mappingNamespace, "mojang");
+});
+
+test("MinecraftExplorerService reports a YYwNNa snapshot id for a vanilla snapshot jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-vanilla-snapshot-"));
+  const context = await signatureContextForJarPath(
+    root,
+    join(root, "versions", "26w14a", "26w14a.jar"),
+    "net/minecraft/client/Minecraft"
+  );
+
+  assert.equal(context.minecraftVersion, "26w14a");
+  assert.equal(context.mappingNamespace, "mojang", "26w snapshots ship mojang names");
 });
 
 test("MinecraftExplorerService reports unknown minecraftVersion for a dependency-origin jar outside any dependency store", async () => {

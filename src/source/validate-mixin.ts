@@ -1,6 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import { isAbsolute, dirname, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
 
 import fastGlob from "fast-glob";
 
@@ -159,78 +160,6 @@ function sameStringArray(left: readonly string[] | undefined, right: readonly st
     if (left[i] !== right[i]) return false;
   }
   return true;
-}
-
-function sameScopeFallback(
-  left: MixinValidationProvenance["scopeFallback"] | undefined,
-  right: MixinValidationProvenance["scopeFallback"] | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return left.requested === right.requested && left.applied === right.applied && left.reason === right.reason;
-}
-
-function sameResolutionTrace(
-  left: MixinValidationProvenance["resolutionTrace"] | undefined,
-  right: MixinValidationProvenance["resolutionTrace"] | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftEntry = left[index];
-    const rightEntry = right[index];
-    if (!leftEntry || !rightEntry) {
-      return false;
-    }
-    if (
-      leftEntry.target !== rightEntry.target ||
-      leftEntry.step !== rightEntry.step ||
-      leftEntry.input !== rightEntry.input ||
-      leftEntry.output !== rightEntry.output ||
-      leftEntry.success !== rightEntry.success ||
-      leftEntry.detail !== rightEntry.detail
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function sameMixinValidationProvenance(
-  left: MixinValidationProvenance | undefined,
-  right: MixinValidationProvenance | undefined
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right) {
-    return false;
-  }
-  return (
-    left.version === right.version &&
-    left.jarPath === right.jarPath &&
-    left.requestedMapping === right.requestedMapping &&
-    left.mappingApplied === right.mappingApplied &&
-    left.requestedScope === right.requestedScope &&
-    left.appliedScope === right.appliedScope &&
-    left.requestedSourcePriority === right.requestedSourcePriority &&
-    left.appliedSourcePriority === right.appliedSourcePriority &&
-    sameStringArray(left.resolutionNotes, right.resolutionNotes) &&
-    left.jarType === right.jarType &&
-    sameStringArray(left.mappingChain, right.mappingChain) &&
-    left.remapFailures === right.remapFailures &&
-    left.mappingAutoDetected === right.mappingAutoDetected &&
-    sameScopeFallback(left.scopeFallback, right.scopeFallback) &&
-    sameResolutionTrace(left.resolutionTrace, right.resolutionTrace)
-  );
 }
 
 export async function validateMixin(
@@ -1147,7 +1076,7 @@ function buildValidateMixinOutput(
     .filter((entry): entry is MixinValidationProvenance => entry != null);
   const provenance = provenanceCandidates.length === 0
     ? undefined
-    : provenanceCandidates.every((entry) => sameMixinValidationProvenance(entry, provenanceCandidates[0]))
+    : provenanceCandidates.every((entry) => isDeepStrictEqual(entry, provenanceCandidates[0]))
       ? provenanceCandidates[0]
       : undefined;
   const toolHealth = results.find((entry) => entry.result?.toolHealth)?.result?.toolHealth;

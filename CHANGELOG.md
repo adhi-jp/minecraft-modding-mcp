@@ -9,10 +9,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Changed
 
+- `diff-class-signatures` and the class diff in `compare-minecraft` report remap failures for modified members as one warning per compared version, such as `Could not remap 3 fields from obfuscated to intermediary (f_a, f_b, f_c).`, instead of one warning per member.
 - **Breaking — internal modules and service members of the Node package changed.** Modules under `dist/` other than the package entry, such as `dist/mixin-validator.js`, and the members of the exported `sourceService` and `config` objects no longer carry helpers, repository methods and options that the server does not use. Clients that talk to the server over stdio are unaffected; code that imported these internals must stop relying on them.
 
 ### Fixed
 
+- `get-class-members` (and the signature context it shares) reports the full pre-release id, such as `26.2-pre-6`, as `context.minecraftVersion` for a vanilla pre-release jar, and recognises snapshot ids such as `26w14a`, reporting `mappingNamespace: "mojang"` for them. It reported `26.2` for the pre-release, a release the jar is not, and `unknown` for snapshots.
 - The error raised when the tiny-remapper jar override does not exist tells you to set `MCP_TINY_REMAPPER_JAR_PATH`, the variable the server reads. It named `MCP_TINY_REMAPPER_JAR`, which has no effect.
 - `inspect-minecraft` class-members and the `compare-minecraft` versions task omit `meta.detailApplied` at the default detail, as every other tool does. When their output was truncated they echoed `detailApplied: "summary"` and repeated the top-level warnings inside `meta`.
 - `inspect-minecraft` search with `detail: "summary", include: ["samples"]` now returns up to five hits in `result.search`, including an empty hits array on a miss. The block was omitted even when samples were requested. Use standard or full detail to recover the whole fetched page; the cursor still advances past that page.

@@ -1,4 +1,3 @@
-import { buildSuggestedCall } from "../../build-suggested-call.js";
 import { mapWithConcurrencyLimit } from "../../concurrency.js";
 import { ERROR_CODES, createError, isAppError } from "../../errors.js";
 import type {
@@ -7,14 +6,14 @@ import type {
   TraceSymbolLifecycleOutput,
   TraceSymbolLifecycleTimelineEntry
 } from "../../source-service.js";
-import { normalizeOptionalString } from "../shared-utils.js";
+import { clampLimit, normalizeMapping, normalizeOptionalString } from "../shared-utils.js";
 import {
-  normalizeMapping,
   rejectLifecycleClassLikeInput,
   releaseLifecycleMappingGraph,
   resolveToObfuscatedClassName,
   resolveToObfuscatedMemberName
 } from "./mapping-helpers.js";
+import { resolveManifestRange } from "./range.js";
 
 const TRACE_LIFECYCLE_MAX_CONCURRENCY = 3;
 
@@ -24,13 +23,6 @@ type LifecycleScanEntry = {
   reason?: TraceSymbolLifecycleTimelineEntry["reason"];
   determinate: boolean;
 };
-
-function clampLimit(limit: number | undefined, fallback: number, max: number): number {
-  if (!Number.isFinite(limit) || limit == null) {
-    return fallback;
-  }
-  return Math.max(1, Math.min(max, Math.trunc(limit)));
-}
 
 function looksLikeJvmMethodDescriptor(descriptor: string | undefined): boolean {
   const trimmed = descriptor?.trim();
@@ -96,54 +88,11 @@ export async function traceSymbolLifecycle(svc: SourceService, input: TraceSymbo
   const includeSnapshots = input.includeSnapshots ?? false;
   const maxVersions = clampLimit(input.maxVersions, 120, 400);
 
-  const manifestOrder = await svc.versionService.listVersionIds({ includeSnapshots });
-  if (manifestOrder.length === 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: "No Minecraft versions were returned by manifest.",
-      details: {
-        includeSnapshots,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-
-  const chronological = [...manifestOrder].reverse();
-  const requestedFrom = normalizeOptionalString(input.fromVersion) ?? chronological[0];
-  const requestedTo = normalizeOptionalString(input.toVersion) ?? chronological[chronological.length - 1];
-  const fromIndex = chronological.indexOf(requestedFrom);
-  const toIndex = chronological.indexOf(requestedTo);
-
-  if (fromIndex < 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: `fromVersion "${requestedFrom}" was not found in manifest.`,
-      details: {
-        fromVersion: requestedFrom,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-  if (toIndex < 0) {
-    throw createError({
-      code: ERROR_CODES.VERSION_NOT_FOUND,
-      message: `toVersion "${requestedTo}" was not found in manifest.`,
-      details: {
-        toVersion: requestedTo,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
-    });
-  }
-  if (fromIndex > toIndex) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "fromVersion must be older than or equal to toVersion.",
-      details: { fromVersion: requestedFrom, toVersion: requestedTo }
-    });
-  }
+  const { chronological, fromIndex, toIndex } = await resolveManifestRange(svc, {
+    fromVersion: normalizeOptionalString(input.fromVersion),
+    toVersion: normalizeOptionalString(input.toVersion),
+    includeSnapshots
+  });
 
   let selectedVersions = chronological.slice(fromIndex, toIndex + 1);
   const warnings: string[] = [];

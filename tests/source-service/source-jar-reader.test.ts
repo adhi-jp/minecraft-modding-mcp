@@ -16,7 +16,6 @@ import {
   listJarEntries,
   listJavaEntries,
   openZipFile,
-  readAllJavaEntriesAsUtf8,
   readJarEntryAsBuffer,
   readJarEntryAsUtf8,
   type ZipFile
@@ -94,24 +93,6 @@ test("sourceJarReader rejects jars that contain unsafe traversal entries", async
     () => listJavaEntries(jarPath),
     /invalid relative path/i
   );
-});
-
-test("sourceJarReader can read all java entries in one call", async () => {
-  const root = await mkdtemp(join(tmpdir(), "reader-all-java-"));
-  const jarPath = join(root, "sample.jar");
-  await createJar(jarPath, {
-    "com/example/Main.java": "package com.example;\npublic class Main {}",
-    "assets/example/lang/en_us.json": "{\"hello\": \"world\"}",
-    "com/example/World.java": "package com.example;\npublic class World {}"
-  });
-
-  const entries = await readAllJavaEntriesAsUtf8(jarPath);
-  assert.deepEqual(
-    entries.map((entry) => entry.filePath),
-    ["com/example/Main.java", "com/example/World.java"]
-  );
-  assert.match(entries[0]?.content ?? "", /class Main/);
-  assert.match(entries[1]?.content ?? "", /class World/);
 });
 
 test("sourceJarReader can iterate java entries without materializing upfront", async () => {

@@ -402,11 +402,19 @@ test("SourceService findClass resolves a qualified inner-class name to its outer
   assert.equal(inner.total, 1, `inner-class lookup should resolve, got ${JSON.stringify(inner.matches)}`);
   assert.equal(inner.matches[0]?.qualifiedName, "a.b.Outer.Inner");
   assert.equal(inner.matches[0]?.filePath, "a/b/Outer.java");
+  assert.equal(inner.matches[0]?.nested, true, "qualified inner-class match must report nested:true");
+  assert.equal(
+    inner.matches[0]?.enclosingClass,
+    "a.b.Outer",
+    "qualified inner-class match must report its enclosingClass"
+  );
 
-  // The outer class must still resolve unchanged.
+  // The outer class must still resolve unchanged, without a spurious nested flag.
   const outer = service.findClass({ className: "a.b.Outer", artifactId: resolved.artifactId });
   assert.equal(outer.matches[0]?.qualifiedName, "a.b.Outer");
   assert.equal(outer.matches[0]?.filePath, "a/b/Outer.java");
+  assert.equal(outer.matches[0]?.nested, undefined);
+  assert.equal(outer.matches[0]?.enclosingClass, undefined);
 });
 
 test("SourceService findClass warns when obfuscated mapping is queried with deobfuscated class names", async () => {

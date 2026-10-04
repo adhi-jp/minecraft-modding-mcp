@@ -379,22 +379,56 @@ test("loadOrDetectWorkspaceContext preserves dependency versions written during 
 });
 
 test("getClassMembers and getClassSource pass input.mapping (raw, possibly undefined) to resolveArtifact symmetrically", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile("src/source/class-source.ts", "utf8");
+  const projectPath = await makeProject(
+    { minecraft_version: "1.21.10" },
+    [
+      "plugins {",
+      "  id 'fabric-loom' version '1.9-SNAPSHOT'",
+      "}",
+      "dependencies {",
+      "  mappings loom.officialMojangMappings()",
+      "}"
+    ].join("\n")
+  );
+  const root = await mkdtemp(join(tmpdir(), "ws-target-raw-mapping-"));
+  await mkdir(join(root, "cache"), { recursive: true });
+  const service = new SourceService(
+    buildTestConfig(root),
+    undefined,
+    { workspaceContextCache: createWorkspaceContextCache() }
+  );
 
-  const getClassSourceMatch = source.match(/export async function getClassSource\(svc: SourceService, input: GetClassSourceInput\)[\s\S]*?await svc\.resolveArtifact\(\{([\s\S]*?)\}\);/);
-  const getClassMembersMatch = source.match(/export async function getClassMembers\(svc: SourceService, input: GetClassMembersInput\)[\s\S]*?await svc\.resolveArtifact\(\{([\s\S]*?)\}\);/);
+  // Record what each caller hands to resolveArtifact, then stop: only the
+  // forwarded request matters here, not the resolution itself.
+  const resolveCalls: Array<Record<string, unknown>> = [];
+  const stopAfterRecording = new Error("stop after recording resolveArtifact input");
+  (service as unknown as { resolveArtifact: (input: Record<string, unknown>) => Promise<never> }).resolveArtifact =
+    async (input) => {
+      resolveCalls.push(input);
+      throw stopAfterRecording;
+    };
 
-  assert.ok(getClassSourceMatch, "Could not locate getClassSource resolveArtifact call");
-  assert.ok(getClassMembersMatch, "Could not locate getClassMembers resolveArtifact call");
+  await assert.rejects(
+    () => service.getClassSource({ className: "net.minecraft.world.item.Item", target: { kind: "workspace" }, projectPath }),
+    (error) => error === stopAfterRecording
+  );
+  await assert.rejects(
+    () => service.getClassMembers({ className: "net.minecraft.world.item.Item", target: { kind: "workspace" }, projectPath }),
+    (error) => error === stopAfterRecording
+  );
 
-  const sourceMappingArg = getClassSourceMatch![1]!.match(/mapping:\s*([^,]+),/)?.[1]?.trim();
-  const membersMappingArg = getClassMembersMatch![1]!.match(/mapping:\s*([^,]+),/)?.[1]?.trim();
-
-  assert.equal(sourceMappingArg, "input.mapping");
+  assert.equal(resolveCalls.length, 2, "each caller resolves the workspace target exactly once");
+  const [sourceCall, membersCall] = resolveCalls;
+  assert.deepEqual(sourceCall?.target, { kind: "workspace" });
+  assert.equal(sourceCall?.projectPath, projectPath);
+  assert.ok(sourceCall && Object.hasOwn(sourceCall, "mapping"), "getClassSource forwards the mapping field");
+  assert.equal(sourceCall?.mapping, undefined, "getClassSource must forward an omitted mapping raw, not normalized");
+  assert.deepEqual(membersCall?.target, { kind: "workspace" });
+  assert.equal(membersCall?.projectPath, projectPath);
+  assert.ok(membersCall && Object.hasOwn(membersCall, "mapping"), "getClassMembers forwards the mapping field");
   assert.equal(
-    membersMappingArg,
-    "input.mapping",
+    membersCall?.mapping,
+    undefined,
     "getClassMembers must pass input.mapping (raw) like getClassSource so workspace-detected mapping is preserved when caller omits mapping"
   );
 });

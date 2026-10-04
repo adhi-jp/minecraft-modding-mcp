@@ -48,7 +48,15 @@ import type {
 import { isUnobfuscatedVersion } from "../version-service.js";
 import type { WorkspaceProjectLoader } from "../workspace-mapping-service.js";
 import * as indexer from "./indexer.js";
-import { dedupeQualityFlags, normalizeMapping, normalizeOptionalString, normalizePathStyle } from "./shared-utils.js";
+import {
+  dedupeQualityFlags,
+  hasPartialNetMinecraftCoverage,
+  normalizeMapping,
+  normalizeOptionalString,
+  normalizePathStyle,
+  pathExists,
+  rememberCachedRegex
+} from "./shared-utils.js";
 
 type VersionSourceCandidate = {
   jarPath: string;
@@ -222,25 +230,9 @@ export type MappingFallbackSuggestion = {
 
 const VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
 const LOADER_VERSION_TOKEN_REGEX_CACHE = new Map<string, RegExp>();
-const MAX_HELPER_REGEX_CACHE = 128;
-
-function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {
-  if (cache.size >= MAX_HELPER_REGEX_CACHE) {
-    const oldestKey = cache.keys().next().value as string | undefined;
-    if (oldestKey) {
-      cache.delete(oldestKey);
-    }
-  }
-  cache.set(key, regex);
-  return regex;
-}
 
 function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
-  return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
 /**
@@ -354,6 +346,20 @@ export function hasLoaderRuntimeVersionToken(path: string, mcVersion: string): b
  */
 const RUNTIME_JAR_VERSION_TOKEN_REGEX =
   /(?:^|[^0-9.])(\d+\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+|-(?:pre|rc|snapshot)-\d+)?|\d{2}w\d{2}[a-z])(?![0-9]|\.[0-9])/g;
+
+/**
+ * The first version-shaped token in `path` (release, pre-release/rc, or `YYwNNa`
+ * snapshot id), with no judgement about whether it is Minecraft's.
+ */
+export function firstMinecraftVersionToken(path: string): string | undefined {
+  // matchAll iterates a clone of the /g regex, so the shared lastIndex is never touched.
+  for (const match of path.matchAll(RUNTIME_JAR_VERSION_TOKEN_REGEX)) {
+    if (match[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
 
 /** The legacy obfuscated line, `1.21` / `1.21.10` / `1.14.4-pre7`. */
 const LEGACY_MINECRAFT_VERSION_REGEX = /^1\.\d+(?:\.\d+)?(?:-(?:pre|rc)\d+|-(?:pre|rc|snapshot)-\d+)?$/;
@@ -635,16 +641,6 @@ function normalizeAccessTransformerNamespace(
     return normalized;
   }
   return undefined;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    const { access } = await import("node:fs/promises");
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function buildResolveArtifactParams(

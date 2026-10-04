@@ -37,7 +37,6 @@ test("SearchHitAccumulator keeps only top limit+1 hits while counting total matc
   acc.add(makeHit("c/C.java", 80));
 
   const finalized = acc.finalize();
-  assert.equal(finalized.totalApprox, 4);
   assert.equal(finalized.page.length, 2);
   assert.deepEqual(
     finalized.page.map((hit) => [hit.filePath, hit.score]),
@@ -84,7 +83,6 @@ test("SearchHitAccumulator applies cursor filtering before pagination", () => {
   acc.add(makeHit("d/D.java", 80));
 
   const finalized = acc.finalize();
-  assert.equal(finalized.totalApprox, 4);
   assert.deepEqual(
     finalized.page.map((hit) => hit.filePath),
     ["c/C.java", "d/D.java"]

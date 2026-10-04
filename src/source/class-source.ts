@@ -1,6 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import { isAbsolute, resolve as resolvePath } from "node:path";
-
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { type AppError, ERROR_CODES, createError, isAppError } from "../errors.js";
 import type {
@@ -34,18 +31,20 @@ import { isUnobfuscatedIdentityPair } from "./lifecycle/mapping-helpers.js";
 import * as classSourceHelpers from "./class-source-helpers.js";
 import { buildClassSourceSnippet } from "./class-source/snippet-builder.js";
 import { remapAndCountMembers, sliceMembersWithLimit, projectMembersForWire, projectMembersByLevel, type MemberProjection } from "./class-source/members-builder.js";
-import { collectDidYouMeanCandidates, type DidYouMeanCandidate } from "./did-you-mean.js";
+import { collectDidYouMeanCandidates, fqnOfRow, TYPE_SYMBOL_KINDS, type DidYouMeanCandidate } from "./did-you-mean.js";
 import { matchesMemberPattern } from "./member-pattern.js";
 import { findNestedJarClasses, resolveUniqueNestedJarForClass } from "./nested-jars.js";
 import { extractSymbolsFromSource } from "../symbols/symbol-extractor.js";
 import { buildPageContextKey, encodeOffsetCursor, resolveCursorOffset } from "../page-cursor.js";
 import {
   dedupeQualityFlags,
+  hasPartialNetMinecraftCoverage,
   inheritArtifactMapping,
   normalizeMapping,
   normalizeOptionalString,
   normalizePathStyle
 } from "./shared-utils.js";
+import { writeSourceToOutputFile } from "../text-truncate.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
 
 const MEMBERS_STATUS_LEGACY = process.env.MEMBERS_STATUS_LEGACY === "1";
@@ -154,10 +153,6 @@ function unobfuscatedMinecraftVersion(input: {
  */
 function unobfuscatedRuntimeNamesNote(version: string): string {
   return `Minecraft ${version} ships Mojang names at runtime, so retrying with a different mapping will not change the class names.`;
-}
-
-function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
-  return qualityFlags.includes("partial-source-no-net-minecraft");
 }
 
 /**
@@ -718,10 +713,6 @@ function projectDecompiledFallback(fallback: DecompiledFallback, level: MemberPr
   };
 }
 
-// The class-like symbol kinds findClass returns. MUST stay in sync with the JS-side
-// isTypeSymbol checks below; pushed down to SQL so non-type rows are never fetched.
-const TYPE_SYMBOL_KINDS = ["class", "interface", "enum", "record"];
-
 /**
  * Reconstruct the full nesting chain between a file's top-level type and a
  * type declared two or more levels deeper inside it. The extractor stores
@@ -812,10 +803,7 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
     });
     const matches = result.items
       .filter((row) => {
-        const isTypeSymbol = row.symbolKind === "class" || row.symbolKind === "interface" ||
-          row.symbolKind === "enum" || row.symbolKind === "record";
-        if (!isTypeSymbol) return false;
-        const rowQualified = row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+        const rowQualified = fqnOfRow(row);
         return (
           rowQualified === className ||
           row.filePath === directPath ||
@@ -823,7 +811,7 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
         );
       })
       .map((row) => {
-        const rowQualified = row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+        const rowQualified = fqnOfRow(row);
         // For an inner-class match the stored qualifiedName is the outer type; the
         // caller asked for the full nested FQCN, so report that.
         const isInnerMatch = rowQualified !== className && row.filePath !== directPath;
@@ -836,20 +824,11 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
         };
       })
       .slice(0, limit);
-    const partialVanillaLookup =
-      hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
-    const filteredMatches =
-      partialVanillaLookup && matches.every((match) =>
-        !match.qualifiedName.startsWith("net.minecraft.") && !match.qualifiedName.startsWith("com.mojang.")
-      )
-        ? []
-        : matches;
     return finishFindClass(svc, {
       artifact,
       artifactId,
       className,
-      matches: filteredMatches,
-      partialVanillaLookup,
+      matches,
       warnings
     });
   }
@@ -867,11 +846,7 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
   // feeding match[0] into get-class-source then fetched the wrong class.
   const candidates: FindClassMatch[] = [];
   for (const row of result.items) {
-    const isTypeSymbol = row.symbolKind === "class" || row.symbolKind === "interface" ||
-      row.symbolKind === "enum" || row.symbolKind === "record";
-    if (!isTypeSymbol) continue;
-    const enclosingQualifiedName =
-      row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+    const enclosingQualifiedName = fqnOfRow(row);
     const enclosingSimpleName = enclosingQualifiedName.split(".").at(-1) ?? enclosingQualifiedName;
     const nested = enclosingSimpleName !== row.symbolName;
     let qualifiedName = nested ? `${enclosingQualifiedName}.${row.symbolName}` : enclosingQualifiedName;
@@ -901,27 +876,19 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
     return left.qualifiedName.localeCompare(right.qualifiedName);
   });
   const matches = candidates.slice(0, limit);
-  const partialVanillaLookup =
-    hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
-  const filteredMatches =
-    partialVanillaLookup && matches.every((match) =>
-      !match.qualifiedName.startsWith("net.minecraft.") && !match.qualifiedName.startsWith("com.mojang.")
-    )
-      ? []
-      : matches;
   return finishFindClass(svc, {
     artifact,
     artifactId,
     className,
-    matches: filteredMatches,
-    partialVanillaLookup,
+    matches,
     warnings
   });
 }
 
 /**
- * Shared tail for both findClass branches: coverage/namespace warnings plus a
- * machine-usable recovery route.
+ * Shared tail for both findClass branches: drops non-vanilla-only matches for a
+ * vanilla-looking name on a partial-coverage artifact, then adds
+ * coverage/namespace warnings plus a machine-usable recovery route.
  *
  * An empty result on an artifact whose index excludes net.minecraft is
  * internally consistent but externally contradictory — get-class-source answers
@@ -935,11 +902,18 @@ function finishFindClass(
     artifactId: string;
     className: string;
     matches: FindClassMatch[];
-    partialVanillaLookup: boolean;
     warnings: string[];
   }
 ): FindClassOutput {
-  const { artifact, artifactId, className, matches, partialVanillaLookup, warnings } = input;
+  const { artifact, artifactId, className, warnings } = input;
+  const partialVanillaLookup =
+    hasPartialNetMinecraftCoverage(artifact.qualityFlags) && looksLikeDeobfuscatedClassName(className);
+  const matches =
+    partialVanillaLookup && input.matches.every((match) =>
+      !match.qualifiedName.startsWith("net.minecraft.") && !match.qualifiedName.startsWith("com.mojang.")
+    )
+      ? []
+      : input.matches;
   let suggestedCall: FindClassOutput["suggestedCall"];
   if (matches.length === 0 && partialVanillaLookup) {
     warnings.push(
@@ -1046,101 +1020,21 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     });
   }
 
-  const normalizedArtifactId = normalizeOptionalString(input.artifactId);
-  if (normalizedArtifactId && input.target) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "artifactId and target are mutually exclusive.",
-      details: { artifactId: normalizedArtifactId, target: input.target }
-    });
-  }
-
-  let artifactId = normalizedArtifactId;
-  let origin: ResolvedSourceArtifact["origin"] = "local-jar";
-  // Derivation, tracked separately from origin: whether the indexed text was
-  // produced by decompiling bytecode. Only the persisted flag answers that.
-  let isDecompiled = false;
-  let warnings: string[] = [];
-  let requestedMapping: SourceMapping = normalizeMapping(input.mapping);
-  let mappingApplied: SourceMapping = requestedMapping;
-  let provenance: ArtifactProvenance | undefined;
-  let qualityFlags: string[] = [];
-  let sourceJarPath: string | undefined;
-  let binaryJarPath: string | undefined;
-  let version: string | undefined;
-  let coordinate: string | undefined;
-  if (!artifactId) {
-    if (!input.target) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Either artifactId or target must be provided."
-      });
-    }
-
-    const resolved = await svc.resolveArtifact({
-      target: input.target,
-      mapping: input.mapping,
-      sourcePriority: input.sourcePriority,
-      allowDecompile: input.allowDecompile,
-      projectPath: input.projectPath,
-      gradleUserHome: input.gradleUserHome,
-      scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion,
-      strictVersion: input.strictVersion
-    });
-    artifactId = resolved.artifactId;
-    origin = resolved.origin;
-    isDecompiled = resolved.isDecompiled;
-    warnings = [...resolved.warnings];
-    requestedMapping = resolved.requestedMapping;
-    mappingApplied = resolved.mappingApplied;
-    provenance = resolved.provenance;
-    qualityFlags = [...resolved.qualityFlags];
-    sourceJarPath = resolved.resolvedSourceJarPath;
-    binaryJarPath = resolved.binaryJarPath;
-    version = resolved.version;
-    coordinate = resolved.coordinate;
-  } else {
-    const artifact = svc.getArtifact(artifactId);
-    artifactId = artifact.artifactId;
-    origin = artifact.origin;
-    isDecompiled = artifact.isDecompiled;
-    requestedMapping = inheritArtifactMapping(input.mapping, artifact);
-    mappingApplied = artifact.mappingApplied ?? requestedMapping;
-    provenance = artifact.provenance;
-    qualityFlags = artifact.qualityFlags;
-    sourceJarPath = artifact.sourceJarPath;
-    binaryJarPath = artifact.binaryJarPath;
-    version = artifact.version;
-    coordinate = artifact.coordinate;
-  }
-
-  version = await artifactResolver.resolveVersionContext(svc, {
-    version,
+  const warnings: string[] = [];
+  const {
+    artifactId,
+    origin,
+    isDecompiled,
+    requestedMapping,
+    mappingApplied,
     provenance,
+    qualityFlags,
+    sourceJarPath,
+    binaryJarPath,
+    version,
     coordinate,
-    projectPath: input.projectPath,
-    preferProjectVersion: input.preferProjectVersion,
-    warnings
-  });
-
-  // Only the Minecraft RUNTIME earns the unobfuscated relabel. `version` here
-  // falls back to the coordinate's own version segment, and a library's release
-  // number is not a Minecraft version: `org.jetbrains:annotations:26.0.2` parses
-  // as a modern Minecraft release and is nothing of the sort. The resolver has
-  // already ruled on such an artifact - it is served in its native namespace,
-  // reported `mappingApplied: "obfuscated"`, flagged `dependency-mapping-unverified`
-  // and warned about - so relabelling it here would contradict the flag and the
-  // warning travelling in the same payload.
-  if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
-    mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
-  }
-  // The same rule for the class-name lookup: its 26.1+ identity shortcut trusts only
-  // a Minecraft version, so a library's 26.x-shaped release number keeps the lookup
-  // (and its warnings) that any other library gets.
-  const minecraftVersion = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })
-    ? undefined
-    : version;
+    minecraftVersion
+  } = await resolveClassArtifactContext(svc, input, warnings);
 
   let activeArtifactId = artifactId;
   let activeOrigin = origin;
@@ -1375,19 +1269,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
 
   let resolvedOutputFile: string | undefined;
   if (outputFile) {
-    const outputPath = isAbsolute(outputFile)
-      ? outputFile
-      : resolvePath(outputFile);
-    try {
-      await writeFile(outputPath, sourceText, "utf8");
-    } catch (writeError) {
-      const errno = (writeError as NodeJS.ErrnoException | undefined)?.code;
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: `outputFile "${outputPath}" could not be written (${errno ?? "unknown error"}).`,
-        details: { field: "outputFile", value: outputPath, osErrorCode: errno }
-      });
-    }
+    const outputPath = await writeSourceToOutputFile(outputFile, sourceText);
     resolvedOutputFile = outputPath;
     sourceText = `[Written to ${outputPath}]`;
   }
@@ -1492,7 +1374,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     });
   }
 
-  let requestedMapping: SourceMapping = normalizeMapping(input.mapping);
+  // An unsupported mapping is reported before any other option error.
+  normalizeMapping(input.mapping);
 
   const access = normalizeMemberAccess(input.access);
   const includeSynthetic = input.includeSynthetic ?? false;
@@ -1501,98 +1384,25 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
   const parsedMaxMembers = normalizeStrictPositiveInt(input.maxMembers, "maxMembers");
   const maxMembers = parsedMaxMembers == null ? 150 : Math.min(parsedMaxMembers, 5000);
 
-  const normalizedArtifactId = normalizeOptionalString(input.artifactId);
-  if (normalizedArtifactId && input.target) {
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "artifactId and target are mutually exclusive.",
-      details: { artifactId: normalizedArtifactId, target: input.target }
-    });
-  }
-
-  let artifactId = normalizedArtifactId;
-  let origin: ResolvedSourceArtifact["origin"] = "local-jar";
-  // See getClassSource: derivation is the persisted flag, not the origin.
-  let isDecompiled = false;
-  let warnings: string[] = [];
-  let mappingApplied: SourceMapping = requestedMapping;
-  let provenance: ArtifactProvenance | undefined;
-  let qualityFlags: string[] = [];
-  let binaryJarPath: string | undefined;
-  let sourceJarPath: string | undefined;
-  let coordinate: string | undefined;
-
+  const warnings: string[] = [];
   if (parsedMaxMembers != null && parsedMaxMembers > 5000) {
     warnings.push(`maxMembers was clamped to 5000 from ${parsedMaxMembers}.`);
   }
 
-  let version: string | undefined;
-
-  if (!artifactId) {
-    if (!input.target) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Either artifactId or target must be provided."
-      });
-    }
-
-    const resolved = await svc.resolveArtifact({
-      target: input.target,
-      mapping: input.mapping,
-      sourcePriority: input.sourcePriority,
-      allowDecompile: input.allowDecompile,
-      projectPath: input.projectPath,
-      gradleUserHome: input.gradleUserHome,
-      scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion,
-      strictVersion: input.strictVersion
-    });
-    artifactId = resolved.artifactId;
-    origin = resolved.origin;
-    isDecompiled = resolved.isDecompiled;
-    warnings.push(...resolved.warnings);
-    requestedMapping = resolved.requestedMapping;
-    mappingApplied = resolved.mappingApplied;
-    provenance = resolved.provenance;
-    qualityFlags = [...resolved.qualityFlags];
-    binaryJarPath = resolved.binaryJarPath;
-    sourceJarPath = resolved.resolvedSourceJarPath;
-    version = resolved.version;
-    coordinate = resolved.coordinate;
-  } else {
-    const artifact = svc.getArtifact(artifactId);
-    artifactId = artifact.artifactId;
-    origin = artifact.origin;
-    isDecompiled = artifact.isDecompiled;
-    requestedMapping = inheritArtifactMapping(input.mapping, artifact);
-    mappingApplied = artifact.mappingApplied ?? requestedMapping;
-    provenance = artifact.provenance;
-    qualityFlags = artifact.qualityFlags;
-    binaryJarPath = artifact.binaryJarPath;
-    sourceJarPath = artifact.sourceJarPath;
-    version = artifact.version;
-    coordinate = artifact.coordinate;
-  }
-
-  version = await artifactResolver.resolveVersionContext(svc, {
-    version,
+  const {
+    artifactId,
+    origin,
+    isDecompiled,
+    requestedMapping,
+    mappingApplied,
     provenance,
+    qualityFlags,
+    sourceJarPath,
+    binaryJarPath,
+    version,
     coordinate,
-    projectPath: input.projectPath,
-    preferProjectVersion: input.preferProjectVersion,
-    warnings
-  });
-
-  // Gated on the same predicate as the source path above, and for the same
-  // reason: a dependency's `version` is its own coordinate version, so the
-  // unobfuscated-runtime relabel must not reach it - nor the 26.1+ identity
-  // shortcut of the class and member lookups below.
-  if (!artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })) {
-    mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
-  }
-  const minecraftVersion = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate })
-    ? undefined
-    : version;
+    minecraftVersion
+  } = await resolveClassArtifactContext(svc, input, warnings);
 
   if (requestedMapping !== "obfuscated" && !version) {
     throw createError({
@@ -1965,5 +1775,155 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     ...(decompiledMemberCounts ? { decompiledMemberCounts } : {}),
     ...statusFields,
     warnings
+  };
+}
+
+type ClassArtifactContextInput = Pick<
+  GetClassSourceInput & GetClassMembersInput,
+  | "artifactId"
+  | "target"
+  | "mapping"
+  | "sourcePriority"
+  | "allowDecompile"
+  | "projectPath"
+  | "gradleUserHome"
+  | "scope"
+  | "preferProjectVersion"
+  | "strictVersion"
+>;
+
+type ClassArtifactContext = {
+  artifactId: string;
+  origin: ResolvedSourceArtifact["origin"];
+  isDecompiled: boolean;
+  requestedMapping: SourceMapping;
+  mappingApplied: SourceMapping;
+  provenance: ArtifactProvenance | undefined;
+  qualityFlags: string[];
+  sourceJarPath: string | undefined;
+  binaryJarPath: string | undefined;
+  version: string | undefined;
+  coordinate: string | undefined;
+  /** `version` when it names Minecraft itself; undefined for a dependency artifact. */
+  minecraftVersion: string | undefined;
+};
+
+/**
+ * Shared front half of get-class-source and get-class-members: validates the
+ * artifactId/target choice, loads or resolves the artifact, settles its
+ * version and namespace, and appends resolution warnings to `warnings`.
+ */
+async function resolveClassArtifactContext(
+  svc: SourceService,
+  input: ClassArtifactContextInput,
+  warnings: string[]
+): Promise<ClassArtifactContext> {
+  const normalizedArtifactId = normalizeOptionalString(input.artifactId);
+  if (normalizedArtifactId && input.target) {
+    throw createError({
+      code: ERROR_CODES.INVALID_INPUT,
+      message: "artifactId and target are mutually exclusive.",
+      details: { artifactId: normalizedArtifactId, target: input.target }
+    });
+  }
+
+  let artifactId: string;
+  let origin: ResolvedSourceArtifact["origin"];
+  // Derivation, tracked separately from origin: whether the indexed text was
+  // produced by decompiling bytecode. Only the persisted flag answers that.
+  let isDecompiled: boolean;
+  let requestedMapping: SourceMapping = normalizeMapping(input.mapping);
+  let mappingApplied: SourceMapping;
+  let provenance: ArtifactProvenance | undefined;
+  let qualityFlags: string[];
+  let sourceJarPath: string | undefined;
+  let binaryJarPath: string | undefined;
+  let version: string | undefined;
+  let coordinate: string | undefined;
+  if (!normalizedArtifactId) {
+    if (!input.target) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: "Either artifactId or target must be provided."
+      });
+    }
+
+    const resolved = await svc.resolveArtifact({
+      target: input.target,
+      mapping: input.mapping,
+      sourcePriority: input.sourcePriority,
+      allowDecompile: input.allowDecompile,
+      projectPath: input.projectPath,
+      gradleUserHome: input.gradleUserHome,
+      scope: input.scope,
+      preferProjectVersion: input.preferProjectVersion,
+      strictVersion: input.strictVersion
+    });
+    artifactId = resolved.artifactId;
+    origin = resolved.origin;
+    isDecompiled = resolved.isDecompiled;
+    warnings.push(...resolved.warnings);
+    requestedMapping = resolved.requestedMapping;
+    mappingApplied = resolved.mappingApplied;
+    provenance = resolved.provenance;
+    qualityFlags = [...resolved.qualityFlags];
+    sourceJarPath = resolved.resolvedSourceJarPath;
+    binaryJarPath = resolved.binaryJarPath;
+    version = resolved.version;
+    coordinate = resolved.coordinate;
+  } else {
+    const artifact = svc.getArtifact(normalizedArtifactId);
+    artifactId = artifact.artifactId;
+    origin = artifact.origin;
+    isDecompiled = artifact.isDecompiled;
+    requestedMapping = inheritArtifactMapping(input.mapping, artifact);
+    mappingApplied = artifact.mappingApplied ?? requestedMapping;
+    provenance = artifact.provenance;
+    qualityFlags = artifact.qualityFlags;
+    sourceJarPath = artifact.sourceJarPath;
+    binaryJarPath = artifact.binaryJarPath;
+    version = artifact.version;
+    coordinate = artifact.coordinate;
+  }
+
+  version = await artifactResolver.resolveVersionContext(svc, {
+    version,
+    provenance,
+    coordinate,
+    projectPath: input.projectPath,
+    preferProjectVersion: input.preferProjectVersion,
+    warnings
+  });
+
+  // Only the Minecraft RUNTIME earns the unobfuscated relabel. `version` here
+  // falls back to the coordinate's own version segment, and a library's release
+  // number is not a Minecraft version: `org.jetbrains:annotations:26.0.2` parses
+  // as a modern Minecraft release and is nothing of the sort. The resolver has
+  // already ruled on such an artifact - it is served in its native namespace,
+  // reported `mappingApplied: "obfuscated"`, flagged `dependency-mapping-unverified`
+  // and warned about - so relabelling it here would contradict the flag and the
+  // warning travelling in the same payload. The same rule covers the class- and
+  // member-name lookups: their 26.1+ identity shortcut trusts only a Minecraft
+  // version, so a library's 26.x-shaped release number keeps the lookup (and its
+  // warnings) that any other library gets.
+  const dependencyLike = artifactResolver.isDependencyLikeArtifact({ provenance, coordinate });
+  if (!dependencyLike) {
+    mappingApplied = reconcileUnobfuscatedNamespace(version, requestedMapping, mappingApplied);
+  }
+  const minecraftVersion = dependencyLike ? undefined : version;
+
+  return {
+    artifactId,
+    origin,
+    isDecompiled,
+    requestedMapping,
+    mappingApplied,
+    provenance,
+    qualityFlags,
+    sourceJarPath,
+    binaryJarPath,
+    version,
+    coordinate,
+    minecraftVersion
   };
 }

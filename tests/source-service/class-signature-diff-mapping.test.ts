@@ -239,3 +239,85 @@ test("SourceService diffClassSignatures remaps non-obfuscated class per endpoint
     )
   );
 });
+
+test("SourceService diffClassSignatures reports remap failures on modified members as one warning per version side", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-diff-modified-remap-warnings-"));
+  const service = new SourceService(buildTestConfig(root));
+
+  const versions = ["1.0.1", "1.0.0"];
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return versions;
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+
+  const fieldNames = ["f_a", "f_b", "f_c"];
+  (service as unknown as { explorerService: unknown }).explorerService = {
+    async getSignature(input: { fqn: string; jarPath: string }) {
+      const isOld = input.jarPath.includes("1.0.0");
+      return {
+        constructors: [],
+        // Same names in both versions with a changed type, so every field lands in `modified`.
+        fields: fieldNames.map((name) => ({
+          ownerFqn: "net.minecraft.server.Main",
+          name,
+          javaSignature: isOld ? `public int ${name}` : `public long ${name}`,
+          jvmDescriptor: isOld ? "I" : "J",
+          accessFlags: 0x0001,
+          isSynthetic: false
+        })),
+        methods: [],
+        warnings: []
+      };
+    }
+  };
+
+  (service as unknown as { mappingService: unknown }).mappingService = {
+    async findMapping(input: { kind: string; name: string; targetMapping: string }) {
+      if (input.kind === "class" && input.name === "net.minecraft.server.IntermediaryMain" && input.targetMapping === "obfuscated") {
+        return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.Main" }, warnings: [] };
+      }
+      if (input.kind === "class" && input.name === "net.minecraft.server.Main" && input.targetMapping === "intermediary") {
+        return { resolved: true, resolvedSymbol: { name: "net.minecraft.server.IntermediaryMain" }, warnings: [] };
+      }
+      return { resolved: false, candidates: [], warnings: [] };
+    }
+  };
+
+  const result = await (service as unknown as {
+    diffClassSignatures: (input: {
+      className: string;
+      fromVersion: string;
+      toVersion: string;
+      mapping: "intermediary";
+    }) => Promise<{
+      fields: { modified: Array<{ key: string }> };
+      warnings: string[];
+    }>;
+  }).diffClassSignatures({
+    className: "net.minecraft.server.IntermediaryMain",
+    fromVersion: "1.0.0",
+    toVersion: "1.0.1",
+    mapping: "intermediary"
+  });
+
+  assert.equal(result.fields.modified.length, 3);
+  const fieldRemapWarnings = result.warnings.filter((warning) => /^Could not remap \d+ fields? /.test(warning));
+  assert.equal(
+    fieldRemapWarnings.length,
+    2,
+    `expected one aggregated field remap warning per version side, got ${JSON.stringify(result.warnings)}`
+  );
+  for (const warning of fieldRemapWarnings) {
+    assert.match(warning, /^Could not remap 3 fields from obfuscated to intermediary \(f_a, f_b, f_c\)\.$/);
+  }
+});

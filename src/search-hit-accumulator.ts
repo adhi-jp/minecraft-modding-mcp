@@ -25,12 +25,9 @@ export interface SearchCursorPayload {
 
 export interface SearchHitAccumulator {
   add(hit: SearchSourceHit): void;
-  setTotalApproxOverride(count: number): void;
-  currentCount(): number;
   finalize(): {
     page: SearchSourceHit[];
     nextCursorHit?: SearchSourceHit;
-    totalApprox: number;
   };
 }
 
@@ -184,13 +181,10 @@ export function createSearchHitAccumulator(
   const pageLimit = Math.max(1, limit);
   const keepLimit = pageLimit + 1;
   const heap: SearchSourceHit[] = [];
-  let totalApprox = 0;
-  let totalApproxOverride: number | undefined = undefined;
   let totalAfterCursor = 0;
 
   return {
     add(hit: SearchSourceHit): void {
-      totalApprox += 1;
       if (cursor && !isAfterSearchCursor(hit, cursor)) {
         return;
       }
@@ -212,12 +206,6 @@ export function createSearchHitAccumulator(
       heap[0] = hit;
       heapSiftDown(heap, 0, heap.length);
     },
-    setTotalApproxOverride(count: number): void {
-      totalApproxOverride = Math.max(0, Math.trunc(count));
-    },
-    currentCount(): number {
-      return heap.length;
-    },
     finalize() {
       const sorted = new Array<SearchSourceHit>(heap.length);
       const heapCopy = heap.slice();
@@ -231,8 +219,7 @@ export function createSearchHitAccumulator(
       const hasMore = totalAfterCursor > page.length;
       return {
         page,
-        nextCursorHit: hasMore && page.length > 0 ? page[page.length - 1] : undefined,
-        totalApprox: totalApproxOverride ?? totalApprox
+        nextCursorHit: hasMore && page.length > 0 ? page[page.length - 1] : undefined
       };
     }
   };
