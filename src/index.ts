@@ -41,6 +41,7 @@ import { analyzeModJar } from "./mod-analyzer.js";
 import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
+import { reportedResolveNamespace } from "./source/artifact-resolver.js";
 import { ToolExecutionGate } from "./tool-execution-gate.js";
 import { SERVER_IDENTITY, SERVER_VERSION } from "./server-identity.js";
 import { STDIO_WORKER_MODE_ENV } from "./stdio-supervisor.js";
@@ -919,8 +920,8 @@ registerExpertTool(server, "resolve-artifact",
   "Resolve a source artifact and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted.",
   resolveArtifactShape,
   { readOnlyHint: true },
-  async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) =>
-    sourceService.resolveArtifact({
+  async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) => {
+    const output = await sourceService.resolveArtifact({
       target: input.target as ResolveArtifactTargetInput,
       mapping: input.mapping,
       sourcePriority: input.sourcePriority,
@@ -933,8 +934,11 @@ registerExpertTool(server, "resolve-artifact",
       includeSampleEntries:
         input.detail === "full" ||
         (Array.isArray(input.include) && input.include.includes("samples"))
-    }) as Promise<Record<string, unknown>>
-  )
+    });
+    // Relabelled only here: every internal caller of resolveArtifact branches on
+    // the stored label, so the resolve output itself keeps it.
+    return { ...output, mappingApplied: reportedResolveNamespace(output) } as Record<string, unknown>;
+  })
 );
 registerToolSchema("resolve-artifact", resolveArtifactSchema);
 

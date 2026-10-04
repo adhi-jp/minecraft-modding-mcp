@@ -5,6 +5,7 @@ import type { FindMappingOutput as MappingFindMappingOutput } from "../../../map
 import type { TargetOutcome as MixinTargetOutcome } from "../../../mixin-validator.js";
 import type { SourceService } from "../../../source-service.js";
 import type { MappingSourcePriority, SourceMapping } from "../../../types.js";
+import { isUnobfuscatedIdentityPair } from "../../lifecycle/mapping-helpers.js";
 import type { ValidateMixinSingleInput } from "../../validate-mixin.js";
 import type { MutableMixinPipelineContext } from "../pipeline-context.js";
 
@@ -100,7 +101,13 @@ export async function processSingleMixinTarget(
 
   let obfuscatedName = resolvedClassName;
 
-  if (ctx.requestedMapping !== ctx.signatureLookupMapping) {
+  // On a 26.1+ runtime mojang and the as-shipped names are the same names and
+  // the mapping graph between them is empty, so a class translation can only
+  // miss and report a tool issue for a lookup that is the identity.
+  if (
+    ctx.requestedMapping !== ctx.signatureLookupMapping &&
+    !isUnobfuscatedIdentityPair(ctx.version, ctx.requestedMapping, ctx.signatureLookupMapping)
+  ) {
     try {
       const mapped = await findValidateMixinClassMapping(svc, {
         version: ctx.version,

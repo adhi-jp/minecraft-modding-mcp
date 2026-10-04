@@ -10,7 +10,7 @@ import {
   normalizeOptionalProjectPath
 } from "../gradle-paths.js";
 import { log } from "../logger.js";
-import { applyMappingPipeline } from "../mapping-pipeline-service.js";
+import { applyMappingPipeline, reportedNamespace } from "../mapping-pipeline-service.js";
 import { parseCoordinate } from "../maven-resolver.js";
 import { resolveMojangTinyFile } from "../mojang-tiny-mapping-service.js";
 import {
@@ -845,7 +845,7 @@ export async function probeMinecraftArtifact(
     runtimeNamesUnobfuscated
   ) {
     warnings.push(
-      `Version ${resolvedVersion} is unobfuscated; ${requestedMapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
+      `Version ${resolvedVersion} is unobfuscated; ${requestedMapping} mappings are not applicable. Serving the runtime names as shipped, which are already Mojang names.`
     );
     effectiveMapping = "obfuscated";
   }
@@ -940,7 +940,9 @@ export async function probeMinecraftArtifact(
   });
   return {
     artifactId,
-    mappingApplied: effectiveMapping,
+    // The probe's output is only ever reported (validate-project's
+    // minecraft.artifact.resolved task), so the response label is set here.
+    mappingApplied: reportedNamespace(effectiveMapping, runtimeNamesUnobfuscated),
     ...(warnings.length > 0 ? { warnings } : {})
   };
 }
@@ -1535,6 +1537,49 @@ export function inferVersionFromContext(input: {
   return undefined;
 }
 
+/**
+ * Whether `provenance` describes a Minecraft 26.1+ runtime, whose as-shipped
+ * names are the Mojang names. The resolver stamps `unobfuscatedRuntime` on every
+ * fresh resolve, but a row indexed before the flag existed is served warm and
+ * never rewritten, so the flag is also derived here. Only the provenance's OWN
+ * recorded version counts - never a project-derived one - and a dependency-like
+ * or nested-jar provenance never qualifies, so a library's release number is
+ * never read as a Minecraft version. A jar row that predates the in-jar proof
+ * records no version and stays unproven until a resolve proves the jar again,
+ * which backfills the row (`backfillResolvedVersion` in the indexer).
+ */
+export function isProvenUnobfuscatedRuntime(provenance: ArtifactProvenance | undefined): boolean {
+  if (!provenance || provenance.nestedJar || isDependencyLikeArtifact({ provenance })) {
+    return false;
+  }
+  if (provenance.unobfuscatedRuntime === true) {
+    return true;
+  }
+  // A persisted or stubbed object can be partial; with nothing recorded there is
+  // nothing to derive the proof from.
+  const partial = provenance as Partial<ArtifactProvenance>;
+  if (!partial.resolvedFrom || !partial.target) {
+    return false;
+  }
+  const version = inferVersionFromContext({
+    provenance,
+    coordinate: partial.resolvedFrom.coordinate
+  });
+  return version !== undefined && isUnobfuscatedVersion(version);
+}
+
+/**
+ * The `mappingApplied` a tool response reports for a resolve output: see
+ * `reportedNamespace`. The resolve output itself keeps the internal label,
+ * because callers branch on it.
+ */
+export function reportedResolveNamespace(output: {
+  mappingApplied: SourceMapping;
+  provenance?: ArtifactProvenance;
+}): SourceMapping {
+  return reportedNamespace(output.mappingApplied, isProvenUnobfuscatedRuntime(output.provenance));
+}
+
 export async function resolveVersionContext(svc: SourceService, input: {
   version?: string;
   provenance?: ArtifactProvenance;
@@ -2036,7 +2081,7 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
     const dropInapplicableUnobfuscatedMapping = (): void => {
       if ((effectiveMapping === "intermediary" || effectiveMapping === "yarn") && runtimeNamesUnobfuscated) {
         warnings.push(
-          `Version ${minecraftVersion} is unobfuscated; ${effectiveMapping} mappings are not applicable. Using the obfuscated namespace label for the deobfuscated runtime names.`
+          `Version ${minecraftVersion} is unobfuscated; ${effectiveMapping} mappings are not applicable. Serving the runtime names as shipped, which are already Mojang names.`
         );
         effectiveMapping = "obfuscated";
       }

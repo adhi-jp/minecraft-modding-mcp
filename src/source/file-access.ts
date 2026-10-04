@@ -253,13 +253,14 @@ export async function getArtifactFile(svc: SourceService, input: GetArtifactFile
       });
     }
 
+    const reportedMapping = svc.reportedArtifactNamespace(artifact);
     return {
       filePath: row.filePath,
       content,
       contentBytes: fullBytes,
       truncated,
-      mappingApplied: artifact.mappingApplied ?? "obfuscated",
-      returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+      mappingApplied: reportedMapping,
+      returnedNamespace: reportedMapping,
       artifactContents: svc.buildArtifactContentsSummary({
         origin: artifact.origin,
         sourceJarPath: artifact.sourceJarPath,
@@ -320,10 +321,11 @@ async function readFileThroughJar(
     });
   }
 
+  const reportedMapping = svc.reportedArtifactNamespace(artifact);
   const base = {
     filePath,
-    mappingApplied: artifact.mappingApplied ?? ("obfuscated" as const),
-    returnedNamespace: artifact.mappingApplied ?? ("obfuscated" as const),
+    mappingApplied: reportedMapping,
+    returnedNamespace: reportedMapping,
     artifactContents: svc.buildArtifactContentsSummary({
       origin: artifact.origin,
       sourceJarPath: artifact.sourceJarPath,
@@ -405,7 +407,7 @@ export async function listArtifactFiles(svc: SourceService, input: ListArtifactF
     return {
       items: page.items,
       nextCursor: page.nextCursor,
-      mappingApplied: artifact.mappingApplied ?? "obfuscated",
+      mappingApplied: svc.reportedArtifactNamespace(artifact),
       artifactContents: svc.buildArtifactContentsSummary({
         origin: artifact.origin,
         sourceJarPath: artifact.sourceJarPath,

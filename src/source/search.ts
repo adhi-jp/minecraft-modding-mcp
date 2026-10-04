@@ -272,10 +272,11 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     const artifact = svc.getArtifact(input.artifactId);
     const originalQuery = input.query.trim();
     if (!originalQuery) {
+      const reportedMapping = svc.reportedArtifactNamespace(artifact);
       return {
         hits: [],
-        mappingApplied: artifact.mappingApplied ?? "obfuscated",
-        returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+        mappingApplied: reportedMapping,
+        returnedNamespace: reportedMapping,
         artifactContents: svc.buildArtifactContentsSummary({
           origin: artifact.origin,
           sourceJarPath: artifact.sourceJarPath,
@@ -494,12 +495,13 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       Buffer.byteLength(JSON.stringify({ hits: page }), "utf8")
     );
 
+    const reportedMapping = svc.reportedArtifactNamespace(artifact);
     return {
       hits: page,
       nextCursor,
       ...(cursorIgnored ? { cursorIgnored: true } : {}),
-      mappingApplied: artifact.mappingApplied ?? "obfuscated",
-      returnedNamespace: artifact.mappingApplied ?? "obfuscated",
+      mappingApplied: reportedMapping,
+      returnedNamespace: reportedMapping,
       artifactContents: svc.buildArtifactContentsSummary({
         origin: artifact.origin,
         sourceJarPath: artifact.sourceJarPath,

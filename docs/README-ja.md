@@ -291,7 +291,7 @@ Minecraft バージョンの参照、ソースアーティファクトの解決�
 | `index-artifact` | 既存アーティファクトのインデックスメタデータを再構築する |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
-`26.1+` のような難読化されていないリリースでは、`obfuscated` はランタイム jar に含まれるままの名前を指し、それはすでに Mojang 名です。`obfuscated` と `mojang` のどちらも受け付け、こうしたアーティファクトには `provenance.unobfuscatedRuntime: true` が付きます。Mojang 名を `obfuscated` と呼ぶのは既知の問題で、互換性のため将来のメジャーリリースで修正されるまで現状のままです。詳しくは [tool-reference.md → Known issue: obfuscated label on unobfuscated runtimes](tool-reference.md#known-issue-obfuscated-label-on-unobfuscated-runtimes) を参照してください。
+`26.1+` のような難読化されていないリリースでは、`obfuscated` はランタイム jar に含まれるままの名前を指し、それはすでに Mojang 名です。`obfuscated` と `mojang` のどちらも受け付け、`obfuscated` と報告されるはずの名前空間フィールド（`mappingApplied`、`returnedNamespace` など）は `mojang` と報告されます。こうしたアーティファクトには `provenance.unobfuscatedRuntime: true` が付きます。`requestedMapping` は書き換えられないため、`mapping` を省略したか `obfuscated` を指定したリクエストで `requestedMapping: "obfuscated"` と `mappingApplied: "mojang"` が並ぶのは同一の名前を指すだけで、フォールバックではありません。アーティファクト系・クラス系のツールが 26.1+ のターゲットを `intermediary` や `yarn` で解決した場合は、警告付きでランタイムの名前にフォールバックし `mojang` と報告します。ライフサイクル系のツールは指定された `intermediary` / `yarn` をそのまま報告します。バージョンが `26.x` に見えるだけの依存 jar、`manage-cache` のメタデータ、Access Widener / Access Transformer 検証の provenance は `obfuscated` のままです。詳しくは [tool-reference.md → Namespace Definitions](tool-reference.md#namespace-definitions) を参照してください。
 
 ### バージョン比較とシンボル追跡
 

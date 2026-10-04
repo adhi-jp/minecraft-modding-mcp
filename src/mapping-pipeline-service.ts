@@ -24,6 +24,21 @@ export interface MappingPipelineResult {
 }
 
 /**
+ * The namespace a tool response reports for names labelled `label`. On a proven
+ * Minecraft 26.1+ runtime the as-shipped names ARE the Mojang names, so the
+ * internal "obfuscated" label is reported as "mojang" there. Only the response
+ * value changes: resolver output, stored rows and every branch that tests the
+ * label keep "obfuscated", so call this where a value is placed into a
+ * response, after all internal logic has run.
+ */
+export function reportedNamespace(
+  label: SourceMapping,
+  provenUnobfuscatedRuntime: boolean
+): SourceMapping {
+  return label === "obfuscated" && provenUnobfuscatedRuntime ? "mojang" : label;
+}
+
+/**
  * Mapping pipeline for v0.3.
  * Current implementation enforces explicit guarantees:
  * - obfuscated: always pass-through

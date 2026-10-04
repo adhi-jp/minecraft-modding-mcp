@@ -135,7 +135,7 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
       },
       indexedAt: currentMeta.indexedAt,
       durationMs: 0,
-      mappingApplied: artifact.mappingApplied ?? "obfuscated"
+      mappingApplied: svc.reportedArtifactNamespace(artifact)
     };
   }
 
@@ -153,7 +153,7 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
     },
     indexedAt: rebuilt.indexedAt,
     durationMs: rebuilt.indexDurationMs,
-    mappingApplied: artifact.mappingApplied ?? "obfuscated"
+    mappingApplied: svc.reportedArtifactNamespace(artifact)
   };
 }
 

@@ -18,8 +18,10 @@ import type {
   GetClassSourceOutput,
   SourceMode
 } from "../source-service.js";
+import { reportedNamespace } from "../mapping-pipeline-service.js";
 import type {
   ArtifactProvenance,
+  ArtifactRow,
   ArtifactScope,
   MappingSourcePriority,
   ResolvedSourceArtifact,
@@ -346,37 +348,36 @@ async function resolveArtifactClassNameForLookup(
 
 /**
  * The provenance as returned, carrying `unobfuscatedRuntime` whenever the artifact
- * it describes is a Minecraft 26.1+ runtime. The resolver stamps the flag on every
- * fresh resolve, but a row indexed before the flag existed is served warm and never
- * rewritten, and a row with no provenance gets `buildFallbackProvenance`. Only the
- * provenance's OWN recorded version counts - never a project-derived one - and a
- * dependency-like provenance is excluded, so a library's release number is never
- * read as a Minecraft version. A jar row that predates the in-jar proof records no
- * version and stays unflagged until a resolve proves the jar again, which backfills
- * the row (`backfillResolvedVersion` in the indexer).
+ * it describes is a Minecraft 26.1+ runtime (`isProvenUnobfuscatedRuntime`). A row
+ * with no provenance gets `buildFallbackProvenance` first.
  */
 function withUnobfuscatedRuntimeFlag(provenance: ArtifactProvenance): ArtifactProvenance {
   if (
     provenance.unobfuscatedRuntime === true ||
-    provenance.nestedJar ||
-    artifactResolver.isDependencyLikeArtifact({ provenance })
+    !artifactResolver.isProvenUnobfuscatedRuntime(provenance)
   ) {
     return provenance;
   }
-  // A persisted or stubbed object can be partial; with nothing recorded there is
-  // nothing to derive the flag from.
-  const partial = provenance as Partial<ArtifactProvenance>;
-  if (!partial.resolvedFrom || !partial.target) {
-    return provenance;
-  }
-  const version = unobfuscatedMinecraftVersion({
-    version: artifactResolver.inferVersionFromContext({
-      provenance,
-      coordinate: partial.resolvedFrom.coordinate
-    }),
-    nativeDependency: false
-  });
-  return version ? { ...provenance, unobfuscatedRuntime: true } : provenance;
+  return { ...provenance, unobfuscatedRuntime: true };
+}
+
+/**
+ * The namespace a tool response reports for a stored artifact row (see
+ * `reportedNamespace`), judged exactly as get-class-source judges the same row:
+ * its own provenance, or `buildFallbackProvenance` when it recorded none. The
+ * row's stored label is never rewritten.
+ */
+export function reportedArtifactNamespace(svc: SourceService, artifact: ArtifactRow): SourceMapping {
+  const label = artifact.mappingApplied ?? "obfuscated";
+  const provenance =
+    artifact.provenance ??
+    buildFallbackProvenance(svc, {
+      artifactId: artifact.artifactId,
+      origin: artifact.origin,
+      requestedMapping: artifact.requestedMapping ?? label,
+      mappingApplied: label
+    });
+  return reportedNamespace(label, artifactResolver.isProvenUnobfuscatedRuntime(provenance));
 }
 
 export function buildFallbackProvenance(svc: SourceService, input: {
@@ -1284,6 +1285,11 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
       })
   );
 
+  const reportedMapping = reportedNamespace(
+    activeMappingApplied,
+    artifactResolver.isProvenUnobfuscatedRuntime(normalizedProvenance)
+  );
+
   const nextStartLine = snippet.nextStartLine;
   // Continuation guidance: when output was truncated and was not redirected to
   // a file, hand the caller the next line to read plus a replayable call that
@@ -1346,8 +1352,8 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     origin: activeOrigin,
     artifactId: activeArtifactId,
     requestedMapping,
-    mappingApplied: activeMappingApplied,
-    returnedNamespace: activeMappingApplied,
+    mappingApplied: reportedMapping,
+    returnedNamespace: reportedMapping,
     provenance: normalizedProvenance,
     qualityFlags: activeQualityFlags,
     artifactContents: svc.buildArtifactContentsSummary({
@@ -1700,6 +1706,8 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
     }
   }
 
+  const provenUnobfuscatedRuntime = artifactResolver.isProvenUnobfuscatedRuntime(normalizedProvenance);
+
   let statusFields: Pick<GetClassMembersOutput, "status" | "unavailableReason" | "suggestedCall"> = {};
   if (!MEMBERS_STATUS_LEGACY) {
     let status: GetClassMembersStatus;
@@ -1753,13 +1761,13 @@ export async function getClassMembers(svc: SourceService, input: GetClassMembers
       ...(signatureContext.minecraftVersion === "unknown" && version && !dependencyOrigin
         ? { minecraftVersion: version }
         : {}),
-      mappingNamespace: requestedMapping
+      mappingNamespace: reportedNamespace(requestedMapping, provenUnobfuscatedRuntime)
     },
     origin,
     artifactId,
     requestedMapping,
-    mappingApplied,
-    returnedNamespace: requestedMapping,
+    mappingApplied: reportedNamespace(mappingApplied, provenUnobfuscatedRuntime),
+    returnedNamespace: reportedNamespace(requestedMapping, provenUnobfuscatedRuntime),
     provenance: normalizedProvenance,
     qualityFlags: fallbackQualityFlags,
     artifactContents: svc.buildArtifactContentsSummary({

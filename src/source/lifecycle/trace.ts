@@ -1,11 +1,13 @@
 import { mapWithConcurrencyLimit } from "../../concurrency.js";
 import { ERROR_CODES, createError, isAppError } from "../../errors.js";
+import { reportedNamespace } from "../../mapping-pipeline-service.js";
 import type {
   SourceService,
   TraceSymbolLifecycleInput,
   TraceSymbolLifecycleOutput,
   TraceSymbolLifecycleTimelineEntry
 } from "../../source-service.js";
+import { isUnobfuscatedVersion } from "../../version-service.js";
 import { clampLimit, normalizeMapping, normalizeOptionalString } from "../shared-utils.js";
 import {
   rejectLifecycleClassLikeInput,
@@ -232,7 +234,12 @@ export async function traceSymbolLifecycle(svc: SourceService, input: TraceSymbo
       className: userClassName,
       methodName: userMethodName,
       descriptor,
-      mapping
+      // Mojang only when every scanned version ships Mojang names; a range that
+      // reaches into the obfuscated era keeps the label it always had.
+      mapping: reportedNamespace(
+        mapping,
+        selectedVersions.length > 0 && selectedVersions.every((version) => isUnobfuscatedVersion(version))
+      )
     },
     range: {
       fromVersion: selectedVersions[0],

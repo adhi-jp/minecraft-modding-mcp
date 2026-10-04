@@ -1,4 +1,5 @@
 import { ERROR_CODES, createError, isAppError } from "../../errors.js";
+import { reportedNamespace } from "../../mapping-pipeline-service.js";
 import type { SignatureMember } from "../../minecraft-explorer-service.js";
 import type {
   DiffClassChange,
@@ -7,6 +8,7 @@ import type {
   DiffClassSignaturesOutput,
   SourceService
 } from "../../source-service.js";
+import { isUnobfuscatedVersion } from "../../version-service.js";
 import {
   compactDiffDelta,
   diffMembersByKey,
@@ -235,7 +237,11 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
       className,
       fromVersion,
       toVersion,
-      mapping
+      // A mixed-era or all-legacy comparison keeps the label it always had.
+      mapping: reportedNamespace(
+        mapping,
+        isUnobfuscatedVersion(fromVersion) && isUnobfuscatedVersion(toVersion)
+      )
     },
     range: {
       fromVersion,

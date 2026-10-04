@@ -1,3 +1,4 @@
+import { reportedResolveNamespace } from "../../../source/artifact-resolver.js";
 import { buildEntryToolResult, createNextAction, createSummarySubject, type DetailLevel, type Summary } from "../../response-contract.js";
 import { nextActionsOrUndefined } from "../../request-normalizers.js";
 import { type Subject, resolveArtifactReference, type InspectMinecraftDeps } from "../internal.js";
@@ -74,7 +75,7 @@ deps: InspectMinecraftDeps,
               artifactId: resolved.artifact.artifactId,
               artifactAlias: resolved.artifact.artifactAlias,
               origin: resolved.artifact.origin,
-              mappingApplied: resolved.artifact.mappingApplied,
+              mappingApplied: reportedResolveNamespace(resolved.artifact),
               version: resolved.artifact.version,
               artifactContents: resolved.artifact.artifactContents
             }

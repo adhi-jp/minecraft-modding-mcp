@@ -826,6 +826,11 @@ export class SourceService {
     return artifactResolver.buildArtifactContentsSummary(this, input);
   }
 
+  /** The `mappingApplied`/`returnedNamespace` a tool response reports for a stored artifact row. */
+  reportedArtifactNamespace(artifact: ArtifactRow): SourceMapping {
+    return classSource.reportedArtifactNamespace(this, artifact);
+  }
+
   async discoverVersionSourceJar(input: {
     version: string;
     projectPath?: string;

@@ -2,6 +2,7 @@ import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import type { GetSignatureOutput, SignatureMember } from "../minecraft-explorer-service.js";
 import { suggestSimilar } from "../mixin-validator.js";
+import { reportedResolveNamespace } from "../source/artifact-resolver.js";
 import type {
   ArtifactProvenance,
   ArtifactScope,
@@ -425,16 +426,17 @@ export class VerifyMixinTargetService {
       accessorAdvice = inferAnnotation(member, matches[0]!, input.mixinMemberName);
     }
 
+    const reportedMapping = reportedResolveNamespace(resolved);
     return {
       exists,
-      resolvedOwner: { className: owner, mapping: resolved.mappingApplied },
+      resolvedOwner: { className: owner, mapping: reportedMapping },
       matches,
       candidates,
       ...(accessorAdvice ? { accessorAdvice } : {}),
       warnings,
       provenance: {
         artifactId: resolved.artifactId,
-        mappingNamespace: resolved.mappingApplied,
+        mappingNamespace: reportedMapping,
         ...(resolved.provenance?.workspaceResolution
           ? { workspaceResolution: resolved.provenance.workspaceResolution }
           : {}),

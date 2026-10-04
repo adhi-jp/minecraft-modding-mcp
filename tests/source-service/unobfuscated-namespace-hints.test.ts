@@ -206,7 +206,10 @@ test("get-class-source and get-class-members report unobfuscatedRuntime for a st
     className: PRESENT_CLASS
   });
 
-  assert.equal(modernSource.mappingApplied, "obfuscated");
+  // The response reports the runtime's names as the Mojang names they are; the
+  // stored row keeps its label (see unobfuscated-reported-namespace.test.ts).
+  assert.equal(modernSource.mappingApplied, "mojang");
+  assert.equal(legacySource.mappingApplied, "obfuscated");
   assert.equal((modernSource.provenance as { unobfuscatedRuntime?: boolean }).unobfuscatedRuntime, true);
   assert.equal((modernMembers.provenance as { unobfuscatedRuntime?: boolean }).unobfuscatedRuntime, true);
   assert.equal("unobfuscatedRuntime" in (legacySource.provenance as object), false);

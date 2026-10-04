@@ -28,6 +28,8 @@ import type {
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "../stage-emitter.js";
 import type { ArtifactScope, MappingSourcePriority, SourceMapping } from "../types.js";
 import type { FindMappingOutput as MappingFindMappingOutput } from "../mapping-service.js";
+import { reportedNamespace } from "../mapping-pipeline-service.js";
+import { isUnobfuscatedVersion } from "../version-service.js";
 import {
   type MixinPipelineSeed,
   type MutableMixinPipelineContext,
@@ -686,6 +688,17 @@ async function finalizeValidateMixinPipeline(svc: SourceService, ctx: MutableMix
     result.valid = preCategoryFilterValid;
     result.validationStatus = preCategoryFilterValidationStatus;
     result.quickSummary = preCategoryFilterQuickSummary;
+  }
+
+  // Relabelled on the returned copy only, after every score and verdict above
+  // has been computed: confidence scoring reads requestedMapping vs
+  // mappingApplied, and on a 26.1+ runtime "obfuscated" and "mojang" name the
+  // same names, so relabelling earlier would cost a false mapping-fallback penalty.
+  if (result.provenance) {
+    result.provenance = {
+      ...result.provenance,
+      mappingApplied: reportedNamespace(result.provenance.mappingApplied, isUnobfuscatedVersion(ctx.version))
+    };
   }
 
   if (shouldRetryValidateMixinWithMavenFirst(svc, input, result, issuesForRetryEligibility)) {

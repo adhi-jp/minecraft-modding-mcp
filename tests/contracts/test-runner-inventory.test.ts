@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_ORDINARY_TEST_FILES = 276;
+const EXPECTED_ORDINARY_TEST_FILES = 278;
 // These constants pin the approved inventory so accidental runner-selection regressions
 // surface as failures. Deliberately adding or splitting test files must update them:
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2518;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2535;
 
 const loadTestFileSelection = (): Promise<{ selectOrdinaryTestFiles: () => Promise<string[]> }> =>
   import("../../scripts/test-file-selection.mjs") as Promise<{
