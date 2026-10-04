@@ -15,6 +15,7 @@ import type {
   SymbolKind
 } from "../source-service.js";
 import { clampLimit, normalizePathStyle, rememberCachedRegex } from "./shared-utils.js";
+import { isProvenUnobfuscatedArtifact } from "./class-source.js";
 
 type SearchIntent = "symbol" | "text" | "path";
 type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -292,11 +293,30 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     let translatedInfo: SearchClassSourceOutput["translatedQuery"];
     let query = originalQuery;
     let translationPackagePrefix: string | undefined;
+    const prepareSymbolQuery = (name: string): void => {
+      const lastDot = name.lastIndexOf(".");
+      query = name.slice(lastDot + 1);
+      if (lastDot >= 0 && !input.scope?.packagePrefix) {
+        translationPackagePrefix = name.slice(0, lastDot);
+      }
+    };
+    const identityQuery = intent === "symbol" && originalQuery.includes(".") && /^[\w.$]+$/.test(originalQuery)
+      && input.queryNamespace !== undefined && (
+        input.queryNamespace === artifactMapping || (
+          isProvenUnobfuscatedArtifact(svc, artifact) &&
+          ((input.queryNamespace === "mojang" && artifactMapping === "obfuscated")
+            || (input.queryNamespace === "obfuscated" && artifactMapping === "mojang"))
+        )
+      );
+    if (identityQuery) {
+      prepareSymbolQuery(originalQuery);
+    }
 
     if (
       input.queryNamespace
       && input.queryNamespace !== artifactMapping
       && !artifact.version
+      && !identityQuery
     ) {
       searchWarnings.push(
         `queryNamespace=${input.queryNamespace} could not be applied because the artifact has no version recorded; namespace translation requires a version. Running literal search in ${artifactMapping} instead.`
@@ -307,6 +327,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       input.queryNamespace
       && input.queryNamespace !== artifactMapping
       && artifact.version
+      && !identityQuery
     ) {
       if (intent === "symbol" && originalQuery.includes(".") && /^[\w.$]+$/.test(originalQuery)) {
         try {
@@ -324,24 +345,16 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
           if (translated.resolved === true && translated.resolvedSymbol) {
             const resolvedName = translated.resolvedSymbol.symbol
               ?? translated.resolvedSymbol.name;
-            if (resolvedName && resolvedName !== originalQuery) {
-              translatedInfo = {
-                original: originalQuery,
-                translated: resolvedName,
-                fromNamespace: input.queryNamespace,
-                toNamespace: artifactMapping
-              };
-              if (resolvedName.includes(".")) {
-                const lastDot = resolvedName.lastIndexOf(".");
-                const simpleName = resolvedName.slice(lastDot + 1);
-                const packagePart = resolvedName.slice(0, lastDot);
-                query = simpleName;
-                if (!input.scope?.packagePrefix) {
-                  translationPackagePrefix = packagePart;
-                }
-              } else {
-                query = resolvedName;
+            if (resolvedName) {
+              if (resolvedName !== originalQuery) {
+                translatedInfo = {
+                  original: originalQuery,
+                  translated: resolvedName,
+                  fromNamespace: input.queryNamespace,
+                  toNamespace: artifactMapping
+                };
               }
+              prepareSymbolQuery(resolvedName);
             }
           } else if (translated.status === "ambiguous") {
             const candidateCount = translated.candidateCount ?? translated.candidates?.length ?? 0;

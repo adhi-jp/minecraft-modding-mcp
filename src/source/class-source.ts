@@ -368,6 +368,10 @@ function withUnobfuscatedRuntimeFlag(provenance: ArtifactProvenance): ArtifactPr
  * row's stored label is never rewritten.
  */
 export function reportedArtifactNamespace(svc: SourceService, artifact: ArtifactRow): SourceMapping {
+  return reportedNamespace(artifact.mappingApplied ?? "obfuscated", isProvenUnobfuscatedArtifact(svc, artifact));
+}
+
+export function isProvenUnobfuscatedArtifact(svc: SourceService, artifact: ArtifactRow): boolean {
   const label = artifact.mappingApplied ?? "obfuscated";
   const provenance =
     artifact.provenance ??
@@ -377,7 +381,7 @@ export function reportedArtifactNamespace(svc: SourceService, artifact: Artifact
       requestedMapping: artifact.requestedMapping ?? label,
       mappingApplied: label
     });
-  return reportedNamespace(label, artifactResolver.isProvenUnobfuscatedRuntime(provenance));
+  return artifactResolver.isProvenUnobfuscatedRuntime(provenance);
 }
 
 function buildFallbackProvenance(svc: SourceService, input: {

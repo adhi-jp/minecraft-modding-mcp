@@ -168,3 +168,45 @@ test("dropSatisfiedParameterAsks removes an ask for a parameter the caller alrea
     "Use find-class to resolve the name."
   ]);
 });
+
+
+test("validateAccessTransformer detects the project loader once per request", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  for (const mode of ["inferred loader", "explicit loader", "inferred vanilla", "explicit no project"] as const) {
+    await t.test(mode, async () => {
+      const { root, mergedJar } = await buildModDevWorkspace();
+      const service = new SourceService(buildTestConfig(root));
+      const detect = service.workspaceMappingService.detectProjectLoader.bind(service.workspaceMappingService);
+      let calls = 0;
+      service.workspaceMappingService.detectProjectLoader = async (path) => { calls += 1; return detect(path); };
+      service.versionService.resolveVersionJar = async () => ({ version: "1.21.11", jarPath: mergedJar });
+      const result = await service.validateAccessTransformer({
+        content: AT_CONTENT, version: "1.21.11",
+        ...(mode !== "explicit no project" ? { projectPath: root } : {}),
+        ...(mode.startsWith("explicit") ? { atNamespace: "mojang" as const } : {}),
+        ...(mode === "inferred vanilla" ? { scope: "vanilla" as const } : {})
+      });
+      assert.equal(result.valid, true);
+      assert.equal(calls, mode === "explicit no project" ? 0 : 1, "each request must perform only necessary loader detection");
+    });
+  }
+});
+
+test("runtime discovery preserves ordered candidates across all project Gradle subtrees", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "runtime-discovery-"));
+  const service = new SourceService(buildTestConfig(root));
+  const subtrees = ["forge-userdev", "neogradle", "caches/forge_gradle", "caches/neogradle", "caches/neoformruntime", "caches/moddev"];
+  const paths = subtrees.map((subtree) => join(root, ".gradle", subtree, "neoforge-1.21.11.jar"));
+  for (const path of paths) {
+    await mkdir(join(path, ".."), { recursive: true });
+    await createJar(path, { "net/minecraft/server/MinecraftServer.class": MINECRAFT_SERVER_CLASS });
+  }
+  const expected = [...paths].sort((left, right) => left.localeCompare(right));
+  const result = await service.discoverAccessTransformerRuntimeCandidates({
+    version: "1.21.11", projectPath: root, gradleUserHome: join(root, "empty-home"),
+    requestedScope: "loader", atNamespace: "mojang", loader: "neoforge"
+  });
+  assert.deepEqual(result.candidateArtifacts, expected);
+  assert.equal(result.selected?.jarPath, expected[0]);
+});

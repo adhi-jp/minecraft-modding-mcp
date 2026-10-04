@@ -25,6 +25,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- `search-class-source` with `intent: "symbol"` and an explicit `queryNamespace` finds fully qualified classes already in that namespace, including Mojang names on a proven Minecraft 26.1+ runtime. These identity searches could return no hits or warn about unavailable mappings; they do not need mapping data. An explicit package scope still takes precedence.
+- `resolve-artifact` honors `allowDecompile: false` for `mapping: "mojang"` on Minecraft 26.1+ version targets, Minecraft runtime coordinates such as `net.minecraft:client:26.1`, and directly named jars proven to be those runtimes. A binary-only target fails with `ERR_SOURCE_NOT_FOUND` before decompilation; available source jars remain usable.
+- `validate-access-widener` and `validate-access-transformer` no longer warn that a valid class could not be mapped when Mojang names already match a proven vanilla Minecraft 26.1+ runtime. Loader-runtime behavior, validation verdicts and provenance namespace labels are unchanged.
 - `validate-mixin` with `mapping: "mojang"` on a Minecraft 26.1+ vanilla runtime checks the mixin against the runtime names. It reported a `mapping-failed` tool issue and a `Could not map class` warning for every target.
 - `get-class-members` (and the signature context it shares) reports the full pre-release id, such as `26.2-pre-6`, as `context.minecraftVersion` for a vanilla pre-release jar, and recognises snapshot ids such as `26w14a`, reporting `mappingNamespace: "mojang"` for them. It reported `26.2` for the pre-release, a release the jar is not, and `unknown` for snapshots.
 - The error raised when the tiny-remapper jar override does not exist tells you to set `MCP_TINY_REMAPPER_JAR_PATH`, the variable the server reads. It named `MCP_TINY_REMAPPER_JAR`, which has no effect.

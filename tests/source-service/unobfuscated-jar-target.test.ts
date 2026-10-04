@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,8 @@ import { resolveSourceTarget } from "../../src/source-resolver.ts";
 import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
+import { withVersionManifestStub } from "../helpers/source-service-fixtures.ts";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 
 /**
  * A kind="jar" target counts as an unobfuscated Minecraft runtime jar only on
@@ -112,6 +114,63 @@ test("resolveArtifact accepts mapping mojang on a jar proven to be a Minecraft 2
   assert.equal(resolved.provenance.unobfuscatedRuntime, true);
   assert.equal(resolved.version, "26.2");
   assert.equal(resolved.provenance.resolvedFrom.version, "26.2");
+});
+
+test("resolveArtifact honors disabled decompilation for proven modern runtime targets", async (t) => {
+  for (const kind of ["jar", "version"] as const) {
+    await t.test(kind, async () => {
+      const root = await mkdtemp(join(tmpdir(), "unobf-runtime-no-decompile-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const jarPath = await writeRuntimeJar(root, {
+        "version.json": JSON.stringify({ id: "26.2" }),
+        [SHARED_CONSTANTS]: CLASS_BYTES
+      });
+      await withVersionManifestStub({ version: "26.2", clientJarBytes: await readFile(jarPath) }, async () => {
+        const service = await makeService(root);
+        let ingested = false;
+        service.ingestIfNeeded = async () => { ingested = true; };
+        await assert.rejects(
+          () => service.resolveArtifact({
+            target: { kind, value: kind === "jar" ? jarPath : "26.2" },
+            mapping: "mojang",
+            allowDecompile: false
+          }),
+          expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
+        );
+        assert.equal(ingested, false, "disabled decompilation must reject before ingestion");
+      });
+    });
+  }
+});
+
+test("resolveArtifact permits source-backed modern runtime targets with decompilation disabled", async (t) => {
+  for (const kind of ["jar", "version"] as const) {
+    await t.test(kind, async () => {
+      const root = await mkdtemp(join(tmpdir(), "unobf-runtime-source-no-decompile-"));
+      t.after(() => rm(root, { recursive: true, force: true }));
+      const jarPath = await writeRuntimeJar(root, {
+        "version.json": JSON.stringify({ id: "26.2" }),
+        [SHARED_CONSTANTS]: CLASS_BYTES
+      });
+      await createJar(join(root, "runtime-sources.jar"), {
+        "net/minecraft/world/item/Item.java": "package net.minecraft.world.item; public class Item {}"
+      });
+      // Version targets download their own jar, so put Java sources in that fixture.
+      const sourceBytes = await readFile(join(root, "runtime-sources.jar"));
+      await withVersionManifestStub({ version: "26.2", clientJarBytes: sourceBytes }, async () => {
+        const service = await makeService(root);
+        const resolved = await service.resolveArtifact({
+          target: { kind, value: kind === "jar" ? jarPath : "26.2" },
+          mapping: "mojang",
+          allowDecompile: false
+        });
+        assert.equal(resolved.isDecompiled, false);
+        assert.equal(resolved.mappingApplied, "mojang");
+        assert.equal(resolved.provenance.unobfuscatedRuntime, true);
+        assert.ok(resolved.resolvedSourceJarPath);
+      });
+    });
+  }
 });
 
 test("resolveArtifact keeps the obfuscated label on a proven 26.x runtime jar and flags unobfuscatedRuntime", async () => {

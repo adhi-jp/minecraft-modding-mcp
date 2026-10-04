@@ -1327,6 +1327,7 @@ async function detectWorkspaceRuntimeLoader(
 export async function resolveAccessTransformerNamespace(svc: SourceService, input: {
   atNamespace?: AccessTransformerNamespace;
   projectPath?: string;
+  onLoaderDetected?: (output: Awaited<ReturnType<SourceService["workspaceMappingService"]["detectProjectLoader"]>>) => void;
 }): Promise<AccessTransformerNamespace> {
   const explicit = normalizeAccessTransformerNamespace(input.atNamespace);
   if (explicit) {
@@ -1345,6 +1346,7 @@ export async function resolveAccessTransformerNamespace(svc: SourceService, inpu
   }
 
   const loaderDetection = await svc.workspaceMappingService.detectProjectLoader(normalizedProjectPath);
+  input.onLoaderDetected?.(loaderDetection);
   if (loaderDetection.resolved && loaderDetection.loader === "forge") {
     return "srg";
   }
@@ -1371,6 +1373,7 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
   gradleUserHome?: string;
   scope?: ArtifactScope;
   preferProjectVersion?: boolean;
+  loaderDetection?: Awaited<ReturnType<SourceService["workspaceMappingService"]["detectProjectLoader"]>>;
 }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
   const normalizedProjectPath = normalizeOptionalProjectPath(input.projectPath);
   let version = input.version;
@@ -1405,9 +1408,9 @@ export async function resolveAccessTransformerRuntimeArtifact(svc: SourceService
     };
   }
 
-  const loaderDetection = normalizedProjectPath
+  const loaderDetection = input.loaderDetection ?? (normalizedProjectPath
     ? await svc.workspaceMappingService.detectProjectLoader(normalizedProjectPath)
-    : { resolved: false, loader: undefined, evidence: [], warnings: [] };
+    : { resolved: false, loader: undefined, evidence: [], warnings: [] });
   const loader = loaderDetection.resolved ? loaderDetection.loader ?? "unknown" : "unknown";
   const discovery = await svc.discoverAccessTransformerRuntimeCandidates({
     version,
@@ -2165,6 +2168,17 @@ export async function resolveArtifact(svc: SourceService, input: ResolveArtifact
       dropInapplicableUnobfuscatedMapping();
     }
     resolved.version = resolvedVersion;
+
+    if (runtimeNamesUnobfuscated && input.allowDecompile === false && resolved.isDecompiled) {
+      throw createError({
+        code: ERROR_CODES.SOURCE_NOT_FOUND,
+        message: `No source jar was found for "${value}" and decompile is disabled.`,
+        details: {
+          jarPath: resolved.binaryJarPath,
+          adjacentSourceCandidates: resolved.adjacentSourceCandidates
+        }
+      });
+    }
 
     let mappingDecision: ReturnType<typeof applyMappingPipeline>;
     try {

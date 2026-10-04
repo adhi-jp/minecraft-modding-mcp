@@ -12,6 +12,7 @@ import type {
 } from "../mixin-validator.js";
 import type { SourceService } from "../source-service.js";
 import { normalizeMapping, normalizeOptionalString } from "./shared-utils.js";
+import { isUnobfuscatedIdentityPair } from "./lifecycle/mapping-helpers.js";
 import type {
   ValidateAccessTransformerInput,
   ValidateAccessTransformerOutput,
@@ -121,13 +122,17 @@ async function loadClassMembers(
     fromNamespace: SourceMapping | AccessTransformerNamespace;
     lookupMapping: SourceMapping | AccessTransformerNamespace;
     resolvedVersion: string;
+    identityMinecraftVersion: string | undefined;
     jarPath: string;
     input: Pick<ValidateAccessWidenerInput, "sourcePriority" | "projectPath" | "gradleUserHome">;
     warnings: string[];
   }
 ): Promise<Map<string, ResolvedTargetMembers>> {
   const { fromNamespace, lookupMapping, resolvedVersion, jarPath, input, warnings } = options;
-  const needsLookupMapping = fromNamespace !== lookupMapping;
+  const needsLookupMapping = fromNamespace !== lookupMapping && !(
+    isSourceMappingNamespace(fromNamespace) && isSourceMappingNamespace(lookupMapping) &&
+    isUnobfuscatedIdentityPair(options.identityMinecraftVersion, fromNamespace, lookupMapping)
+  );
   const mapping =
     needsLookupMapping && isSourceMappingNamespace(fromNamespace) && isSourceMappingNamespace(lookupMapping)
       ? { from: fromNamespace, to: lookupMapping }
@@ -285,6 +290,7 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
     fromNamespace: awNamespace,
     lookupMapping,
     resolvedVersion,
+    identityMinecraftVersion: !provenance || provenance.appliedScope === "vanilla" ? resolvedVersion : undefined,
     jarPath,
     input,
     warnings
@@ -315,9 +321,13 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
 
   const warnings: string[] = [];
   const parsed = parseAccessTransformer(content);
+  let loaderDetection: Awaited<ReturnType<SourceService["workspaceMappingService"]["detectProjectLoader"]>> | undefined;
   const atNamespace = await svc.resolveAccessTransformerNamespace({
     atNamespace: input.atNamespace,
-    projectPath: input.projectPath
+    projectPath: input.projectPath,
+    onLoaderDetected: (output) => {
+      loaderDetection = output;
+    }
   });
   const runtimeAware = input.projectPath != null || input.scope != null || input.preferProjectVersion === true;
   let resolvedVersion = version;
@@ -333,7 +343,8 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
       projectPath: input.projectPath,
       gradleUserHome: input.gradleUserHome,
       scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion
+      preferProjectVersion: input.preferProjectVersion,
+      loaderDetection
     });
     approximation = guardRuntimeEvidence(provenance, warnings, "Access Transformer");
     resolvedVersion = provenance.version;
@@ -354,6 +365,7 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
     fromNamespace: atNamespace,
     lookupMapping,
     resolvedVersion,
+    identityMinecraftVersion: !provenance || provenance.appliedScope === "vanilla" ? resolvedVersion : undefined,
     jarPath,
     input,
     warnings

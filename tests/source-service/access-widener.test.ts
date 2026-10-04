@@ -10,6 +10,33 @@ import { withGradleUserHome } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
+import { withTempDir } from "../helpers/temp-dir.ts";
+
+test("SourceService access validators use runtime class names for the modern vanilla Mojang identity", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  for (const validator of ["widener", "transformer"] as const) {
+    await t.test(validator, async () => withTempDir("access-modern-class-identity-", async (root) => {
+      const jarPath = join(root, "26.2.jar");
+      await createJar(jarPath, {
+        "net/minecraft/world/level/Level.class": buildClassFile({
+          internalName: "net/minecraft/world/level/Level", accessFlags: 0x0001,
+          fields: [{ name: "count", descriptor: "I", accessFlags: 0x0001 }],
+          methods: [{ name: "tick", descriptor: "()V", accessFlags: 0x0001 }]
+        })
+      });
+      const service = new SourceService(buildTestConfig(root));
+      service.versionService.resolveVersionJar = async () => ({ version: "26.2", jarPath, source: "downloaded", clientJarUrl: "https://example.test/unused" });
+      // Use the real mapping service: modern vanilla mapping graphs are empty,
+      // so a nonidentity lookup reports mapping_unavailable rather than a name.
+      const result = validator === "widener"
+        ? await service.validateAccessWidener({ version: "26.2", content: "accessWidener v2 mojang\naccessible class net/minecraft/world/level/Level\naccessible field net/minecraft/world/level/Level count I\naccessible method net/minecraft/world/level/Level tick ()V" })
+        : await service.validateAccessTransformer({ version: "26.2", atNamespace: "mojang", content: "public net.minecraft.world.level.Level\npublic net.minecraft.world.level.Level count\npublic net.minecraft.world.level.Level tick()V" });
+      assert.equal(result.valid, true);
+      assert.deepEqual(result.summary, { total: 3, valid: 3, invalid: 0 });
+      assert.ok(!result.warnings.some((warning) => /Could not map class|Mapping lookup failed/.test(warning)), JSON.stringify(result.warnings));
+    }));
+  }
+});
 
 test("SourceService validateAccessWidener chooses the expected mapping namespace", async (t) => {
   const { SourceService } = await import("../../src/source-service.ts");

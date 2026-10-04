@@ -47,12 +47,11 @@ test("buildLoaderRuntimeSearchRoots prefers explicit Gradle user home over proce
       gradleUserHome: explicitGradleUserHome
     } as any);
 
-    assert.ok(roots.includes(resolve(projectPath, "build")));
-    assert.ok(roots.includes(resolve(projectPath, ".gradle", "caches", "moddev")));
-    assert.ok(roots.includes(resolve(explicitGradleUserHome, "caches", "forge_gradle")));
-    assert.ok(roots.includes(resolve(explicitGradleUserHome, "caches", "neogradle")));
-    assert.ok(roots.includes(resolve(explicitGradleUserHome, "caches", "neoformruntime")));
-    assert.ok(roots.includes(resolve(explicitGradleUserHome, "caches", "moddev")));
+    assert.deepEqual(roots, [
+      resolve(projectPath, "build"),
+      resolve(projectPath, ".gradle"),
+      ...["forge_gradle", "neogradle", "neoformruntime", "moddev"].map((name) => resolve(explicitGradleUserHome, "caches", name))
+    ]);
     assert.ok(!roots.some((entry) => entry.startsWith(defaultGradleUserHome)));
   });
 });

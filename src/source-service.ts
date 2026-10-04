@@ -792,6 +792,7 @@ export class SourceService {
   async resolveAccessTransformerNamespace(input: {
     atNamespace?: AccessTransformerNamespace;
     projectPath?: string;
+    onLoaderDetected?: (output: Awaited<ReturnType<SourceService["workspaceMappingService"]["detectProjectLoader"]>>) => void;
   }): Promise<AccessTransformerNamespace> {
     return artifactResolver.resolveAccessTransformerNamespace(this, input);
   }
@@ -803,6 +804,7 @@ export class SourceService {
     gradleUserHome?: string;
     scope?: ArtifactScope;
     preferProjectVersion?: boolean;
+    loaderDetection?: Awaited<ReturnType<SourceService["workspaceMappingService"]["detectProjectLoader"]>>;
   }): Promise<RuntimeValidationProvenance<AccessTransformerNamespace>> {
     return artifactResolver.resolveAccessTransformerRuntimeArtifact(this, input);
   }

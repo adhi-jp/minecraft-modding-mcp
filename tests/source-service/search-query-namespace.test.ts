@@ -6,6 +6,127 @@ import test from "node:test";
 
 import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
+import { withTempDir } from "../helpers/temp-dir.ts";
+
+test("SourceService searchClassSource scopes explicit runtime namespace FQCNs even when names are identical", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  for (const mappingApplied of ["obfuscated", "mojang"] as const) {
+    for (const queryNamespace of ["obfuscated", "mojang"] as const) {
+      await t.test(`${mappingApplied} index with ${queryNamespace} query`, async () => {
+        await withTempDir("search-runtime-identity-", async (root) => {
+          const service = new SourceService(buildTestConfig(root));
+          const filePath = "net/minecraft/world/level/Level.java";
+          const otherPath = "com/example/Level.java";
+          // This warm row predates runtime provenance. Namespace reporting already
+          // derives its Minecraft runtime proof from the stored version context.
+          seedIndexedArtifact(service, {
+            artifactId: "runtime-identity", origin: "local-jar", version: "26.2",
+            requestedMapping: mappingApplied, mappingApplied, qualityFlags: [],
+            files: [{ filePath, content: "class Level {}" }, { filePath: otherPath, content: "class Level {}" }],
+            symbols: [
+              { filePath, symbolKind: "class", symbolName: "Level", qualifiedName: "net.minecraft.world.level.Level", line: 1 },
+              { filePath: otherPath, symbolKind: "class", symbolName: "Level", qualifiedName: "com.example.Level", line: 1 }
+            ]
+          });
+          const result = await service.searchClassSource({
+            artifactId: "runtime-identity", query: "net.minecraft.world.level.Level", intent: "symbol", match: "exact", queryNamespace
+          });
+          assert.deepEqual(result.hits.map((hit) => hit.filePath), [filePath]);
+          assert.equal(result.translatedQuery, undefined, "identity must not report a changed query");
+          assert.ok(!result.warnings?.some((warning) => /mapping.*unavailable|no .* mapping found/i.test(warning)));
+          const scoped = await service.searchClassSource({
+            artifactId: "runtime-identity", query: "net.minecraft.world.level.Level", intent: "symbol", match: "exact", queryNamespace,
+            scope: { packagePrefix: "com/example" }
+          });
+          assert.deepEqual(scoped.hits.map((hit) => hit.filePath), [otherPath], "caller package scope takes precedence");
+          const literal = await service.searchClassSource({
+            artifactId: "runtime-identity", query: "net.minecraft.world.level.Level", intent: "symbol", match: "exact"
+          });
+          assert.deepEqual(literal.hits, [], "omitted queryNamespace retains literal symbol matching");
+        });
+      });
+    }
+  }
+});
+
+test("SourceService searchClassSource trusts runtime provenance when a warm row has no version label", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  await withTempDir("search-provenance-identity-", async (root) => {
+    const service = new SourceService(buildTestConfig(root));
+    const filePath = "net/minecraft/world/level/Level.java";
+    seedIndexedArtifact(service, {
+      artifactId: "provenance-identity", origin: "local-jar", requestedMapping: "obfuscated", mappingApplied: "obfuscated", qualityFlags: [],
+      provenance: { target: { kind: "version", value: "26.2" }, resolvedFrom: { version: "26.2" } },
+      files: [{ filePath, content: "class Level {}" }],
+      symbols: [{ filePath, symbolKind: "class", symbolName: "Level", qualifiedName: "net.minecraft.world.level.Level", line: 1 }]
+    });
+    const result = await service.searchClassSource({
+      artifactId: "provenance-identity", query: "net.minecraft.world.level.Level", queryNamespace: "mojang", intent: "symbol", match: "exact"
+    });
+    assert.equal(result.mappingApplied, "mojang", "the existing reporting proof already trusts the provenance version");
+    assert.deepEqual(result.hits.map((hit) => hit.filePath), [filePath]);
+    assert.ok(!result.warnings?.some((warning) => /no version/.test(warning)));
+  });
+});
+
+test("SourceService searchClassSource prepares an unchanged resolved FQCN for the symbol index", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  await withTempDir("search-unchanged-translation-", async (root) => {
+    const service = new SourceService(buildTestConfig(root));
+    const filePath = "net/minecraft/world/level/Level.java";
+    seedIndexedArtifact(service, {
+      artifactId: "unchanged-translation", origin: "local-jar", version: "1.21.10",
+      requestedMapping: "mojang", mappingApplied: "mojang", qualityFlags: [],
+      files: [{ filePath, content: "class Level {}" }],
+      symbols: [{ filePath, symbolKind: "class", symbolName: "Level", qualifiedName: "net.minecraft.world.level.Level", line: 1 }]
+    });
+    service.mappingService.findMapping = async () => ({
+      resolved: true, status: "resolved", resolvedSymbol: { kind: "class", name: "net.minecraft.world.level.Level", symbol: "net.minecraft.world.level.Level" },
+      candidates: [], candidateCount: 0, warnings: [], querySymbol: { kind: "class", name: "Level", symbol: "Level" },
+      mappingContext: { version: "1.21.10", sourceMapping: "obfuscated", targetMapping: "mojang", sourcePriorityApplied: "loom-first" }
+    });
+    const result = await service.searchClassSource({
+      artifactId: "unchanged-translation", query: "net.minecraft.world.level.Level", queryNamespace: "obfuscated", intent: "symbol", match: "exact"
+    });
+    assert.deepEqual(result.hits.map((hit) => hit.filePath), [filePath]);
+    assert.equal(result.translatedQuery, undefined);
+  });
+});
+
+test("SourceService searchClassSource does not infer runtime namespace identity from dependency or nested jar versions", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  for (const fixture of [
+    { name: "dependency coordinate", version: "26.2", coordinate: "org.example:library:26.2", provenance: undefined },
+    { name: "library release number", version: "26.0.2", coordinate: "org.example:library:26.0.2", provenance: undefined },
+    { name: "dependency", version: "26.2", provenance: { unobfuscatedRuntime: true, dependencyResolution: {}, target: { kind: "dependency", group: "org.example", name: "library", version: "26.2" } } },
+    { name: "nested", version: "26.2", provenance: { unobfuscatedRuntime: true, nestedJar: { entryPath: "nested.jar" } } },
+    { name: "unproven jar", version: "26.2", provenance: { target: { kind: "jar", value: "library.jar" }, resolvedFrom: {} } }
+  ]) {
+    await t.test(fixture.name, async () => withTempDir("search-unproven-identity-", async (root) => {
+      const service = new SourceService(buildTestConfig(root));
+      const filePath = "net/minecraft/world/level/Level.java";
+      seedIndexedArtifact(service, {
+        artifactId: "unproven", origin: "local-jar", version: fixture.version, provenance: fixture.provenance,
+        requestedMapping: "obfuscated", mappingApplied: "obfuscated", qualityFlags: [],
+        files: [{ filePath, content: "class Level {}" }],
+        symbols: [{ filePath, symbolKind: "class", symbolName: "Level", qualifiedName: "net.minecraft.world.level.Level", line: 1 }]
+      });
+      if (fixture.coordinate) service.artifactsRepo.upsertArtifact({
+        ...service.getArtifact("unproven"), coordinate: fixture.coordinate, timestamp: new Date().toISOString()
+      });
+      if (fixture.version === "26.0.2") service.mappingService.findMapping = async () => ({
+        resolved: false, status: "mapping_unavailable", candidates: [], candidateCount: 0, warnings: [],
+        querySymbol: { kind: "class", name: "Level", symbol: "Level" },
+        mappingContext: { version: "26.0.2", sourceMapping: "mojang", targetMapping: "obfuscated", sourcePriorityApplied: "loom-first" }
+      });
+      const result = await service.searchClassSource({
+        artifactId: "unproven", query: "net.minecraft.world.level.Level", queryNamespace: "mojang", intent: "symbol", match: "exact"
+      });
+      assert.deepEqual(result.hits, []);
+      assert.ok(result.warnings?.some((warning) => /mapping data unavailable/.test(warning)), "unproven artifact retains real mapping-service refusal");
+    }));
+  }
+});
 
 test("SourceService searchClassSource translates symbol intent via queryNamespace when artifact namespace differs", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
