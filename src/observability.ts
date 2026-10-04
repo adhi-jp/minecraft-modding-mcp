@@ -82,13 +82,36 @@ interface DurationState {
 
 const MAX_TIMING_SAMPLES = 512;
 
-function percentile(samples: number[], p: number): number {
-  if (samples.length === 0) {
-    return 0;
+function recordSample(timing: DurationState, durationMs: number): void {
+  const normalizedDuration = Math.max(0, Math.trunc(durationMs));
+  timing.count += 1;
+  timing.totalMs += normalizedDuration;
+  timing.lastMs = normalizedDuration;
+  timing.samples.push(normalizedDuration);
+  if (timing.samples.length > MAX_TIMING_SAMPLES) {
+    timing.samples.shift();
   }
-  const sorted = [...samples].sort((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-  return sorted[index] ?? 0;
+}
+
+function toTimingSnapshot(timing: DurationState | undefined): MetricTimingSnapshot {
+  const count = timing?.count ?? 0;
+  const totalMs = timing?.totalMs ?? 0;
+  const sorted = [...(timing?.samples ?? [])].sort((left, right) => left - right);
+  const percentile = (p: number): number => {
+    if (sorted.length === 0) {
+      return 0;
+    }
+    const index = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+    return sorted[index] ?? 0;
+  };
+  return {
+    count,
+    totalMs,
+    avgMs: count > 0 ? totalMs / count : 0,
+    lastMs: timing?.lastMs ?? 0,
+    p95Ms: percentile(95),
+    p99Ms: percentile(99)
+  };
 }
 
 export class RuntimeMetrics {
@@ -147,14 +170,7 @@ export class RuntimeMetrics {
       return;
     }
 
-    const normalizedDuration = Math.max(0, Math.trunc(durationMs));
-    timing.count += 1;
-    timing.totalMs += normalizedDuration;
-    timing.lastMs = normalizedDuration;
-    timing.samples.push(normalizedDuration);
-    if (timing.samples.length > MAX_TIMING_SAMPLES) {
-      timing.samples.shift();
-    }
+    recordSample(timing, durationMs);
   }
 
   recordArtifactCacheHit(): void {
@@ -274,14 +290,7 @@ export class RuntimeMetrics {
       timing = { count: 0, totalMs: 0, lastMs: 0, samples: [] };
       this.toolCallTimings.set(tool, timing);
     }
-    const normalizedDuration = Math.max(0, Math.trunc(durationMs));
-    timing.count += 1;
-    timing.totalMs += normalizedDuration;
-    timing.lastMs = normalizedDuration;
-    timing.samples.push(normalizedDuration);
-    if (timing.samples.length > MAX_TIMING_SAMPLES) {
-      timing.samples.shift();
-    }
+    recordSample(timing, durationMs);
   }
 
   setMappingResolutionCacheStats(stats: { hits: number; misses: number; size: number }): void {
@@ -331,17 +340,7 @@ export class RuntimeMetrics {
       repo_failover_count: this.repoFailoverCount,
       tool_call_counts: Object.fromEntries(this.toolCallCounts),
       tool_call_duration_ms: Object.fromEntries(
-        [...this.toolCallTimings].map(([tool, timing]) => [
-          tool,
-          {
-            count: timing.count,
-            totalMs: timing.totalMs,
-            avgMs: timing.count > 0 ? timing.totalMs / timing.count : 0,
-            lastMs: timing.lastMs,
-            p95Ms: percentile(timing.samples, 95),
-            p99Ms: percentile(timing.samples, 99)
-          }
-        ])
+        [...this.toolCallTimings].map(([tool, timing]) => [tool, toTimingSnapshot(timing)])
       ),
       mapping_resolution_cache_hits: this.mappingResolutionCacheHits,
       mapping_resolution_cache_misses: this.mappingResolutionCacheMisses,
@@ -350,17 +349,7 @@ export class RuntimeMetrics {
   }
 
   private toSnapshot(name: DurationMetricName): MetricTimingSnapshot {
-    const timing = this.timings.get(name);
-    const count = timing?.count ?? 0;
-    const totalMs = timing?.totalMs ?? 0;
-    return {
-      count,
-      totalMs,
-      avgMs: count > 0 ? totalMs / count : 0,
-      lastMs: timing?.lastMs ?? 0,
-      p95Ms: percentile(timing?.samples ?? [], 95),
-      p99Ms: percentile(timing?.samples ?? [], 99)
-    };
+    return toTimingSnapshot(this.timings.get(name));
   }
 
   private resolveCacheHitRate(): number {

@@ -262,19 +262,10 @@ export class JsonRpcFrameReader {
   /**
    * Whether an unrecoverable framing violation has stopped this reader. No
    * further input is examined and no further frame is ever emitted until
-   * `reset()` or `clear()` explicitly re-arms it.
+   * `clear()` explicitly re-arms it.
    */
   get isFatal(): boolean {
     return this.fatal;
-  }
-
-  reset(): void {
-    this.clearIdleTimer();
-    this.mode = "unknown";
-    this.awaitedFrameEnd = -1;
-    this.awaitedBodyStart = -1;
-    this.fatal = false;
-    this.discardingOversizedLine = false;
   }
 
   clear(): void {
@@ -485,14 +476,33 @@ export class JsonRpcFrameReader {
   }
 
   /**
+   * Consumes leading blank separator lines (bare LF or CRLF) so the next
+   * framing decision sees the first byte of the next frame. Shared by the
+   * initial mode detection and the Content-Length reader.
+   */
+  private skipLeadingBlankLines(): void {
+    while (this.buffer.length > 0) {
+      if (this.buffer[0] === 0x0a) {
+        this.buffer = this.buffer.subarray(1);
+        continue;
+      }
+      if (this.buffer.length >= 2 && this.buffer[0] === 0x0d && this.buffer[1] === 0x0a) {
+        this.buffer = this.buffer.subarray(2);
+        continue;
+      }
+      break;
+    }
+  }
+
+  /**
    * Whether the buffer, despite `mode` still sticking at "content-length"
-   * from an earlier frame, actually opens a line-mode frame — the same probe
-   * `readContentLengthMessage` uses to detect the mid-stream switch back to
-   * line framing (a JSON object/array opener can never begin a Content-Length
-   * header block). Used to keep the header-size ceiling scoped to buffers
-   * still being accumulated as a header block, so it never judges a line
-   * frame's bytes as an oversized header just because the switch hasn't been
-   * recognized yet.
+   * from an earlier frame, actually opens a line-mode frame (a JSON
+   * object/array opener can never begin a Content-Length header block). This
+   * is the single shared probe: `readContentLengthMessage` uses it to detect
+   * the mid-stream switch back to line framing, and the header-size ceiling
+   * uses it to stay scoped to buffers still being accumulated as a header
+   * block, so it never judges a line frame's bytes as an oversized header
+   * just because the switch hasn't been recognized yet.
    */
   private looksLikeLineFrame(): boolean {
     let probeIndex = 0;
@@ -617,17 +627,7 @@ export class JsonRpcFrameReader {
   }
 
   private detectMode(): FramingMode | undefined {
-    while (this.buffer.length > 0) {
-      if (this.buffer[0] === 0x0a) {
-        this.buffer = this.buffer.subarray(1);
-        continue;
-      }
-      if (this.buffer.length >= 2 && this.buffer[0] === 0x0d && this.buffer[1] === 0x0a) {
-        this.buffer = this.buffer.subarray(2);
-        continue;
-      }
-      break;
-    }
+    this.skipLeadingBlankLines();
 
     if (this.buffer.length === 0) {
       return undefined;
@@ -713,17 +713,7 @@ export class JsonRpcFrameReader {
 
     // Skip blank separator lines between frames so the mid-stream mode check
     // below sees the first byte of the next frame.
-    while (this.buffer.length > 0) {
-      if (this.buffer[0] === 0x0a) {
-        this.buffer = this.buffer.subarray(1);
-        continue;
-      }
-      if (this.buffer.length >= 2 && this.buffer[0] === 0x0d && this.buffer[1] === 0x0a) {
-        this.buffer = this.buffer.subarray(2);
-        continue;
-      }
-      break;
-    }
+    this.skipLeadingBlankLines();
 
     // Mirror of the line→content-length switch in readLineDelimitedMessage:
     // a JSON object or array opener can never begin a Content-Length header block,
@@ -734,21 +724,7 @@ export class JsonRpcFrameReader {
     // whitespace-prefixed line) without consuming it, then switch modes and let
     // processChunk re-dispatch the buffered bytes, so every frame is delivered
     // with its own true mode.
-    let probeIndex = 0;
-    while (
-      probeIndex < this.buffer.length &&
-      (this.buffer[probeIndex] === 0x20 ||
-        this.buffer[probeIndex] === 0x09 ||
-        this.buffer[probeIndex] === 0x0d ||
-        this.buffer[probeIndex] === 0x0a)
-    ) {
-      probeIndex += 1;
-    }
-    if (
-      probeIndex < this.buffer.length &&
-      (this.buffer[probeIndex] === 0x7b /* '{' */ ||
-        this.buffer[probeIndex] === 0x5b /* '[' */)
-    ) {
+    if (this.looksLikeLineFrame()) {
       this.mode = "line";
       return undefined;
     }

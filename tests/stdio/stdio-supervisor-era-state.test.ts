@@ -69,7 +69,7 @@ type Harness = {
   handleClientMessage(message: JSONRPCMessage): void;
   handleWorkerMessage(child: FakeChild, message: JSONRPCMessage): void;
   handleWorkerReady(child: FakeChild): void;
-  scheduleRestart(failedAttempt?: boolean): void;
+  scheduleRestart(): void;
   shutdown(): Promise<void>;
 };
 

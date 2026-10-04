@@ -1292,7 +1292,7 @@
 0	ok	repeated dynamic queries reuse a single cached prepared statement
 0	ok	replaceSymbolsForArtifact discards the previously indexed symbols for the artifact
 0	ok	replacement initialization replay failure terminalizes queued work without duplicating initialize
-0	ok	reset and clear cancel oversized-frame discard state
+0	ok	clear cancels oversized-frame discard state
 0	ok	resolve-artifact compact:true omits diagnostic fields from local-jar result
 0	ok	resolve-artifact invalid string target returns retryable object target suggestedCall
 0	ok	resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING

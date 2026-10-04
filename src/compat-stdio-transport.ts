@@ -10,10 +10,6 @@ import {
 type StdioReadable = NodeJS.ReadStream;
 type StdioWritable = NodeJS.WriteStream;
 
-function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
 export class CompatStdioServerTransport {
   private readonly stdin: StdioReadable;
   private readonly stdout: StdioWritable;

@@ -24,7 +24,6 @@ import {
   buildMissingMetaRejection,
   buildUnsupportedProtocolVersionRejection,
   classifyEraSignal,
-  extractModernRequestContext,
   isCompleteInitializeRequest,
   stripModernEraClaimInPlace,
   MODERN_PROTOCOL_VERSION,
@@ -170,20 +169,17 @@ export function shouldRetainUnavailableNotification(method: string): boolean {
 }
 
 export type RestartReservation = {
-  epoch: number;
   notBefore: number;
   delayMs: number;
 };
 
 export class RestartBackoffState {
   private retryIndex = 0;
-  private epoch = 0;
 
   reserve(now: number): RestartReservation {
     const delayMs = computeRestartBackoffMs(this.retryIndex);
     this.retryIndex += 1;
     return {
-      epoch: ++this.epoch,
       notBefore: now + delayMs,
       delayMs
     };
@@ -302,25 +298,9 @@ export type PendingRequestSnapshot = {
    * the type level for tolerant synthetic-builder inputs and exported-type
    * compatibility — no reply BUILDER may read it. Carve-out: the terminal
    * synthetic-decoration step (writeSyntheticReply → decorateSyntheticReply)
-   * reads `era` — and ONLY `era` — to gate modern-era decoration; the three
-   * captured context fields below remain unread everywhere.
+   * reads `era` to gate modern-era decoration.
    */
   era?: Era;
-  /**
-   * Per-request modern protocol context, captured SHALLOW (values aliased
-   * as-is from params._meta — nothing may mutate an inbound params graph
-   * after admission, or captured snapshots would change retroactively) for
-   * shallow-valid modern-signal requests only; undefined for claim-less
-   * legacy traffic and for every initialize (initialize envelopes are
-   * ignored). Captured for downstream consumers; the supervisor itself must
-   * never read these three fields — no reply, synthesis, decoration, or
-   * forwarded frame may depend on them (the no-leak tests pin that).
-   * Synthetic decoration reads the snapshot's `era` alone, and the identity
-   * it stamps comes from src/server-identity.ts, never from request context.
-   */
-  protocolVersion?: string;
-  clientCapabilities?: Record<string, unknown>;
-  clientInfo?: unknown;
   lastStage?: string;
   lastStageStartedAt?: number;
   lastStageMeta?: unknown;
@@ -623,7 +603,6 @@ export function buildValidateProjectTimeoutReply(
   const { request, phase, deadlineMs, now, workerRestartInitiated } = input;
   const retryRecommendation = decideRetryRecommendation(
     {
-      toolName: "validate-project",
       lastStage: request.lastStage,
       lastStageMeta: request.lastStageMeta,
       exit: { code: null, signal: null }
@@ -682,7 +661,7 @@ export function buildValidateProjectTimeoutReply(
 }
 
 export function decideRetryRecommendation(
-  ctx: Pick<RestartContext, "toolName" | "lastStage" | "lastStageMeta" | "exit">,
+  ctx: Pick<RestartContext, "lastStage" | "lastStageMeta" | "exit">,
   recentRestartTimestamps: number[]
 ): RetryRecommendation {
   if (ctx.lastStage === "target-lookup") {
@@ -805,22 +784,7 @@ export function buildSyntheticCallToolResult(
     restart
   };
 
-  const structuredContent = { error, meta };
-
-  return {
-    jsonrpc: "2.0",
-    id,
-    result: {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(structuredContent)
-        }
-      ],
-      isError: true,
-      structuredContent
-    }
-  } as unknown as JSONRPCResponse;
+  return buildSyntheticToolResult(id, { error, meta });
 }
 
 export function pruneRestartTimestamps(
@@ -866,12 +830,9 @@ export function buildWorkerRestartReply(
   now: number,
   recentRestartTimestamps: number[],
   options: BuildWorkerRestartReplyOptions = {}
-): { reply: JSONRPCResponse; updatedTimestamps: number[] } {
+): JSONRPCResponse {
   if (options.structuredRestartDisabled || req.method !== "tools/call") {
-    return {
-      reply: buildLegacyJsonRpcError(req.id),
-      updatedTimestamps: recentRestartTimestamps
-    };
+    return buildLegacyJsonRpcError(req.id);
   }
 
   const pruned = pruneRestartTimestamps(recentRestartTimestamps, now);
@@ -880,7 +841,6 @@ export function buildWorkerRestartReply(
   const updatedTimestamps = [...pruned, now];
   const recommendation = decideRetryRecommendation(
     {
-      toolName: req.toolName,
       lastStage: req.lastStage,
       lastStageMeta: req.lastStageMeta,
       exit
@@ -902,10 +862,7 @@ export function buildWorkerRestartReply(
     toolArgsRedactedModified: req.toolArgsRedactedModified ?? false,
     retryRecommendation: recommendation
   };
-  return {
-    reply: buildSyntheticCallToolResult(req.id, ctx),
-    updatedTimestamps
-  };
+  return buildSyntheticCallToolResult(req.id, ctx);
 }
 
 function debugSupervisor(event: string, details?: Record<string, unknown>): void {
@@ -1031,7 +988,6 @@ export class StdioSupervisor {
   private validateBarrierKey: string | undefined;
   private runningValidateKey: string | undefined;
   private attemptToken = 0;
-  private currentRetryEpoch: number | undefined;
   private currentRetryReservation: RestartReservation | undefined;
   private retryPaused = false;
   private workerStderrBuffer = "";
@@ -1623,9 +1579,9 @@ export class StdioSupervisor {
       return;
     }
 
-    const pending = this.createPendingRequest(message, eraSignal);
+    const pending = this.createPendingRequest(message);
     if (!this.child && this.liveCapOccupancy() >= 2) {
-      const { reply } = buildWorkerRestartReply(
+      const reply = buildWorkerRestartReply(
         pending,
         { code: null, signal: null },
         this.monotonicNow(),
@@ -1803,11 +1759,8 @@ export class StdioSupervisor {
    * order. Returns undefined when the request was terminally rejected here (a
    * supervisor-produced response was written; nothing may be forwarded or
    * queued). On admission it returns the admission-time era signal, which the
-   * caller hands to createPendingRequest so snapshot capture uses the same
-   * result as the gating decision (extractModernRequestContext re-checks the
-   * same immutable params graph defensively — a pure re-evaluation, not a
-   * second authority); the caller then proceeds through the original era-less
-   * admission path unchanged.
+   * caller treats as the admission decision; the caller then proceeds
+   * through the original era-less admission path unchanged.
    */
   private admitEraRequest(message: JSONRPCRequest): EraSignal | undefined {
     const signal = classifyEraSignal(message.params);
@@ -1925,14 +1878,11 @@ export class StdioSupervisor {
   }
 
   /**
-   * `eraSignal` is the ADMISSION-time classification handed back by
-   * admitEraRequest — the initialize/replay/flush call sites omit it (an
-   * initialize snapshot is always era "legacy" with no modern context, even
-   * when the initialize carries a _meta envelope). Context is captured only
-   * for shallow-valid modern signals; this.era already reflects any lock
-   * admitEraRequest applied, so it IS the era at admission on every path.
+   * this.era already reflects any lock admitEraRequest applied, so it IS the
+   * era at admission on every path (an initialize snapshot is always era
+   * "legacy", even when the initialize carries a _meta envelope).
    */
-  private createPendingRequest(message: JSONRPCRequest, eraSignal?: EraSignal): PendingRequest {
+  private createPendingRequest(message: JSONRPCRequest): PendingRequest {
     const pending: PendingRequest = {
       id: message.id as RequestId,
       method: message.method,
@@ -1940,16 +1890,6 @@ export class StdioSupervisor {
       mode: this.modeForMessage(message),
       era: this.era
     };
-    if (eraSignal?.classification === "modern-signal") {
-      const context = extractModernRequestContext(message.params);
-      if (context) {
-        pending.protocolVersion = context.protocolVersion;
-        pending.clientCapabilities = context.clientCapabilities;
-        if ("clientInfo" in context) {
-          pending.clientInfo = context.clientInfo;
-        }
-      }
-    }
     if (message.method === "tools/call") {
       const params = (message.params ?? {}) as { name?: unknown; arguments?: unknown };
       if (typeof params.name === "string") pending.toolName = params.name;
@@ -2373,7 +2313,6 @@ export class StdioSupervisor {
       this.retryPaused = this.liveCapOccupancy() >= 2;
       return;
     }
-    this.currentRetryEpoch = undefined;
     this.currentRetryReservation = undefined;
     this.retryPaused = false;
     const token = ++this.attemptToken;
@@ -2694,7 +2633,7 @@ export class StdioSupervisor {
     } else {
       this.consecutiveImmediateStandDowns = 0;
       this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
-      this.scheduleRestart(true);
+      this.scheduleRestart();
     }
   }
 
@@ -2759,7 +2698,7 @@ export class StdioSupervisor {
       // run of them.
       this.consecutiveImmediateStandDowns = 0;
       this.failPendingRequestsOnWorkerExit({ code: null, signal: null });
-      this.scheduleRestart(true);
+      this.scheduleRestart();
     }
   }
 
@@ -2823,7 +2762,7 @@ export class StdioSupervisor {
     }
     this.accountForReadyGenerationExit(childPid, readyAt, code, signal);
     this.failPendingRequestsOnWorkerExit({ code, signal });
-    this.scheduleRestart(true);
+    this.scheduleRestart();
   }
 
   /**
@@ -3168,7 +3107,7 @@ export class StdioSupervisor {
         // cancellation settled them terminally at admission.
         const toolName = pending.toolName ?? "unknown";
         const pruned = prunedByTool.get(toolName) ?? [];
-        const { reply } = buildWorkerRestartReply(
+        const reply = buildWorkerRestartReply(
           pending,
           exit,
           now,
@@ -3334,7 +3273,6 @@ export class StdioSupervisor {
     this.childReady = true;
     this.childReadyAt ??= this.monotonicNow();
     this.restartBackoff.reset();
-    this.currentRetryEpoch = undefined;
     this.currentRetryReservation = undefined;
     this.retryPaused = false;
   }
@@ -3420,7 +3358,7 @@ export class StdioSupervisor {
   private recoverTimedOutWorker(): void {
     const child = this.child;
     if (!child) {
-      this.scheduleRestart(true);
+      this.scheduleRestart();
       return;
     }
     this.invalidateCurrentChild(child);
@@ -3627,7 +3565,7 @@ export class StdioSupervisor {
     if (token !== this.attemptToken && this.child !== undefined) return;
     this.clearStartupWatchdog();
     this.failQueuedRequestsOnStartupFailure(exit);
-    this.scheduleRestart(true);
+    this.scheduleRestart();
   }
 
   private failQueuedRequestsOnStartupFailure(exit: ExitInfo): void {
@@ -3635,7 +3573,7 @@ export class StdioSupervisor {
     const queued = this.queuedRequests.splice(0, this.queuedRequests.length);
     for (const { pending } of queued) {
       if (pending.deadlineTimer) this.timerClearer(pending.deadlineTimer);
-      const { reply } = buildWorkerRestartReply(pending, exit, now, [], {
+      const reply = buildWorkerRestartReply(pending, exit, now, [], {
         structuredRestartDisabled: STRUCTURED_RESTART_DISABLED
       });
       this.writeSyntheticReply(pending, reply);
@@ -3659,13 +3597,12 @@ export class StdioSupervisor {
     this.runningValidateKey = undefined;
   }
 
-  private scheduleRestart(_failedAttempt = false): void {
+  private scheduleRestart(): void {
     if (this.restartTimer || this.shuttingDown || this.child || this.currentRetryReservation) {
       return;
     }
     const reservation = this.restartBackoff.reserve(this.monotonicNow());
     this.currentRetryReservation = reservation;
-    this.currentRetryEpoch = reservation.epoch;
     if (this.liveCapOccupancy() >= 2) {
       this.retryPaused = true;
       this.eventWriter("warn", "supervisor.live_cap.saturated", {
@@ -3687,20 +3624,19 @@ export class StdioSupervisor {
       this.restartTimer = undefined;
       if (
         this.shuttingDown ||
-        reservation.epoch !== this.currentRetryEpoch ||
+        reservation !== this.currentRetryReservation ||
         this.child ||
         this.liveCapOccupancy() >= 2
       ) {
         if (
           !this.shuttingDown &&
-          reservation.epoch === this.currentRetryEpoch &&
+          reservation === this.currentRetryReservation &&
           this.liveCapOccupancy() >= 2
         ) {
           this.retryPaused = true;
         }
         return;
       }
-      this.currentRetryEpoch = undefined;
       this.currentRetryReservation = undefined;
       this.spawnWorker();
     }, remaining);
@@ -3711,10 +3647,9 @@ export class StdioSupervisor {
     this.retryPaused = false;
     const reservation = this.currentRetryReservation;
     if (!reservation) {
-      this.scheduleRestart(true);
+      this.scheduleRestart();
       return;
     }
-    if (reservation.epoch !== this.currentRetryEpoch) return;
     this.armRestartReservation(reservation);
   }
 
@@ -3743,7 +3678,6 @@ export class StdioSupervisor {
       this.timerClearer(this.restartTimer);
       this.restartTimer = undefined;
     }
-    this.currentRetryEpoch = undefined;
     this.currentRetryReservation = undefined;
     this.retryPaused = false;
     this.clearStartupWatchdog();
@@ -3798,3 +3732,4 @@ export class StdioSupervisor {
 }
 
 export const STDIO_WORKER_MODE_ENV = WORKER_MODE_ENV;
+export const STDIO_WORKER_READY_MARKER = WORKER_READY_MARKER;

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { encodeJsonRpcMessage } from "../../src/json-rpc-framing.ts";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wire-session.ts";
 
 /**
  * Wire-level era test against the REAL supervisor + REAL worker:
@@ -43,66 +44,12 @@ const ERA_CONFLICT_LEGACY_MESSAGE =
 
 type Frame = Record<string, unknown> & { id?: unknown };
 
-function startSupervisor(root: string): {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  workerReady: () => boolean;
-  send: (message: object) => void;
-} {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      // Debug logs expose the supervisor's worker_ready adoption on stderr so
-      // wire tests can sequence sends deterministically around readiness.
-      MCP_SUPERVISOR_DEBUG: "1",
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db")
-    },
-    stdio: ["pipe", "pipe", "pipe"]
+function startSupervisor(root: string): WireSession {
+  return startWireSession(root, {
+    // Debug logs expose the supervisor's worker_ready adoption on stderr so
+    // wire tests can sequence sends deterministically around readiness.
+    extraEnv: { MCP_SUPERVISOR_DEBUG: "1" }
   });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
-    }
-  });
-
-  let stderrBuffer = "";
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrBuffer += chunk.toString();
-  });
-
-  return {
-    child,
-    frames,
-    workerReady: () => stderrBuffer.includes("supervisor.debug.worker_ready"),
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
-}
-
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs: number,
-  label: string
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 test("wire: unsupported modern protocol version locks modern and -32022 reaches the client on the FIRST request", { timeout: 90_000 }, async (t) => {

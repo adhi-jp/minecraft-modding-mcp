@@ -423,23 +423,17 @@ test("frames split across chunk boundaries survive a framing switch", () => {
   }
 });
 
-test("reset and clear cancel oversized-frame discard state", () => {
-  // An oversized header whose body never arrives now leaves the reader in the
-  // terminal framing-fatal state instead of a discard countdown; reset() and
-  // clear() are the explicit re-arm for both, so a transport that rebuilds its
-  // session gets a working reader back.
-  for (const resetReader of [
-    (reader: JsonRpcFrameReader) => reader.reset(),
-    (reader: JsonRpcFrameReader) => reader.clear()
-  ]) {
-    const harness = createHarness(64);
-    harness.process(Buffer.from("Content-Length: 96\r\n\r\n", "utf8"));
-    assert.equal(harness.errors.length, 1);
-    assert.equal(harness.reader.isFatal, true);
+test("clear cancels oversized-frame discard state", () => {
+  // An oversized header whose body never arrives leaves the reader in the
+  // terminal framing-fatal state; clear() is the explicit re-arm, so a
+  // transport that rebuilds its session gets a working reader back.
+  const harness = createHarness(64);
+  harness.process(Buffer.from("Content-Length: 96\r\n\r\n", "utf8"));
+  assert.equal(harness.errors.length, 1);
+  assert.equal(harness.reader.isFatal, true);
 
-    resetReader(harness.reader);
-    assert.equal(harness.reader.isFatal, false);
-    harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
-    assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
-  }
+  harness.reader.clear();
+  assert.equal(harness.reader.isFatal, false);
+  harness.process(encodeJsonRpcMessage(NORMAL_MESSAGE, "line"));
+  assert.deepEqual(harness.frames, [NORMAL_MESSAGE]);
 });

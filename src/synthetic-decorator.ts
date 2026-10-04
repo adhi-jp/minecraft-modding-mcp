@@ -9,9 +9,7 @@ import { serverIdentitySnapshot } from "./server-identity.js";
  *
  * Contract:
  *  - Decorates ONLY when the originating request's snapshot era is "modern"
- *    (the era captured at admission; it is the ONLY captured-context field
- *    synthetic decoration may read — protocolVersion/clientCapabilities/
- *    clientInfo stay unread, and the identity comes from the canonical
+ *    (the era captured at admission; the identity comes from the canonical
  *    src/server-identity.ts module, never from request context).
  *  - Modern-era RESULT envelopes gain the modern public fields the SDK stamps
  *    on every result it encodes: top-level `resultType: "complete"` (every

@@ -23,8 +23,7 @@ type Harness = {
   retryPaused: boolean;
   validateBarrierKey?: string;
   runningValidateKey?: string;
-  currentRetryEpoch?: number;
-  currentRetryReservation?: { epoch: number; notBefore: number; delayMs: number };
+  currentRetryReservation?: { notBefore: number; delayMs: number };
   clientInitialized?: boolean;
   spawnsProcessGroupLeaders: boolean;
   handleClientMessage(message: JSONRPCMessage): void;
@@ -34,7 +33,7 @@ type Harness = {
   handleWorkerExit(child: FakeChild, code: number | null, signal: NodeJS.Signals | null): void;
   handleWorkerProcessError(child: FakeChild, error: Error): void;
   finishTreeTermination(child: FakeChild, success: boolean): void;
-  scheduleRestart(failedAttempt?: boolean): void;
+  scheduleRestart(): void;
   resumePausedRestart(): void;
   adoptActiveChild(): void;
   spawnWorker(): void;
@@ -669,7 +668,7 @@ test("normal operation retries unresolved cleanup tokens and unblocks restart an
     message: call(90, "list-versions"),
     pending: { id: 90, method: "tools/call", toolName: "list-versions", startedAt: 0 }
   } as never);
-  supervisor.scheduleRestart(true);
+  supervisor.scheduleRestart();
 
   assert.equal(supervisor.unresolvedTreeTokenCount, 2);
   assert.equal(supervisor.retryPaused, true);
@@ -725,7 +724,7 @@ test("cap-paused restart preserves remaining backoff and resumes once", () => {
   supervisor.unresolvedTreeTokens.add(1);
   supervisor.unresolvedTreeTokens.add(2);
 
-  supervisor.scheduleRestart(true);
+  supervisor.scheduleRestart();
   assert.equal(supervisor.retryPaused, true);
   assert.equal(timers.length, 0);
   harness.setNow(50);
@@ -737,13 +736,13 @@ test("cap-paused restart preserves remaining backoff and resumes once", () => {
   harness.setNow(100);
   timers[0].callback();
   assert.equal(harness.spawns(), 1);
-  assert.equal(supervisor.currentRetryEpoch, undefined);
+  assert.equal(supervisor.currentRetryReservation, undefined);
 });
 
 test("elapsed backoff resumes immediately after cap cleanup", () => {
   const harness = createRestartHarness();
   const { supervisor, timers } = harness;
-  supervisor.scheduleRestart(true);
+  supervisor.scheduleRestart();
   assert.equal(timers[0].at, 100);
   supervisor.unresolvedTreeTokens.add(1);
   supervisor.unresolvedTreeTokens.add(2);
@@ -762,13 +761,13 @@ test("elapsed backoff resumes immediately after cap cleanup", () => {
 test("active adoption invalidates a stale retry epoch and resets backoff", () => {
   const harness = createRestartHarness();
   const { supervisor, timers } = harness;
-  supervisor.scheduleRestart(true);
+  supervisor.scheduleRestart();
   const stale = timers[0];
   supervisor.adoptActiveChild();
   stale.callback();
   assert.equal(harness.spawns(), 0);
 
-  supervisor.scheduleRestart(true);
+  supervisor.scheduleRestart();
   assert.equal(timers[1].at, 100);
 });
 

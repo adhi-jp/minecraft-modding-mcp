@@ -114,17 +114,17 @@ test("only the initialized lifecycle notification is retained while the worker i
 test("restart backoff reserves its exact delay even when live-cap blocks the timer", () => {
   const BackoffState = supervisorExports.RestartBackoffState as {
     new(): {
-      reserve(now: number): { epoch: number; notBefore: number; delayMs: number };
+      reserve(now: number): { notBefore: number; delayMs: number };
       reset(): void;
     };
   };
   assert.equal(typeof BackoffState, "function");
   const state = new BackoffState();
-  assert.deepEqual(state.reserve(1_000), { epoch: 1, notBefore: 1_100, delayMs: 100 });
-  assert.deepEqual(state.reserve(1_050), { epoch: 2, notBefore: 1_250, delayMs: 200 });
-  assert.deepEqual(state.reserve(1_250), { epoch: 3, notBefore: 1_650, delayMs: 400 });
+  assert.deepEqual(state.reserve(1_000), { notBefore: 1_100, delayMs: 100 });
+  assert.deepEqual(state.reserve(1_050), { notBefore: 1_250, delayMs: 200 });
+  assert.deepEqual(state.reserve(1_250), { notBefore: 1_650, delayMs: 400 });
   state.reset();
-  assert.deepEqual(state.reserve(2_000), { epoch: 4, notBefore: 2_100, delayMs: 100 });
+  assert.deepEqual(state.reserve(2_000), { notBefore: 2_100, delayMs: 100 });
 });
 
 test("POSIX unresolved-token shutdown retry targets the saved process group", () => {
@@ -747,7 +747,7 @@ describe("buildWorkerRestartReply", () => {
       lastStageStartedAt: 1500,
       lastStageMeta: { targetIndex: 3, targetTotal: 8 }
     };
-    const { reply, updatedTimestamps } = buildWorkerRestartReply(
+    const reply = buildWorkerRestartReply(
       req,
       { code: null, signal: "SIGKILL" },
       2500,
@@ -762,8 +762,6 @@ describe("buildWorkerRestartReply", () => {
     const restart = r.result.structuredContent.meta.restart as Record<string, unknown>;
     assert.equal(restart.durationMs, 1500);
     assert.equal(restart.lastStageElapsedMs, 1000);
-    assert.equal(updatedTimestamps.length, 1);
-    assert.equal(updatedTimestamps[0], 2500);
   });
 
   test("buildWorkerRestartReply returns raw -32603 for non-tools/call", () => {
@@ -772,7 +770,7 @@ describe("buildWorkerRestartReply", () => {
       method: "initialize",
       startedAt: 0
     };
-    const { reply } = buildWorkerRestartReply(req, baseExit, 100, []);
+    const reply = buildWorkerRestartReply(req, baseExit, 100, []);
     const r = reply as { error: { code: number } };
     assert.equal(r.error.code, -32603);
   });
@@ -785,7 +783,7 @@ describe("buildWorkerRestartReply", () => {
       toolArgsRedacted: {},
       startedAt: 0
     };
-    const { reply } = buildWorkerRestartReply(req, baseExit, 100, [], {
+    const reply = buildWorkerRestartReply(req, baseExit, 100, [], {
       structuredRestartDisabled: true
     });
     const r = reply as {
@@ -815,21 +813,21 @@ describe("buildWorkerRestartReply", () => {
     };
     // 2 prior + 1 current → length=3 → report-bug.
     const result1 = buildWorkerRestartReply(req, { code: 1, signal: null }, 100, [10, 20]);
-    const r1 = result1.reply as {
+    const r1 = result1 as {
       result: { structuredContent: { meta: { restart: Record<string, unknown> } } };
     };
     assert.equal(r1.result.structuredContent.meta.restart.retryRecommendation, "report-bug");
 
     // 1 prior + 1 current → length=2 → same-request (default).
     const result2 = buildWorkerRestartReply(req, { code: 1, signal: null }, 100, [50]);
-    const r2 = result2.reply as {
+    const r2 = result2 as {
       result: { structuredContent: { meta: { restart: Record<string, unknown> } } };
     };
     assert.equal(r2.result.structuredContent.meta.restart.retryRecommendation, "same-request");
   });
 
   test("buildWorkerRestartReply yields a structured envelope without throwing when lastStageStartedAt is undefined", () => {
-    const { reply } = buildWorkerRestartReply(
+    const reply = buildWorkerRestartReply(
       {
         id: "id-3",
         method: "tools/call",

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +6,7 @@ import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wire-session.ts";
 
 /**
  * Framing-violation behavior over the REAL wire (production supervisor +
@@ -31,77 +31,15 @@ const MODERN_META = { [PROTOCOL_VERSION_KEY]: "2026-07-28", [CLIENT_CAPABILITIES
 
 type Frame = Record<string, unknown> & { id?: unknown };
 
-type Session = {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  stderr: () => string;
-  workerReady: () => boolean;
-  exit: () => { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  writeRaw: (payload: string) => void;
-  send: (message: object) => void;
-};
+type Session = WireSession;
 
 function startSupervisor(root: string): Session {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      MCP_SUPERVISOR_DEBUG: "1",
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db")
-    },
-    stdio: ["pipe", "pipe", "pipe"]
+  return startWireSession(root, {
+    extraEnv: { MCP_SUPERVISOR_DEBUG: "1" },
+    // stdin may be torn down under us by a framing-fatal teardown; a write to
+    // the closed pipe must not crash the test process.
+    swallowStdinErrors: true
   });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
-    }
-  });
-
-  let stderrBuffer = "";
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrBuffer += chunk.toString();
-  });
-
-  let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  child.once("exit", (code, signal) => {
-    exit = { code, signal };
-  });
-
-  // stdin may be torn down under us by a framing-fatal teardown; a write to
-  // the closed pipe must not crash the test process.
-  child.stdin.on("error", () => {});
-
-  return {
-    child,
-    frames,
-    stderr: () => stderrBuffer,
-    workerReady: () => stderrBuffer.includes("supervisor.debug.worker_ready"),
-    exit: () => exit,
-    writeRaw: (payload) => child.stdin.write(payload),
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 function discover(id: number): object {

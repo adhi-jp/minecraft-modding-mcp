@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -42,6 +41,7 @@ import {
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wire-session.ts";
 
 // inprocess-era-serve.ts exports no logLevel key, so this literal stays local.
 const LOG_LEVEL_KEY = "io.modelcontextprotocol/logLevel";
@@ -91,57 +91,18 @@ after(async () => {
   await new Promise<void>((resolve) => manifestServer?.close(() => resolve()));
 });
 
-type ChildSession = {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  stderr: () => string;
-  send: (message: object) => void;
-};
+type ChildSession = WireSession;
 
 function startChildSession(root: string, extraEnv: Record<string, string>): ChildSession {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db"),
+  return startWireSession(root, {
+    extraEnv: {
       // Stage progress must be ON for the $/stageUpdate recipe (mirrors
       // tests/stdio/stdio-worker-protocol.test.ts).
       MIXIN_STAGE_PROGRESS_OFF: "",
       MCP_VERSION_MANIFEST_URL: manifestUrl,
       ...extraEnv
-    },
-    stdio: ["pipe", "pipe", "pipe"]
-  });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
     }
   });
-
-  let stderrBuffer = "";
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrBuffer += chunk.toString();
-  });
-
-  return {
-    child,
-    frames,
-    stderr: () => stderrBuffer,
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
 }
 
 function startWireSupervisor(root: string): ChildSession {
@@ -150,15 +111,6 @@ function startWireSupervisor(root: string): ChildSession {
 
 function startDirectWorker(root: string): ChildSession {
   return startChildSession(root, { MCP_STDIO_WORKER_MODE: "1" });
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 test("direct worker emits $/stageUpdate for the inline validate-mixin recipe (emission control for the suppression guards below)", { timeout: 90_000 }, async (t) => {

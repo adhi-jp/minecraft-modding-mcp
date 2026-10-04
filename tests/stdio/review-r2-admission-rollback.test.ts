@@ -43,7 +43,7 @@ type Harness = {
   runningValidateKey?: string;
   writeToWorker(child: FakeChild, message: JSONRPCMessage): void;
   canDispatchImmediately(pending: unknown): boolean;
-  scheduleRestart(failedAttempt?: boolean): void;
+  scheduleRestart(): void;
   recoverTimedOutWorker(): void;
   handleClientMessage(message: JSONRPCMessage): void;
   shutdown(): Promise<void>;

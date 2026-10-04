@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +6,7 @@ import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wire-session.ts";
 
 /**
  * Worker-level protocol tests: spawn the REAL worker directly
@@ -31,68 +31,16 @@ type Frame = Record<string, unknown> & { id?: unknown; method?: unknown };
 const ENVELOPE_PROTOCOL_KEY = "io.modelcontextprotocol/protocolVersion";
 const ENVELOPE_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 
-function startWorker(root: string): {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  ready: () => boolean;
-  send: (message: object) => void;
-} {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
+function startWorker(root: string): WireSession & { ready: () => boolean } {
+  const session = startWireSession(root, {
+    extraEnv: {
       MCP_STDIO_WORKER_MODE: "1",
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db"),
       // Stage progress must be ON for the $/stageUpdate assertion.
       MIXIN_STAGE_PROGRESS_OFF: ""
     },
-    stdio: ["pipe", "pipe", "pipe"]
+    readyMarker: "__MCP_STDIO_WORKER_READY__"
   });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
-    }
-  });
-
-  let workerReady = false;
-  let stderrBuffer = "";
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrBuffer += chunk.toString();
-    if (stderrBuffer.includes("__MCP_STDIO_WORKER_READY__")) workerReady = true;
-  });
-
-  return {
-    child,
-    frames,
-    ready: () => workerReady,
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
-}
-
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs: number,
-  label: string
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
+  return { ...session, ready: session.workerReady };
 }
 
 test("worker builds a fresh server per serveStdio instance: legacy initialize after a modern server/discover negotiates down", { timeout: 60_000 }, async (t) => {

@@ -7,14 +7,12 @@ import type { JSONRPCMessage, JSONRPCRequest } from "@modelcontextprotocol/serve
 import { StdioSupervisor } from "../../src/stdio-supervisor.ts";
 
 /**
- * Per-request protocol-context carriage — the supervisor captures
- * {era, protocolVersion, clientCapabilities, clientInfo?} into pending/queued
- * request snapshots at admission and carries them across worker restarts.
- * Capture-and-carry with one carve-out: synthetic decoration reads the
- * snapshot's `era` (and only `era`) to gate modern-era result decoration; the
- * three captured context fields stay unread — no reply, synthesis,
- * decoration, or forwarded frame may depend on them (the no-leak tests pin
- * that invariant for downstream consumers).
+ * Per-request era carriage — the supervisor captures the admission-time era
+ * into pending/queued request snapshots and carries it across worker
+ * restarts; the request's own `_meta` reaches the worker verbatim. Synthetic
+ * decoration reads the snapshot's `era` to gate modern-era result decoration,
+ * and the identity it stamps is the canonical server identity, never request
+ * context.
  */
 
 const PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion";
@@ -27,9 +25,6 @@ type CapturedSnapshot = {
   method?: string;
   toolName?: string;
   era?: string;
-  protocolVersion?: string;
-  clientCapabilities?: Record<string, unknown>;
-  clientInfo?: unknown;
 };
 
 type FakeChild = {
@@ -58,7 +53,7 @@ type Harness = {
   handleWorkerReady(child: FakeChild): void;
   handleWorkerExit(child: FakeChild, code: number | null, signal: NodeJS.Signals | null): void;
   spawnWorker(): void;
-  scheduleRestart(failedAttempt?: boolean): void;
+  scheduleRestart(): void;
   shutdown(): Promise<void>;
 };
 
@@ -237,11 +232,10 @@ function assertNoContextLeak(reply: JSONRPCMessage, label: string): void {
   }
   const serialized = JSON.stringify(reply);
   // EVERY reserved-namespace occurrence in the reply must be exactly the
-  // SERVER-side identity key — the era carve-out is bounded both ways: the
-  // serverInfo stamp is legitimate on decorated modern-era synthetic results
-  // (canonical server identity, not captured request context), while any
-  // OTHER io.modelcontextprotocol/* occurrence (the request-context keys
-  // included) is a leak.
+  // SERVER-side identity key — the serverInfo stamp is legitimate on
+  // decorated modern-era synthetic results (canonical server identity, not
+  // request context), while any OTHER io.modelcontextprotocol/* occurrence
+  // (the request-context keys included) is a leak.
   const reservedOccurrences = serialized.match(/io\.modelcontextprotocol\/[^"\\]*/g) ?? [];
   for (const occurrence of reservedOccurrences) {
     assert.equal(
@@ -250,7 +244,7 @@ function assertNoContextLeak(reply: JSONRPCMessage, label: string): void {
       `${label}: unexpected reserved-namespace occurrence "${occurrence}"`
     );
   }
-  assert.equal(serialized.includes("sentinel-noleak"), false, `${label}: reply must not embed the captured clientInfo sentinel`);
+  assert.equal(serialized.includes("sentinel-noleak"), false, `${label}: reply must not embed the request's clientInfo sentinel`);
 }
 
 /** The decorated modern synthetic reply must positively CARRY the identity stamp. */
@@ -262,7 +256,7 @@ function assertServerIdentityStamped(reply: JSONRPCMessage, label: string): void
   );
 }
 
-test("admission captures era and the verbatim modern protocol context into the pending snapshot", () => {
+test("admission captures the era into a modern call's pending snapshot", () => {
   const { supervisor } = createEraHarness();
   const clientCapabilities = { sampling: {} };
   const clientInfo = { name: "sentinel-a", version: "1" };
@@ -273,11 +267,6 @@ test("admission captures era and the verbatim modern protocol context into the p
   const pending = supervisor.pendingRequests.get("number:1");
   assert.ok(pending, "the admitted modern call must have a pending snapshot");
   assert.equal(pending.era, "modern", "the snapshot must carry the era at admission");
-  assert.equal(pending.protocolVersion, "2026-07-28");
-  assert.equal(pending.clientCapabilities, clientCapabilities, "clientCapabilities must be captured as-is (shallow, same reference)");
-  assert.equal(pending.clientInfo, clientInfo, "clientInfo must be captured as-is (shallow, same reference)");
-  assert.deepEqual(pending.clientCapabilities, { sampling: {} });
-  assert.deepEqual(pending.clientInfo, { name: "sentinel-a", version: "1" });
 });
 
 test("a claim-less legacy tools/call carries era legacy and no invented protocol context", () => {
@@ -296,9 +285,6 @@ test("a claim-less legacy tools/call carries era legacy and no invented protocol
   const pending = supervisor.pendingRequests.get("number:2");
   assert.ok(pending, "the claim-less legacy call must have a pending snapshot");
   assert.equal(pending.era, "legacy");
-  assert.equal(pending.protocolVersion, undefined, "claim-less traffic must not gain an invented protocolVersion");
-  assert.equal(pending.clientCapabilities, undefined, "claim-less traffic must not gain invented clientCapabilities");
-  assert.equal(pending.clientInfo, undefined, "claim-less traffic must not gain an invented clientInfo");
 });
 
 test("an era-neutral modern discover admitted before any lock carries era unselected with its context and still does not lock", () => {
@@ -315,19 +301,15 @@ test("an era-neutral modern discover admitted before any lock carries era unsele
   const pending = supervisor.pendingRequests.get("number:1");
   assert.ok(pending, "the era-neutral discover must have a pending snapshot");
   assert.equal(pending.era, "unselected", "an unlocked discover admission must snapshot the unselected era");
-  assert.equal(pending.protocolVersion, "2026-07-28");
-  assert.deepEqual(pending.clientCapabilities, { sampling: {} });
-  assert.deepEqual(pending.clientInfo, { name: "sentinel-a", version: "1" });
   assert.equal(supervisor.era, "unselected", "the era-neutral discover must not lock the era");
 });
 
 test("two back-to-back modern requests hold their own context simultaneously and each worker frame carries its own _meta verbatim", () => {
   const { supervisor, workerWrites } = createEraHarness();
   // The distinguishing sentinels are clientCapabilities and clientInfo: a
-  // last-seen-global context carrier would collapse both requests onto the
-  // second one's values. (This test used an UNSUPPORTED protocolVersion as a
-  // third sentinel; unsupported versions are now answered -32022 at admission
-  // and never reach a pending snapshot at all, so per-request carriage of
+  // last-seen-global carrier would collapse both worker-bound frames onto the
+  // second one's values. (Unsupported versions are answered -32022 at
+  // admission and never reach the worker, so per-request carriage of
   // DIFFERENT version values is pinned over the wire instead — see the
   // concurrent -32022 test in stdio-supervisor-era-wire.test.ts.)
   const capsA = { sampling: {} };
@@ -341,19 +323,11 @@ test("two back-to-back modern requests hold their own context simultaneously and
     modernCall(2, { protocolVersion: "2026-07-28", clientCapabilities: capsB, clientInfo: infoB })
   );
 
-  // Both snapshots must hold their OWN values BEFORE any response — a
-  // last-seen-global carrier would collapse them onto the second request.
   const first = supervisor.pendingRequests.get("number:1");
   const second = supervisor.pendingRequests.get("number:2");
   assert.ok(first && second, "both concurrent modern calls must have pending snapshots");
   assert.equal(first.era, "modern");
   assert.equal(second.era, "modern");
-  assert.equal(first.protocolVersion, "2026-07-28");
-  assert.equal(second.protocolVersion, "2026-07-28");
-  assert.equal(first.clientCapabilities, capsA);
-  assert.equal(second.clientCapabilities, capsB);
-  assert.equal(first.clientInfo, infoA);
-  assert.equal(second.clientInfo, infoB);
 
   // The worker-bound frames each carry their own _meta verbatim.
   const metaA = frameMeta(workerFrameById(workerWrites, 1));
@@ -412,9 +386,6 @@ test("a modern request queued while the worker is down carries its context throu
   assert.equal(supervisor.queuedRequests.length, 1, "the modern request must queue while the worker is down");
   const queued = supervisor.queuedRequests[0].pending;
   assert.equal(queued.era, "modern", "the queued snapshot must carry the era captured at admission");
-  assert.equal(queued.protocolVersion, "2026-07-28");
-  assert.equal(queued.clientCapabilities, clientCapabilities);
-  assert.equal(queued.clientInfo, clientInfo);
 
   const retry = timers.find((timer) => timer.at === 100 && !timer.cleared);
   assert.ok(retry, "restart retry timer must be armed");
@@ -433,9 +404,6 @@ test("a modern request queued while the worker is down carries its context throu
   const pending = supervisor.pendingRequests.get("number:3");
   assert.ok(pending, "the released request must be pending on the replacement generation");
   assert.equal(pending.era, "modern");
-  assert.equal(pending.protocolVersion, "2026-07-28");
-  assert.equal(pending.clientCapabilities, clientCapabilities);
-  assert.equal(pending.clientInfo, clientInfo);
 });
 
 test("a legacy initialize snapshot carries era legacy and no modern context fields even when it carries a _meta envelope", () => {
@@ -445,9 +413,6 @@ test("a legacy initialize snapshot carries era legacy and no modern context fiel
   const plain = supervisor.pendingRequests.get("number:1");
   assert.ok(plain, "the initialize must have a pending snapshot");
   assert.equal(plain.era, "legacy", "an initialize snapshot's era is legacy");
-  assert.equal(plain.protocolVersion, undefined);
-  assert.equal(plain.clientCapabilities, undefined);
-  assert.equal(plain.clientInfo, undefined);
 
   // initialize is the legacy signal regardless of any _meta envelope it
   // carries; the envelope is ignored for era classification AND for capture.
@@ -463,9 +428,6 @@ test("a legacy initialize snapshot carries era legacy and no modern context fiel
   const enveloped = supervisor.pendingRequests.get("number:2");
   assert.ok(enveloped, "the enveloped initialize must have a pending snapshot");
   assert.equal(enveloped.era, "legacy");
-  assert.equal(enveloped.protocolVersion, undefined, "an initialize envelope must never be captured as protocol context");
-  assert.equal(enveloped.clientCapabilities, undefined);
-  assert.equal(enveloped.clientInfo, undefined);
 });
 
 test("captured context never leaks into worker-exit synthesis or queue-limit replies", () => {

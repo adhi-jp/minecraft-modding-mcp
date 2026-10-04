@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,6 +16,7 @@ import {
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession, waitFor, type WireSession } from "../helpers/stdio-wire-session.ts";
 
 /**
  * Legacy-era unknown-tool intercept: the premigration contract returned a
@@ -78,63 +78,8 @@ const CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities";
 
 type Frame = Record<string, unknown> & { id?: unknown };
 
-function startWireSupervisor(root: string): {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  workerReady: () => boolean;
-  stderr: () => string;
-  send: (message: object) => void;
-} {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      BATCH_TOOLS_OFF: "1",
-      MCP_SUPERVISOR_DEBUG: "1",
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db")
-    },
-    stdio: ["pipe", "pipe", "pipe"]
-  });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
-    }
-  });
-
-  let stderrBuffer = "";
-  child.stderr.on("data", (chunk: Buffer | string) => {
-    stderrBuffer += chunk.toString();
-  });
-
-  return {
-    child,
-    frames,
-    workerReady: () => stderrBuffer.includes("supervisor.debug.worker_ready"),
-    stderr: () => stderrBuffer,
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
+function startWireSupervisor(root: string): WireSession {
+  return startWireSession(root, { extraEnv: { BATCH_TOOLS_OFF: "1", MCP_SUPERVISOR_DEBUG: "1" } });
 }
 
 async function wireReply(session: { frames: Frame[] }, id: number | string, label: string): Promise<Frame> {

@@ -40,7 +40,7 @@ type StormChild = EventEmitter & {
 
 type Harness = {
   spawnWorker(): void;
-  currentRetryReservation?: { epoch: number; notBefore: number; delayMs: number };
+  currentRetryReservation?: { notBefore: number; delayMs: number };
 };
 
 function createStormChild(pid: number): StormChild {

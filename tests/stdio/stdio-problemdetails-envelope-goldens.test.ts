@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { createPremigrationNormalizer, firstDifference } from "../helpers/premigration-compare.ts";
 import { legacyHandshake, startInProcessSession, type InProcessSession } from "./inprocess-era-serve.ts";
 
 /**
@@ -80,63 +81,7 @@ const replayOrder = [...goldens].sort((left, right) => left.request.id - right.r
 // Normalization (same lib the capture used, with THIS session's paths)
 // ---------------------------------------------------------------------------
 
-type Normalize = (value: unknown, options?: { pathReplacements?: [string, string][] }) => unknown;
 let normalizeLiveMessage: (message: unknown) => unknown;
-
-async function loadNormalizer(): Promise<void> {
-  const lib = (await import("../../scripts/premigration/lib.mjs")) as {
-    normalizeCaptured: Normalize;
-    REPO_ROOT: string;
-  };
-  // defaultPathReplacements() is bound to the CAPTURE-time scratch root, so
-  // substitute this session's own scratch root (rule N2, longest-first).
-  const pathReplacements: [string, string][] = (
-    [
-      [root, "<SCRATCH>"],
-      [lib.REPO_ROOT, "<REPO>"],
-      [homedir(), "<HOME>"]
-    ] as [string, string][]
-  ).sort((left, right) => right[0].length - left[0].length);
-  normalizeLiveMessage = (message) =>
-    // JSON round-trip first: the in-process transport hands over the raw
-    // object, and wire serialization drops undefined-valued keys.
-    lib.normalizeCaptured(JSON.parse(JSON.stringify(message)), { pathReplacements });
-}
-
-/** First structural difference between two JSON values, or null; deterministic key order. */
-function firstDifference(expected: unknown, actual: unknown, path: string): string | null {
-  if (Object.is(expected, actual)) return null;
-  const bothObjects =
-    typeof expected === "object" && expected !== null && typeof actual === "object" && actual !== null;
-  if (!bothObjects) {
-    return `${path}: fixture ${JSON.stringify(expected)} !== live ${JSON.stringify(actual)}`;
-  }
-  if (Array.isArray(expected) !== Array.isArray(actual)) {
-    return `${path}: fixture is ${Array.isArray(expected) ? "array" : "object"}, live is ${
-      Array.isArray(actual) ? "array" : "object"
-    }`;
-  }
-  if (Array.isArray(expected) && Array.isArray(actual)) {
-    if (expected.length !== actual.length) {
-      return `${path}.length: fixture ${expected.length} !== live ${actual.length}`;
-    }
-    for (let index = 0; index < expected.length; index += 1) {
-      const diff = firstDifference(expected[index], actual[index], `${path}[${index}]`);
-      if (diff !== null) return diff;
-    }
-    return null;
-  }
-  const expectedRecord = expected as Record<string, unknown>;
-  const actualRecord = actual as Record<string, unknown>;
-  const keys = [...new Set([...Object.keys(expectedRecord), ...Object.keys(actualRecord)])].sort();
-  for (const key of keys) {
-    if (!(key in actualRecord)) return `${path}.${key}: present in fixture, missing in live reply`;
-    if (!(key in expectedRecord)) return `${path}.${key}: missing in fixture, present in live reply`;
-    const diff = firstDifference(expectedRecord[key], actualRecord[key], `${path}.${key}`);
-    if (diff !== null) return diff;
-  }
-  return null;
-}
 
 /** Compare a golden's recorded reply message to a normalized live message. */
 function compareGolden(golden: Golden, normalizedLive: unknown): string | null {
@@ -153,7 +98,7 @@ const liveReplies = new Map<string, unknown>(); // fixture file -> raw reply fra
 const normalizedReplies = new Map<string, unknown>(); // fixture file -> normalized message
 
 before(async () => {
-  await loadNormalizer();
+  normalizeLiveMessage = await createPremigrationNormalizer(root);
   session = await startInProcessSession();
   await legacyHandshake(session, "2025-06-18", "problemdetails-init");
   for (const golden of replayOrder) {

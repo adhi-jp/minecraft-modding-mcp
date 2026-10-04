@@ -269,10 +269,6 @@ function dispatchCount(workerWrites: string[], id: number): number {
   return workerWrites.filter((frame) => frame.includes(`"id":${id}`)).length;
 }
 
-function reachedWorker(workerWrites: string[], id: number): boolean {
-  return dispatchCount(workerWrites, id) > 0;
-}
-
 /**
  * Captures what `log` writes while `run()` executes.
  *

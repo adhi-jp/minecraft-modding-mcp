@@ -114,45 +114,6 @@ export function classifyEraSignal(params: unknown): EraSignal {
 }
 
 /**
- * Per-request modern protocol context, captured SHALLOW from `params._meta`
- * at supervisor admission. Values are copied as-is (no deep validation — the
- * worker validates values, e.g. answering -32022 for an unsupported
- * protocolVersion). `clientInfo` is present only when the optional
- * io.modelcontextprotocol/clientInfo key is present, and is passed through
- * verbatim even when it is not Implementation-shaped.
- */
-export type ModernRequestContext = {
-  protocolVersion: string;
-  clientCapabilities: Record<string, unknown>;
-  clientInfo?: unknown;
-};
-
-/**
- * Shallow extraction of the {@link ModernRequestContext} from a request's
- * params. Returns undefined unless the params classify as a shallow-valid
- * modern signal — the guard is the same pure {@link classifyEraSignal} check
- * the admission gate runs, so it cannot diverge from an admission-time
- * classification of the same params object. The returned values ALIAS the
- * inbound params._meta objects (no clone): callers must never mutate an
- * inbound params graph after admission, or captured snapshots would change
- * retroactively.
- */
-export function extractModernRequestContext(params: unknown): ModernRequestContext | undefined {
-  if (classifyEraSignal(params).classification !== "modern-signal") {
-    return undefined;
-  }
-  const meta = (params as { _meta: Record<string, unknown> })._meta;
-  const context: ModernRequestContext = {
-    protocolVersion: meta[PROTOCOL_VERSION_META_KEY] as string,
-    clientCapabilities: meta[CLIENT_CAPABILITIES_META_KEY] as Record<string, unknown>
-  };
-  if (CLIENT_INFO_META_KEY in meta) {
-    context.clientInfo = meta[CLIENT_INFO_META_KEY];
-  }
-  return context;
-}
-
-/**
  * Strips the modern era-claim keys from a request's `params._meta` IN PLACE,
  * deleting `_meta` entirely when nothing else remains. Used by the supervisor
  * for accepted legacy `initialize` frames: the admission rule classifies every
@@ -160,9 +121,7 @@ export function extractModernRequestContext(params: unknown): ModernRequestConte
  * SDK's opening classifier treats an initialize carrying a valid modern claim
  * as MODERN — the strip keeps the worker's classification aligned with the
  * admission decision. Mutation is in place deliberately: the framing-mode
- * registry is keyed by the exact inbound frame object, and no
- * {@link ModernRequestContext} ever aliases an initialize's `_meta` (an
- * initialize never classifies as a modern signal at admission).
+ * registry is keyed by the exact inbound frame object.
  */
 export function stripModernEraClaimInPlace(params: unknown): void {
   if (!isPlainObject(params)) return;

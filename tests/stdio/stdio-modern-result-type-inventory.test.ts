@@ -11,6 +11,7 @@ import {
   type Frame,
   type InProcessSession
 } from "./inprocess-era-serve.ts";
+import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
 import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 
 /**
@@ -131,7 +132,7 @@ test("registry-driven: every advertised tool answers a cheap tools/call with res
   const list = await modern.request({ jsonrpc: "2.0", id: id(), method: "tools/list", params: { _meta: MODERN_META } });
   const tools = list.result?.tools as Array<{ name: string; inputSchema?: { required?: string[] } }> | undefined;
   assert.ok(Array.isArray(tools), "tools/list must carry a tools array");
-  assert.equal(tools.length, 41, "the default flag config advertises all 41 tools");
+  assert.equal(tools.length, EXPECTED_TOOLS.length, "the default flag config advertises every expected tool");
 
   for (const tool of tools) {
     const required = tool.inputSchema?.required ?? [];

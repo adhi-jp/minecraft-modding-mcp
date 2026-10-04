@@ -238,7 +238,7 @@ test("the per-path inventory table matches the observed/builder/baseline codes",
     { code: null, signal: "SIGKILL" },
     10,
     []
-  ).reply as { error?: unknown; result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
+  ) as { error?: unknown; result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
   const timeoutStructured = buildValidateProjectTimeoutReply({
     request: { id: 1, method: "tools/call", toolName: "validate-project", startedAt: 0, era: "legacy" },
     phase: "running",

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +6,7 @@ import test from "node:test";
 
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
+import { startWireSession as startSupervisor, waitFor } from "../helpers/stdio-wire-session.ts";
 
 /**
  * Five-version legacy negotiation matrix, driven over the REAL wire
@@ -30,54 +30,6 @@ const APPROVED_LEGACY_VERSIONS = [
 const NEGOTIATE_DOWN_TARGET = "2025-11-25";
 
 type Frame = Record<string, unknown> & { id?: unknown };
-
-function startSupervisor(root: string): {
-  child: ChildProcessWithoutNullStreams;
-  frames: Frame[];
-  send: (message: object) => void;
-} {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      MCP_CACHE_DIR: join(root, "cache"),
-      MCP_SQLITE_PATH: join(root, "cache", "source-cache.db")
-    },
-    stdio: ["pipe", "pipe", "pipe"]
-  });
-
-  let buffer = "";
-  const frames: Frame[] = [];
-  child.stdout.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    let index;
-    while ((index = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, index).trim();
-      buffer = buffer.slice(index + 1);
-      if (!line) continue;
-      try {
-        frames.push(JSON.parse(line) as Frame);
-      } catch {
-        // Ignore non-JSON stdout noise.
-      }
-    }
-  });
-
-  return {
-    child,
-    frames,
-    send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
-  };
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
 
 async function negotiate(
   t: Parameters<NonNullable<Parameters<typeof test>[2]>>[0],

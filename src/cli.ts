@@ -5,10 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { startServer } from "./index.js";
 import { log } from "./logger.js";
-import { STDIO_WORKER_MODE_ENV, StdioSupervisor } from "./stdio-supervisor.js";
+import { STDIO_WORKER_MODE_ENV, STDIO_WORKER_READY_MARKER, StdioSupervisor } from "./stdio-supervisor.js";
 
 const CHILD_PID_FILE_ENV = "MCP_SUPERVISOR_CHILD_PID_FILE";
-const WORKER_READY_MARKER = "__MCP_STDIO_WORKER_READY__";
 const PARENT_LIVENESS_POLL_MS = 5_000;
 
 async function main(): Promise<void> {
@@ -91,7 +90,7 @@ async function main(): Promise<void> {
     process.stdin.on("close", handleStdinEnd);
 
     await startServer();
-    process.stderr.write(`${WORKER_READY_MARKER}\n`);
+    process.stderr.write(`${STDIO_WORKER_READY_MARKER}\n`);
     workerReady = true;
     // An EOF observed during startup must not be lost: act on it now that the
     // worker is up, rather than idling forever on a stream that already ended.

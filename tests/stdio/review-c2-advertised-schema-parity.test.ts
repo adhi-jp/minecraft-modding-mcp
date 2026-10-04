@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { z } from "zod";
 
+import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
+
 /**
  * Advertised inputSchema vs runtime Zod schema: property-set parity.
  *
@@ -39,8 +41,6 @@ const root = mkdtempSync(join(tmpdir(), "review-c2-schema-parity-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");
 
-const EXPECTED_TOOL_COUNT = 41;
-
 type JsonSchemaObject = {
   properties?: Record<string, unknown>;
   required?: unknown;
@@ -63,8 +63,8 @@ test("every tool's advertised inputSchema property set matches its runtime Zod s
   const tools = listRegisteredTools();
   assert.equal(
     tools.length,
-    EXPECTED_TOOL_COUNT,
-    "tool count changed; update EXPECTED_TOOL_COUNT once the new tool is covered here"
+    EXPECTED_TOOLS.length,
+    "tool count changed; cover the new tool here"
   );
 
   const drift: string[] = [];

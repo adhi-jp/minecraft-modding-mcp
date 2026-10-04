@@ -65,7 +65,7 @@ type Harness = {
   handleWorkerReady(child: FakeChild): void;
   handleWorkerExit(child: FakeChild, code: number | null, signal: NodeJS.Signals | null): void;
   spawnWorker(): void;
-  scheduleRestart(failedAttempt?: boolean): void;
+  scheduleRestart(): void;
   shutdown(): Promise<void>;
 };
 
