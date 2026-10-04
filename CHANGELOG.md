@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking — internal modules and service members of the Node package changed.** Modules under `dist/` other than the package entry, such as `dist/mixin-validator.js`, and the members of the exported `sourceService` and `config` objects no longer carry helpers, repository methods and options that the server does not use. Clients that talk to the server over stdio are unaffected; code that imported these internals must stop relying on them.
+
 ### Fixed
 
 - `inspect-minecraft` search with `detail: "summary", include: ["samples"]` now returns up to five hits in `result.search`, including an empty hits array on a miss. The block was omitted even when samples were requested. Use standard or full detail to recover the whole fetched page; the cursor still advances past that page.

@@ -1097,7 +1097,6 @@
 0	ok	mcmeta files count as text for read-through delivery
 0	ok	member annotations appear only under the opt-in projection of get-class-members
 0	ok	method existence requests inherited members (includeInherited: true)
-0	ok	mixin-validator re-exports the per-annotation validation helpers as functions
 0	ok	name-only method with MULTIPLE overloads resolves (exists), not ambiguous
 0	ok	name-only method with no match is not_found
 0	ok	nbtBase64ToTypedJson enforces max inflated bytes for gzip payloads
