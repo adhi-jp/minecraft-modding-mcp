@@ -98,6 +98,14 @@ v1 build would not match on that description. `get-class-source.json` and
 `trace-symbol-lifecycle.json` / `diff-class-signatures.json` keep
 `default obfuscated` because they do not inherit an artifact mapping.
 
+`tool-contracts/analyze-mod.json` had its `maxFiles`, `maxLines` and `maxChars`
+properties changed from `{"$ref":"#/properties/limit"}` to an inline
+`{"type":"integer","exclusiveMinimum":0}` for this major release. The `$ref`
+also carried `limit`'s `default: 50`, which the runtime schema does not apply to
+those three optional caps. `limit` itself is unchanged. `src/v1-parity-schemas.ts`
+was regenerated from the edited file, and a byte comparison against a fresh
+capture from the untouched v1 build would not match on those three properties.
+
 ## Fixture families
 
 ### `tools-list-order.<flag-config>.json`

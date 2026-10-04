@@ -111,13 +111,16 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
         "default": true
       },
       "maxFiles": {
-        "$ref": "#/properties/limit"
+        "type": "integer",
+        "exclusiveMinimum": 0
       },
       "maxLines": {
-        "$ref": "#/properties/limit"
+        "type": "integer",
+        "exclusiveMinimum": 0
       },
       "maxChars": {
-        "$ref": "#/properties/limit"
+        "type": "integer",
+        "exclusiveMinimum": 0
       },
       "targetMapping": {
         "type": "string",
