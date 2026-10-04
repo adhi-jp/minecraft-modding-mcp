@@ -80,6 +80,16 @@ if (options.lcovPath) {
   args.push("--test-reporter=lcov", `--test-reporter-destination=${options.lcovPath}`);
 }
 
+// Every test file that calls mkdtemp without cleanup lands in this per-run directory, which
+// is removed when the run finishes. KEEP_TEST_TMP keeps it for debugging, like withTempDir.
+const runTmp = mkdtempSync(join(tmpdir(), "mcp-test-run-"));
+
+function discardRunTmp() {
+  if (!process.env.KEEP_TEST_TMP) {
+    rmSync(runTmp, { recursive: true, force: true });
+  }
+}
+
 let tapDirectory;
 let tapPath;
 if (namedSetGateEnabled) {
@@ -140,12 +150,14 @@ let spawnFailed = false;
 async function finish(code, signal) {
   if (spawnFailed) {
     discardTapCapture();
+    discardRunTmp();
     process.exitCode = 1;
     return;
   }
   if (signal) {
     console.error(`Test runner terminated by signal ${signal}`);
     discardTapCapture();
+    discardRunTmp();
     process.exitCode = 1;
     return;
   }
@@ -154,10 +166,13 @@ async function finish(code, signal) {
   // partial run cannot prove the baseline.
   if (exitCode !== 0 || !namedSetGateEnabled) {
     discardTapCapture();
+    discardRunTmp();
     process.exitCode = exitCode;
     return;
   }
   try {
+    // The gate reads only the TAP capture, so the per-run directory can go on every path.
+    discardRunTmp();
     if (await checkNamedTestSet()) {
       discardTapCapture();
       process.exitCode = 0;
@@ -171,7 +186,10 @@ async function finish(code, signal) {
   }
 }
 
-const child = spawn(process.execPath, args, { stdio: "inherit" });
+const child = spawn(process.execPath, args, {
+  stdio: "inherit",
+  env: { ...process.env, TMPDIR: runTmp, TMP: runTmp, TEMP: runTmp }
+});
 child.on("error", (error) => {
   console.error(error);
   spawnFailed = true;
