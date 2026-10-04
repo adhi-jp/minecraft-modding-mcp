@@ -14,6 +14,35 @@ import {
 
 const VALID_AW_HEADER_VERSIONS = new Set(["v1", "v2"]);
 
+type RuntimeEvidence = {
+  resolvedInRuntime?: boolean;
+  resolvedRuntimeAccess?: "public" | "protected" | "private" | "package-private";
+  resolvedRuntimeJvmDescriptor?: string;
+  resolvedRuntimeJavaSignature?: string;
+};
+
+/**
+ * Runtime-evidence fields for an entry that resolved against the runtime jar, or nothing when
+ * evidence was not requested. `member` adds the descriptor and signature of a matched method or
+ * field; classes and wildcards pass only access flags (or none).
+ */
+function runtimeEvidence(
+  include: boolean | undefined,
+  accessFlags: number | undefined,
+  member?: { jvmDescriptor?: string; javaSignature?: string }
+): RuntimeEvidence {
+  if (!include) {
+    return {};
+  }
+  const runtimeAccess = accessLevelFromFlags(accessFlags);
+  return {
+    resolvedInRuntime: true,
+    ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {}),
+    ...(member?.jvmDescriptor ? { resolvedRuntimeJvmDescriptor: member.jvmDescriptor } : {}),
+    ...(member?.javaSignature ? { resolvedRuntimeJavaSignature: member.javaSignature } : {})
+  };
+}
+
 /**
  * Fabric access widener grammar rules (AUTHORITY): `accessible` applies to
  * class, method, field; `extendable` applies to class and method only;
@@ -44,6 +73,7 @@ export function validateParsedAccessWidener(
   options?: { includeRuntimeEvidence?: boolean }
 ): AccessWidenerValidationResult {
   warnings.push(...parsed.parseWarnings);
+  const unresolved = options?.includeRuntimeEvidence ? { resolvedInRuntime: false as const } : {};
 
   let headerValid = true;
   const headerLine = parsed.headerLine ?? 1;
@@ -76,18 +106,10 @@ export function validateParsedAccessWidener(
     if (entry.targetKind === "class") {
       const members = membersByClass.get(ownerFqn);
       if (members) {
-        const runtimeAccess = accessLevelFromFlags(members.classAccessFlags);
         validatedEntries.push({
           ...entry,
           valid: true,
-          ...(options?.includeRuntimeEvidence
-            ? {
-                resolvedInRuntime: true,
-                ...(runtimeAccess
-                  ? { resolvedRuntimeAccess: runtimeAccess }
-                  : {})
-              }
-            : {})
+          ...runtimeEvidence(options?.includeRuntimeEvidence, members.classAccessFlags)
         });
         validCount++;
       } else {
@@ -95,7 +117,7 @@ export function validateParsedAccessWidener(
           ...entry,
           valid: false,
           issue: `Class "${ownerFqn}" not found in game jar.`,
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
       }
@@ -109,7 +131,7 @@ export function validateParsedAccessWidener(
         ...entry,
         valid: false,
         issue: `Owner class "${ownerFqn}" not found in game jar.`,
-        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        ...unresolved
       });
       invalidCount++;
       continue;
@@ -122,28 +144,12 @@ export function validateParsedAccessWidener(
       ) ?? members.constructors.find(
         (m) => m.name === entry.name && (!entry.descriptor || m.jvmDescriptor === entry.descriptor)
       );
-      const found = matchedMember != null;
 
-      if (found) {
-        const runtimeMember = matchedMember;
-        const runtimeAccess = accessLevelFromFlags(runtimeMember.accessFlags);
+      if (matchedMember) {
         validatedEntries.push({
           ...entry,
           valid: true,
-          ...(options?.includeRuntimeEvidence
-            ? {
-                resolvedInRuntime: true,
-                ...(runtimeAccess
-                  ? { resolvedRuntimeAccess: runtimeAccess }
-                  : {}),
-                ...(runtimeMember.jvmDescriptor
-                  ? { resolvedRuntimeJvmDescriptor: runtimeMember.jvmDescriptor }
-                  : {}),
-                ...(runtimeMember.javaSignature
-                  ? { resolvedRuntimeJavaSignature: runtimeMember.javaSignature }
-                  : {})
-              }
-            : {})
+          ...runtimeEvidence(options?.includeRuntimeEvidence, matchedMember.accessFlags, matchedMember)
         });
         validCount++;
       } else {
@@ -153,7 +159,7 @@ export function validateParsedAccessWidener(
           valid: false,
           issue: `Method "${entry.name}" not found in class "${ownerFqn}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
       }
@@ -163,28 +169,12 @@ export function validateParsedAccessWidener(
       const matchedMember = members.fields.find(
         (m) => m.name === entry.name && (!entry.descriptor || m.jvmDescriptor === entry.descriptor)
       );
-      const found = matchedMember != null;
 
-      if (found) {
-        const runtimeMember = matchedMember;
-        const runtimeAccess = accessLevelFromFlags(runtimeMember.accessFlags);
+      if (matchedMember) {
         validatedEntries.push({
           ...entry,
           valid: true,
-          ...(options?.includeRuntimeEvidence
-            ? {
-                resolvedInRuntime: true,
-                ...(runtimeAccess
-                  ? { resolvedRuntimeAccess: runtimeAccess }
-                  : {}),
-                ...(runtimeMember.jvmDescriptor
-                  ? { resolvedRuntimeJvmDescriptor: runtimeMember.jvmDescriptor }
-                  : {}),
-                ...(runtimeMember.javaSignature
-                  ? { resolvedRuntimeJavaSignature: runtimeMember.javaSignature }
-                  : {})
-              }
-            : {})
+          ...runtimeEvidence(options?.includeRuntimeEvidence, matchedMember.accessFlags, matchedMember)
         });
         validCount++;
       } else {
@@ -194,7 +184,7 @@ export function validateParsedAccessWidener(
           valid: false,
           issue: `Field "${entry.name}" not found in class "${ownerFqn}".`,
           suggestions: suggestions.length > 0 ? suggestions : undefined,
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
       }
@@ -222,6 +212,7 @@ export function validateParsedAccessTransformer(
   options?: { includeRuntimeEvidence?: boolean }
 ): AccessTransformerValidationResult {
   warnings.push(...parsed.parseWarnings);
+  const unresolved = options?.includeRuntimeEvidence ? { resolvedInRuntime: false as const } : {};
 
   const validatedEntries: AccessTransformerValidationResult["entries"] = [];
   let validCount = 0;
@@ -237,22 +228,16 @@ export function validateParsedAccessTransformer(
           ...entry,
           valid: false,
           issue: `Class "${ownerFqn}" not found in runtime jar.`,
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
         continue;
       }
 
-      const runtimeAccess = accessLevelFromFlags(members.classAccessFlags);
       validatedEntries.push({
         ...entry,
         valid: true,
-        ...(options?.includeRuntimeEvidence
-          ? {
-              resolvedInRuntime: true,
-              ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {})
-            }
-          : {})
+        ...runtimeEvidence(options?.includeRuntimeEvidence, members.classAccessFlags)
       });
       validCount++;
       continue;
@@ -263,7 +248,7 @@ export function validateParsedAccessTransformer(
         ...entry,
         valid: false,
         issue: `Owner class "${ownerFqn}" not found in runtime jar.`,
-        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        ...unresolved
       });
       invalidCount++;
       continue;
@@ -275,7 +260,7 @@ export function validateParsedAccessTransformer(
       validatedEntries.push({
         ...entry,
         valid: true,
-        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: true } : {})
+        ...runtimeEvidence(options?.includeRuntimeEvidence, undefined)
       });
       validCount++;
       continue;
@@ -291,24 +276,16 @@ export function validateParsedAccessTransformer(
           valid: false,
           issue: `Field "${entry.name}" not found in class "${ownerFqn}".`,
           ...(suggestions.length > 0 ? { suggestions } : {}),
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
         continue;
       }
 
-      const runtimeAccess = accessLevelFromFlags(matchedField.accessFlags);
       validatedEntries.push({
         ...entry,
         valid: true,
-        ...(options?.includeRuntimeEvidence
-          ? {
-              resolvedInRuntime: true,
-              ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {}),
-              ...(matchedField.jvmDescriptor ? { resolvedRuntimeJvmDescriptor: matchedField.jvmDescriptor } : {}),
-              ...(matchedField.javaSignature ? { resolvedRuntimeJavaSignature: matchedField.javaSignature } : {})
-            }
-          : {})
+        ...runtimeEvidence(options?.includeRuntimeEvidence, matchedField.accessFlags, matchedField)
       });
       validCount++;
       continue;
@@ -335,7 +312,7 @@ export function validateParsedAccessTransformer(
           valid: false,
           issue: `Method "${entry.name}" exists in "${ownerFqn}" but no overload matches descriptor ${entry.descriptor} (available: ${available.join(", ")}).`,
           suggestions: available,
-          ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+          ...unresolved
         });
         invalidCount++;
         continue;
@@ -346,24 +323,16 @@ export function validateParsedAccessTransformer(
         valid: false,
         issue: `Method "${entry.name}" not found in class "${ownerFqn}".`,
         ...(suggestions.length > 0 ? { suggestions } : {}),
-        ...(options?.includeRuntimeEvidence ? { resolvedInRuntime: false } : {})
+        ...unresolved
       });
       invalidCount++;
       continue;
     }
 
-    const runtimeAccess = accessLevelFromFlags(matchedMethod.accessFlags);
     validatedEntries.push({
       ...entry,
       valid: true,
-      ...(options?.includeRuntimeEvidence
-        ? {
-            resolvedInRuntime: true,
-            ...(runtimeAccess ? { resolvedRuntimeAccess: runtimeAccess } : {}),
-            ...(matchedMethod.jvmDescriptor ? { resolvedRuntimeJvmDescriptor: matchedMethod.jvmDescriptor } : {}),
-            ...(matchedMethod.javaSignature ? { resolvedRuntimeJavaSignature: matchedMethod.javaSignature } : {})
-          }
-        : {})
+      ...runtimeEvidence(options?.includeRuntimeEvidence, matchedMethod.accessFlags, matchedMethod)
     });
     validCount++;
   }

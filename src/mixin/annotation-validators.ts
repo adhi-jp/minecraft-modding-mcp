@@ -22,6 +22,39 @@ const REGEX_SELECTOR_RE = /^(?:(?:owner|name|desc)\s*=\s*)?\//;
 // group 2 the comma (open or explicit maximum) and group 3 the maximum.
 const QUANTIFIER_RE = /(?:\*|\+|\{(\d*)(?:(,)(\d*))?\})$/;
 
+/**
+ * Confidence, resolution path and degraded flag for a member name that is missing from a
+ * target: a failed member remap or unavailable signature means the miss may be a tooling
+ * artifact rather than a true missing member.
+ */
+function notFoundDegradation(
+  targetName: string,
+  memberName: string,
+  confidence: IssueConfidence | undefined,
+  confidenceReason: string | undefined,
+  remapFailedMembers: Map<string, Set<string>> | undefined,
+  signatureFailedTargets: Set<string> | undefined,
+  healthReport: MappingHealthReport | undefined
+): {
+  issueConfidence: IssueConfidence | undefined;
+  issueConfidenceReason: string | undefined;
+  resolutionPath: ResolutionPath | undefined;
+  memberDegraded: boolean | undefined;
+} {
+  const isRemapFailed = remapFailedMembers?.get(targetName)?.has(memberName);
+  const isSigFailed = signatureFailedTargets?.has(targetName);
+  return {
+    issueConfidence: isRemapFailed ? "uncertain" : confidence,
+    issueConfidenceReason: isRemapFailed
+      ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
+      : confidenceReason,
+    resolutionPath: isRemapFailed
+      ? "member-remap-failed"
+      : isSigFailed ? "source-signature-unavailable" : undefined,
+    memberDegraded: isRemapFailed && healthReport?.memberRemapAvailable === false
+  };
+}
+
 export function validateInjection(
   inj: ParsedInjection,
   targetMembers: Map<string, ResolvedTargetMembers>,
@@ -111,16 +144,15 @@ export function validateInjection(
       const descriptorHint = descriptor ? ` (descriptor: ${descriptor})` : "";
 
       // Determine if this is a remap artifact or signature unavailability
-      const isRemapFailed = remapFailedMembers?.get(targetName)?.has(methodName);
-      const isSigFailed = signatureFailedTargets?.has(targetName);
-      const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
-      const issueConfidenceReason = isRemapFailed
-        ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
-        : confidenceReason;
-      const resolutionPath: ResolutionPath | undefined = isRemapFailed
-        ? "member-remap-failed"
-        : isSigFailed ? "source-signature-unavailable" : undefined;
-      const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
+      const { issueConfidence, issueConfidenceReason, resolutionPath, memberDegraded } = notFoundDegradation(
+        targetName,
+        methodName,
+        confidence,
+        confidenceReason,
+        remapFailedMembers,
+        signatureFailedTargets,
+        healthReport
+      );
 
       issues.push({
         severity: memberDegraded ? "warning" : "error",
@@ -256,61 +288,36 @@ export function validateShadow(
     const members = targetMembers.get(targetName);
     if (!members) continue;
 
-    const isRemapFailed = remapFailedMembers?.get(targetName)?.has(effectiveName);
-    const isSigFailed = signatureFailedTargets?.has(targetName);
-    const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
-    const issueConfidenceReason = isRemapFailed
-      ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
-      : confidenceReason;
-    const resolutionPath: ResolutionPath | undefined = isRemapFailed
-      ? "member-remap-failed"
-      : isSigFailed ? "source-signature-unavailable" : undefined;
-    const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
-
-    if (shadow.kind === "field") {
-      const fieldNames = allFieldNames(members);
-      const matchedName = candidateNames.find((candidate) => fieldNames.includes(candidate));
-      if (matchedName === undefined) {
-        const suggestions = suggestSimilar(effectiveName, fieldNames);
-        issues.push({
-          severity: memberDegraded ? "warning" : "error",
-          kind: "field-not-found",
-          annotation: "@Shadow",
-          target: `${targetName}#${effectiveName}`,
-          message: `Field "${shadow.name}" not found in target class "${targetName}" (${fieldNames.length} field(s) available).${prefixHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
-          suggestions: suggestions.length > 0 ? suggestions : undefined,
-          line: shadow.line,
-          confidence: issueConfidence,
-          confidenceReason: issueConfidenceReason,
-          resolutionPath,
-          falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
-        });
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
-      } else {
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${matchedName}`, status: "resolved" });
-      }
+    const isField = shadow.kind === "field";
+    const memberNames = isField ? allFieldNames(members) : allMethodNames(members);
+    const matchedName = candidateNames.find((candidate) => memberNames.includes(candidate));
+    if (matchedName === undefined) {
+      const { issueConfidence, issueConfidenceReason, resolutionPath, memberDegraded } = notFoundDegradation(
+        targetName,
+        effectiveName,
+        confidence,
+        confidenceReason,
+        remapFailedMembers,
+        signatureFailedTargets,
+        healthReport
+      );
+      const suggestions = suggestSimilar(effectiveName, memberNames);
+      issues.push({
+        severity: memberDegraded ? "warning" : "error",
+        kind: isField ? "field-not-found" : "method-not-found",
+        annotation: "@Shadow",
+        target: `${targetName}#${effectiveName}`,
+        message: `${isField ? "Field" : "Method"} "${shadow.name}" not found in target class "${targetName}" (${memberNames.length} ${isField ? "field(s)" : "method(s)"} available).${prefixHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        line: shadow.line,
+        confidence: issueConfidence,
+        confidenceReason: issueConfidenceReason,
+        resolutionPath,
+        falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
+      });
+      resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
     } else {
-      const methodNames = allMethodNames(members);
-      const matchedName = candidateNames.find((candidate) => methodNames.includes(candidate));
-      if (matchedName === undefined) {
-        const suggestions = suggestSimilar(effectiveName, methodNames);
-        issues.push({
-          severity: memberDegraded ? "warning" : "error",
-          kind: "method-not-found",
-          annotation: "@Shadow",
-          target: `${targetName}#${effectiveName}`,
-          message: `Method "${shadow.name}" not found in target class "${targetName}" (${methodNames.length} method(s) available).${prefixHint}${memberDegraded ? " (infrastructure degraded; may be false positive)" : ""}`,
-          suggestions: suggestions.length > 0 ? suggestions : undefined,
-          line: shadow.line,
-          confidence: issueConfidence,
-          confidenceReason: issueConfidenceReason,
-          resolutionPath,
-          falsePositiveRisk: computeFalsePositiveRisk(healthReport, resolutionPath, issueConfidence)
-        });
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, status: "not-found" });
-      } else {
-        resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${matchedName}`, status: "resolved" });
-      }
+      resolvedMembers.push({ annotation: "@Shadow", name: shadow.name, line: shadow.line, resolvedTo: `${targetName}#${matchedName}`, status: "resolved" });
     }
   }
 }
@@ -336,16 +343,15 @@ export function validateAccessor(
       : allFieldNames(members);
 
     if (!candidateNames.includes(accessor.targetName)) {
-      const isRemapFailed = remapFailedMembers?.get(targetName)?.has(accessor.targetName);
-      const isSigFailed = signatureFailedTargets?.has(targetName);
-      const issueConfidence = isRemapFailed ? "uncertain" as IssueConfidence : confidence;
-      const issueConfidenceReason = isRemapFailed
-        ? `Member remap from obfuscated→mapping failed; name mismatch may be a remap artifact, not a true missing member.`
-        : confidenceReason;
-      const resolutionPath: ResolutionPath | undefined = isRemapFailed
-        ? "member-remap-failed"
-        : isSigFailed ? "source-signature-unavailable" : undefined;
-      const memberDegraded = isRemapFailed && healthReport?.memberRemapAvailable === false;
+      const { issueConfidence, issueConfidenceReason, resolutionPath, memberDegraded } = notFoundDegradation(
+        targetName,
+        accessor.targetName,
+        confidence,
+        confidenceReason,
+        remapFailedMembers,
+        signatureFailedTargets,
+        healthReport
+      );
 
       const suggestions = suggestSimilar(accessor.targetName, candidateNames);
       const inferenceHint = accessor.targetName !== accessor.name

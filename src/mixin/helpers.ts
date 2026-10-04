@@ -25,16 +25,17 @@ const CONFIG_WARNING_RE = /(?:version|gradle|jar\b|properties|project)/i;
 const PARSE_WARNING_RE = /(?:could not parse|parse\s+warning|missing method attribute)/i;
 
 export function classifyStructuredWarning(message: string): StructuredWarning {
+  const category = MAPPING_WARNING_RE.test(message)
+    ? "mapping"
+    : PARSE_WARNING_RE.test(message)
+      ? "parse"
+      : CONFIG_WARNING_RE.test(message)
+        ? "configuration"
+        : "validation";
   return {
-    severity: MAPPING_WARNING_RE.test(message) ? "warning" : PARSE_WARNING_RE.test(message) ? "warning" : "info",
+    severity: category === "mapping" || category === "parse" ? "warning" : "info",
     message,
-    category: MAPPING_WARNING_RE.test(message)
-      ? "mapping"
-      : PARSE_WARNING_RE.test(message)
-        ? "parse"
-        : CONFIG_WARNING_RE.test(message)
-          ? "configuration"
-          : "validation"
+    category
   };
 }
 
@@ -183,12 +184,7 @@ export function computeFalsePositiveRisk(
   if (!healthReport) return undefined;
 
   if (healthReport.overallHealthy === false) {
-    if (
-      resolutionPath === "source-signature-unavailable" ||
-      resolutionPath === "target-mapping-failed" ||
-      resolutionPath === "member-remap-failed"
-    ) return "high";
-    if (issueConfidence === "uncertain") return "medium";
+    if (resolutionPath !== undefined && TOOL_RESOLUTION_PATHS.includes(resolutionPath)) return "high";
     return "medium";
   }
 
@@ -353,22 +349,7 @@ export function refreshMixinValidationOutcome(result: MixinValidationResult): Mi
         membersSkipped: result.summary.membersSkipped,
         membersMissing: result.summary.membersMissing
       };
-  // Preserve budget signals across refresh; otherwise pre-target partial
-  // paths regress to "full" on a second recompute.
-  const preservedBudget = {
-    targetsDeferredBudget: result.summary.targetsDeferredBudget,
-    degradedReason: result.summary.degradedReason
-  };
-  result.summary = {
-    ...result.summary,
-    ...memberSummary,
-    ...(preservedBudget.targetsDeferredBudget !== undefined
-      ? { targetsDeferredBudget: preservedBudget.targetsDeferredBudget }
-      : {}),
-    ...(preservedBudget.degradedReason !== undefined
-      ? { degradedReason: preservedBudget.degradedReason }
-      : {})
-  };
+  result.summary = { ...result.summary, ...memberSummary };
   result.validationStatus = computeValidationStatus(result.summary);
   result.valid = result.summary.definiteErrors === 0;
   result.quickSummary = buildQuickSummary(result.validationStatus, result.summary, {

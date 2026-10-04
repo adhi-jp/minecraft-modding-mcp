@@ -188,3 +188,33 @@ public abstract class PlayerMixin {
     ]
   );
 });
+
+test("parseMixinSource keeps a @Shadow whose declaration follows line and block comments", () => {
+  const source = `
+@Mixin(PlayerEntity.class)
+public abstract class PlayerMixin {
+  @Shadow
+  // line comment between the annotation and the declaration
+  private int health;
+  @Shadow
+  /* single-line block comment */
+  private int armor;
+  @Shadow
+  /*
+   * multi-line block comment
+   */
+  private int hunger;
+}
+`;
+  const result = parseMixinSource(source);
+
+  assert.deepEqual(result.parseWarnings, []);
+  assert.deepEqual(
+    result.shadows.map((entry) => ({ name: entry.name, line: entry.line })),
+    [
+      { name: "health", line: 4 },
+      { name: "armor", line: 7 },
+      { name: "hunger", line: 10 }
+    ]
+  );
+});

@@ -29,24 +29,12 @@ export type {
 export { loadMixinStageBudgets } from "./mixin/types.js";
 
 export {
-  accessLevelFromFlags,
-  buildQuickSummary,
-  computeConfidenceBreakdown,
-  computeFalsePositiveRisk,
-  computeValidationStatus,
   extractMethodDescriptor,
   extractMethodName,
   levenshteinDistance,
   refreshMixinValidationOutcome,
-  suggestSimilar,
-  summarizeResolvedMembers
+  suggestSimilar
 } from "./mixin/helpers.js";
-
-export {
-  validateAccessor,
-  validateInjection,
-  validateShadow
-} from "./mixin/annotation-validators.js";
 
 export { validateParsedMixin } from "./mixin/parsed-validator.js";
 

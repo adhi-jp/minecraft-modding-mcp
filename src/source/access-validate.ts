@@ -110,6 +110,105 @@ function guardRuntimeEvidence(
   return { approximate: true, approximationReasons: [reason] };
 }
 
+/**
+ * Loads the runtime members of every class in `classFqns` from the jar, remapping each class name
+ * and its members from `fromNamespace` into the jar's `lookupMapping` when they differ. Namespaces
+ * outside the source-mapping set (such as SRG) cannot be remapped: the class is looked up by its
+ * original name and a "Could not map class" warning is recorded.
+ */
+async function loadClassMembers(
+  svc: SourceService,
+  classFqns: Iterable<string>,
+  options: {
+    fromNamespace: SourceMapping | AccessTransformerNamespace;
+    lookupMapping: SourceMapping | AccessTransformerNamespace;
+    resolvedVersion: string;
+    jarPath: string;
+    input: Pick<ValidateAccessWidenerInput, "sourcePriority" | "projectPath" | "gradleUserHome">;
+    warnings: string[];
+  }
+): Promise<Map<string, ResolvedTargetMembers>> {
+  const { fromNamespace, lookupMapping, resolvedVersion, jarPath, input, warnings } = options;
+  const needsLookupMapping = fromNamespace !== lookupMapping;
+  const mapping =
+    needsLookupMapping && isSourceMappingNamespace(fromNamespace) && isSourceMappingNamespace(lookupMapping)
+      ? { from: fromNamespace, to: lookupMapping }
+      : undefined;
+  const membersByClass = new Map<string, ResolvedTargetMembers>();
+  for (const fqn of classFqns) {
+    let lookupFqn = fqn;
+    if (needsLookupMapping) {
+      if (!mapping) {
+        warnings.push(`Could not map class "${fqn}" from ${fromNamespace} to ${lookupMapping}.`);
+      } else {
+        try {
+          const mapped = await svc.mappingService.findMapping({
+            version: resolvedVersion,
+            kind: "class",
+            name: fqn,
+            sourceMapping: mapping.from,
+            targetMapping: mapping.to,
+            sourcePriority: input.sourcePriority,
+            projectPath: input.projectPath,
+            gradleUserHome: input.gradleUserHome
+          });
+          if (mapped.resolved && mapped.resolvedSymbol) {
+            lookupFqn = mapped.resolvedSymbol.name;
+          } else {
+            warnings.push(`Could not map class "${fqn}" from ${fromNamespace} to ${lookupMapping}.`);
+          }
+        } catch {
+          warnings.push(`Mapping lookup failed for class "${fqn}".`);
+        }
+      }
+    }
+
+    try {
+      const sig = await svc.explorerService.getSignature({
+        fqn: lookupFqn,
+        jarPath,
+        access: "all"
+      });
+      warnings.push(...sig.warnings);
+      let constructors = sig.constructors;
+      let methods = sig.methods;
+      let fields = sig.fields;
+      if (mapping) {
+        const remap = (members: typeof sig.methods, kind: "method" | "field") =>
+          svc.remapSignatureMembers(
+            members,
+            kind,
+            resolvedVersion,
+            mapping.to,
+            mapping.from,
+            input.sourcePriority,
+            warnings,
+            input.projectPath,
+            input.gradleUserHome
+          );
+        const [ctorResult, methodResult, fieldResult] = await Promise.all([
+          remap(sig.constructors, "method"),
+          remap(sig.methods, "method"),
+          remap(sig.fields, "field")
+        ]);
+        constructors = ctorResult.members;
+        methods = methodResult.members;
+        fields = fieldResult.members;
+      }
+      membersByClass.set(fqn, {
+        className: fqn,
+        classAccessFlags: sig.classAccessFlags,
+        constructors,
+        methods,
+        fields
+      });
+    } catch {
+      warnings.push(`Could not load signature for class "${lookupFqn}".`);
+    }
+  }
+  return membersByClass;
+}
+
 export async function validateAccessWidener(svc: SourceService, input: ValidateAccessWidenerInput): Promise<ValidateAccessWidenerOutput> {
   const version = input.version.trim();
   if (!version) {
@@ -177,8 +276,6 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
   } else {
     ({ jarPath } = await svc.versionService.resolveVersionJar(version));
   }
-  const needsLookupMapping = awNamespace !== lookupMapping;
-
   // Collect unique class FQNs from entries
   const classFqns = new Set<string>();
   for (const entry of parsed.entries) {
@@ -186,93 +283,14 @@ export async function validateAccessWidener(svc: SourceService, input: ValidateA
     classFqns.add(fqn);
   }
 
-  const membersByClass = new Map<string, ResolvedTargetMembers>();
-  for (const fqn of classFqns) {
-    let lookupFqn = fqn;
-
-    if (needsLookupMapping) {
-      try {
-        const mapped = await svc.mappingService.findMapping({
-          version: resolvedVersion,
-          kind: "class",
-          name: fqn,
-          sourceMapping: awNamespace,
-          targetMapping: lookupMapping,
-          sourcePriority: input.sourcePriority,
-          projectPath: input.projectPath,
-          gradleUserHome: input.gradleUserHome
-        });
-        if (mapped.resolved && mapped.resolvedSymbol) {
-          lookupFqn = mapped.resolvedSymbol.name;
-        } else {
-          warnings.push(`Could not map class "${fqn}" from ${awNamespace} to ${lookupMapping}.`);
-        }
-      } catch {
-        warnings.push(`Mapping lookup failed for class "${fqn}".`);
-      }
-    }
-
-    try {
-      const sig = await svc.explorerService.getSignature({
-        fqn: lookupFqn,
-        jarPath,
-        access: "all"
-      });
-      warnings.push(...sig.warnings);
-      let constructors = sig.constructors;
-      let methods = sig.methods;
-      let fields = sig.fields;
-      if (needsLookupMapping) {
-        const [ctorResult, methodResult, fieldResult] = await Promise.all([
-          svc.remapSignatureMembers(
-            sig.constructors,
-            "method",
-            resolvedVersion,
-            lookupMapping,
-            awNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.methods,
-            "method",
-            resolvedVersion,
-            lookupMapping,
-            awNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.fields,
-            "field",
-            resolvedVersion,
-            lookupMapping,
-            awNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          )
-        ]);
-        constructors = ctorResult.members;
-        methods = methodResult.members;
-        fields = fieldResult.members;
-      }
-      membersByClass.set(fqn, {
-        className: fqn,
-        classAccessFlags: sig.classAccessFlags,
-        constructors,
-        methods,
-        fields
-      });
-    } catch {
-      warnings.push(`Could not load signature for class "${lookupFqn}".`);
-    }
-  }
+  const membersByClass = await loadClassMembers(svc, classFqns, {
+    fromNamespace: awNamespace,
+    lookupMapping,
+    resolvedVersion,
+    jarPath,
+    input,
+    warnings
+  });
 
   const result: AccessWidenerValidationResult = validateParsedAccessWidener(parsed, membersByClass, warnings, {
     includeRuntimeEvidence: runtimeAware
@@ -333,101 +351,15 @@ export async function validateAccessTransformer(svc: SourceService, input: Valid
     ({ jarPath } = await svc.versionService.resolveVersionJar(version));
   }
 
-  const needsLookupMapping = atNamespace !== lookupMapping;
   const classFqns = new Set(parsed.entries.map((entry) => entry.owner));
-  const membersByClass = new Map<string, ResolvedTargetMembers>();
-
-  for (const fqn of classFqns) {
-    let lookupFqn = fqn;
-    if (needsLookupMapping) {
-      if (!isSourceMappingNamespace(atNamespace) || !isSourceMappingNamespace(lookupMapping)) {
-        warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
-      } else {
-        try {
-          const mapped = await svc.mappingService.findMapping({
-            version: resolvedVersion,
-            kind: "class",
-            name: fqn,
-            sourceMapping: atNamespace,
-            targetMapping: lookupMapping,
-            sourcePriority: input.sourcePriority,
-            projectPath: input.projectPath,
-            gradleUserHome: input.gradleUserHome
-          });
-          if (mapped.resolved && mapped.resolvedSymbol) {
-            lookupFqn = mapped.resolvedSymbol.name;
-          } else {
-            warnings.push(`Could not map class "${fqn}" from ${atNamespace} to ${lookupMapping}.`);
-          }
-        } catch {
-          warnings.push(`Mapping lookup failed for class "${fqn}".`);
-        }
-      }
-    }
-
-    try {
-      const sig = await svc.explorerService.getSignature({
-        fqn: lookupFqn,
-        jarPath,
-        access: "all"
-      });
-      warnings.push(...sig.warnings);
-      let constructors = sig.constructors;
-      let methods = sig.methods;
-      let fields = sig.fields;
-
-      if (needsLookupMapping && isSourceMappingNamespace(atNamespace) && isSourceMappingNamespace(lookupMapping)) {
-        const [ctorResult, methodResult, fieldResult] = await Promise.all([
-          svc.remapSignatureMembers(
-            sig.constructors,
-            "method",
-            resolvedVersion,
-            lookupMapping,
-            atNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.methods,
-            "method",
-            resolvedVersion,
-            lookupMapping,
-            atNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          ),
-          svc.remapSignatureMembers(
-            sig.fields,
-            "field",
-            resolvedVersion,
-            lookupMapping,
-            atNamespace,
-            input.sourcePriority,
-            warnings,
-            input.projectPath,
-            input.gradleUserHome
-          )
-        ]);
-        constructors = ctorResult.members;
-        methods = methodResult.members;
-        fields = fieldResult.members;
-      }
-
-      membersByClass.set(fqn, {
-        className: fqn,
-        classAccessFlags: sig.classAccessFlags,
-        constructors,
-        methods,
-        fields
-      });
-    } catch {
-      warnings.push(`Could not load signature for class "${lookupFqn}".`);
-    }
-  }
+  const membersByClass = await loadClassMembers(svc, classFqns, {
+    fromNamespace: atNamespace,
+    lookupMapping,
+    resolvedVersion,
+    jarPath,
+    input,
+    warnings
+  });
 
   const result: AccessTransformerValidationResult = validateParsedAccessTransformer(parsed, membersByClass, warnings, {
     includeRuntimeEvidence: runtimeAware

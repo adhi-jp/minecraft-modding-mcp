@@ -52,7 +52,6 @@ export type ParsedShadow = {
   targetName?: string;
   /** Alternative target names from `@Shadow(aliases = {...})`. */
   aliases?: string[];
-  descriptor?: string;
   line: number;
   /** Owning `@Mixin` class; see `ParsedInjection.mixinIndex`. */
   mixinIndex?: number;
@@ -360,6 +359,10 @@ function findAnnotatedClassBody(
   return null;
 }
 
+function isUpperCaseLetter(ch: string): boolean {
+  return ch !== ch.toLowerCase() && ch === ch.toUpperCase();
+}
+
 /**
  * Skip past annotations (including multi-line ones) starting at `startIndex`.
  * Returns the index of the first non-annotation line.
@@ -367,34 +370,14 @@ function findAnnotatedClassBody(
  * are treated as declaration lines (not skipped); `declText` then carries the text after
  * the annotations with arguments, which may end a wrapped argument list on that line.
  */
-function isUpperCaseLetter(ch: string): boolean {
-  return ch !== ch.toLowerCase() && ch === ch.toUpperCase();
-}
-
 function skipAnnotations(lines: string[], startIndex: number): { index: number; declText?: string } {
   let idx = startIndex;
   while (idx < lines.length) {
     const current = lines[idx];
-    // Skip blank lines and comment-only lines that sit between an annotation and the
-    // member declaration; otherwise the declaration line is missed and the member dropped.
-    if (/^\s*$/.test(current) || /^\s*\/\//.test(current)) {
+    // Comments were already blanked by stripComments upstream, so comment-only lines
+    // between an annotation and the member declaration arrive here as blank lines.
+    if (/^\s*$/.test(current)) {
       idx++;
-      continue;
-    }
-    if (/^\s*\/\*/.test(current)) {
-      if (current.includes("*/")) {
-        const afterComment = current.slice(current.indexOf("*/") + 2).trim();
-        if (afterComment === "") {
-          idx++;
-          continue;
-        }
-        break; // declaration text follows an inline block comment
-      }
-      idx++;
-      while (idx < lines.length && !lines[idx].includes("*/")) {
-        idx++;
-      }
-      idx++; // move past the closing "*/" line
       continue;
     }
     if (!/^\s*@/.test(current)) {
@@ -717,6 +700,24 @@ function inferAccessorTarget(methodName: string): string {
 /*  Main parser                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Index of the innermost `@Mixin` class whose span holds `line`. Nested class spans nest, so
+ * the containing span that starts last is the innermost.
+ */
+function innermostMixinIndex(mixins: readonly ParsedMixinClass[], line: number): number | undefined {
+  let owner: number | undefined;
+  mixins.forEach((mixin, index) => {
+    if (
+      mixin.startLine <= line &&
+      line <= mixin.endLine &&
+      (owner === undefined || mixin.startLine > mixins[owner].startLine)
+    ) {
+      owner = index;
+    }
+  });
+  return owner;
+}
+
 export function parseMixinSource(source: string): ParsedMixin {
   const lines = stripComments(source).split(/\r?\n/);
   const codeLines = lines.map(blankLiterals);
@@ -997,18 +998,8 @@ export function parseMixinSource(source: string): ParsedMixin {
   }
 
   // Ownership: the innermost @Mixin class whose span holds the member's annotation line.
-  // Nested class spans nest, so the containing span that starts last is the innermost.
   const assignOwner = (member: { line: number; mixinIndex?: number }): void => {
-    let owner: number | undefined;
-    mixins.forEach((mixin, index) => {
-      if (
-        mixin.startLine <= member.line &&
-        member.line <= mixin.endLine &&
-        (owner === undefined || mixin.startLine > mixins[owner].startLine)
-      ) {
-        owner = index;
-      }
-    });
+    const owner = innermostMixinIndex(mixins, member.line);
     if (owner !== undefined) {
       member.mixinIndex = owner;
     }
@@ -1098,21 +1089,7 @@ export function selectNestedMixin(parsed: ParsedMixin, classPath: readonly strin
     return undefined;
   }
   const mixin = mixins[index];
-  // The innermost @Mixin class whose span holds `line`, as for member ownership.
-  const ownerOf = (line: number): number | undefined => {
-    let owner: number | undefined;
-    mixins.forEach((candidate, candidateIndex) => {
-      if (
-        candidate.startLine <= line &&
-        line <= candidate.endLine &&
-        (owner === undefined || candidate.startLine > mixins[owner].startLine)
-      ) {
-        owner = candidateIndex;
-      }
-    });
-    return owner;
-  };
-  const own = <T extends { mixinIndex?: number }>(members: T[]): T[] =>
+  const own =<T extends { mixinIndex?: number }>(members: T[]): T[] =>
     members.filter((member) => member.mixinIndex === index).map((member) => ({ ...member, mixinIndex: 0 }));
   return {
     ...parsed,
@@ -1125,7 +1102,7 @@ export function selectNestedMixin(parsed: ParsedMixin, classPath: readonly strin
     accessors: own(parsed.accessors),
     parseWarnings: parsed.parseWarnings.filter((warning) => {
       const lineMatch = /^Line (\d+):/.exec(warning);
-      return !lineMatch || ownerOf(Number.parseInt(lineMatch[1], 10)) === index;
+      return !lineMatch || innermostMixinIndex(mixins, Number.parseInt(lineMatch[1], 10)) === index;
     })
   };
 }
