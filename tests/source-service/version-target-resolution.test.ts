@@ -15,6 +15,7 @@ import {
   readSearchPathMetrics
 } from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
+import { withVersionManifestStub } from "../helpers/source-service-fixtures.ts";
 import { createJar } from "../helpers/zip.ts";
 
 test("SourceService resolves version target through manifest and downloads client jar", async () => {
@@ -26,67 +27,8 @@ test("SourceService resolves version target through manifest and downloads clien
   });
   const remoteJarBytes = await readFile(remoteJarPath);
 
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: {
-            release: "1.21.10",
-            snapshot: "1.21.11-pre1"
-          },
-          versions: [
-            {
-              id: "1.21.10",
-              type: "release",
-              url: "https://example.test/versions/1.21.10.json",
-              time: "2026-01-01T00:00:00+00:00",
-              releaseTime: "2026-01-01T00:00:00+00:00"
-            }
-          ]
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" }
-        }
-      );
-    }
-
-    if (url === "https://example.test/versions/1.21.10.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.10",
-          downloads: {
-            client: {
-              url: "https://example.test/downloads/client-1.21.10.jar"
-            }
-          }
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" }
-        }
-      );
-    }
-
-    if (url === "https://example.test/downloads/client-1.21.10.jar") {
-      return new Response(remoteJarBytes, {
-        status: 200,
-        headers: {
-          "content-length": String(remoteJarBytes.byteLength),
-          etag: "abc123"
-        }
-      });
-    }
-
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
+  const jarHeaders = { "content-length": String(remoteJarBytes.byteLength), etag: "abc123" };
+  await withVersionManifestStub({ version: "1.21.10", clientJarBytes: remoteJarBytes, jarHeaders }, async () => {
     const service = new SourceService(buildTestConfig(root));
     const resolved = await service.resolveArtifact({
       target: {
@@ -109,14 +51,7 @@ test("SourceService resolves version target through manifest and downloads clien
       className: "net.minecraft.server.Main"
     });
     assert.match(source.sourceText, /class Main/);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+  });
 });
 
 test("SourceService resolves mojang mapping for version target using workspace Loom source cache", async () => {
@@ -154,45 +89,7 @@ test("SourceService resolves mojang mapping for version target using workspace L
   });
   const remoteJarBytes = await readFile(remoteJarPath);
 
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: "1.21.10" },
-          versions: [
-            {
-              id: "1.21.10",
-              type: "release",
-              url: "https://example.test/versions/1.21.10.json"
-            }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/versions/1.21.10.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.10",
-          downloads: {
-            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
-          }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/downloads/client-1.21.10.jar") {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
+  await withVersionManifestStub({ version: "1.21.10", clientJarBytes: remoteJarBytes }, async () => {
     const service = new SourceService(buildTestConfig(root));
     const resolved = await service.resolveArtifact({
       target: {
@@ -214,14 +111,7 @@ test("SourceService resolves mojang mapping for version target using workspace L
       className: "net.minecraft.world.level.block.Blocks"
     });
     assert.match(source.sourceText, /class Blocks/);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+  });
 });
 
 test("SourceService prefers explicit gradleUserHome over stale process GRADLE_USER_HOME source jars", async () => {
@@ -346,45 +236,7 @@ test("SourceService ignores projectPath Loom source discovery for obfuscated map
   });
   const remoteJarBytes = await readFile(remoteJarPath);
 
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: "1.21.10" },
-          versions: [
-            {
-              id: "1.21.10",
-              type: "release",
-              url: "https://example.test/versions/1.21.10.json"
-            }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/versions/1.21.10.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.10",
-          downloads: {
-            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
-          }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/downloads/client-1.21.10.jar") {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
+  await withVersionManifestStub({ version: "1.21.10", clientJarBytes: remoteJarBytes }, async () => {
     const service = new SourceService(buildTestConfig(root));
     const discoverCalls: Array<{ version: string; projectPath?: string }> = [];
     (
@@ -418,14 +270,7 @@ test("SourceService ignores projectPath Loom source discovery for obfuscated map
       resolved.warnings.some((warning) => warning.includes("Loom cache candidate")),
       false
     );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+  });
 });
 
 test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot be applied for version target", { concurrency: false }, async () => {
@@ -442,45 +287,7 @@ test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot
   });
   const remoteJarBytes = await readFile(remoteJarPath);
 
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: "1.21.10" },
-          versions: [
-            {
-              id: "1.21.10",
-              type: "release",
-              url: "https://example.test/versions/1.21.10.json"
-            }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/versions/1.21.10.json") {
-      return new Response(
-        JSON.stringify({
-          id: "1.21.10",
-          downloads: {
-            client: { url: "https://example.test/downloads/client-1.21.10.jar" }
-          }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === "https://example.test/downloads/client-1.21.10.jar") {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
+  await withVersionManifestStub({ version: "1.21.10", clientJarBytes: remoteJarBytes }, async () => {
     const service = new SourceService(buildTestConfig(root));
     await withGradleUserHome(gradleUserHome, () =>
       assert.rejects(
@@ -513,14 +320,7 @@ test("SourceService exposes searchedPaths diagnostics when mojang mapping cannot
         }
       )
     );
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+  });
 });
 
 test("SourceService resolveArtifact prefers Minecraft source jars from sibling Gradle user home over project remapped mod sources", { concurrency: false }, async () => {

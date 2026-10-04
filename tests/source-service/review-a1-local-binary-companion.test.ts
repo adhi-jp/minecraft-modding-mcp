@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
+import { withGlobalFetch, withGradleUserHome } from "../helpers/env.ts";
+import { gradleCacheJarPath, writeUnreadableJar } from "../helpers/gradle-cache-jars.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -22,61 +24,9 @@ import { createJar } from "../helpers/zip.ts";
 const CLASS_FILE_MAGIC = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
 const NO_CLASSES_FLAG = "binary-jar-no-classes";
 
-/** Gradle's cache layout for one coordinate: <group>/<artifact>/<version>/<hash>/<file>. */
-function gradleCacheJarPath(
-  gradleUserHome: string,
-  groupId: string,
-  artifactId: string,
-  version: string,
-  fileName: string
-): string {
-  return join(
-    gradleUserHome,
-    "caches",
-    "modules-2",
-    "files-2.1",
-    groupId,
-    artifactId,
-    version,
-    "binary-hash",
-    fileName
-  );
-}
-
-/** Write a file that passes an existence check but is not a readable archive. */
-async function writeUnreadableJar(jarPath: string, bytes: Buffer): Promise<void> {
-  await mkdir(dirname(jarPath), { recursive: true });
-  await writeFile(jarPath, bytes);
-}
-
-/** Run `body` with GRADLE_USER_HOME pinned so no real user cache leaks into the test. */
-async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
-  const previous = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previous;
-    }
-  }
-}
-
 /** No repository is reachable: every local leg under test must answer on its own. */
 const offlineFetch: typeof fetch = (async () =>
   new Response("not found", { status: 404 })) as typeof fetch;
-
-async function withFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = stub;
-  try {
-    return await body();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
 
 test("resolveSourceTarget(targetKind=coordinate) skips a corrupt m2 binary companion for the readable Gradle one beside LOCAL m2 sources", async () => {
   const root = await mkdtemp(join(tmpdir(), "review-a1-m2-sources-companion-order-"));
@@ -104,8 +54,8 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt m2 binary compa
     "com/example/LocalShadowed.class": CLASS_FILE_MAGIC
   });
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(offlineFetch, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(offlineFetch, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         { allowDecompile: true },
@@ -141,8 +91,8 @@ test("resolveSourceTarget(targetKind=coordinate) flags a class-free m2 binary co
     "assets/example/icon.png": Buffer.from([0x89, 0x50, 0x4e, 0x47])
   });
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(offlineFetch, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(offlineFetch, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         { allowDecompile: true },
@@ -202,8 +152,8 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt Gradle binary c
   );
   await createJar(m2JarPath, { "com/example/GradleShadowed.class": CLASS_FILE_MAGIC });
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(offlineFetch, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(offlineFetch, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         { allowDecompile: true },
@@ -255,8 +205,8 @@ test("resolveSourceTarget(targetKind=coordinate) flags a class-free Gradle binar
     "data/example/recipe.json": "{}"
   });
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(offlineFetch, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(offlineFetch, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         { allowDecompile: true },

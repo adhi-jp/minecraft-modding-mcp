@@ -4,34 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { Config } from "../../src/types.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: ":memory:",
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 10_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    searchScanMaxBytes: 67_108_864,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
 
 async function createLargePathSearchJar(root: string): Promise<string> {
   const binaryJarPath = join(root, "path-heap.jar");
@@ -61,7 +35,7 @@ test("path-intent indexed search keeps heap growth bounded for large files", asy
   const root = await mkdtemp(join(tmpdir(), "path-heap-perf-"));
   const binaryJarPath = await createLargePathSearchJar(root);
 
-  const service = new SourceService(buildTestConfig(root));
+  const service = new SourceService(buildTestConfig(root, { sqlitePath: ":memory:", maxContentBytes: 10_000_000 }));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
     mapping: "obfuscated"

@@ -4,36 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { Config } from "../../src/types.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
 const DATASET_FILE_COUNT = 2_000;
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: ":memory:",
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    searchScanMaxBytes: 67_108_864,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
-}
 
 function readSearchIoMetrics(service: { getRuntimeMetrics: () => unknown }): {
   dbRoundtrips: number;
@@ -73,7 +47,7 @@ test("separator-query token mode stays on indexed path and avoids full scan I/O"
 
   await createJar(sourcesJarPath, sourceEntries);
 
-  const service = new SourceService(buildTestConfig(root));
+  const service = new SourceService(buildTestConfig(root, { sqlitePath: ":memory:" }));
   const resolved = await service.resolveArtifact({
     target: { kind: "jar", value: binaryJarPath },
     mapping: "obfuscated"

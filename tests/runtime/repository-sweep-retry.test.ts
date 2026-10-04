@@ -9,6 +9,7 @@ import {
   resolveCachedDownload
 } from "../../src/repo-downloader.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
+import { withGlobalFetch, withGradleUserHome } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -34,32 +35,6 @@ function countingFetch(answer: (url: string) => Response | Promise<Response>): {
     return await answer(url);
   }) as typeof fetch;
   return { fetchFn, urls };
-}
-
-/** Run `body` with GRADLE_USER_HOME pinned so no real user cache leaks in. */
-async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
-  const previous = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previous;
-    }
-  }
-}
-
-/** Run `body` with `globalThis.fetch` replaced, restoring it afterwards. */
-async function withGlobalFetch<T>(fetchFn: typeof fetch, body: () => Promise<T>): Promise<T> {
-  const previous = globalThis.fetch;
-  globalThis.fetch = fetchFn;
-  try {
-    return await body();
-  } finally {
-    globalThis.fetch = previous;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +250,7 @@ test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve w
   });
   const target = { kind: "coordinate", value: "com.example:binary-only:1.0.0" } as const;
 
-  await withGradleHome(join(root, "gradle-home"), async () => {
+  await withGradleUserHome(join(root, "gradle-home"), async () => {
     await withGlobalFetch(fetchFn, async () => {
       const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
       const sweptOnFirstCall = urls.length;
@@ -387,7 +362,7 @@ test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve w
   });
   const target = { kind: "coordinate", value: "com.example:refused-binary:1.0.0" } as const;
 
-  await withGradleHome(join(root, "gradle-home"), async () => {
+  await withGradleUserHome(join(root, "gradle-home"), async () => {
     await withGlobalFetch(fetchFn, async () => {
       const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
       const sweptOnFirstCall = urls.length;
@@ -438,7 +413,7 @@ test("resolveSourceTarget(targetKind=coordinate) repeats a binary-only resolve w
   });
   const target = { kind: "coordinate", value: "com.example:withdrawn-binary:1.0.0" } as const;
 
-  await withGradleHome(join(root, "gradle-home"), async () => {
+  await withGradleUserHome(join(root, "gradle-home"), async () => {
     await withGlobalFetch(fetchFn, async () => {
       const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
       const sweptOnFirstCall = urls.length;
@@ -505,7 +480,7 @@ test("resolveSourceTarget(targetKind=coordinate) still prefers published sources
   const config = buildTestConfig(root, { sourceRepos: ["https://repo-one.example.test"] });
   const target = { kind: "coordinate", value: "com.example:flaky-sources:2.0.0" } as const;
 
-  await withGradleHome(join(root, "gradle-home"), async () => {
+  await withGradleUserHome(join(root, "gradle-home"), async () => {
     await withGlobalFetch(fetchFn, async () => {
       const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
       const second = await resolveSourceTarget(target, { allowDecompile: true }, config);

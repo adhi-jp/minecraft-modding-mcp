@@ -140,15 +140,10 @@ async function expectAppError(
   });
 }
 
-// a primary-class parse failure of ANY origin - including
-// parseClassFile's own deliberate throws below - is third-party jar content,
-// never blamed on the caller as ERR_INTERNAL. Retitled and rewritten from
-// "... as ERR_INTERNAL", which pinned the defect this contract closes.
-// FROZEN TITLE. This name is pinned in tests/fixtures/premigration/test-list.txt,
-// so the named-set gate treats a rename as a deletion. The title is the pre-fix
-// wording; what the body checks now: invalid magic on the PRIMARY class is a
-// class-corruption ERR_CLASS_NOT_FOUND naming the class and jar, not ERR_INTERNAL.
-test("MinecraftExplorerService reports invalid class magic as ERR_INTERNAL", async () => {
+// A primary-class parse failure of any origin - including parseClassFile's own
+// deliberate throws - is third-party jar content, never blamed on the caller as
+// ERR_INTERNAL.
+test("MinecraftExplorerService reports invalid class magic as ERR_CLASS_NOT_FOUND naming the class and jar", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-invalid-magic-"));
   const invalidClass = buildClassFile({
     internalName: "com/example/Broken",
@@ -176,10 +171,7 @@ test("MinecraftExplorerService reports invalid class magic as ERR_INTERNAL", asy
   );
 });
 
-// FROZEN TITLE (see above). What the body checks now: an unsupported constant
-// pool tag on the PRIMARY class is a class-corruption ERR_CLASS_NOT_FOUND naming
-// the class and jar, not ERR_INTERNAL.
-test("MinecraftExplorerService reports unsupported constant pool tags as ERR_INTERNAL", async () => {
+test("MinecraftExplorerService reports unsupported constant pool tags as ERR_CLASS_NOT_FOUND naming the class and jar", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-invalid-cp-tag-"));
   const invalidClass = buildClassFile({
     internalName: "com/example/BrokenTag",

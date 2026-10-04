@@ -8,7 +8,8 @@ import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { fakeExplorerContext, seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
+import { stubVersionService } from "../helpers/source-service-fixtures.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -24,20 +25,6 @@ test("SourceService traces symbol lifecycle across versions and reports gaps", a
 
   const versions = ["1.0.3", "1.0.2", "1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
-
-  const versionServiceStub = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
 
   const signatureStub = {
     async getSignature(input: { jarPath: string }) {
@@ -74,7 +61,7 @@ test("SourceService traces symbol lifecycle across versions and reports gaps", a
     }
   };
 
-  (service as unknown as { versionService: unknown }).versionService = versionServiceStub;
+  stubVersionService(service, root, versions);
   (service as unknown as { explorerService: unknown }).explorerService = signatureStub;
 
   const result = await (
@@ -125,40 +112,20 @@ test("SourceService traceSymbolLifecycle with non-obfuscated mapping resolves sy
 
   const versions = ["1.0.1", "1.0.0"];
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [
-          {
-            ownerFqn: "net.minecraft.server.Main",
-            name: "tickServer",
-            javaSignature: "public void tickServer()",
-            jvmDescriptor: "()V",
-            accessFlags: 0x0001,
-            isSynthetic: false
-          }
-        ],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    methods: [
+      {
+        ownerFqn: "net.minecraft.server.Main",
+        name: "tickServer",
+        javaSignature: "public void tickServer()",
+        jvmDescriptor: "()V",
+        accessFlags: 0x0001,
+        isSynthetic: false
+      }
+    ]
+  });
 
   const mappingCalls: Array<{ name: string; sourceMapping: string; targetMapping: string }> = [];
   (service as unknown as { mappingService: unknown }).mappingService = {
@@ -204,19 +171,7 @@ test("SourceService traceSymbolLifecycle ignores inline signature suffix when pa
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-inline-signature-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return ["1.0.0"];
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, ["1.0.0"]);
 
   let requestedClassName: string | undefined;
   (service as unknown as { explorerService: unknown }).explorerService = {
@@ -237,7 +192,7 @@ test("SourceService traceSymbolLifecycle ignores inline signature suffix when pa
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -266,19 +221,7 @@ test("SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanne
 
   const versions = ["1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string; jarPath: string }) {
@@ -304,7 +247,7 @@ test("SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanne
             }
           ],
           warnings: [],
-          context: { classExistedInJar: true }
+          context: fakeExplorerContext()
         };
       }
       if (input.fqn !== "net.minecraft.server.NewMain") {
@@ -324,7 +267,7 @@ test("SourceService traceSymbolLifecycle remaps non-obfuscated symbol per scanne
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -388,19 +331,7 @@ test("SourceService traceSymbolLifecycle with non-obfuscated mapping remaps desc
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-descriptor-remap-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return ["1.0.0"];
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, ["1.0.0"]);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string }) {
@@ -419,7 +350,7 @@ test("SourceService traceSymbolLifecycle with non-obfuscated mapping remaps desc
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -468,19 +399,7 @@ test("SourceService traceSymbolLifecycle uses name-only mapping when descriptor 
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-name-only-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return ["1.0.0"];
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, ["1.0.0"]);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string }) {
@@ -499,7 +418,7 @@ test("SourceService traceSymbolLifecycle uses name-only mapping when descriptor 
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -552,31 +471,9 @@ test("SourceService traceSymbolLifecycle surfaces invalid method mapping input d
   const root = await mkdtemp(join(tmpdir(), "service-lifecycle-invalid-warning-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return ["1.0.0"];
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, ["1.0.0"]);
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping(input: { kind: string }) {
@@ -642,7 +539,7 @@ test("SourceService traceSymbolLifecycle rejects obvious class-like symbols befo
         fields: [],
         methods: [],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -715,19 +612,7 @@ test("SourceService traceSymbolLifecycle keeps mapping pressure bounded across v
   const activeGraphVersions = new Set<string>();
   const releasedVersions: string[] = [];
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature() {
@@ -746,7 +631,7 @@ test("SourceService traceSymbolLifecycle keeps mapping pressure bounded across v
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -869,19 +754,7 @@ test("SourceService traceSymbolLifecycle evaluates versions with bounded paralle
   const versions = ["1.0.7", "1.0.6", "1.0.5", "1.0.4", "1.0.3", "1.0.2", "1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   let activeCalls = 0;
   let maxActiveCalls = 0;
@@ -909,7 +782,7 @@ test("SourceService traceSymbolLifecycle evaluates versions with bounded paralle
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };

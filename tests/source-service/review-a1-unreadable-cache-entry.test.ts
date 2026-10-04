@@ -8,34 +8,10 @@ import { ERROR_CODES, isAppError } from "../../src/errors.ts";
 import { defaultDownloadPath } from "../../src/repo-downloader.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
 import { mapErrorToProblem } from "../../src/tool-guidance.ts";
+import { withGlobalFetch, withGradleUserHome } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 
 const REPO = "https://repo.example.test";
-
-/** Run `body` with GRADLE_USER_HOME pinned so no real user cache leaks into the test. */
-async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
-  const previous = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previous;
-    }
-  }
-}
-
-async function withFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = stub;
-  try {
-    return await body();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
 
 test("resolveSourceTarget names an unreadable download-cache entry in the terminal error's hints", async () => {
   // The downloader deliberately propagates a cache entry that is PRESENT and
@@ -62,8 +38,8 @@ test("resolveSourceTarget names an unreadable download-cache entry in the termin
   const fetchStub: typeof fetch = (async () =>
     new Response("not found", { status: 404 })) as typeof fetch;
 
-  const caught = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, async () => {
+  const caught = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
       try {
         await resolveSourceTarget(
           { kind: "coordinate", value: coordinate },

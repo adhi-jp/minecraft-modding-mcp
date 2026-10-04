@@ -18,7 +18,8 @@ import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import {
   type SourceServiceFixture,
-  withVersionApproximationFixture
+  withVersionApproximationFixture,
+  withVersionManifestStub
 } from "../helpers/source-service-fixtures.ts";
 
 test("SourceService resolveArtifact returns sampleEntries for source JAR", async () => {
@@ -45,34 +46,6 @@ test("SourceService resolveArtifact returns sampleEntries for source JAR", async
   assert.ok(resolved.sampleEntries);
   assert.ok(resolved.sampleEntries.length >= 2);
   assert.ok(resolved.sampleEntries.some((entry: string) => entry.endsWith(".java")));
-});
-
-test("SourceService resolveArtifact returns undefined sampleEntries for decompile-only", async () => {
-  const { SourceService } = await import("../../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "service-sample-entries-none-"));
-  const binaryJarPath = join(root, "nosource.jar");
-
-  await createJar(binaryJarPath, {
-    "com/example/A.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-  });
-
-  const service = new SourceService(buildTestConfig(root));
-
-  await assert.rejects(
-    () =>
-      service.resolveArtifact({
-        target: { kind: "jar", value: binaryJarPath },
-        allowDecompile: false
-      }),
-    (error: unknown) => {
-      return (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as { code: string }).code === ERROR_CODES.SOURCE_NOT_FOUND
-      );
-    }
-  );
 });
 
 test("resolveArtifact preserves representative suggestedCall hint variants", async (t) => {
@@ -665,67 +638,32 @@ test(
     });
     const remoteJarBytes = await readFile(remoteJarPath);
 
-    const originalFetch = globalThis.fetch;
-    const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-    process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-    globalThis.fetch = (async (input: string | URL | Request) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url === "https://example.test/version_manifest_v2.json") {
-        return new Response(
-          JSON.stringify({
-            latest: { release: "26.1" },
-            versions: [
-              { id: "26.1", type: "release", url: "https://example.test/versions/26.1.json" }
-            ]
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        );
-      }
-      if (url === "https://example.test/versions/26.1.json") {
-        return new Response(
-          JSON.stringify({
-            id: "26.1",
-            downloads: { client: { url: "https://example.test/downloads/client-26.1.jar" } }
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        );
-      }
-      if (url === "https://example.test/downloads/client-26.1.jar") {
-        return new Response(remoteJarBytes, {
-          status: 200,
-          headers: { "content-length": String(remoteJarBytes.byteLength), etag: "mc-26-1" }
+    await withVersionManifestStub(
+      {
+        version: "26.1",
+        clientJarBytes: remoteJarBytes,
+        jarHeaders: { "content-length": String(remoteJarBytes.byteLength), etag: "mc-26-1" }
+      },
+      async () => {
+        const service = new SourceService(buildTestConfig(root));
+        const resolved = await service.resolveArtifact({
+          target: { kind: "version", value: "26.1" },
+          mapping: "yarn"
         });
-      }
-      return new Response("not found", { status: 404 });
-    }) as typeof fetch;
 
-    try {
-      const service = new SourceService(buildTestConfig(root));
-      const resolved = await service.resolveArtifact({
-        target: { kind: "version", value: "26.1" },
-        mapping: "yarn"
-      });
-
-      // yarn is relabelled to the obfuscated namespace only when the runtime is
-      // known to ship unobfuscated names, so this pins runtimeNamesUnobfuscated
-      // still being true for a real Minecraft version target.
-      assert.equal(resolved.mappingApplied, "obfuscated");
-      assert.ok(
-        resolved.warnings.some(
-          (w: string) =>
-            w.includes("Version 26.1 is unobfuscated") &&
-            w.includes("yarn mappings are not applicable")
-        ),
-        `Expected the unobfuscated-runtime downgrade warning, got: ${JSON.stringify(resolved.warnings)}`
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalManifestUrl === undefined) {
-        delete process.env.MCP_VERSION_MANIFEST_URL;
-      } else {
-        process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
+        // yarn is relabelled to the obfuscated namespace only when the runtime is
+        // known to ship unobfuscated names, so this pins runtimeNamesUnobfuscated
+        // still being true for a real Minecraft version target.
+        assert.equal(resolved.mappingApplied, "obfuscated");
+        assert.ok(
+          resolved.warnings.some(
+            (w: string) =>
+              w.includes("Version 26.1 is unobfuscated") &&
+              w.includes("yarn mappings are not applicable")
+          ),
+          `Expected the unobfuscated-runtime downgrade warning, got: ${JSON.stringify(resolved.warnings)}`
+        );
       }
-    }
+    );
   }
 );

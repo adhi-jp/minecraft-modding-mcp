@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 
 test("SourceService searchClassSource translates symbol intent via queryNamespace when artifact namespace differs", async () => {
@@ -11,52 +12,29 @@ test("SourceService searchClassSource translates symbol intent via queryNamespac
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-symbol-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: {
-      upsertArtifact: (value: Record<string, unknown>) => void;
-    };
-    filesRepo: {
-      insertFilesForArtifact: (
-        id: string,
-        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
-      ) => void;
-    };
-    symbolsRepo: {
-      insertSymbolsForArtifact: (
-        id: string,
-        symbols: Array<{ filePath: string; symbolKind: string; symbolName: string; qualifiedName?: string; line: number }>
-      ) => void;
-    };
-  };
-  const timestamp = new Date().toISOString();
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-query-ns",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp
+    files: [
+      {
+        filePath: "czl.java",
+        content: "package czl;\npublic class czl {}"
+      }
+    ],
+    symbols: [
+      {
+        filePath: "czl.java",
+        symbolKind: "class",
+        symbolName: "czl",
+        qualifiedName: "czl",
+        line: 2
+      }
+    ]
   });
-  repos.filesRepo.insertFilesForArtifact("artifact-query-ns", [
-    {
-      filePath: "czl.java",
-      content: "package czl;\npublic class czl {}",
-      contentBytes: Buffer.byteLength("package czl;\npublic class czl {}", "utf8"),
-      contentHash: "hash"
-    }
-  ]);
-  repos.symbolsRepo.insertSymbolsForArtifact("artifact-query-ns", [
-    {
-      filePath: "czl.java",
-      symbolKind: "class",
-      symbolName: "czl",
-      qualifiedName: "czl",
-      line: 2
-    }
-  ]);
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     ...(service as unknown as { mappingService: Record<string, unknown> }).mappingService,
@@ -109,19 +87,15 @@ test("SourceService searchClassSource does not translate when mapping result is 
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-ambiguous-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-query-ambiguous",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp: new Date().toISOString()
+    files: [],
+    symbols: []
   });
 
   (service as unknown as { mappingService: unknown }).mappingService = {
@@ -167,21 +141,15 @@ test("SourceService searchClassSource warns when queryNamespace used with intent
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-text-warn-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: {
-      upsertArtifact: (value: Record<string, unknown>) => void;
-    };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-text-warn",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp: new Date().toISOString()
+    files: [],
+    symbols: []
   });
 
   const result = await service.searchClassSource({
@@ -204,21 +172,15 @@ test("SourceService searchClassSource warns when symbol intent query is not a fu
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-symbol-nonfqcn-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: {
-      upsertArtifact: (value: Record<string, unknown>) => void;
-    };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-symbol-nonfqcn-warn",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp: new Date().toISOString()
+    files: [],
+    symbols: []
   });
 
   const result = await service.searchClassSource({
@@ -241,18 +203,14 @@ test("SourceService searchClassSource warns when queryNamespace cannot be applie
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-no-version-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-no-version",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
-    timestamp: new Date().toISOString()
+    files: [],
+    symbols: []
   });
 
   const result = await service.searchClassSource({
@@ -277,19 +235,15 @@ test("SourceService searchClassSource warns when queryNamespace used with intent
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-path-warn-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  seedIndexedArtifact(service, {
     artifactId: "artifact-path-warn",
     origin: "local-jar",
     requestedMapping: "obfuscated",
     mappingApplied: "obfuscated",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp: new Date().toISOString()
+    files: [],
+    symbols: []
   });
 
   const result = await service.searchClassSource({
@@ -312,52 +266,26 @@ test("SourceService searchClassSource translated symbol query uses simple name +
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-packageful-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-    filesRepo: {
-      insertFilesForArtifact: (
-        id: string,
-        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
-      ) => void;
-    };
-    symbolsRepo: {
-      insertSymbolsForArtifact: (
-        id: string,
-        symbols: Array<{ filePath: string; symbolKind: string; symbolName: string; qualifiedName?: string; line: number }>
-      ) => void;
-    };
-  };
-  const timestamp = new Date().toISOString();
-  repos.artifactsRepo.upsertArtifact({
+  const filePath = "net/minecraft/world/entity/player/Player.java";
+  const content = "package net.minecraft.world.entity.player;\npublic class Player {}";
+  seedIndexedArtifact(service, {
     artifactId: "artifact-packageful-mojang",
     origin: "local-jar",
     requestedMapping: "mojang",
     mappingApplied: "mojang",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp
+    files: [{ filePath, content }],
+    symbols: [
+      {
+        filePath,
+        symbolKind: "class",
+        symbolName: "Player",
+        qualifiedName: "net.minecraft.world.entity.player.Player",
+        line: 2
+      }
+    ]
   });
-  const filePath = "net/minecraft/world/entity/player/Player.java";
-  const content = "package net.minecraft.world.entity.player;\npublic class Player {}";
-  repos.filesRepo.insertFilesForArtifact("artifact-packageful-mojang", [
-    {
-      filePath,
-      content,
-      contentBytes: Buffer.byteLength(content, "utf8"),
-      contentHash: "hash"
-    }
-  ]);
-  repos.symbolsRepo.insertSymbolsForArtifact("artifact-packageful-mojang", [
-    {
-      filePath,
-      symbolKind: "class",
-      symbolName: "Player",
-      qualifiedName: "net.minecraft.world.entity.player.Player",
-      line: 2
-    }
-  ]);
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping() {
@@ -403,44 +331,26 @@ test("SourceService searchClassSource preserves caller-supplied packagePrefix du
   const root = await mkdtemp(join(tmpdir(), "service-search-queryns-preserve-prefix-"));
   const service = new SourceService(buildTestConfig(root));
 
-  const repos = service as unknown as {
-    artifactsRepo: { upsertArtifact: (value: Record<string, unknown>) => void };
-    filesRepo: {
-      insertFilesForArtifact: (
-        id: string,
-        files: Array<{ filePath: string; content: string; contentBytes: number; contentHash: string }>
-      ) => void;
-    };
-    symbolsRepo: {
-      insertSymbolsForArtifact: (
-        id: string,
-        symbols: Array<{ filePath: string; symbolKind: string; symbolName: string; qualifiedName?: string; line: number }>
-      ) => void;
-    };
-  };
-  repos.artifactsRepo.upsertArtifact({
+  // Two files with the same simple name but different packages; caller's
+  // packagePrefix should keep only the entity match.
+  const entityFile = "net/minecraft/world/entity/player/Player.java";
+  const otherFile = "com/example/other/Player.java";
+  seedIndexedArtifact(service, {
     artifactId: "artifact-preserve-prefix",
     origin: "local-jar",
     requestedMapping: "mojang",
     mappingApplied: "mojang",
     qualityFlags: [],
-    artifactSignature: "sig",
-    isDecompiled: false,
     version: "1.21.10",
-    timestamp: new Date().toISOString()
+    files: [
+      { filePath: entityFile, content: "x" },
+      { filePath: otherFile, content: "x" }
+    ],
+    symbols: [
+      { filePath: entityFile, symbolKind: "class", symbolName: "Player", qualifiedName: "net.minecraft.world.entity.player.Player", line: 2 },
+      { filePath: otherFile, symbolKind: "class", symbolName: "Player", qualifiedName: "com.example.other.Player", line: 2 }
+    ]
   });
-  // Two files with the same simple name but different packages; caller's
-  // packagePrefix should keep only the entity match.
-  const entityFile = "net/minecraft/world/entity/player/Player.java";
-  const otherFile = "com/example/other/Player.java";
-  repos.filesRepo.insertFilesForArtifact("artifact-preserve-prefix", [
-    { filePath: entityFile, content: "x", contentBytes: 1, contentHash: "h1" },
-    { filePath: otherFile, content: "x", contentBytes: 1, contentHash: "h2" }
-  ]);
-  repos.symbolsRepo.insertSymbolsForArtifact("artifact-preserve-prefix", [
-    { filePath: entityFile, symbolKind: "class", symbolName: "Player", qualifiedName: "net.minecraft.world.entity.player.Player", line: 2 },
-    { filePath: otherFile, symbolKind: "class", symbolName: "Player", qualifiedName: "com.example.other.Player", line: 2 }
-  ]);
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping() {

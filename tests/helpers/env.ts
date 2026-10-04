@@ -38,3 +38,17 @@ export async function withGradleUserHome<T>(
 ): Promise<T> {
   return withEnv({ GRADLE_USER_HOME: dir }, fn);
 }
+
+/** Install a global fetch stub for the duration of the callback, restoring the original afterwards. */
+export async function withGlobalFetch<T>(
+  stub: typeof fetch,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stub;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}

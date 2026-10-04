@@ -4,7 +4,7 @@ import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve as resolvePath, sep } from "node:path";
+import { join, resolve as resolvePath, sep } from "node:path";
 import test from "node:test";
 
 import { ERROR_CODES, isAppError } from "../../src/errors.ts";
@@ -15,6 +15,8 @@ import {
   resolveSourceTarget
 } from "../../src/source-resolver.ts";
 import { mapErrorToProblem } from "../../src/tool-guidance.ts";
+import { withGlobalFetch, withGradleUserHome } from "../helpers/env.ts";
+import { gradleCacheJarPath, writeUnreadableJar } from "../helpers/gradle-cache-jars.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -192,10 +194,7 @@ test("resolveSourceTarget(targetKind=coordinate) resolves Gradle modules cache a
     "dev/architectury/platform/Platform.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
   });
 
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-
-  try {
+  await withGradleUserHome(gradleUserHome, async () => {
     const resolved = await resolveSourceTarget(
       { kind: "coordinate", value: "dev.architectury:architectury:18.0.6" },
       { allowDecompile: true },
@@ -207,13 +206,7 @@ test("resolveSourceTarget(targetKind=coordinate) resolves Gradle modules cache a
     assert.equal(resolved.coordinate, "dev.architectury:architectury:18.0.6");
     assert.equal(resolved.sourceJarPath, sourceJarPath);
     assert.equal(resolved.binaryJarPath, binaryJarPath);
-  } finally {
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
-  }
+  });
 });
 
 test("resolveLocalCoordinateCandidates avoids nested readdirSync scans of Gradle cache directories", async () => {
@@ -259,10 +252,7 @@ test("resolveSourceTarget(targetKind=coordinate) keeps the Gradle cache binary j
   });
   const remoteSourcesBytes = await readFile(remoteSourcesFixture);
 
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.endsWith("/fabric-gametest-api-v1-4.0.21-sources.jar")) {
       return new Response(remoteSourcesBytes, { status: 200 });
@@ -270,25 +260,20 @@ test("resolveSourceTarget(targetKind=coordinate) keeps the Gradle cache binary j
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  try {
-    const resolved = await resolveSourceTarget(
-      { kind: "coordinate", value: "net.fabricmc.fabric-api:fabric-gametest-api-v1:4.0.21" },
-      { allowDecompile: true },
-      buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
-    );
+  await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
+      const resolved = await resolveSourceTarget(
+        { kind: "coordinate", value: "net.fabricmc.fabric-api:fabric-gametest-api-v1:4.0.21" },
+        { allowDecompile: true },
+        buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
+      );
 
-    assert.equal(resolved.origin, "remote-repo");
-    assert.equal(resolved.isDecompiled, false);
-    assert.ok(resolved.sourceJarPath);
-    assert.equal(resolved.binaryJarPath, binaryJarPath);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
-  }
+      assert.equal(resolved.origin, "remote-repo");
+      assert.equal(resolved.isDecompiled, false);
+      assert.ok(resolved.sourceJarPath);
+      assert.equal(resolved.binaryJarPath, binaryJarPath);
+    })
+  );
 });
 
 test("resolveSourceTarget(targetKind=coordinate) reuses the cached binary jar instead of downloading it again", async () => {
@@ -300,10 +285,7 @@ test("resolveSourceTarget(targetKind=coordinate) reuses the cached binary jar in
   const binaryBytes = await readFile(binaryFixture);
 
   let binaryFetches = 0;
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = join(root, "gradle-home");
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.endsWith("/cached-module-1.2.3.jar")) {
       binaryFetches += 1;
@@ -315,26 +297,21 @@ test("resolveSourceTarget(targetKind=coordinate) reuses the cached binary jar in
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  try {
-    const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
-    const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
+  await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => {
+      const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+      const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
 
-    const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
-    const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
 
-    assert.equal(binaryFetches, 1);
-    assert.equal(first.origin, "decompiled");
-    assert.equal(second.binaryJarPath, first.binaryJarPath);
-    assert.equal(second.artifactSignature, first.artifactSignature);
-    assert.equal(second.artifactId, first.artifactId);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
-  }
+      assert.equal(binaryFetches, 1);
+      assert.equal(first.origin, "decompiled");
+      assert.equal(second.binaryJarPath, first.binaryJarPath);
+      assert.equal(second.artifactSignature, first.artifactSignature);
+      assert.equal(second.artifactId, first.artifactId);
+    })
+  );
 });
 
 test("resolveSourceTarget(targetKind=coordinate) reuses the cached source jar instead of downloading it again", async () => {
@@ -349,10 +326,7 @@ test("resolveSourceTarget(targetKind=coordinate) reuses the cached source jar in
   const sourcesBytes = await readFile(sourcesFixture);
 
   let sourceFetches = 0;
-  const previousGradleUserHome = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = join(root, "gradle-home");
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  const fetchStub: typeof fetch = (async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     if (url.endsWith("/cached-module-1.2.3-sources.jar")) {
       sourceFetches += 1;
@@ -361,53 +335,22 @@ test("resolveSourceTarget(targetKind=coordinate) reuses the cached source jar in
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  try {
-    const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
-    const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
+  await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => {
+      const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+      const target = { kind: "coordinate", value: "com.example:cached-module:1.2.3" } as const;
 
-    const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
-    const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const first = await resolveSourceTarget(target, { allowDecompile: true }, config);
+      const second = await resolveSourceTarget(target, { allowDecompile: true }, config);
 
-    assert.equal(sourceFetches, 1);
-    assert.equal(first.origin, "remote-repo");
-    assert.equal(second.sourceJarPath, first.sourceJarPath);
-    assert.equal(second.artifactSignature, first.artifactSignature);
-    assert.equal(second.artifactId, first.artifactId);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (previousGradleUserHome === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previousGradleUserHome;
-    }
-  }
+      assert.equal(sourceFetches, 1);
+      assert.equal(first.origin, "remote-repo");
+      assert.equal(second.sourceJarPath, first.sourceJarPath);
+      assert.equal(second.artifactSignature, first.artifactSignature);
+      assert.equal(second.artifactId, first.artifactId);
+    })
+  );
 });
-
-/** Run `body` with GRADLE_USER_HOME pinned so no real user cache leaks into the test. */
-async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
-  const previous = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previous;
-    }
-  }
-}
-
-/** Install a global fetch stub for the duration of `body`. */
-async function withFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = stub;
-  try {
-    return await body();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
 
 function requestUrlOf(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -439,8 +382,8 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
   const target = { kind: "coordinate", value: "com.example:etag-module:1.2.3" } as const;
 
-  const [first, second] = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, async () => [
+  const [first, second] = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => [
       await resolveSourceTarget(target, { allowDecompile: true }, config),
       await resolveSourceTarget(target, { allowDecompile: true }, config)
     ])
@@ -473,8 +416,8 @@ test("resolveSourceTarget(targetKind=coordinate) derives the same artifactId fro
     }) as typeof fetch;
 
   const resolveWith = async (root: string, etag: string) =>
-    withGradleHome(join(root, "gradle-home"), () =>
-      withFetch(stubServing(etag), () =>
+    withGradleUserHome(join(root, "gradle-home"), () =>
+      withGlobalFetch(stubServing(etag), () =>
         resolveSourceTarget(
           target,
           { allowDecompile: true },
@@ -526,8 +469,8 @@ test("resolveSourceTarget(targetKind=coordinate) revalidates a -SNAPSHOT sources
   const snapshotTarget = { kind: "coordinate", value: "com.example:mutable-module:9.0.0-SNAPSHOT" } as const;
   const releaseTarget = { kind: "coordinate", value: "com.example:release-module:9.0.0" } as const;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, async () => ({
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => ({
       snapshotFirst: await resolveSourceTarget(snapshotTarget, { allowDecompile: true }, config),
       snapshotSecond: await resolveSourceTarget(snapshotTarget, { allowDecompile: true }, config),
       releaseFirst: await resolveSourceTarget(releaseTarget, { allowDecompile: true }, config),
@@ -571,8 +514,8 @@ test("resolveSourceTarget(targetKind=coordinate) decompiles the local Gradle cac
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:binary-only:3.2.1" },
         { allowDecompile: true },
@@ -608,8 +551,8 @@ test("resolveSourceTarget(targetKind=coordinate) still refuses a local binary-on
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, async () => {
+  await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
       await assert.rejects(
         () =>
           resolveSourceTarget(
@@ -625,33 +568,6 @@ test("resolveSourceTarget(targetKind=coordinate) still refuses a local binary-on
     })
   );
 });
-
-/** Gradle's cache layout for one coordinate: <group>/<artifact>/<version>/<hash>/<file>. */
-function gradleCacheJarPath(
-  gradleUserHome: string,
-  groupId: string,
-  artifactId: string,
-  version: string,
-  fileName: string
-): string {
-  return join(
-    gradleUserHome,
-    "caches",
-    "modules-2",
-    "files-2.1",
-    groupId,
-    artifactId,
-    version,
-    "binary-hash",
-    fileName
-  );
-}
-
-/** Write a file that passes an existence check but is not a readable archive. */
-async function writeUnreadableJar(jarPath: string, bytes: Buffer): Promise<void> {
-  await mkdir(dirname(jarPath), { recursive: true });
-  await writeFile(jarPath, bytes);
-}
 
 test("resolveSourceTarget(targetKind=coordinate) redownloads the binary when the local Gradle cache jar is empty", async () => {
   const root = await mkdtemp(join(tmpdir(), "resolver-coordinate-local-binary-empty-"));
@@ -682,8 +598,8 @@ test("resolveSourceTarget(targetKind=coordinate) redownloads the binary when the
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:truncated:1.0" },
         { allowDecompile: true },
@@ -722,8 +638,8 @@ test("resolveSourceTarget(targetKind=coordinate) redownloads the binary when the
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:garbage:1.0" },
         { allowDecompile: true },
@@ -768,8 +684,8 @@ test("resolveSourceTarget(targetKind=coordinate) fetches the classified binary i
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:classified:1.0:linux" },
         { allowDecompile: true },
@@ -803,8 +719,8 @@ test("resolveSourceTarget(targetKind=coordinate) decompiles a readable local m2 
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:m2-binary:2.0" },
         { allowDecompile: true },
@@ -829,8 +745,8 @@ test("resolveSourceTarget(targetKind=coordinate) still refuses a readable local 
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, async () => {
+  await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => {
       await assert.rejects(
         () =>
           resolveSourceTarget(
@@ -854,8 +770,8 @@ test("resolveSourceTarget(targetKind=coordinate) reports not-found when the loca
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, async () => {
+  await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => {
       await assert.rejects(
         () =>
           resolveSourceTarget(
@@ -945,8 +861,8 @@ test("resolveSourceTarget(targetKind=coordinate) fails over to the second reposi
   const target = { kind: "coordinate", value: coordinate } as const;
   const failovers: RecordedFailover[] = [];
 
-  const { warm, cold } = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, async () => {
+  const { warm, cold } = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, async () => {
       const warmed = await resolveSourceTarget(target, { allowDecompile: true }, config);
       // The artifact is pulled from A and published by B instead.
       repoAServes = false;
@@ -1014,8 +930,8 @@ test("resolveSourceTarget(targetKind=coordinate) refuses a remote binary that is
   const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
   const failovers: RecordedFailover[] = [];
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         {
@@ -1075,8 +991,8 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:shadowed:1.0" },
         { allowDecompile: true },
@@ -1137,8 +1053,8 @@ test("resolveSourceTarget(targetKind=coordinate) refuses a remote sources downlo
   const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
   const failovers: RecordedFailover[] = [];
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         {
@@ -1310,8 +1226,8 @@ test("resolveSourceTarget(targetKind=coordinate) leaves a concurrent winner's ja
     poisonedSlot,
     installWinner,
     () =>
-      withGradleHome(join(root, "gradle-home"), () =>
-        withFetch(fetchStub, () =>
+      withGradleUserHome(join(root, "gradle-home"), () =>
+        withGlobalFetch(fetchStub, () =>
           resolveSourceTarget(
             { kind: "coordinate", value: coordinate },
             { allowDecompile: true },
@@ -1376,8 +1292,8 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt exact m2 binary
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         { allowDecompile: true },
@@ -1430,11 +1346,11 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   const config = buildTestConfig(root);
   const target = { kind: "coordinate", value: coordinate } as const;
 
-  const first = await withGradleHome(gradleUserHome, () =>
+  const first = await withGradleUserHome(gradleUserHome, () =>
     resolveSourceTarget(target, { allowDecompile: true }, config)
   );
   await touchWithoutRewriting(sourceJarPath);
-  const second = await withGradleHome(gradleUserHome, () =>
+  const second = await withGradleUserHome(gradleUserHome, () =>
     resolveSourceTarget(target, { allowDecompile: true }, config)
   );
 
@@ -1469,7 +1385,7 @@ test("resolveSourceTarget(targetKind=coordinate) gives a local m2 sources jar a 
   const config = buildTestConfig(root);
   const target = { kind: "coordinate", value: coordinate } as const;
 
-  const first = await withGradleHome(gradleUserHome, () =>
+  const first = await withGradleUserHome(gradleUserHome, () =>
     resolveSourceTarget(target, { allowDecompile: true }, config)
   );
 
@@ -1485,7 +1401,7 @@ test("resolveSourceTarget(targetKind=coordinate) gives a local m2 sources jar a 
     ].join("\n")
   });
 
-  const second = await withGradleHome(gradleUserHome, () =>
+  const second = await withGradleUserHome(gradleUserHome, () =>
     resolveSourceTarget(target, { allowDecompile: true }, config)
   );
 
@@ -1516,8 +1432,8 @@ test("resolveSourceTarget(targetKind=coordinate) keeps a stable artifactId when 
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
   const target = { kind: "coordinate", value: coordinate } as const;
 
-  const { first, second } = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, async () => {
+  const { first, second } = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
       const firstResolve = await resolveSourceTarget(target, { allowDecompile: true }, config);
       await touchWithoutRewriting(binaryJarPath);
       const secondResolve = await resolveSourceTarget(target, { allowDecompile: true }, config);
@@ -1725,8 +1641,8 @@ test("resolveSourceTarget publishes the download size cap to the CALLER, even be
   try {
     const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
 
-    const caught = await withGradleHome(gradleUserHome, () =>
-      withFetch(fetchStub, async () => {
+    const caught = await withGradleUserHome(gradleUserHome, () =>
+      withGlobalFetch(fetchStub, async () => {
         try {
           await resolveSourceTarget(
             { kind: "coordinate", value: "com.example:oversized:1.0" },
@@ -1827,8 +1743,8 @@ test("resolveSourceTarget keeps the most recent failure when none of them is act
 
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
 
-  const caught = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, async () => {
+  const caught = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
       try {
         await resolveSourceTarget(
           { kind: "coordinate", value: "com.example:plain:1.0" },
@@ -1992,8 +1908,8 @@ test("resolveSourceTarget(targetKind=coordinate) skips a corrupt ~/.m2 sources j
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:rescued:1.0" },
         { allowDecompile: true },
@@ -2055,8 +1971,8 @@ test("resolveSourceTarget(targetKind=coordinate) reaches the remote sources leg 
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:twice-broken:1.0" },
         { allowDecompile: true },
@@ -2145,8 +2061,8 @@ test("resolveSourceTarget(targetKind=coordinate) flags a remote binary that carr
   }) as typeof fetch;
 
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:no-classes:1.0" },
         { allowDecompile: true },
@@ -2177,8 +2093,8 @@ test("resolveSourceTarget(targetKind=coordinate) flags a local binary that carri
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:local-no-classes:1.0" },
         { allowDecompile: true },
@@ -2202,8 +2118,8 @@ test("resolveSourceTarget(targetKind=coordinate) leaves an ordinary binary jar u
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:with-classes:1.0" },
         { allowDecompile: true },
@@ -2262,8 +2178,8 @@ test("resolveSourceTarget(targetKind=coordinate) still resolves a class-free MAP
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-      withFetch(fetchStub, () =>
+    const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+      withGlobalFetch(fetchStub, () =>
         resolveSourceTarget(
           { kind: "coordinate", value: artifact.coordinate },
           { allowDecompile: true },
@@ -2306,8 +2222,8 @@ test("resolveSourceTarget(targetKind=coordinate) still resolves a class-free RES
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:resource-mod:1.0" },
         { allowDecompile: true },
@@ -2359,8 +2275,8 @@ test("resolveSourceTarget(targetKind=coordinate) accepts a LOCAL jar of nothing 
   }) as typeof fetch;
 
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
-  const resolved = await withGradleHome(gradleUserHome, () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:dirs-only:1.0" },
         { allowDecompile: true },
@@ -2412,8 +2328,8 @@ test("resolveSourceTarget(targetKind=coordinate) accepts a DOWNLOADED binary of 
   const config = buildTestConfig(root, { sourceRepos: [REPO_A, REPO_B] });
   const failovers: RecordedFailover[] = [];
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: coordinate },
         {
@@ -2460,8 +2376,8 @@ test("resolveSourceTarget(targetKind=coordinate) treats a ZERO-LENGTH entry as a
 
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
 
-  const resolved = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const resolved = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:zero-length:1.0" },
         { allowDecompile: true },
@@ -2502,8 +2418,8 @@ test("resolveSourceTarget(targetKind=coordinate) reads a directory record stored
   const fetchStub: typeof fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
   const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
 
-  const dirsOnly = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const dirsOnly = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:slashless:1.0" },
         { allowDecompile: true },
@@ -2514,8 +2430,8 @@ test("resolveSourceTarget(targetKind=coordinate) reads a directory record stored
   assert.equal(dirsOnly.binaryJarPath, dirsOnlyJarPath, "slashless records keep the jar usable");
   assert.deepEqual(dirsOnly.qualityFlags, [NO_CLASSES_FLAG]);
 
-  const classRecord = await withGradleHome(join(root, "gradle-home"), () =>
-    withFetch(fetchStub, () =>
+  const classRecord = await withGradleUserHome(join(root, "gradle-home"), () =>
+    withGlobalFetch(fetchStub, () =>
       resolveSourceTarget(
         { kind: "coordinate", value: "com.example:slashless-class:1.0" },
         { allowDecompile: true },

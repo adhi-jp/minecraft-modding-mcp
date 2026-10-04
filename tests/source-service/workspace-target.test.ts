@@ -7,6 +7,7 @@ import test from "node:test";
 import { ERROR_CODES } from "../../src/errors.ts";
 import { SourceService } from "../../src/source-service.ts";
 import { createWorkspaceContextCache } from "../../src/workspace-context-cache.ts";
+import { withEnv } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 
 type AnySourceService = SourceService & {
@@ -490,14 +491,10 @@ test("synthesizeWorkspaceTarget gives workspace.scope precedence over input.scop
 });
 
 test("synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TARGET_OFF is set", async () => {
-  process.env.WORKSPACE_TARGET_OFF = "1";
-  try {
-    const sourceServiceModule = await import(
-      `../../src/source-service.ts?toggle=ws-${Date.now()}`
-    );
+  await withEnv({ WORKSPACE_TARGET_OFF: "1" }, async () => {
     const root = await mkdtemp(join(tmpdir(), "ws-target-toggle-"));
     await mkdir(join(root, "cache"), { recursive: true });
-    const service = new sourceServiceModule.SourceService(buildTestConfig(root)) as unknown as AnySourceService;
+    const service = new SourceService(buildTestConfig(root)) as unknown as AnySourceService;
 
     await assert.rejects(
       () =>
@@ -507,7 +504,5 @@ test("synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TAR
         ),
       (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
     );
-  } finally {
-    delete process.env.WORKSPACE_TARGET_OFF;
-  }
+  });
 });

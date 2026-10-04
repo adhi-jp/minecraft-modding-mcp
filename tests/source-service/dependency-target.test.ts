@@ -9,6 +9,7 @@ import { parseCoordinate } from "../../src/maven-resolver.ts";
 import { SourceService } from "../../src/source-service.ts";
 import { createWorkspaceContextCache } from "../../src/workspace-context-cache.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
+import { withEnv, withGradleUserHome } from "../helpers/env.ts";
 import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
@@ -85,8 +86,7 @@ test("synthesizeDependencyTarget refuses to pick when modules-2 has multiple cac
   const project = await mkdtemp(join(tmpdir(), "dep-target-modules2-"));
   const host = await makeHost();
 
-  process.env.GRADLE_USER_HOME = fakeGradleHome;
-  try {
+  await withGradleUserHome(fakeGradleHome, async () => {
     const service = new SourceService(
       buildTestConfig(host),
       undefined,
@@ -107,9 +107,7 @@ test("synthesizeDependencyTarget refuses to pick when modules-2 has multiple cac
         return true;
       }
     );
-  } finally {
-    delete process.env.GRADLE_USER_HOME;
-  }
+  });
 });
 
 test("synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when neither source has the dependency", async () => {
@@ -117,8 +115,7 @@ test("synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when n
   const project = await mkdtemp(join(tmpdir(), "dep-target-unresolved-"));
   const host = await makeHost();
 
-  process.env.GRADLE_USER_HOME = fakeGradleHome;
-  try {
+  await withGradleUserHome(fakeGradleHome, async () => {
     const service = new SourceService(
       buildTestConfig(host),
       undefined,
@@ -145,9 +142,7 @@ test("synthesizeDependencyTarget throws ERR_DEPENDENCY_VERSION_UNRESOLVED when n
         return true;
       }
     );
-  } finally {
-    delete process.env.GRADLE_USER_HOME;
-  }
+  });
 });
 
 test("synthesizeDependencyTarget rejects unsafe explicit version tokens", async () => {
@@ -251,8 +246,7 @@ test("synthesizeDependencyTarget reuses WorkspaceContextCache on subsequent call
   const project = await mkdtemp(join(tmpdir(), "dep-target-cache-"));
   const host = await makeHost();
 
-  process.env.GRADLE_USER_HOME = fakeGradleHome;
-  try {
+  await withGradleUserHome(fakeGradleHome, async () => {
     const cache = createWorkspaceContextCache();
     const service = new SourceService(
       buildTestConfig(host),
@@ -271,19 +265,13 @@ test("synthesizeDependencyTarget reuses WorkspaceContextCache on subsequent call
 
     assert.equal(first.provenance.cacheHit, false);
     assert.equal(second.provenance.cacheHit, true);
-  } finally {
-    delete process.env.GRADLE_USER_HOME;
-  }
+  });
 });
 
 test("synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_TARGET_OFF is set", async () => {
-  process.env.DEPENDENCY_TARGET_OFF = "1";
-  try {
-    const sourceServiceModule = await import(
-      `../../src/source-service.ts?toggle=dep-${Date.now()}`
-    );
+  await withEnv({ DEPENDENCY_TARGET_OFF: "1" }, async () => {
     const host = await makeHost();
-    const service = new sourceServiceModule.SourceService(buildTestConfig(host)) as unknown as AnySourceService;
+    const service = new SourceService(buildTestConfig(host)) as unknown as AnySourceService;
 
     await assert.rejects(
       () =>
@@ -293,9 +281,7 @@ test("synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_
         ),
       (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
     );
-  } finally {
-    delete process.env.DEPENDENCY_TARGET_OFF;
-  }
+  });
 });
 
 test("synthesizeDependencyTarget tries the de-duplicated property keys for a hyphen-less name", async () => {
@@ -304,8 +290,7 @@ test("synthesizeDependencyTarget tries the de-duplicated property keys for a hyp
   await writeFile(join(project, "gradle.properties"), "# none\n", "utf8");
   const host = await makeHost();
 
-  process.env.GRADLE_USER_HOME = fakeGradleHome;
-  try {
+  await withGradleUserHome(fakeGradleHome, async () => {
     const service = new SourceService(
       buildTestConfig(host),
       undefined,
@@ -329,9 +314,7 @@ test("synthesizeDependencyTarget tries the de-duplicated property keys for a hyp
         return true;
       }
     );
-  } finally {
-    delete process.env.GRADLE_USER_HOME;
-  }
+  });
 });
 
 test("synthesizeDependencyTarget carries umbrella POM adoption provenance to the coordinate target", async () => {
@@ -363,8 +346,7 @@ test("synthesizeDependencyTarget carries umbrella POM adoption provenance to the
   );
   const host = await makeHost();
 
-  process.env.GRADLE_USER_HOME = fakeGradleHome;
-  try {
+  await withGradleUserHome(fakeGradleHome, async () => {
     const service = new SourceService(
       buildTestConfig(host),
       undefined,
@@ -391,9 +373,7 @@ test("synthesizeDependencyTarget carries umbrella POM adoption provenance to the
     );
     assert.equal(synthesized.provenance.submoduleVersionSource, "umbrella-pom");
     assert.match(synthesized.provenance.source, /^umbrella-pom:/);
-  } finally {
-    delete process.env.GRADLE_USER_HOME;
-  }
+  });
 });
 
 test("get-class-members accepts and dispatches a dependency target", async () => {

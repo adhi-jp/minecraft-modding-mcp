@@ -24,8 +24,7 @@ const SPECIAL_DIRECTORIES = new Set([
   "helpers",
   "manual",
   "perf",
-  "resources",
-  "smoke"
+  "resources"
 ]);
 
 async function collectFiles(root: string): Promise<string[]> {

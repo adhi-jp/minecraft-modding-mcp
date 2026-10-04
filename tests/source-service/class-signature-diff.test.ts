@@ -9,6 +9,7 @@ import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
 import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { stubVersionService } from "../helpers/source-service-fixtures.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -25,19 +26,7 @@ test("SourceService diffClassSignatures returns member added/removed/modified de
   const versions = ["1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { jarPath: string }) {
@@ -266,19 +255,7 @@ test("SourceService diffClassSignatures omits from/to snapshots when includeFull
   const versions = ["1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { jarPath: string }) {
@@ -364,19 +341,7 @@ test("SourceService diffClassSignatures reports class added and absent_in_both s
   const versions = ["1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { jarPath: string; fqn: string }) {
@@ -469,19 +434,7 @@ test("SourceService diffClassSignatures validates version range order", async ()
   const root = await mkdtemp(join(tmpdir(), "service-diff-validate-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return ["1.0.2", "1.0.1", "1.0.0"];
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, ["1.0.2", "1.0.1", "1.0.0"]);
 
   await assert.rejects(
     () =>

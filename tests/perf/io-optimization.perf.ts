@@ -8,8 +8,8 @@ import { discoverWorkspaceAccessTransformers, discoverWorkspaceAccessWideners, d
 import { ModSearchService } from "../../src/mod-search-service.ts";
 import type { DecompileModJarOutput, ModDecompileService } from "../../src/mod-decompile-service.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
-import type { Config } from "../../src/types.ts";
 import { WorkspaceMappingService } from "../../src/workspace-mapping-service.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
 const BASELINE_PATH = join(process.cwd(), "tests/resources/perf/io-optimization-baseline.json");
@@ -47,32 +47,6 @@ interface IoOptimizationSnapshot {
     decompiledJavaFiles: number;
   };
   kpis: Record<BenchmarkName, IoLatencyKpi>;
-}
-
-function buildTestConfig(root: string): Config {
-  return {
-    cacheDir: join(root, "cache"),
-    sqlitePath: ":memory:",
-    sourceRepos: [],
-    localM2Path: join(root, "m2"),
-    vineflowerJarPath: undefined,
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
-    fetchTimeoutMs: 1_000,
-    fetchRetries: 0,
-    indexedSearchEnabled: true,
-    mappingSourcePriority: "loom-first",
-    searchScanPageSize: 250,
-    searchScanMaxBytes: 67_108_864,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2_000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024
-  };
 }
 
 function percentile(values: number[], p: number): number {
@@ -487,7 +461,7 @@ test("io optimization perf benchmarks stay within locked baseline guardrails", a
   const workspaceRoot = await createWorkspaceFixture(root);
   const binaryJarPath = await createSourceJarFixture(root);
   const decompiledFixture = await createDecompiledSearchFixture(root);
-  const config = buildTestConfig(root);
+  const config = buildTestConfig(root, { sqlitePath: ":memory:" });
   const workspaceMappingService = new WorkspaceMappingService();
 
   const workspaceDurationsMs = await measureSamples(async () => {

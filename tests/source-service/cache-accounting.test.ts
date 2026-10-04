@@ -17,13 +17,10 @@ import {
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import {
-  type CacheAccountingRepo,
   type CacheFixtureArtifact,
   type CacheFixtureArtifactInput,
   type SourceServiceFixture,
-  computeSourceEntriesBytes,
   createCacheAccountingFixture,
-  defaultBinaryEntriesFor,
   instrumentCacheAccountingRepo
 } from "../helpers/source-service-fixtures.ts";
 

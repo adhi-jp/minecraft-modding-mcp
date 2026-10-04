@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import type { SignatureMember } from "../../src/minecraft-explorer-service.ts";
 import { remapSignatureMembers, resolveToObfuscatedMemberName } from "../../src/source/lifecycle.ts";
+import { stubVersionService } from "../helpers/source-service-fixtures.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 
 // On Minecraft 26.1+ the as-shipped ("obfuscated") names are the Mojang names and the
@@ -162,19 +163,7 @@ async function createLifecycleService(t: TestContext, prefix: string, versionsNe
   const service = new SourceService(buildTestConfig(root));
   const { calls, mappingService } = emptyGraphMappingService();
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versionsNewestFirst;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versionsNewestFirst);
   (service as unknown as { mappingService: unknown }).mappingService = mappingService;
   // Class-name lookup is covered elsewhere; keep it the identity so these tests observe
   // only the member remap path.

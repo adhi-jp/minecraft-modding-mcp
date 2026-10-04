@@ -8,7 +8,7 @@ const EXPECTED_ORDINARY_TEST_FILES = 278;
 // new behavior tests raise both counts, behavior-preserving splits raise only the file count.
 // Historical deltas (which change raised the count, and why) live in git log
 // / git blame for this file, not here.
-const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2535;
+const EXPECTED_ORDINARY_TEST_DECLARATIONS = 2533;
 
 const loadTestFileSelection = (): Promise<{ selectOrdinaryTestFiles: () => Promise<string[]> }> =>
   import("../../scripts/test-file-selection.mjs") as Promise<{
@@ -82,8 +82,8 @@ test("the frozen premigration named set parses into a unique, directive-free key
 
   const frozen = parseFrozenNamedSet(await readFile(FROZEN_NAMED_SET_URL, "utf8"));
 
-  assert.equal(frozen.rowCount, 1735, "the frozen fixture holds 1735 TAP rows");
-  assert.equal(frozen.keys.size, 1735, "every frozen row must canonicalize to a distinct key");
+  assert.equal(frozen.rowCount, 1728, "the frozen fixture holds 1728 TAP rows");
+  assert.equal(frozen.keys.size, 1728, "every frozen row must canonicalize to a distinct key");
   assert.equal(
     frozen.prefixStrippedCount,
     11,

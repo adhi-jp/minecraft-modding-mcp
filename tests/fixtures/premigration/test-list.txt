@@ -207,8 +207,8 @@
 0	ok	MinecraftExplorerService rejects malformed field descriptors
 0	ok	MinecraftExplorerService rejects malformed method descriptors
 0	ok	MinecraftExplorerService renders arrays, objects, primitives, and void signatures
-0	ok	MinecraftExplorerService reports invalid class magic as ERR_INTERNAL
-0	ok	MinecraftExplorerService reports unsupported constant pool tags as ERR_INTERNAL
+0	ok	MinecraftExplorerService reports invalid class magic as ERR_CLASS_NOT_FOUND naming the class and jar
+0	ok	MinecraftExplorerService reports unsupported constant pool tags as ERR_CLASS_NOT_FOUND naming the class and jar
 0	ok	MinecraftExplorerService reports void method arguments as invalid method descriptors
 0	ok	MinecraftExplorerService reuses cached signatures but refreshes response context
 0	ok	MinecraftExplorerService stops inherited expansion at max depth
@@ -260,7 +260,6 @@
 0	ok	SourceService checkSymbolExists falls back to unobfuscated runtime bytecode for mojang class queries
 0	ok	SourceService checkSymbolExists keeps mapping_unavailable when unobfuscated runtime jar resolution fails
 0	ok	SourceService checkSymbolExists reports short unobfuscated class names when nameMode is omitted
-0	ok	SourceService delegates representative mapping queries to MappingService
 0	ok	SourceService detectFabricLikeInputNamespace detects intermediary vs mojang jars
 0	ok	SourceService diffClassSignatures omits from/to snapshots when includeFullDiff=false
 0	ok	SourceService diffClassSignatures remaps non-obfuscated class per endpoint version
@@ -335,7 +334,6 @@
 0	ok	SourceService resolveArtifact marks merged mojang sources without net.minecraft coverage as partial
 0	ok	SourceService resolveArtifact prefers Minecraft source jars from sibling Gradle user home over project remapped mod sources
 0	ok	SourceService resolveArtifact returns sampleEntries for source JAR
-0	ok	SourceService resolveArtifact returns undefined sampleEntries for decompile-only
 0	ok	SourceService resolveWorkspaceSymbol derives field status from kind-filtered findMapping candidates
 0	ok	SourceService resolveWorkspaceSymbol handles representative compile-visible symbol flows
 0	ok	SourceService resolveWorkspaceSymbol routes by kind once a workspace mapping is known
@@ -526,7 +524,7 @@
 0	ok	applyMappingPipeline throws MAPPING_UNAVAILABLE for an unsupported mapping kind
 0	ok	applyNbtJsonPatch enforces patched typedJson response bytes limit
 0	ok	applyNbtJsonPatch reports metadata and returns patched typed json
-0	ok	artifactSignatureFromFile yields a stable sha256 id for the same jar contents
+0	ok	readJarStatStamp yields a stable sha256 id for the same jar contents
 0	ok	artifact_content_bytes stays in sync when files rows change
 0	ok	assertJavaAvailable caches a success that follows a failed probe
 0	ok	assertJavaAvailable does not cache unavailable-Java failures after reset
@@ -1106,7 +1104,7 @@
 0	ok	oversized Content-Length frames report the limit and preserve the next frame
 0	ok	package distribution smoke guards CLI startup when stdio pipes close immediately
 0	ok	package.json declares distribution entrypoints and include list
-0	ok	package.json version is reflected in CHANGELOG and [Unreleased] is omitted when empty
+0	ok	package.json version is reflected in CHANGELOG and the permanent [Unreleased] heading is kept
 0	ok	parent close before tree result keeps one token until success resolves it
 0	ok	parseAccessTransformer parses class, field, and method entries with final actions
 0	ok	parseAccessTransformer preserves final actions for case-insensitive declarations
@@ -1181,7 +1179,7 @@
 0	ok	projectMembersByLevel: signatures keeps javaSignature, drops jvmDescriptor
 0	ok	projection is threaded from batch input to each get-class-members call
 0	ok	projection tool name sets are pairwise disjoint
-0	ok	propagates the raw filesystem error when the path-mode file does not exist
+0	ok	reports a missing path-mode file as ERR_INVALID_INPUT naming the path and OS code
 0	ok	prune in apply mode without a selector is rejected with ERR_INVALID_INPUT before calling the registry
 0	ok	prune preview forwards the selector, reports unchanged, and offers the apply follow-up call
 0	ok	pruneRestartTimestamps
@@ -1474,7 +1472,6 @@
 0	ok	tools/list exposes the expected MCP tools without legacy mc prefixes
 0	ok	tools/list schemas expose explicit defaults for public input parameters
 0	ok	top-level resolution failure surfaces as a thrown error (no results array)
-0	ok	top-level workflow tool schemas expose explicit defaults on safe public parameters
 0	ok	traversal-shaped file paths are rejected as invalid input
 0	ok	tree cleanup returns failure within its deadline when the helper never settles
 0	ok	truncateSuggestionText appends an ellipsis when the value exceeds maxLength
@@ -1602,7 +1599,6 @@
 1	ok	buildWorkerRestartReply yields a structured envelope without throwing when lastStageStartedAt is undefined
 1	ok	buildWorkerRestartReply: pruned timestamps without current restart still receive correct count for recommendation
 1	ok	can omit per-result issues while preserving summaries
-1	ok	checkSymbolExists forwards maxCandidates
 1	ok	config can disable indexed search
 1	ok	config mode reports empty mixin configs as warnings instead of invalid input
 1	ok	contains path uses indexed search
@@ -1624,8 +1620,6 @@
 1	ok	exact path uses indexed search
 1	ok	explain=true keeps per-result resolvedMembers/toolHealth under the summary-first default
 1	ok	falls back to vanilla when merged resolution fails
-1	ok	findMapping returns lookup payload
-1	ok	getClassApiMatrix forwards maxRows
 1	ok	getClassMembers reads unobfuscated runtime names without remap fallback
 1	ok	getClassSource preserves ERR_JAR_NOT_FOUND for missing target.kind=jar paths
 1	ok	hideUncertain recomputes parseWarnings summary
@@ -1707,7 +1701,6 @@
 1	ok	reports target-not-found for non-mapping failures
 1	ok	resolveArtifact ignores mismatched Loom sources for unobfuscated versions
 1	ok	resolveArtifact maps missing target.kind=jar paths to ERR_JAR_NOT_FOUND
-1	ok	resolveMethodMappingExact forwards maxCandidates
 1	ok	resolvedMembers tracks accessors
 1	ok	resolves a field and filters out non-field candidates from findMapping
 1	ok	resolves class via class identity mapping

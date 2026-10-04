@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,18 +16,13 @@ import {
   resolveCachedDownload,
   resolveRetryAfterMs
 } from "../../src/repo-downloader.ts";
-
-function sha256Of(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
+import { CURRENT_SIDECAR_VERSION, sha256Of, writeSidecarFor } from "../helpers/download-sidecar.ts";
 
 /**
- * The sidecar schema this build writes and is willing to read. Pinned here so a
- * fixture that hand-writes a record cannot silently drift out of the schema the
- * reader accepts - and so the deliberately-foreign-version fixtures below stay
- * obviously foreign.
+ * The production cap on a honoured `Retry-After`, pinned here rather than read
+ * from source so a regression toward trusting the header whole fails loudly.
  */
-const CURRENT_SIDECAR_VERSION = 2;
+const MAX_RETRY_AFTER_MS = 30_000;
 
 /**
  * The conditional validators in `headers`, matched the way HTTP matches header
@@ -59,40 +53,6 @@ function forbiddenFetch(seen: { calls: number }): typeof fetch {
     seen.calls += 1;
     return new Response("network-should-not-be-reached", { status: 200 });
   }) as typeof fetch;
-}
-
-/**
- * Write the identity record `resolveCachedDownload` would have left beside
- * `destination`, stamped with the file's real size and mtime.
- *
- * A record binds an identity to one specific set of bytes, and it is the size
- * *and* the mtime that pin it to them. A fixture has to stamp it the same way
- * the implementation does, or it is simply a record the reader is right to
- * reject - which would make the fixture prove nothing.
- */
-async function writeSidecarFor(
-  destination: string,
-  record: {
-    url: string;
-    contentSha256: string;
-    contentLength?: number;
-    etag?: string;
-    lastModified?: string;
-  }
-): Promise<void> {
-  const stats = await stat(destination);
-  await writeFile(
-    downloadSidecarPath(destination),
-    JSON.stringify({
-      version: CURRENT_SIDECAR_VERSION,
-      url: record.url,
-      contentSha256: record.contentSha256,
-      contentLength: record.contentLength ?? stats.size,
-      contentMtimeMs: stats.mtimeMs,
-      ...(record.etag === undefined ? {} : { etag: record.etag }),
-      ...(record.lastModified === undefined ? {} : { lastModified: record.lastModified })
-    })
-  );
 }
 
 test("downloadToCache rejects non-http schemes", async () => {
@@ -297,9 +257,6 @@ test("downloadToCache caps an unreasonable retry-after instead of honoring it wh
   // (mocked) setTimeout, so the tick below lands after that timer exists.
   await new Promise((resolve) => setImmediate(resolve));
 
-  // Pinned to the production cap: a value this test never reads from source,
-  // so it fails loudly if the cap ever regresses back toward the raw header.
-  const MAX_RETRY_AFTER_MS = 30_000;
   t.mock.timers.tick(MAX_RETRY_AFTER_MS - 1);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls, 1, "must not retry before the capped delay elapses");
@@ -1684,13 +1641,6 @@ test("resolveCachedDownload(immutable) surfaces a stat failure on the cached ent
     "and never a live re-download either: reported as a miss, this immutable url would transfer on every call forever while the one actionable error stayed hidden behind whatever the network did next"
   );
 });
-
-/**
- * The production cap on a honoured `Retry-After`, pinned here rather than read
- * from source so a regression toward trusting the header whole fails loudly.
- * Deliberately the same literal the older cap test above uses.
- */
-const MAX_RETRY_AFTER_MS = 30_000;
 
 test("resolveRetryAfterMs reads both RFC 9110 forms and refuses the Date.parse year trap", () => {
   const now = Date.UTC(2026, 0, 1, 0, 0, 0);

@@ -8,7 +8,7 @@ import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -22,26 +22,18 @@ test("SourceService getClassMembers mapping fallback keeps original name and emi
   const root = await mkdtemp(join(tmpdir(), "service-members-fallback-"));
   const service = new SourceService(buildTestConfig(root));
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [
-          {
-            ownerFqn: "net.minecraft.server.Unknown",
-            name: "unknownMethod",
-            javaSignature: "public void unknownMethod()",
-            jvmDescriptor: "()V",
-            accessFlags: 0x0001,
-            isSynthetic: false
-          }
-        ],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    methods: [
+      {
+        ownerFqn: "net.minecraft.server.Unknown",
+        name: "unknownMethod",
+        javaSignature: "public void unknownMethod()",
+        jvmDescriptor: "()V",
+        accessFlags: 0x0001,
+        isSynthetic: false
+      }
+    ]
+  });
 
   (service as unknown as { mappingService: unknown }).mappingService = {
     async findMapping() {
@@ -121,17 +113,7 @@ test("SourceService getClassMembers populates decompiledFallback when bytecode e
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-decompiled-fallback",
@@ -193,17 +175,7 @@ test("SourceService getClassMembers applies memberPattern to decompiledFallback"
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-decompiled-fallback-pattern",
@@ -258,17 +230,7 @@ test("SourceService getClassMembers scopes decompiledFallback to the requested c
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-decompiled-inner",
@@ -344,17 +306,7 @@ test("SourceService getClassMembers uses the artifact-namespace lookup name when
     }
   };
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-decompiled-ns",
@@ -410,17 +362,7 @@ test("SourceService getClassMembers excludes method calls and local variables fr
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-body-depth",
@@ -489,17 +431,7 @@ test("SourceService getClassMembers skips memberPattern on fallback when namespa
     }
   };
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-pattern-ns",
@@ -549,26 +481,18 @@ test("SourceService getClassMembers does not populate decompiledFallback when by
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [
-          {
-            ownerFqn: "net.minecraft.server.Main",
-            name: "main",
-            javaSignature: "public static void main(String[])",
-            jvmDescriptor: "([Ljava/lang/String;)V",
-            accessFlags: 0x0009,
-            isSynthetic: false
-          }
-        ],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    methods: [
+      {
+        ownerFqn: "net.minecraft.server.Main",
+        name: "main",
+        javaSignature: "public static void main(String[])",
+        jvmDescriptor: "([Ljava/lang/String;)V",
+        accessFlags: 0x0009,
+        isSynthetic: false
+      }
+    ]
+  });
 
   const result = await service.getClassMembers({
     artifactId: "artifact-no-fallback",
@@ -610,11 +534,7 @@ test("SourceService getClassMembers projects decompiledFallback members per proj
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return { constructors: [], fields: [], methods: [], warnings: [], context: { classExistedInJar: true } };
-    }
-  };
+  stubExplorer(service, {});
 
   // projection="names": decompiledFallback members carry only `name` (no line/kind).
   const names = await service.getClassMembers({
@@ -670,11 +590,7 @@ test("SourceService getClassMembers applies '|'-OR memberPattern to decompiledFa
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return { constructors: [], fields: [], methods: [], warnings: [], context: { classExistedInJar: true } };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-decompiled-or",

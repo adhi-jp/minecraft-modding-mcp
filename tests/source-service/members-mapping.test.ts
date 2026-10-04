@@ -8,7 +8,7 @@ import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { fakeExplorerContext, seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -60,7 +60,7 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -187,7 +187,7 @@ test("SourceService getClassMembers with non-obfuscated mapping applies memberPa
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -272,7 +272,7 @@ test("SourceService getClassMembers with obfuscated mapping is unchanged (regres
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -498,17 +498,7 @@ test("SourceService getClassMembers keeps outer members declared after a nested 
     symbols: []
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {});
 
   const result = await service.getClassMembers({
     artifactId: "artifact-after-inner",

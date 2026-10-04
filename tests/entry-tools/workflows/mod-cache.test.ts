@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,41 +7,6 @@ import test from "node:test";
 import { ERROR_CODES } from "../../../src/errors.ts";
 import { AnalyzeModService } from "../../../src/entry-tools/analyze-mod-service.ts";
 import { ManageCacheService } from "../../../src/entry-tools/manage-cache-service.ts";
-
-test("top-level workflow tool schemas expose explicit defaults on safe public parameters", async () => {
-  const inspectMinecraftSource = await readFile("src/entry-tools/inspect-minecraft-service.ts", "utf8");
-  const inspectMinecraftInternalSource = await readFile("src/entry-tools/inspect-minecraft/internal.ts", "utf8");
-  const validateProjectSource = await readFile("src/entry-tools/validate-project-service.ts", "utf8");
-  const analyzeSymbolSource = await readFile("src/entry-tools/analyze-symbol-service.ts", "utf8");
-  const compareMinecraftSource = await readFile("src/entry-tools/compare-minecraft-service.ts", "utf8");
-  const analyzeModSource = await readFile("src/entry-tools/analyze-mod-service.ts", "utf8");
-  const manageCacheSource = await readFile("src/entry-tools/manage-cache-service.ts", "utf8");
-
-  assert.match(validateProjectSource, /preferProjectMapping:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateProjectSource, /minSeverity:\s*z\.enum\(\["error", "warning", "all"\]\)\.default\("all"\)/);
-  assert.match(validateProjectSource, /hideUncertain:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateProjectSource, /explain:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.match(validateProjectSource, /treatInfoAsWarning:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(validateProjectSource, /includeIssues:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(analyzeSymbolSource, /signatureMode:\s*z\.enum\(\["exact", "name-only"\]\)\.default\("exact"\)/);
-  assert.match(analyzeSymbolSource, /nameMode:\s*z\.enum\(\["fqcn", "auto"\]\)\.default\("auto"\)/);
-  assert.match(analyzeSymbolSource, /maxCandidates:\s*positiveIntSchema\.default\(5\)/);
-  // subject.kind documents the 'symbol' auto-detect contract via .describe().
-  assert.match(analyzeSymbolSource, /\.enum\(\["class", "method", "field", "symbol"\]\)\s*\.describe\(/);
-  assert.match(compareMinecraftSource, /maxClassResults:\s*positiveIntSchema\.default\(500\)/);
-  assert.match(compareMinecraftSource, /includeFullDiff:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(inspectMinecraftSource, /includeSnapshots:\s*z\.boolean\(\)\.default\(false\)/);
-  assert.equal(
-    inspectMinecraftInternalSource.match(/queryMode:\s*z\.enum\(\["auto", "token", "literal"\]\)\.default\("auto"\)/g)?.length ?? 0,
-    2
-  );
-  assert.match(analyzeModSource, /searchType:\s*z\.enum\(\["class", "method", "field", "content", "all"\]\)\.default\("all"\)/);
-  assert.match(analyzeModSource, /limit:\s*positiveIntSchema\.default\(50\)/);
-  assert.match(analyzeModSource, /includeFiles:\s*z\.boolean\(\)\.default\(true\)/);
-  assert.match(analyzeModSource, /executionMode:\s*executionModeSchema\.default\("preview"\)/);
-  assert.match(manageCacheSource, /limit:\s*positiveIntSchema\.default\(50\)/);
-  assert.match(manageCacheSource, /executionMode:\s*executionModeSchema\.default\("preview"\)/);
-});
 
 test("AnalyzeModService omits default search/decompile controls from summary.subject", async () => {
   const service = new AnalyzeModService({

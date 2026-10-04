@@ -425,7 +425,7 @@ pnpm test
 - `pnpm test:coverage` または `pnpm test:coverage:lcov`: カバレッジ確認時（`lines=80`, `branches=70`, `functions=80`）
 - `pnpm validate`: ローカルの完全検証スイートを実行する場合
 
-通常の `.test.ts` ファイルは `tests/` 配下のドメイン別ディレクトリ（例: `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, `utils/`）に置きます。ヘルパー専用モジュールは `tests/helpers` に残し、手動 smoke、性能、リソース、smoke 専用ファイルは既存の専用ディレクトリに残します。
+通常の `.test.ts` ファイルは `tests/` 配下のドメイン別ディレクトリ（例: `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, `utils/`）に置きます。ヘルパー専用モジュールは `tests/helpers` に残し、手動 smoke、性能、リソースのファイルは既存の専用ディレクトリに残します。
 
 ## ライセンス
 

@@ -82,6 +82,23 @@ export function seedIndexedArtifact(service: unknown, input: ArtifactSeed): void
   repos.symbolsRepo.insertSymbolsForArtifact(input.artifactId, input.symbols);
 }
 
+/** A signature-response context as the bytecode explorer reports it, for stubbed getSignature results. */
+export function fakeExplorerContext(): {
+  minecraftVersion: string;
+  mappingType: string;
+  mappingNamespace: string;
+  jarSignature: string;
+  generatedAt: string;
+} {
+  return {
+    minecraftVersion: "1.21.10",
+    mappingType: "unknown",
+    mappingNamespace: "obfuscated",
+    jarSignature: "fake",
+    generatedAt: new Date().toISOString()
+  };
+}
+
 export function stubExplorer(
   service: unknown,
   result: {
@@ -101,13 +118,7 @@ export function stubExplorer(
         fields: result.fields ?? [],
         methods: result.methods ?? [],
         warnings: [],
-        context: {
-          minecraftVersion: "1.21.10",
-          mappingType: "unknown",
-          mappingNamespace: "obfuscated",
-          jarSignature: "fake",
-          generatedAt: new Date().toISOString()
-        }
+        context: fakeExplorerContext()
       };
     }
   };

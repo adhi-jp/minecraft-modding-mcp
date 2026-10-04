@@ -2,20 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createRepos, seedArtifact } from "../helpers/repos.ts";
+import { seedFiles } from "../helpers/seed-files.ts";
 
 import type { TestRepos } from "../helpers/repos.ts";
-
-function seedFiles(repos: TestRepos, artifactId: string, filePaths: string[]): void {
-  repos.files.replaceFilesForArtifact(
-    artifactId,
-    filePaths.map((filePath) => ({
-      filePath,
-      content: `// ${filePath}`,
-      contentBytes: 10,
-      contentHash: `hash-${filePath}`
-    }))
-  );
-}
 
 function seedDupSymbols(repos: TestRepos, artifactId: string): void {
   seedFiles(repos, artifactId, ["a/A.java", "a/B.java", "a/C.java"]);

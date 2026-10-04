@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { relative, sep } from "node:path";
 
-export const SPECIAL_TEST_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources", "smoke"]);
+export const SPECIAL_TEST_DIRECTORIES = new Set(["helpers", "manual", "perf", "resources"]);
 
 async function collectRecursiveFiles(root) {
   const entries = await readdir(root, { withFileTypes: true });

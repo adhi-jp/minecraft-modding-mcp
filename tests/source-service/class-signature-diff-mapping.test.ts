@@ -9,6 +9,7 @@ import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
 import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { stubVersionService } from "../helpers/source-service-fixtures.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -24,19 +25,7 @@ test("SourceService diffClassSignatures with non-obfuscated mapping remaps membe
 
   const versions = ["1.0.1", "1.0.0"];
 
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string; jarPath: string }) {
@@ -136,19 +125,7 @@ test("SourceService diffClassSignatures remaps non-obfuscated class per endpoint
 
   const versions = ["1.0.1", "1.0.0"];
   const versionByJarPath = new Map(versions.map((version) => [join(root, `${version}.jar`), version]));
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   (service as unknown as { explorerService: unknown }).explorerService = {
     async getSignature(input: { fqn: string; jarPath: string }) {
@@ -246,19 +223,7 @@ test("SourceService diffClassSignatures reports remap failures on modified membe
   const service = new SourceService(buildTestConfig(root));
 
   const versions = ["1.0.1", "1.0.0"];
-  (service as unknown as { versionService: unknown }).versionService = {
-    async listVersionIds() {
-      return versions;
-    },
-    async resolveVersionJar(version: string) {
-      return {
-        version,
-        jarPath: join(root, `${version}.jar`),
-        source: "downloaded" as const,
-        clientJarUrl: `https://example.test/${version}.jar`
-      };
-    }
-  };
+  stubVersionService(service, root, versions);
 
   const fieldNames = ["f_a", "f_b", "f_c"];
   (service as unknown as { explorerService: unknown }).explorerService = {

@@ -440,7 +440,7 @@ Run these when relevant:
 - `pnpm test:coverage` or `pnpm test:coverage:lcov` for coverage checks (`lines=80`, `branches=70`, `functions=80`)
 - `pnpm validate` for the full local validation suite
 
-Ordinary `.test.ts` files live in domain directories under `tests/` (for example `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, and `utils/`). Keep helper-only modules in `tests/helpers`; manual smoke, performance, resource, and smoke-only files remain in their existing special directories.
+Ordinary `.test.ts` files live in domain directories under `tests/` (for example `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, and `utils/`). Keep helper-only modules in `tests/helpers`; manual smoke, performance, and resource files remain in their existing special directories.
 
 ## License
 

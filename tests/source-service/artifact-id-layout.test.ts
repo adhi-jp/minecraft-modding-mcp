@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { composeArtifactId, contentDigestSignature } from "../../src/artifact-identity.ts";
 import { resolveSourceTarget } from "../../src/source-resolver.ts";
+import { withGradleUserHome } from "../helpers/env.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
@@ -34,20 +35,6 @@ const PINNED_JAR_DIGEST = "e890fbabaf994fe9d2cbdf60af72676d71a25b7c80686d7e60e9e
 /** The sha256 of a file's bytes, which is what a jar's signature now is. */
 async function sha256OfFile(filePath: string): Promise<string> {
   return createHash("sha256").update(await readFile(filePath)).digest("hex");
-}
-
-async function withGradleHome<T>(gradleUserHome: string, body: () => Promise<T>): Promise<T> {
-  const previous = process.env.GRADLE_USER_HOME;
-  process.env.GRADLE_USER_HOME = gradleUserHome;
-  try {
-    return await body();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.GRADLE_USER_HOME;
-    } else {
-      process.env.GRADLE_USER_HOME = previous;
-    }
-  }
 }
 
 test("the jar id space composes the exact artifactId strings it shipped with", () => {
@@ -135,7 +122,7 @@ test("the coordinate id space composes the exact artifactId string it shipped wi
     "com/example/PinnedLayout.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
   });
 
-  const resolved = await withGradleHome(gradleUserHome, () =>
+  const resolved = await withGradleUserHome(gradleUserHome, () =>
     resolveSourceTarget(
       { kind: "coordinate", value: "com.example:pinned-module:9.8.7" },
       { allowDecompile: true },

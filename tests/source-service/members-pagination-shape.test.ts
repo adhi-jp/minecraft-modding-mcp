@@ -8,7 +8,7 @@ import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { Config } from "../../src/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withGradleUserHome } from "../helpers/env.ts";
-import { seedIndexedArtifact } from "../helpers/seed-artifact.ts";
+import { fakeExplorerContext, seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 import {
   readCacheAccountingMetrics,
   readSearchModeMetrics,
@@ -16,16 +16,6 @@ import {
 } from "../helpers/source-service-metrics.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
-import {
-  type CacheAccountingRepo,
-  type CacheFixtureArtifact,
-  type CacheFixtureArtifactInput,
-  type SourceServiceFixture,
-  computeSourceEntriesBytes,
-  createCacheAccountingFixture,
-  defaultBinaryEntriesFor,
-  instrumentCacheAccountingRepo
-} from "../helpers/source-service-fixtures.ts";
 
 test("SourceService getClassMembers uses sibling binary jar when artifact is resolved from a source jar input", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
@@ -69,7 +59,7 @@ test("SourceService getClassMembers uses sibling binary jar when artifact is res
           }
         ],
         warnings: [],
-        context: { classExistedInJar: true }
+        context: fakeExplorerContext()
       };
     }
   };
@@ -110,17 +100,9 @@ test("SourceService getClassMembers paginates with a stable nextCursor and rejec
     accessFlags: 0x0001,
     isSynthetic: false
   });
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: [0, 1, 2, 3, 4].map(makeMethod),
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    methods: [0, 1, 2, 3, 4].map(makeMethod)
+  });
 
   const names = (page: { members: { methods: Array<{ name: string }> } }) => page.members.methods.map((m) => m.name);
 
@@ -196,17 +178,9 @@ test("SourceService getClassMembers caps the default first page at 150 members a
     accessFlags: 0x0001,
     isSynthetic: false
   });
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [],
-        methods: Array.from({ length: 200 }, (_, i) => makeMethod(i)),
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    methods: Array.from({ length: 200 }, (_, i) => makeMethod(i))
+  });
 
   const page = await service.getClassMembers({
     artifactId: resolved.artifactId,
@@ -238,21 +212,14 @@ test("SourceService getClassMembers slims the wire member shape (hoist ownerFqn,
     mapping: "obfuscated"
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [
-          { ownerFqn: "net.minecraft.world.item.Item", name: "field", javaSignature: "public int field", jvmDescriptor: "I", accessFlags: 0x0001, isSynthetic: false }
-        ],
-        methods: [
-          { ownerFqn: "net.minecraft.world.item.Item", name: "use", javaSignature: "public void use()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
-        ],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    fields: [
+      { ownerFqn: "net.minecraft.world.item.Item", name: "field", javaSignature: "public int field", jvmDescriptor: "I", accessFlags: 0x0001, isSynthetic: false }
+    ],
+    methods: [
+      { ownerFqn: "net.minecraft.world.item.Item", name: "use", javaSignature: "public void use()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
+    ]
+  });
 
   const result = await service.getClassMembers({
     artifactId: resolved.artifactId,
@@ -302,21 +269,14 @@ test("SourceService getClassMembers restores FIELD jvmDescriptor with includeDes
     mapping: "obfuscated"
   });
 
-  (service as unknown as { explorerService: unknown }).explorerService = {
-    async getSignature() {
-      return {
-        constructors: [],
-        fields: [
-          { ownerFqn: "net.minecraft.world.item.Item", name: "field", javaSignature: "public int field", jvmDescriptor: "I", accessFlags: 0x0001, isSynthetic: false }
-        ],
-        methods: [
-          { ownerFqn: "net.minecraft.world.item.Item", name: "use", javaSignature: "public void use()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
-        ],
-        warnings: [],
-        context: { classExistedInJar: true }
-      };
-    }
-  };
+  stubExplorer(service, {
+    fields: [
+      { ownerFqn: "net.minecraft.world.item.Item", name: "field", javaSignature: "public int field", jvmDescriptor: "I", accessFlags: 0x0001, isSynthetic: false }
+    ],
+    methods: [
+      { ownerFqn: "net.minecraft.world.item.Item", name: "use", javaSignature: "public void use()", jvmDescriptor: "()V", accessFlags: 0x0001, isSynthetic: false }
+    ]
+  });
 
   const result = await service.getClassMembers({
     artifactId: resolved.artifactId,

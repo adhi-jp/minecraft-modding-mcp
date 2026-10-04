@@ -1,37 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { downloadSidecarPath, resolveCachedDownload } from "../../src/repo-downloader.ts";
-
-/** The sidecar schema this build writes and is willing to read. */
-const CURRENT_SIDECAR_VERSION = 2;
-
-function sha256Of(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-async function writeSidecarFor(
-  destination: string,
-  record: { url: string; contentSha256: string; etag?: string; lastModified?: string }
-): Promise<void> {
-  const stats = await stat(destination);
-  await writeFile(
-    downloadSidecarPath(destination),
-    JSON.stringify({
-      version: CURRENT_SIDECAR_VERSION,
-      url: record.url,
-      contentSha256: record.contentSha256,
-      contentLength: stats.size,
-      contentMtimeMs: stats.mtimeMs,
-      ...(record.etag === undefined ? {} : { etag: record.etag }),
-      ...(record.lastModified === undefined ? {} : { lastModified: record.lastModified })
-    })
-  );
-}
+import { sha256Of, writeSidecarFor } from "../helpers/download-sidecar.ts";
 
 test("resolveCachedDownload(revalidate) adopts a concurrent winner's record on a 304 instead of writing its own over it", async () => {
   const root = await mkdtemp(join(tmpdir(), "review-b-revalidate-winner-"));

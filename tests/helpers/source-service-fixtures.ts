@@ -1,58 +1,19 @@
 // Fixtures and helpers factored out of tests/source-service.test.ts when that
 // large suite was split into per-feature test files. These build SourceService
 // instances over temp-dir jars, accounting-repo instrumentation, and a
-// version-approximation fixture that overrides globalThis.fetch.
+// version-approximation fixture that overrides globalThis.fetch. Search-specific
+// fixtures live in source-service-search-fixtures.ts.
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Config } from "../../src/types.ts";
+import { withEnv, withGlobalFetch } from "./env.ts";
 import { buildTestConfig } from "./test-config.ts";
 import { createJar } from "./zip.ts";
 
-export async function createResolvedSearchFixture(input: {
-  rootPrefix: string;
-  jarBaseName: string;
-  sourceEntries: Record<string, string>;
-  binaryEntries?: Record<string, Buffer>;
-  configOverrides?: Partial<Config>;
-  mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-}): Promise<{
-  service: InstanceType<(typeof import("../../src/source-service.ts"))["SourceService"]>;
-  resolved: Awaited<ReturnType<InstanceType<(typeof import("../../src/source-service.ts"))["SourceService"]>["resolveArtifact"]>>;
-}> {
-  const { SourceService } = await import("../../src/source-service.ts");
-  const root = await mkdtemp(join(tmpdir(), input.rootPrefix));
-  const binaryJarPath = join(root, `${input.jarBaseName}.jar`);
-  const sourcesJarPath = join(root, `${input.jarBaseName}-sources.jar`);
-
-  await createJar(
-    binaryJarPath,
-    input.binaryEntries ?? {
-      "net/minecraft/server/Main.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
-    }
-  );
-  await createJar(sourcesJarPath, input.sourceEntries);
-
-  const service = new SourceService(buildTestConfig(root, input.configOverrides));
-  const resolved = await service.resolveArtifact({
-    target: { kind: "jar", value: binaryJarPath },
-    ...(input.mapping === undefined ? {} : { mapping: input.mapping })
-  });
-
-  return { service, resolved };
-}
-
-export type SearchFixture = Awaited<ReturnType<typeof createResolvedSearchFixture>>;
 export type SourceServiceFixture = InstanceType<
   (typeof import("../../src/source-service.ts"))["SourceService"]
->;
-export type SearchClassSourceCaseInput = Omit<
-  Parameters<SearchFixture["service"]["searchClassSource"]>[0],
-  "artifactId"
->;
-export type SearchClassSourceCaseResult = Awaited<
-  ReturnType<SearchFixture["service"]["searchClassSource"]>
 >;
 
 export type CacheFixtureArtifactInput = {
@@ -75,14 +36,14 @@ export type CacheAccountingRepo = {
   ) => Array<{ artifactId: string; totalContentBytes: number; updatedAt: string }>;
 };
 
-export function computeSourceEntriesBytes(sourceEntries: Record<string, string>): number {
+function computeSourceEntriesBytes(sourceEntries: Record<string, string>): number {
   return Object.values(sourceEntries).reduce(
     (total, content) => total + Buffer.byteLength(content, "utf8"),
     0
   );
 }
 
-export function defaultBinaryEntriesFor(sourceEntries: Record<string, string>): Record<string, Buffer> {
+function defaultBinaryEntriesFor(sourceEntries: Record<string, string>): Record<string, Buffer> {
   const [firstSourcePath] = Object.keys(sourceEntries);
   const defaultClassPath =
     firstSourcePath?.replace(/\.java$/, ".class") ?? "net/minecraft/server/Main.class";
@@ -155,6 +116,79 @@ export function instrumentCacheAccountingRepo(service: SourceServiceFixture): {
   };
 }
 
+/**
+ * Replace the service's VersionService with a stub that lists `versions` and
+ * resolves each one to `<root>/<version>.jar` as if it had just been downloaded.
+ */
+export function stubVersionService(service: object, root: string, versions: string[]): void {
+  (service as unknown as { versionService: unknown }).versionService = {
+    async listVersionIds() {
+      return versions;
+    },
+    async resolveVersionJar(version: string) {
+      return {
+        version,
+        jarPath: join(root, `${version}.jar`),
+        source: "downloaded" as const,
+        clientJarUrl: `https://example.test/${version}.jar`
+      };
+    }
+  };
+}
+
+/**
+ * Serve a one-release Mojang-style version manifest, its version json and the
+ * client jar from `https://example.test`, and point MCP_VERSION_MANIFEST_URL at
+ * it for the duration of `body`. fetch and the env var are restored afterwards.
+ */
+export async function withVersionManifestStub<T>(
+  input: {
+    version: string;
+    clientJarBytes: Buffer;
+    jarHeaders?: Record<string, string>;
+  },
+  body: () => Promise<T>
+): Promise<T> {
+  const manifestUrl = "https://example.test/version_manifest_v2.json";
+  const versionJsonUrl = `https://example.test/versions/${input.version}.json`;
+  const clientJarUrl = `https://example.test/downloads/client-${input.version}.jar`;
+  const stub = (async (requestInput: string | URL | Request) => {
+    const url =
+      typeof requestInput === "string"
+        ? requestInput
+        : requestInput instanceof URL
+          ? requestInput.toString()
+          : requestInput.url;
+    if (url === manifestUrl) {
+      return new Response(
+        JSON.stringify({
+          latest: { release: input.version },
+          versions: [{ id: input.version, type: "release", url: versionJsonUrl }]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === versionJsonUrl) {
+      return new Response(
+        JSON.stringify({
+          id: input.version,
+          downloads: { client: { url: clientJarUrl } }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === clientJarUrl) {
+      return new Response(input.clientJarBytes, {
+        status: 200,
+        ...(input.jarHeaders === undefined ? {} : { headers: input.jarHeaders })
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  return withEnv({ MCP_VERSION_MANIFEST_URL: manifestUrl }, () => withGlobalFetch(stub, body));
+}
+
 export async function withVersionApproximationFixture(
   input: {
     rootPrefix: string;
@@ -183,56 +217,11 @@ export async function withVersionApproximationFixture(
   });
   const remoteJarBytes = await readFile(remoteJarPath);
 
-  const originalFetch = globalThis.fetch;
-  const originalManifestUrl = process.env.MCP_VERSION_MANIFEST_URL;
-  process.env.MCP_VERSION_MANIFEST_URL = "https://example.test/version_manifest_v2.json";
-
-  globalThis.fetch = (async (requestInput: string | URL | Request) => {
-    const url =
-      typeof requestInput === "string"
-        ? requestInput
-        : requestInput instanceof URL
-          ? requestInput.toString()
-          : requestInput.url;
-    if (url === "https://example.test/version_manifest_v2.json") {
-      return new Response(
-        JSON.stringify({
-          latest: { release: input.requestedVersion },
-          versions: [
-            {
-              id: input.requestedVersion,
-              type: "release",
-              url: `https://example.test/versions/${input.requestedVersion}.json`
-            }
-          ]
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
+  await withVersionManifestStub(
+    { version: input.requestedVersion, clientJarBytes: remoteJarBytes },
+    async () => {
+      const service = new SourceService(buildTestConfig(root));
+      await run({ service, projectPath });
     }
-    if (url === `https://example.test/versions/${input.requestedVersion}.json`) {
-      return new Response(
-        JSON.stringify({
-          id: input.requestedVersion,
-          downloads: { client: { url: `https://example.test/downloads/client-${input.requestedVersion}.jar` } }
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
-    }
-    if (url === `https://example.test/downloads/client-${input.requestedVersion}.jar`) {
-      return new Response(remoteJarBytes, { status: 200 });
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-
-  try {
-    const service = new SourceService(buildTestConfig(root));
-    await run({ service, projectPath });
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalManifestUrl === undefined) {
-      delete process.env.MCP_VERSION_MANIFEST_URL;
-    } else {
-      process.env.MCP_VERSION_MANIFEST_URL = originalManifestUrl;
-    }
-  }
+  );
 }

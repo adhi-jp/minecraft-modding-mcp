@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,31 +10,7 @@ import { discardCachedDownload, downloadSidecarPath } from "../../src/repo-downl
 import { openDatabase } from "../../src/storage/db.ts";
 import { runMigrations } from "../../src/storage/migrations.ts";
 import Database from "../../src/storage/sqlite.ts";
-
-function sha256Of(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-/**
- * Write the sidecar `resolveCachedDownload` would have left beside
- * `jarPath`, stamped with the file's real size and mtime - the same
- * fixture shape tests/runtime/repo-downloader.test.ts uses, since a record
- * that does not match the file's own stat is simply rejected by the reader
- * and would prove nothing here either.
- */
-async function writeSidecarFor(jarPath: string, url: string, contentSha256: string): Promise<void> {
-  const stats = await stat(jarPath);
-  await writeFile(
-    downloadSidecarPath(jarPath),
-    JSON.stringify({
-      version: 2,
-      url,
-      contentSha256,
-      contentLength: stats.size,
-      contentMtimeMs: stats.mtimeMs
-    })
-  );
-}
+import { sha256Of, writeSidecarFor } from "../helpers/download-sidecar.ts";
 
 test("pathContainsVersion matches whole version tokens, not coarse substrings", () => {
   // Exact and major.minor.patch sweep should match.
@@ -627,7 +602,7 @@ test("cache registry deletes a downloads entry with a real sidecar identity end-
   await mkdir(join(root, "downloads"), { recursive: true });
   const jarPath = join(root, "downloads", "client.jar");
   await writeFile(jarPath, "jar-bytes");
-  await writeSidecarFor(jarPath, "https://repo.example.com/client.jar", sha256Of("jar-bytes"));
+  await writeSidecarFor(jarPath, { url: "https://repo.example.com/client.jar", contentSha256: sha256Of("jar-bytes") });
 
   const registry = createCacheRegistry({
     cacheDir: root,
@@ -658,7 +633,7 @@ test("cache registry deleteEntries reports a warning and excludes the entry from
   await mkdir(downloadsDir, { recursive: true });
   const jarPath = join(downloadsDir, "client.jar");
   await writeFile(jarPath, "jar-bytes");
-  await writeSidecarFor(jarPath, "https://repo.example.com/client.jar", sha256Of("jar-bytes"));
+  await writeSidecarFor(jarPath, { url: "https://repo.example.com/client.jar", contentSha256: sha256Of("jar-bytes") });
 
   const registry = createCacheRegistry({
     cacheDir: root,
@@ -700,7 +675,7 @@ test("readDownloadEntryIdentity reads the url and digest a valid sidecar records
   const jarPath = join(root, "client.jar");
   await writeFile(jarPath, "jar-bytes");
   const url = "https://repo.example.com/client.jar";
-  await writeSidecarFor(jarPath, url, sha256Of("jar-bytes"));
+  await writeSidecarFor(jarPath, { url, contentSha256: sha256Of("jar-bytes") });
 
   assert.deepEqual(await readDownloadEntryIdentity(jarPath), { url, contentSha256: sha256Of("jar-bytes") });
 });
@@ -751,7 +726,7 @@ test("deleteEntries' downloads path must not destroy a concurrent resolve's repl
   // The state `deleteEntries` lists: a poisoned/stale jar this call means to
   // evict.
   await writeFile(jarPath, "poisoned-bytes");
-  await writeSidecarFor(jarPath, url, sha256Of("poisoned-bytes"));
+  await writeSidecarFor(jarPath, { url, contentSha256: sha256Of("poisoned-bytes") });
 
   // Listing time: this is exactly what cache-registry.ts's deleteEntries
   // captures before it opens the db or unlinks anything.
@@ -762,7 +737,7 @@ test("deleteEntries' downloads path must not destroy a concurrent resolve's repl
   // finishes and installs its own good bytes and its own record at the same
   // path - the exact race the bug report describes.
   await writeFile(jarPath, "winner-bytes");
-  await writeSidecarFor(jarPath, url, sha256Of("winner-bytes"));
+  await writeSidecarFor(jarPath, { url, contentSha256: sha256Of("winner-bytes") });
 
   // The delete path's actual removal call, using the identity captured at
   // listing time - precisely what deleteEntries now does per downloads entry.
