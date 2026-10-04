@@ -33,6 +33,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Documentation
 
+- `docs/tool-reference.md` distinguishes malformed non-object tool arguments in the two protocol eras: modern clients receive `-32602`, while legacy clients keep the supervisor's `-32603` response. The table incorrectly said both received `-32602`; wire behavior is unchanged.
 - `docs/tool-reference.md` no longer lists a `sourceLine` field on `verify-mixin-target` matches; the server never returned it.
 - The requirements now say Java 17+ on `PATH`: the default Vineflower decompiler needs Java 17, and the server checks only that `java` runs, not its version. Reading Minecraft source for a version that has no Loom sources jar decompiles the game jar, so it needs Java as well. `get-registry-data` and registry diffs in `compare-versions` and `compare-minecraft` run the Minecraft server's data generator, so they need the Java version that Minecraft release requires. The docs named no minimum Java version and did not say that reading a version's source can trigger a decompile or that registry generation needs a release-specific Java version.
 - A per-call `gradleUserHome` replaces the MCP process's Gradle User Home for Loom and Forge/NeoForge cache lookups; project-local caches under `projectPath` are still searched. `README.md` and `docs/tool-reference.md` said it was searched before the process default.
