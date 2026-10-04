@@ -621,8 +621,6 @@
 0	ok	class-source resource returns an invalid-input envelope for missing template params
 0	ok	class-source-json resource error envelope forwards AppError details (hints + suggestedCall)
 0	ok	class-source-json resource returns a structured JSON envelope with metadata
-0	ok	classifies a lowercase-leading qualified tail as a field record
-0	ok	classifies an uppercase-leading or dollar-leading qualified tail as a class record
 0	ok	classifyWarnings classifies remap and mapping-lookup failures as mapping/warning
 0	ok	classifyWarnings classifies the AGGREGATED remap warning as namespace_fallback
 0	ok	classifyWarnings maps each high-value family to a code/category/severity
@@ -810,7 +808,6 @@
 0	ok	encodeJavaNbt/decodeJavaNbt round-trip preserves non-finite float/double sentinels
 0	ok	encodeJavaNbt/decodeJavaNbt roundtrip preserves typed structure
 0	ok	encodeOffsetCursor round-trips through decodeOffsetCursor
-0	ok	enumerateLocalAlternativeSourceJars returns [] for missing directory and filters with prefix + .jar suffix
 0	ok	errorResource carries retryClass + issueOrigin for a coded AppError
 0	ok	errorResource drops a placeholder-only suggestedCall via the shared validation gate
 0	ok	errorResource extracts hints/suggestedCall/context from AppError details
@@ -841,7 +838,6 @@
 0	ok	extractSymbolsFromSource keeps the field when its initializer is a call
 0	ok	extractSymbolsFromSource normalizes the file path once even for multiple symbols
 0	ok	extracts a field name from a type-prefixed declaration and rejects a bare token
-0	ok	extracts the method name from a return-type-prefixed signature
 0	ok	failed tree cleanup retains one logical token in both event orders and resumes once on proof
 0	ok	fallback ASCII contains uses the LIKE prefilter and stays case-insensitive
 0	ok	fallback ASCII exact match stays case-sensitive through the LIKE prefilter
@@ -1062,7 +1058,6 @@
 0	ok	loadMixinStageBudgets honors MIXIN_STAGE_BUDGETS_OFF=1 → infinity
 0	ok	loadMixinStageBudgets returns defaults when env not set
 0	ok	loadOrDetectWorkspaceContext preserves dependency versions written during the detection window
-0	ok	localArtifactPathsFromCoordinate matches resolveLocalM2Candidate output
 0	ok	makeStageEmitter is a no-op when disabled option is true
 0	ok	makeStageEmitter is a no-op when extra is undefined
 0	ok	makeStageEmitter is a no-op when requestId is undefined (SDK fallback)
@@ -1121,8 +1116,6 @@
 0	ok	normalizePathForHost converts wsl.localhost UNC paths to Linux paths under WSL
 0	ok	normalizePathForHost rejects UNC WSL paths targeting a different distro
 0	ok	normalizePathForHost rejects malformed windows drive paths
-0	ok	normalizes a slash-form owner to dots in the produced method record
-0	ok	normalizes a slash-separated class input to a dotted class record
 0	ok	numeric annotation defaults render from retained constant-pool values
 0	ok	obfuscated versions keep the mapping-graph verdict without touching runtime bytecode
 0	ok	objectResource handles empty payload with result === {}
@@ -1190,7 +1183,6 @@
 0	ok	parseProguardMethod preserves multi-dim array and erased-varargs parameters
 0	ok	parseProguardMethod returns undefined for a field-style line without parentheses
 0	ok	parseProguardMethod translates owner/param classes when given an obfuscation lookup
-0	ok	parses a descriptor-suffixed symbol into a method record
 0	ok	path converter detects windows, wsl mount, and unc path styles
 0	ok	pathContainsVersion matches whole version tokens, not coarse substrings
 0	ok	per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource
@@ -1199,7 +1191,6 @@
 0	ok	per-entry version is rejected by the schema (entries[].version unknown key)
 0	ok	placeholder primary is not emitted as an executable suggestedCall
 0	ok	placeholder primary surfaces as an exampleCalls template when supplied as an example
-0	ok	prefers the later separator when dots and slashes are mixed
 0	ok	prepareToolInput coerces every POSITIVE_INT_FIELD_NAMES entry from a numeric string to a number
 0	ok	prepareToolInput coerces only documented top-level numeric string fields
 0	ok	prepareToolInput coercion does not descend into nested objects or arrays
@@ -1272,10 +1263,9 @@
 0	ok	rejects with ERR_CONTEXT_UNRESOLVED when the runtime has no access transformer validator configured
 0	ok	rejects with ERR_INVALID_INPUT when task access-transformer receives a subject of a different kind
 0	ok	remaining resources delegate to the expected source-service methods
-0	ok	remapJar appends --threads=N for non-default threads and --rebuildSourceFilenames when true
 0	ok	remapJar forwards explicit timeoutMs / maxMemoryMb overrides
 0	ok	remapJar invokes javaRunner via mockJavaRunner helper (mock smoke)
-0	ok	remapJar omits --threads when threads defaults to 4 and omits --rebuildSourceFilenames when false
+0	ok	remapJar passes exactly the five positional arguments
 0	ok	remapJar propagates assertJavaAvailable failures with their original code
 0	ok	remapJar propagates default timeoutMs / maxMemoryMb and normalizePathArgs to javaRunner.run
 0	ok	remapJar returns RemapResult with durationMs >= 0 on success
@@ -1320,14 +1310,10 @@
 0	ok	resolveIndexRebuildReason classifies each rebuild branch
 0	ok	resolveJarPathWithSymlinkCheck preserves the original input alongside the resolved path
 0	ok	resolveLocalCoordinateCandidates avoids nested readdirSync scans of Gradle cache directories
-0	ok	resolveLocalM2Candidate builds correct source and binary jar paths without classifier
-0	ok	resolveLocalM2Candidate inserts classifier in both source and binary jar names
-0	ok	resolveLocalSourceJar prefers source jar when present and returns undefined otherwise
 0	ok	resolveMojangTinyFile builds merged tiny v2 from client+server mappings
 0	ok	resolveMojangTinyFile converts varargs and generic types in method descriptors
 0	ok	resolveMojangTinyFile dedups identical members shared between client and server
 0	ok	resolveMojangTinyFile emits Conflicting class mapping warning and keeps first side
-0	ok	resolveMojangTinyFile falls back to mappingsUrl when clientMappingsUrl is undefined
 0	ok	resolveMojangTinyFile preserves versionDetailUrl in details when no URLs are exposed
 0	ok	resolveMojangTinyFile records skip warnings for unsupported member syntax
 0	ok	resolveMojangTinyFile rejects when ProGuard input has no class entries
@@ -1373,14 +1359,7 @@
 0	ok	retryClassForErrorCode keeps genuinely-transient codes transient (scope guard)
 0	ok	returns only the original symbol when it contains no separators
 0	ok	returns the trailing segment of a slash-separated symbol
-0	ok	returns undefined for a field-style line without parentheses
-0	ok	returns undefined for a method call shape with no qualified owner
-0	ok	returns undefined for an unbalanced descriptor parenthesis
-0	ok	returns undefined for an unqualified simple name
 0	ok	returns undefined for blank input or a symbol ending in a separator
-0	ok	returns undefined for empty, whitespace-only, or internally spaced input
-0	ok	returns undefined when the method signature has no return type before the name
-0	ok	returns undefined when the separator is leading or trailing
 0	ok	runBatch attaches the synthesized per-entry suggestedCall to a failed entry
 0	ok	runBatch failFast=false keeps running after a per-entry failure and preserves the underlying code
 0	ok	runBatch failFast=true aborts un-started entries with ERR_BATCH_ABORTED
@@ -1388,7 +1367,7 @@
 0	ok	runBinaryRemapWithDeps maps final-path rename races to ERR_REMAP_FAILED and cleans temp
 0	ok	runBinaryRemapWithDeps rejects directory temp output and removes it recursively
 0	ok	runJavaProcess accepts memory flags without a spawn error (missing jar still exits non-zero)
-0	ok	runJavaProcess forwards -Xmx/-Xms memory flags ahead of -jar in the spawn args
+0	ok	runJavaProcess forwards the -Xmx memory flag ahead of -jar in the spawn args
 0	ok	runJavaProcess kills the process and rejects with JAVA_PROCESS_FAILED on timeout
 0	ok	runJavaProcess normalizes path args when normalizePathArgs is true
 0	ok	runJavaProcess rejects with JAVA_PROCESS_FAILED when java cannot be spawned
@@ -1458,8 +1437,6 @@
 0	ok	sourceJarReader: readJarEntryAsUtf8 still resolves safe entries from the same jar
 0	ok	split-source resolution keeps a deterministic artifact identity
 0	ok	split-source workspaces index both the common and the client-only sources jars
-0	ok	splits a dot-qualified member symbol at the last dot
-0	ok	splits a slash-separated internal name at the last slash without normalizing
 0	ok	stale buffered response is ignored and the request ID can be reused on the replacement
 0	ok	startup watchdog is capped independently from validate-project workload timeout
 0	ok	startup watchdog terminalizes queued work and late ready cannot adopt the replacement
@@ -1544,9 +1521,7 @@
 0	ok	top-level resolution failure surfaces as a thrown error (no results array)
 0	ok	top-level workflow tool schemas expose explicit defaults on safe public parameters
 0	ok	traversal-shaped file paths are rejected as invalid input
-0	ok	treats a bare simple name as a class record with no owner
 0	ok	tree cleanup returns failure within its deadline when the helper never settles
-0	ok	trims surrounding whitespace before locating the separator
 0	ok	truncateSuggestionText appends an ellipsis when the value exceeds maxLength
 0	ok	truncateSuggestionText returns the value unchanged at or below maxLength
 0	ok	typedJsonToNbtBase64 + nbtBase64ToTypedJson support gzip roundtrip with auto detection
@@ -1718,7 +1693,6 @@
 1	ok	mixinConfigPath auto-detect finds multiple module source roots
 1	ok	mixinConfigPath finds mixins in both main and client source roots
 1	ok	normalizes WSL UNC sourcePath inputs
-1	ok	normalizes backslash separated candidate paths
 1	ok	normalizes named namespace to yarn
 1	ok	normalizes slashed class identities to dotted names in the resolved candidate
 1	ok	obfuscated keeps mapping without fallback warning

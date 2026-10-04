@@ -62,12 +62,7 @@ export interface DownloadOptions {
   fetchFn?: typeof fetch;
   /**
    * Extra request headers, e.g. the conditional validators of a revalidation.
-   *
-   * With one exception, both entry points send these exactly as given.
-   * {@link downloadToCache} holds no cache state, so a conditional validator
-   * here is the caller's to decide. {@link resolveCachedDownload} drops them
-   * (see `withoutConditionalHeaders`): it derives its own from the sidecar, and
-   * it alone knows whether the bytes they describe are still on disk.
+   * {@link downloadToCache} sends them exactly as given.
    */
   requestHeaders?: Record<string, string>;
   /**
@@ -906,47 +901,6 @@ function conditionalHeadersFor(sidecar: DownloadSidecar | undefined): Record<str
 }
 
 /**
- * The request headers that make a request conditional (RFC 9110 section 13.1),
- * lowercased.
- *
- * Lowercased because HTTP header names are case-insensitive: a caller writes
- * `If-None-Match`, `if-none-match` or `IF-NONE-MATCH` as it pleases, and a
- * name check that recognises one of the three is not a check.
- */
-const CONDITIONAL_REQUEST_HEADER_NAMES: ReadonlySet<string> = new Set([
-  "if-match",
-  "if-none-match",
-  "if-modified-since",
-  "if-unmodified-since",
-  "if-range"
-]);
-
-/**
- * `headers` with every conditional validator dropped, whatever its casing, and
- * every other header left exactly as the caller wrote it.
- *
- * {@link resolveCachedDownload} owns the validators for a url it caches: they
- * come out of the sidecar, and only this module knows whether the bytes they
- * describe are still on disk. A caller-supplied one is dropped on both legs.
- * On the conditional leg it would either collide with ours under a different
- * casing - two entries the `Headers` constructor joins into one comma-separated
- * value, asking about two sets of bytes at once - or ask about bytes this
- * module never checked. On the unconditional leg it is precisely what that leg
- * exists to avoid.
- */
-function withoutConditionalHeaders(
-  headers: Record<string, string> | undefined
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const kept = Object.entries(headers).filter(
-    ([name]) => !CONDITIONAL_REQUEST_HEADER_NAMES.has(name.toLowerCase())
-  );
-  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
-}
-
-/**
  * Reuse the bytes already on disk, deriving (and persisting) the digest if
  * needed.
  *
@@ -1057,11 +1011,11 @@ function cachedByteCount(filePath: string): number {
 export async function resolveCachedDownload(
   url: string,
   destinationPath: string,
-  options: DownloadOptions & { freshness: CacheFreshness }
+  options: Omit<DownloadOptions, "requestHeaders"> & { freshness: CacheFreshness }
 ): Promise<CachedDownloadResult> {
   requireHttpUrl(url);
 
-  const { freshness, requestHeaders, ...downloadOptions } = options;
+  const { freshness, ...downloadOptions } = options;
   const hasCachedBytes = cachedByteCount(destinationPath) > 0;
   const sidecar = hasCachedBytes ? readDownloadSidecar(destinationPath, url) : undefined;
 
@@ -1096,25 +1050,13 @@ export async function resolveCachedDownload(
    * `conditional: false` is not merely "no 304 wanted": it is the only honest
    * request once the cached bytes are gone, because a validator describes bytes
    * nobody holds any more and a 304 answering for one would confirm a cache
-   * entry that no longer exists. That has to hold for validators from *every*
-   * source, so the caller's headers are stripped of them as well:
-   * `requestHeaders` is a public field, and a caller-supplied `If-None-Match`
-   * surviving into this leg would earn the same useless 304 and leave the call
-   * with no bytes to show for it. Which names count, under which casing, is
-   * {@link withoutConditionalHeaders}'s business - it strips them on the
-   * conditional leg too, where ours are the only validators that describe bytes
-   * this module has checked.
+   * entry that no longer exists.
    */
-  const performTransfer = async (conditional: boolean): Promise<DownloadResult> => {
-    const headers = {
-      ...(withoutConditionalHeaders(requestHeaders) ?? {}),
-      ...((conditional ? conditionalHeaders : undefined) ?? {})
-    };
-    return await downloadToCache(url, destinationPath, {
+  const performTransfer = async (conditional: boolean): Promise<DownloadResult> =>
+    await downloadToCache(url, destinationPath, {
       ...downloadOptions,
-      requestHeaders: Object.keys(headers).length > 0 ? headers : undefined
+      requestHeaders: conditional ? conditionalHeaders : undefined
     });
-  };
 
   // The 200 leg below renames replacement bytes over `destinationPath`, and
   // digesting a multi-hundred-megabyte jar afterwards is not instant. Retire the

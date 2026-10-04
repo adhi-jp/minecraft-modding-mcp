@@ -77,7 +77,6 @@ export type LoadedGraph = {
    */
   unobfuscatedRuntime?: boolean;
   priority: import("../types.js").MappingSourcePriority;
-  mode: GraphLoadMode;
   pairs: Map<PairKey, PairRecord>;
   adjacency: Map<import("../types.js").SourceMapping, import("../types.js").SourceMapping[]>;
   pathCache: Map<PairKey, import("../types.js").SourceMapping[] | undefined>;

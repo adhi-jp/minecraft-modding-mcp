@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { ERROR_CODES } from "../../src/errors.ts";
-import type { SourceMapping } from "../../src/types.ts";
 import {
   installGradleUserHomeIsolation,
   buildTestConfig,
@@ -29,13 +28,8 @@ import {
 installGradleUserHomeIsolation();
 
 test("MappingService checkSymbolExists matches a descriptor against an intermediary-coordinate yarn tiny", async () => {
-  const { MappingService } = await import("../../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), "mapping-service-yarn-2col-"));
+  const { root, service } = await createLoomService("mapping-service-yarn-2col-", TEST_TINY_YARN_2COL);
   try {
-    const config = buildTestConfig(root, { sourceRepos: [] });
-    await writeLoomTinyCache(root, TEST_TINY_YARN_2COL);
-    const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-
     const result = await withCwd(root, () =>
       service.checkSymbolExists({
         version: "1.21.10",
@@ -62,35 +56,13 @@ test("MappingService checks symbol existence across class/field/method kinds", a
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const classExists = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            name: string;
-            owner?: string;
-            sourceMapping: SourceMapping;
-            descriptor?: string;
-          }) => Promise<{ resolved: boolean; status: string }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "class",
         name: "a.b.C",
@@ -103,19 +75,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
     await assert.rejects(
       () =>
         withCwd(root, () =>
-          (
-            service as unknown as {
-              checkSymbolExists: (input: {
-                version: string;
-                kind: "class" | "field" | "method";
-                owner?: string;
-                name: string;
-                sourceMapping: SourceMapping;
-                descriptor?: string;
-                signatureMode?: "exact" | "name-only";
-              }) => Promise<{ resolved: boolean; status: string }>;
-            }
-          ).checkSymbolExists({
+          service.checkSymbolExists({
             version: "1.21.10",
             kind: "method",
             owner: "a.b.C",
@@ -133,19 +93,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
     );
 
     const methodExists = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: SourceMapping;
-            descriptor?: string;
-            signatureMode?: "exact" | "name-only";
-          }) => Promise<{ resolved: boolean; status: string }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "method",
         owner: "a.b.C",
@@ -162,18 +110,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
 
     // signatureMode=name-only should NOT throw when descriptor is omitted
     const nameOnlyResult = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: SourceMapping;
-            signatureMode?: "exact" | "name-only";
-          }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "method",
         owner: "a.b.C",
@@ -188,18 +125,7 @@ test("MappingService checks symbol existence across class/field/method kinds", a
 
     // signatureMode=name-only with unique method "e" should resolve
     const nameOnlyUnique = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            sourceMapping: SourceMapping;
-            signatureMode?: "exact" | "name-only";
-          }) => Promise<{ resolved: boolean; status: string; candidates: unknown[] }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "method",
         owner: "a.b.C",
@@ -276,20 +202,9 @@ test("MappingService checkSymbolExists projects descriptor class references befo
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-projection-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -301,23 +216,7 @@ test("MappingService checkSymbolExists projects descriptor class references befo
     const yarnDescriptor =
       "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
     const resolved = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            descriptor?: string;
-            sourceMapping: SourceMapping;
-            signatureMode?: "exact" | "name-only";
-          }) => Promise<{
-            resolved: boolean;
-            status: string;
-            candidates: Array<{ name: string; descriptor?: string }>;
-          }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "method",
         owner: "net.minecraft.world.level.Level",
@@ -342,20 +241,9 @@ test("MappingService findMapping signatureMode=exact accepts partial projection 
   const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-exact-mixed-jdk-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -397,20 +285,9 @@ test("MappingService findMapping signatureMode=exact accepts obfuscated-canonica
   const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-exact-multihop-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -474,16 +351,7 @@ test(
       await writeFile(join(loomCacheDir, "mappings.tiny"), `${TEST_DESCRIPTOR_REMAP_MULTIHOP_OBF_INTER_TINY}\n`, "utf8");
       await writeFile(join(loomCacheDir, "mappings-yarn.tiny"), `${TEST_DESCRIPTOR_REMAP_MULTIHOP_INTER_NAMED_TINY}\n`, "utf8");
 
-      const versionServiceStub = {
-        async resolveVersionMappings(version: string) {
-          return {
-            version,
-            versionManifestUrl: "https://example.test/version_manifest_v2.json",
-            versionDetailUrl: `https://example.test/versions/${version}.json`,
-            mappingsUrl: undefined
-          };
-        }
-      };
+      const versionServiceStub = createVersionServiceStub();
 
       const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -519,20 +387,9 @@ test("MappingService findMapping omitted signatureMode behaves as name-only at t
   const root = await mkdtemp(join(tmpdir(), "mapping-service-findmapping-omitted-sigmode-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_AMBIGUOUS_METHOD_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_AMBIGUOUS_METHOD_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -563,20 +420,9 @@ test("MappingService checkSymbolExists accepts partial projection when descripto
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-mixed-jdk-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_DESCRIPTOR_REMAP_MIXED_JDK_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
 
@@ -587,23 +433,7 @@ test("MappingService checkSymbolExists accepts partial projection when descripto
     // result aligns with the stored record descriptor `(Lclass_1799;Ljava/lang/String;)V`.
     const yarnDescriptor = "(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V";
     const resolved = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            owner?: string;
-            name: string;
-            descriptor?: string;
-            sourceMapping: SourceMapping;
-            signatureMode?: "exact" | "name-only";
-          }) => Promise<{
-            resolved: boolean;
-            status: string;
-            candidates: Array<{ name: string }>;
-          }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "method",
         owner: "net.minecraft.world.item.ItemStack",
@@ -632,34 +462,13 @@ test("MappingService supports short class name checks when nameMode=auto", async
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-auto-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            name: string;
-            sourceMapping: SourceMapping;
-            nameMode?: "fqcn" | "auto";
-          }) => Promise<{ resolved: boolean; status: string; resolvedSymbol?: { symbol: string } }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "class",
         name: "C",
@@ -686,20 +495,9 @@ test("MappingService checkSymbolExists supports maxCandidates", async () => {
       "c\ta/b/C\tinter/one/C\tyarn/one/C",
       "c\tx/y/C\tinter/two/C\tyarn/two/C"
     ].join("\n");
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+    await writeLoomTinyCache(root, tiny);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
@@ -732,34 +530,13 @@ test("MappingService returns ambiguous for short class names when multiple FQCNs
       "c\ta/b/C\tinter/one/C\tyarn/one/C",
       "c\tx/y/C\tinter/two/C\tyarn/two/C"
     ].join("\n");
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${tiny}\n`, "utf8");
+    await writeLoomTinyCache(root, tiny);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          checkSymbolExists: (input: {
-            version: string;
-            kind: "class" | "field" | "method";
-            name: string;
-            sourceMapping: SourceMapping;
-            nameMode?: "fqcn" | "auto";
-          }) => Promise<{ resolved: boolean; status: string; candidates: Array<{ symbol: string }>; warnings: string[] }>;
-        }
-      ).checkSymbolExists({
+      service.checkSymbolExists({
         version: "1.21.10",
         kind: "class",
         name: "C",
@@ -810,18 +587,7 @@ test("MappingService findMapping handles representative ambiguity metadata flows
     );
     try {
       const result = await withCwd(root, () =>
-        (
-          service as unknown as {
-            findMapping: (input: {
-              version: string;
-              kind: "class" | "field" | "method";
-              name: string;
-              sourceMapping: SourceMapping;
-              targetMapping: SourceMapping;
-              disambiguation?: { ownerHint?: string; descriptorHint?: string };
-            }) => Promise<{ status: string; resolvedSymbol?: { symbol: string } }>;
-          }
-        ).findMapping({
+        service.findMapping({
           version: "1.21.10",
           kind: "class",
           name: "a.b.C",
@@ -863,29 +629,10 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
   const root = await mkdtemp(join(tmpdir(), "mapping-service-symbol-exists-unavailable-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
-    const result = await (
-      service as unknown as {
-        checkSymbolExists: (input: {
-          version: string;
-          kind: "class" | "field" | "method";
-          owner?: string;
-          name: string;
-          sourceMapping: SourceMapping;
-        }) => Promise<{ resolved: boolean; status: string }>;
-      }
-    ).checkSymbolExists({
+    const result = await service.checkSymbolExists({
       version: "1.21.10",
       kind: "class",
       name: "intermediary.pkg.InterClass",
@@ -897,19 +644,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
 
     await assert.rejects(
       () =>
-        (
-          service as unknown as {
-            checkSymbolExists: (input: {
-              version: string;
-              kind: "class" | "field" | "method";
-              owner?: string;
-              name: string;
-              sourceMapping: SourceMapping;
-              descriptor?: string;
-              signatureMode?: "exact" | "name-only";
-            }) => Promise<{ resolved: boolean; status: string }>;
-          }
-        ).checkSymbolExists({
+        service.checkSymbolExists({
           version: "1.21.10",
           kind: "method",
           owner: "a.b.C",
@@ -927,17 +662,7 @@ test("MappingService returns mapping_unavailable for symbol existence when mappi
 
     await assert.rejects(
       () =>
-        (
-          service as unknown as {
-            checkSymbolExists: (input: {
-              version: string;
-              kind: "class" | "field" | "method";
-              owner?: string;
-              name: string;
-              sourceMapping: SourceMapping;
-            }) => Promise<{ resolved: boolean; status: string }>;
-          }
-        ).checkSymbolExists({
+        service.checkSymbolExists({
           version: "1.21.10",
           kind: "class",
           owner: "a.b.C",
@@ -968,16 +693,7 @@ test("MappingService returns empty graph for unobfuscated version (26.1)", async
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await service.findMapping({
@@ -1006,16 +722,7 @@ test("MappingService checkMappingHealth treats unobfuscated mojang runtime names
     const config = buildTestConfig(root, { sourceRepos: [] });
 
     const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const mojangHealth = await service.checkMappingHealth({
@@ -1114,16 +821,7 @@ test("MappingService rejects class queries that include owner", async () => {
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-owner-invalid-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     await assert.rejects(
@@ -1152,16 +850,7 @@ test("MappingService checkMappingHealth reports memberRemapAvailable=true for ob
   const root = await mkdtemp(join(tmpdir(), "mapping-service-graph-load-failure-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: `https://example.test/versions/${version}.json`,
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
     const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
     const service = new MappingService(config, versionServiceStub, fetchStub);
 

@@ -33,9 +33,10 @@ test("resolveTinyRemapperJar throws INVALID_INPUT when the override path does no
     await assert.rejects(
       () => resolveTinyRemapperJar(tempDir, missing),
       (error: unknown) => {
-        const appError = error as { code?: string; message?: string };
+        const appError = error as { code?: string; message?: string; details?: { nextAction?: string } };
         assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
         assert.match(appError.message ?? "", /does-not-exist\.jar/);
+        assert.match(appError.details?.nextAction ?? "", /MCP_TINY_REMAPPER_JAR_PATH/);
         return true;
       }
     );

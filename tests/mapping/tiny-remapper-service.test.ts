@@ -101,7 +101,7 @@ async function buildRemapFixture(prefix: string): Promise<{
   };
 }
 
-test("remapJar omits --threads when threads defaults to 4 and omits --rebuildSourceFilenames when false", async () => {
+test("remapJar passes exactly the five positional arguments", async () => {
   const fx = await buildRemapFixture("remap-default-threads");
   const recording = mockJavaRunner(async () => {
     await writeFile(fx.outputJar, Buffer.from("PK\x03\x04"));
@@ -117,33 +117,6 @@ test("remapJar omits --threads when threads defaults to 4 and omits --rebuildSou
     fx.mappings,
     "intermediary",
     "named"
-  ]);
-  assert.ok(!args.some((a) => a.startsWith("--threads")));
-  assert.ok(!args.includes("--rebuildSourceFilenames"));
-});
-
-test("remapJar appends --threads=N for non-default threads and --rebuildSourceFilenames when true", async () => {
-  const fx = await buildRemapFixture("remap-custom-flags");
-  const recording = mockJavaRunner(async () => {
-    await writeFile(fx.outputJar, Buffer.from("PK\x03\x04"));
-    return { exitCode: 0, stdoutTail: "", stderrTail: "" };
-  });
-
-  await remapJar("/tmp/fake-remapper.jar", {
-    ...fx.base,
-    threads: 8,
-    rebuildSourceFilenames: true
-  });
-
-  const args = recording.calls[0]!.args;
-  assert.deepEqual(args, [
-    fx.inputJar,
-    fx.outputJar,
-    fx.mappings,
-    "intermediary",
-    "named",
-    "--threads=8",
-    "--rebuildSourceFilenames"
   ]);
 });
 

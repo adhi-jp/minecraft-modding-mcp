@@ -8,6 +8,7 @@ import test from "node:test";
 import { ERROR_CODES } from "../../src/errors.ts";
 import { remapModJar, type ModRemapInput } from "../../src/mod-remap-service.ts";
 import type { Config } from "../../src/types.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 
 function makeTempDir(): string {
   const dir = join(tmpdir(), `mcp-test-remap-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -16,33 +17,15 @@ function makeTempDir(): string {
 }
 
 function makeTestConfig(cacheDir: string): Config {
-  return {
+  return buildTestConfig(cacheDir, {
     cacheDir,
     sqlitePath: join(cacheDir, "test.db"),
-    sourceRepos: ["https://maven.fabricmc.net"],
     localM2Path: join(cacheDir, ".m2"),
-    vineflowerJarPath: undefined,
+    sourceRepos: ["https://maven.fabricmc.net"],
     indexedSearchEnabled: false,
-    mappingSourcePriority: "loom-first",
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
     fetchTimeoutMs: 15_000,
-    fetchRetries: 2,
-    searchScanPageSize: 250,
-    searchScanMaxBytes: 67_108_864,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    tinyRemapperJarPath: undefined,
-    remapTimeoutMs: 600_000,
-    remapMaxMemoryMb: 4096
-  };
+    fetchRetries: 2
+  });
 }
 
 // Mirrors resolveOutputJarPath()'s "next to input" default in src/mod-remap-service.ts,

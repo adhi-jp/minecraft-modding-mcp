@@ -162,14 +162,13 @@ test("runJavaProcess accepts memory flags without a spawn error (missing jar sti
   }
 
   // The process exits non-zero because the jar doesn't exist; this smoke-checks
-  // that the -Xmx/-Xms args don't break spawning. The dedicated test below
-  // asserts those flags actually reach the spawn argv.
+  // that the -Xmx arg doesn't break spawning. The dedicated test below
+  // asserts that flag actually reaches the spawn argv.
   const result = await runJavaProcess({
     jarPath: "/tmp/nonexistent-test-jar.jar",
     args: [],
     timeoutMs: 5_000,
-    maxMemoryMb: 512,
-    minMemoryMb: 128
+    maxMemoryMb: 512
   });
 
   assert.notEqual(result.exitCode, 0);
@@ -347,7 +346,7 @@ test("runJavaProcess rejects with JAVA_PROCESS_FAILED when java cannot be spawne
   }
 });
 
-test("runJavaProcess forwards -Xmx/-Xms memory flags ahead of -jar in the spawn args", async () => {
+test("runJavaProcess forwards the -Xmx memory flag ahead of -jar in the spawn args", async () => {
   if (process.platform === "win32") {
     return;
   }
@@ -382,22 +381,18 @@ process.exit(0);
       jarPath: "/tmp/tool.jar",
       args: ["--threads=4"],
       timeoutMs: 5_000,
-      maxMemoryMb: 512,
-      minMemoryMb: 128
+      maxMemoryMb: 512
     });
 
     assert.equal(result.exitCode, 0);
 
     const spawnedArgs = readFileSync(argsLogPath, "utf8").split("\n");
     const xmxIndex = spawnedArgs.indexOf("-Xmx512m");
-    const xmsIndex = spawnedArgs.indexOf("-Xms128m");
     const jarIndex = spawnedArgs.indexOf("-jar");
 
     assert.ok(xmxIndex >= 0, "-Xmx512m must reach the spawn args");
-    assert.ok(xmsIndex >= 0, "-Xms128m must reach the spawn args");
     assert.ok(jarIndex >= 0, "-jar must reach the spawn args");
     assert.ok(xmxIndex < jarIndex, "-Xmx must precede -jar");
-    assert.ok(xmsIndex < jarIndex, "-Xms must precede -jar");
   } finally {
     process.env.PATH = originalPath;
   }

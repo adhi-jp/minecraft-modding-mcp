@@ -57,32 +57,12 @@ export function normalizeMappedSymbolOutput(symbol: string): string {
   return symbol.replace(/\//g, ".");
 }
 
-export function splitOwnerAndName(symbol: string): { owner: string; name: string } | undefined {
-  const trimmed = symbol.trim();
-  const separatorIndex = Math.max(trimmed.lastIndexOf("."), trimmed.lastIndexOf("/"));
-  if (separatorIndex <= 0 || separatorIndex >= trimmed.length - 1) {
-    return undefined;
-  }
-  return {
-    owner: trimmed.slice(0, separatorIndex),
-    name: trimmed.slice(separatorIndex + 1)
-  };
-}
-
 export function stripLineInfo(input: string): string {
   let value = input.trim();
   while (/^\d+:\d+:/.test(value)) {
     value = value.replace(/^\d+:\d+:/, "");
   }
   return value.replace(/:\d+:\d+$/, "").trim();
-}
-
-export function parseMethodName(value: string): string | undefined {
-  const match = /^(.+?)\s+([^\s(]+)\((.*)\)$/.exec(value);
-  if (!match) {
-    return undefined;
-  }
-  return match[2]?.trim() || undefined;
 }
 
 export function parseFieldName(value: string): string | undefined {
@@ -148,37 +128,6 @@ export function createMethodSymbolRecord(
     name: normalizedName,
     descriptor: normalizedDescriptor
   };
-}
-
-export function parseInputSymbol(symbol: string): MappingSymbolRecord | undefined {
-  const trimmed = symbol.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
-    return undefined;
-  }
-
-  const openIndex = trimmed.indexOf("(");
-  if (openIndex >= 0) {
-    const closeIndex = trimmed.indexOf(")", openIndex);
-    if (closeIndex < 0) {
-      return undefined;
-    }
-    const ownerAndMethod = splitOwnerAndName(trimmed.slice(0, openIndex));
-    if (!ownerAndMethod) {
-      return undefined;
-    }
-    const descriptor = trimmed.slice(openIndex);
-    return createMethodSymbolRecord(ownerAndMethod.owner, ownerAndMethod.name, descriptor);
-  }
-
-  const ownerAndName = splitOwnerAndName(trimmed);
-  if (!ownerAndName) {
-    return createClassSymbolRecord(trimmed);
-  }
-
-  if (/^[A-Z$]/.test(ownerAndName.name)) {
-    return createClassSymbolRecord(trimmed);
-  }
-  return createFieldSymbolRecord(ownerAndName.owner, ownerAndName.name);
 }
 
 export function exactLookupKeys(record: MappingSymbolRecord): string[] {

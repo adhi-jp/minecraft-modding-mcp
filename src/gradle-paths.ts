@@ -3,41 +3,32 @@ import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 
 import { normalizePathForHost } from "./path-converter.js";
 
-export function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
-  if (!projectPath) {
+function normalizeOptionalHostPath(value: string | undefined, field: string): string | undefined {
+  if (!value) {
     return undefined;
   }
-  const trimmed = projectPath.trim();
+  const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
-  const normalized = normalizePathForHost(trimmed, undefined, "projectPath");
+  const normalized = normalizePathForHost(trimmed, undefined, field);
   return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+}
+
+export function normalizeOptionalProjectPath(projectPath: string | undefined): string | undefined {
+  return normalizeOptionalHostPath(projectPath, "projectPath");
 }
 
 export function normalizeOptionalGradleUserHomePath(gradleUserHome: string | undefined): string | undefined {
-  if (!gradleUserHome) {
-    return undefined;
-  }
-  const trimmed = gradleUserHome.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = normalizePathForHost(trimmed, undefined, "gradleUserHome");
-  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+  return normalizeOptionalHostPath(gradleUserHome, "gradleUserHome");
 }
 
 export function resolveGradleUserHomePath(gradleUserHome?: string): string {
-  const explicit = normalizeOptionalGradleUserHomePath(gradleUserHome);
-  if (explicit) {
-    return explicit;
-  }
-  const configured = process.env.GRADLE_USER_HOME?.trim();
-  if (!configured) {
-    return resolvePath(homedir(), ".gradle");
-  }
-  const normalized = normalizePathForHost(configured, undefined, "GRADLE_USER_HOME");
-  return isAbsolute(normalized) ? normalized : resolvePath(process.cwd(), normalized);
+  return (
+    normalizeOptionalGradleUserHomePath(gradleUserHome) ??
+    normalizeOptionalHostPath(process.env.GRADLE_USER_HOME, "GRADLE_USER_HOME") ??
+    resolvePath(homedir(), ".gradle")
+  );
 }
 
 export type GradleCacheSearchInput =

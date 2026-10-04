@@ -6,10 +6,11 @@ import { mergeDirectionIndexes } from "../parsers/symbol-records.js";
 import { parseTinyMappingsInto } from "../parsers/tiny.js";
 import type { MappingLoaderDeps, MappingLoaderResult } from "./types.js";
 
-async function fetchYarnCoordinates(
+export async function fetchYarnCoordinates(
   fetchFn: typeof fetch,
   repoBase: string,
-  version: string
+  version: string,
+  fallback: string[]
 ): Promise<string[]> {
   const metadataUrl = `${repoBase}/net/fabricmc/yarn/maven-metadata.xml`;
   try {
@@ -31,9 +32,9 @@ async function fetchYarnCoordinates(
     if (sorted.length > 0) {
       return sorted.slice(0, 3);
     }
-    return [version];
+    return fallback;
   } catch {
-    return [version];
+    return fallback;
   }
 }
 
@@ -84,7 +85,7 @@ export async function loadTinyPairsFromMaven(
   const yarnCoordinatesByRepo = await Promise.all(
     repoBases.map(async (base) => ({
       base,
-      yarnCoordinates: await fetchYarnCoordinates(deps.fetchFn, base, version)
+      yarnCoordinates: await fetchYarnCoordinates(deps.fetchFn, base, version, [version])
     }))
   );
 

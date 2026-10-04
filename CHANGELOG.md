@@ -13,6 +13,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Fixed
 
+- The error raised when the tiny-remapper jar override does not exist tells you to set `MCP_TINY_REMAPPER_JAR_PATH`, the variable the server reads. It named `MCP_TINY_REMAPPER_JAR`, which has no effect.
 - `inspect-minecraft` class-members and the `compare-minecraft` versions task omit `meta.detailApplied` at the default detail, as every other tool does. When their output was truncated they echoed `detailApplied: "summary"` and repeated the top-level warnings inside `meta`.
 - `inspect-minecraft` search with `detail: "summary", include: ["samples"]` now returns up to five hits in `result.search`, including an empty hits array on a miss. The block was omitted even when samples were requested. Use standard or full detail to recover the whole fetched page; the cursor still advances past that page.
 

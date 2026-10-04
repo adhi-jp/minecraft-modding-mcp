@@ -102,7 +102,6 @@ export type ResolvedVersionMappings = {
   versionDetailUrl: string;
   clientMappingsUrl?: string;
   serverMappingsUrl?: string;
-  mappingsUrl?: string;
 };
 
 export type ListVersionIdsInput = {
@@ -120,16 +119,20 @@ function isVersionManifest(value: unknown): value is VersionManifest {
   return typeof value === "object" && value !== null;
 }
 
+function listVersionsHintDetails(version: string): Record<string, unknown> {
+  return {
+    version,
+    nextAction: "Use list-versions to see available Minecraft versions.",
+    ...buildSuggestedCall({ tool: "list-versions", params: {} })
+  };
+}
+
 function ensureVersionDetail(value: unknown, version: string): VersionDetails {
   if (typeof value !== "object" || value == null) {
     throw createError({
       code: ERROR_CODES.VERSION_NOT_FOUND,
       message: `Version metadata for "${version}" is invalid.`,
-      details: {
-        version,
-        nextAction: "Use list-versions to see available Minecraft versions.",
-        ...buildSuggestedCall({ tool: "list-versions", params: {} })
-      }
+      details: listVersionsHintDetails(version)
     });
   }
   return value as VersionDetails;
@@ -235,29 +238,14 @@ export class VersionService {
       });
     }
 
-    const manifest = await this.fetchManifest();
-    const versionEntry = (manifest.versions ?? []).find((entry) => entry.id === normalizedVersion);
-    if (!versionEntry) {
-      throw createError({
-        code: ERROR_CODES.VERSION_NOT_FOUND,
-        message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
-      });
-    }
-
-    const details = await this.fetchVersionDetails(versionEntry.url, normalizedVersion);
+    const { versionEntry, details } = await this.resolveVersionEntry(normalizedVersion);
     const clientMappingsUrl = details.downloads?.client_mappings?.url;
     return {
       version: normalizedVersion,
       versionManifestUrl: this.manifestUrl,
       versionDetailUrl: versionEntry.url,
       clientMappingsUrl,
-      serverMappingsUrl: details.downloads?.server_mappings?.url,
-      mappingsUrl: clientMappingsUrl
+      serverMappingsUrl: details.downloads?.server_mappings?.url
     };
   }
 
@@ -277,21 +265,7 @@ export class VersionService {
       });
     }
 
-    const manifest = await this.fetchManifest();
-    const versionEntry = (manifest.versions ?? []).find((entry) => entry.id === normalizedVersion);
-    if (!versionEntry) {
-      throw createError({
-        code: ERROR_CODES.VERSION_NOT_FOUND,
-        message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
-      });
-    }
-
-    const details = await this.fetchVersionDetails(versionEntry.url, normalizedVersion);
+    const { details } = await this.resolveVersionEntry(normalizedVersion);
     return (details.libraries ?? [])
       .map((lib) => lib?.name)
       .filter((name): name is string => typeof name === "string" && name.length > 0);
@@ -306,83 +280,26 @@ export class VersionService {
       });
     }
 
-    const manifest = await this.fetchManifest();
-    const versionEntry = (manifest.versions ?? []).find((entry) => entry.id === normalizedVersion);
-    if (!versionEntry) {
-      throw createError({
-        code: ERROR_CODES.VERSION_NOT_FOUND,
-        message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
-      });
-    }
-
-    const details = await this.fetchVersionDetails(versionEntry.url, normalizedVersion);
+    const { details } = await this.resolveVersionEntry(normalizedVersion);
     const serverJarUrl = details.downloads?.server?.url;
     if (!serverJarUrl) {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" does not expose a server download URL.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
+        details: listVersionsHintDetails(normalizedVersion)
       });
     }
 
-    const destinationPath = defaultDownloadPath(this.config.cacheDir, serverJarUrl);
-    if (existsSync(destinationPath)) {
-      return {
-        version: normalizedVersion,
-        jarPath: destinationPath,
-        source: "downloaded",
-        serverJarUrl
-      };
-    }
-
-    const downloaded = await downloadToCache(serverJarUrl, destinationPath, {
-      retries: this.config.fetchRetries,
-      timeoutMs: this.config.fetchTimeoutMs,
-      fetchFn: this.fetchFn
+    const jarPath = await this.downloadVerifiedJar({
+      url: serverJarUrl,
+      sha1: details.downloads?.server?.sha1,
+      version: normalizedVersion,
+      label: "server"
     });
-
-    if (!downloaded.ok || !downloaded.path) {
-      throw createError({
-        code: ERROR_CODES.REPO_FETCH_FAILED,
-        message: `Failed to download Minecraft server jar for version "${normalizedVersion}".`,
-        details: {
-          version: normalizedVersion,
-          url: serverJarUrl,
-          statusCode: downloaded.statusCode
-        }
-      });
-    }
-
-    const expectedSha1 = details.downloads?.server?.sha1;
-    if (expectedSha1) {
-      const actualSha1 = await computeFileSha1(downloaded.path);
-      if (actualSha1 !== expectedSha1) {
-        await unlink(downloaded.path).catch(() => {});
-        throw createError({
-          code: ERROR_CODES.REPO_FETCH_FAILED,
-          message: `SHA-1 mismatch for downloaded server jar of version "${normalizedVersion}".`,
-          details: {
-            version: normalizedVersion,
-            url: serverJarUrl,
-            expected: expectedSha1,
-            actual: actualSha1
-          }
-        });
-      }
-    }
 
     return {
       version: normalizedVersion,
-      jarPath: downloaded.path,
+      jarPath,
       source: "downloaded",
       serverJarUrl
     };
@@ -422,50 +339,65 @@ export class VersionService {
       };
     }
 
+    const { details } = await this.resolveVersionEntry(normalizedVersion);
+    const clientJarUrl = details.downloads?.client?.url;
+    if (!clientJarUrl) {
+      throw createError({
+        code: ERROR_CODES.VERSION_NOT_FOUND,
+        message: `Minecraft version "${normalizedVersion}" does not expose a client download URL.`,
+        details: listVersionsHintDetails(normalizedVersion)
+      });
+    }
+
+    const jarPath = await this.downloadVerifiedJar({
+      url: clientJarUrl,
+      sha1: details.downloads?.client?.sha1,
+      version: normalizedVersion,
+      label: "client"
+    });
+    await this.recordCacheEntry({
+      version: normalizedVersion,
+      jarPath,
+      downloadedAt: new Date().toISOString()
+    });
+
+    return {
+      version: normalizedVersion,
+      jarPath,
+      source: "downloaded",
+      clientJarUrl
+    };
+  }
+
+  private async resolveVersionEntry(
+    normalizedVersion: string
+  ): Promise<{ versionEntry: VersionManifestEntry; details: VersionDetails }> {
     const manifest = await this.fetchManifest();
     const versionEntry = (manifest.versions ?? []).find((entry) => entry.id === normalizedVersion);
     if (!versionEntry) {
       throw createError({
         code: ERROR_CODES.VERSION_NOT_FOUND,
         message: `Minecraft version "${normalizedVersion}" was not found in version manifest.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
+        details: listVersionsHintDetails(normalizedVersion)
       });
     }
 
     const details = await this.fetchVersionDetails(versionEntry.url, normalizedVersion);
-    const clientJarUrl = details.downloads?.client?.url;
-    if (!clientJarUrl) {
-      throw createError({
-        code: ERROR_CODES.VERSION_NOT_FOUND,
-        message: `Minecraft version "${normalizedVersion}" does not expose a client download URL.`,
-        details: {
-          version: normalizedVersion,
-          nextAction: "Use list-versions to see available Minecraft versions.",
-          ...buildSuggestedCall({ tool: "list-versions", params: {} })
-        }
-      });
-    }
+    return { versionEntry, details };
+  }
 
-    const destinationPath = defaultDownloadPath(this.config.cacheDir, clientJarUrl);
+  private async downloadVerifiedJar(opts: {
+    url: string;
+    sha1: string | undefined;
+    version: string;
+    label: "client" | "server";
+  }): Promise<string> {
+    const destinationPath = defaultDownloadPath(this.config.cacheDir, opts.url);
     if (existsSync(destinationPath)) {
-      await this.recordCacheEntry({
-        version: normalizedVersion,
-        jarPath: destinationPath,
-        downloadedAt: new Date().toISOString()
-      });
-      return {
-        version: normalizedVersion,
-        jarPath: destinationPath,
-        source: "downloaded",
-        clientJarUrl
-      };
+      return destinationPath;
     }
 
-    const downloaded = await downloadToCache(clientJarUrl, destinationPath, {
+    const downloaded = await downloadToCache(opts.url, destinationPath, {
       retries: this.config.fetchRetries,
       timeoutMs: this.config.fetchTimeoutMs,
       fetchFn: this.fetchFn
@@ -474,45 +406,33 @@ export class VersionService {
     if (!downloaded.ok || !downloaded.path) {
       throw createError({
         code: ERROR_CODES.REPO_FETCH_FAILED,
-        message: `Failed to download Minecraft client jar for version "${normalizedVersion}".`,
+        message: `Failed to download Minecraft ${opts.label} jar for version "${opts.version}".`,
         details: {
-          version: normalizedVersion,
-          url: clientJarUrl,
+          version: opts.version,
+          url: opts.url,
           statusCode: downloaded.statusCode
         }
       });
     }
 
-    const expectedSha1 = details.downloads?.client?.sha1;
-    if (expectedSha1) {
+    if (opts.sha1) {
       const actualSha1 = await computeFileSha1(downloaded.path);
-      if (actualSha1 !== expectedSha1) {
+      if (actualSha1 !== opts.sha1) {
         await unlink(downloaded.path).catch(() => {});
         throw createError({
           code: ERROR_CODES.REPO_FETCH_FAILED,
-          message: `SHA-1 mismatch for downloaded jar of version "${normalizedVersion}".`,
+          message: `SHA-1 mismatch for downloaded ${opts.label === "server" ? "server jar" : "jar"} of version "${opts.version}".`,
           details: {
-            version: normalizedVersion,
-            url: clientJarUrl,
-            expected: expectedSha1,
+            version: opts.version,
+            url: opts.url,
+            expected: opts.sha1,
             actual: actualSha1
           }
         });
       }
     }
 
-    await this.recordCacheEntry({
-      version: normalizedVersion,
-      jarPath: downloaded.path,
-      downloadedAt: new Date().toISOString()
-    });
-
-    return {
-      version: normalizedVersion,
-      jarPath: downloaded.path,
-      source: "downloaded",
-      clientJarUrl
-    };
+    return downloaded.path;
   }
 
   private async fetchVersionDetails(versionUrl: string, version: string): Promise<VersionDetails> {

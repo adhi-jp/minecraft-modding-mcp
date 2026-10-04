@@ -17,10 +17,8 @@ let javaAvailabilityPromise: Promise<void> | undefined;
 export interface JavaProcessOptions {
   jarPath: string;
   args: string[];
-  cwd?: string;
   timeoutMs?: number;
   maxMemoryMb?: number;
-  minMemoryMb?: number;
   normalizePathArgs?: boolean;
 }
 
@@ -123,19 +121,14 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
   const {
     jarPath,
     args,
-    cwd,
     timeoutMs = 120_000,
     maxMemoryMb,
-    minMemoryMb,
     normalizePathArgs = false
   } = options;
 
   const jvmArgs: string[] = [];
   if (maxMemoryMb) {
     jvmArgs.push(`-Xmx${maxMemoryMb}m`);
-  }
-  if (minMemoryMb) {
-    jvmArgs.push(`-Xms${minMemoryMb}m`);
   }
 
   const normalizedJar = normalizePathArgs ? normalizePathForHost(jarPath) : jarPath;
@@ -145,8 +138,7 @@ export function runJavaProcess(options: JavaProcessOptions): Promise<JavaProcess
 
   return new Promise((resolve, reject) => {
     const proc = spawn("java", spawnArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-      ...(cwd ? { cwd } : {})
+      stdio: ["ignore", "pipe", "pipe"]
     });
 
     let stdout = "";

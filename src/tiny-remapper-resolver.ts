@@ -32,7 +32,7 @@ export async function resolveTinyRemapperJar(
         details: {
           path: overridePath,
           nextAction:
-            "Point tinyRemapperJarPath / MCP_TINY_REMAPPER_JAR at an existing fat jar, or unset it to download automatically."
+            "Point tinyRemapperJarPath / MCP_TINY_REMAPPER_JAR_PATH at an existing fat jar, or unset it to download automatically."
         }
       });
     }

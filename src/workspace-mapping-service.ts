@@ -430,14 +430,6 @@ function compareSemverDescending(left: string, right: string): number {
   return 0;
 }
 
-/**
- * The rule itself now lives in `maven-token.js`, a leaf module the coordinate
- * parser can also import without pulling this service's dependencies in with
- * it. Re-exported here so the callers that already knew it by this module keep
- * working; there is still exactly one definition.
- */
-export { isSafeMavenVersionToken };
-
 function detectLoadersFromContent(rawContent: string, scriptKind: GradleScriptKind): LoaderDetection[] {
   const content = stripGradleComments(rawContent, scriptKind);
   const detections: LoaderDetection[] = [];
@@ -480,13 +472,15 @@ function detectLoadersFromContent(rawContent: string, scriptKind: GradleScriptKi
   return detections;
 }
 
-/** The build.gradle(.kts) files `detectCompileMapping` scans under `root`, sorted. */
+const GRADLE_PROJECT_GLOB_IGNORE = ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"];
+
+/** The build.gradle(.kts) files scanned under `root` for compile-mapping and loader detection, sorted. */
 async function listCompileMappingBuildScripts(root: string): Promise<string[]> {
   return (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
     cwd: root,
     absolute: true,
     onlyFiles: true,
-    ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+    ignore: GRADLE_PROJECT_GLOB_IGNORE
   })).sort((left, right) => left.localeCompare(right));
 }
 
@@ -732,12 +726,7 @@ export class WorkspaceMappingService {
 
   async detectProjectLoader(projectPath: string): Promise<WorkspaceProjectLoaderOutput> {
     const root = resolve(projectPath);
-    const buildFiles = (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
-      cwd: root,
-      absolute: true,
-      onlyFiles: true,
-      ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
-    })).sort((left, right) => left.localeCompare(right));
+    const buildFiles = await listCompileMappingBuildScripts(root);
     const descriptorFiles = (await fastGlob.glob([
       "fabric.mod.json",
       "quilt.mod.json",
@@ -751,7 +740,7 @@ export class WorkspaceMappingService {
       cwd: root,
       absolute: true,
       onlyFiles: true,
-      ignore: ["**/.git/**", "**/.gradle/**", "**/build/**", "**/out/**", "**/node_modules/**"]
+      ignore: GRADLE_PROJECT_GLOB_IGNORE
     })).sort((left, right) => left.localeCompare(right));
 
     const evidence = (await mapWithConcurrencyLimit(

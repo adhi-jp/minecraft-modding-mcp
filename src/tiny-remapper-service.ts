@@ -10,8 +10,6 @@ export interface RemapOptions {
   mappingsFile: string;
   fromNamespace: string;
   toNamespace: string;
-  threads?: number;
-  rebuildSourceFilenames?: boolean;
   timeoutMs?: number;
   maxMemoryMb?: number;
 }
@@ -31,8 +29,6 @@ export async function remapJar(
     mappingsFile,
     fromNamespace,
     toNamespace,
-    threads = 4,
-    rebuildSourceFilenames = false,
     timeoutMs = 600_000,
     maxMemoryMb = 4096
   } = options;
@@ -43,19 +39,12 @@ export async function remapJar(
     inputJar,
     outputJar,
     fromNamespace,
-    toNamespace,
-    threads
+    toNamespace
   });
 
   const startedAt = Date.now();
 
   const args = [inputJar, outputJar, mappingsFile, fromNamespace, toNamespace];
-  if (threads !== 4) {
-    args.push(`--threads=${threads}`);
-  }
-  if (rebuildSourceFilenames) {
-    args.push("--rebuildSourceFilenames");
-  }
 
   try {
     const result = await javaRunner.run({

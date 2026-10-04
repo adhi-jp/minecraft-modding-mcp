@@ -8,17 +8,12 @@
 
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import {
   installGradleUserHomeIsolation,
-  buildTestConfig,
   withCwd,
-  createVersionServiceStub,
-  writeLoomTinyCache,
+  createLoomService,
   TEST_DESCRIPTOR_REMAP_TINY
 } from "../helpers/mapping-service-fixtures.ts";
 
@@ -28,19 +23,8 @@ const OBFUSCATED_DESCRIPTOR = "(Lnet/minecraft/class_2338;Lnet/minecraft/class_2
 const YARN_DESCRIPTOR =
   "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z";
 
-async function createServiceWithTiny(prefix: string, tiny: string) {
-  const { MappingService } = await import("../../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), prefix));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  await writeLoomTinyCache(root, tiny);
-  return {
-    root,
-    service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
-  };
-}
-
 test("MappingService findMapping keeps symbol and descriptor in one namespace after projection", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "projection-symbol-findmapping-",
     TEST_DESCRIPTOR_REMAP_TINY
   );
@@ -71,7 +55,7 @@ test("MappingService findMapping keeps symbol and descriptor in one namespace af
 });
 
 test("MappingService resolveMethodMappingExact keeps symbol and descriptor in one namespace after projection", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "projection-symbol-exact-",
     TEST_DESCRIPTOR_REMAP_TINY
   );

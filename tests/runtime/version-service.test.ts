@@ -336,8 +336,7 @@ test("resolveVersionMappings returns mapping URLs and reuses cached version deta
     versionManifestUrl: DEFAULT_MANIFEST_URL,
     versionDetailUrl: detailUrl,
     clientMappingsUrl: "https://example.invalid/client.txt",
-    serverMappingsUrl: "https://example.invalid/server.txt",
-    mappingsUrl: "https://example.invalid/client.txt"
+    serverMappingsUrl: "https://example.invalid/server.txt"
   });
   assert.deepEqual(second, first);
   assert.equal(fetchFn.calls.filter((url) => url === detailUrl).length, 1);

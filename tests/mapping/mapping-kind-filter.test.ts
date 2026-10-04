@@ -11,17 +11,12 @@
 
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import {
   installGradleUserHomeIsolation,
-  buildTestConfig,
   withCwd,
-  createVersionServiceStub,
-  writeLoomTinyCache
+  createLoomService
 } from "../helpers/mapping-service-fixtures.ts";
 
 installGradleUserHomeIsolation();
@@ -45,19 +40,8 @@ const TEST_FIELD_NAMED_LIKE_CLASS_TINY = [
   "c\ta/b/Thing\tinter/pkg/InterThing\tyarn/pkg/Thing"
 ].join("\n");
 
-async function createServiceWithTiny(prefix: string, tiny: string) {
-  const { MappingService } = await import("../../src/mapping-service.ts");
-  const root = await mkdtemp(join(tmpdir(), prefix));
-  const config = buildTestConfig(root, { sourceRepos: [] });
-  await writeLoomTinyCache(root, tiny);
-  return {
-    root,
-    service: new MappingService(config, createVersionServiceStub(), globalThis.fetch)
-  };
-}
-
 test("MappingService findMapping kind=field ignores a same-named method on the same owner", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "field-method-collision-",
     TEST_FIELD_METHOD_NAME_COLLISION_TINY
   );
@@ -86,7 +70,7 @@ test("MappingService findMapping kind=field ignores a same-named method on the s
 });
 
 test("MappingService findMapping kind=method ignores a same-named field on the same owner", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "method-field-collision-",
     TEST_FIELD_METHOD_NAME_COLLISION_TINY
   );
@@ -115,7 +99,7 @@ test("MappingService findMapping kind=method ignores a same-named field on the s
 });
 
 test("MappingService findMapping kind=field ignores a class sharing the field's simple name", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "field-class-collision-",
     TEST_FIELD_NAMED_LIKE_CLASS_TINY
   );
@@ -144,7 +128,7 @@ test("MappingService findMapping kind=field ignores a class sharing the field's 
 });
 
 test("MappingService findMapping kind=class still resolves through the class index", async () => {
-  const { root, service } = await createServiceWithTiny(
+  const { root, service } = await createLoomService(
     "class-still-resolves-",
     TEST_FIELD_NAMED_LIKE_CLASS_TINY
   );

@@ -391,7 +391,7 @@ function resolveMappingsUrls(metadata: ResolvedVersionMappings): {
   serverUrl: string | undefined;
 } {
   return {
-    clientUrl: metadata.clientMappingsUrl ?? metadata.mappingsUrl,
+    clientUrl: metadata.clientMappingsUrl,
     serverUrl: metadata.serverMappingsUrl
   };
 }

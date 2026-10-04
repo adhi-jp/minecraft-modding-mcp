@@ -33,12 +33,9 @@ import {
   normalizedVariants,
   normalizeMappedSymbolOutput,
   parseFieldName,
-  parseInputSymbol,
-  parseMethodName,
   registerRecord,
   simpleLookupKeys,
   simpleName,
-  splitOwnerAndName,
   stripLineInfo
 } from "./mapping/parsers/symbol-records.js";
 import {
@@ -105,7 +102,7 @@ import {
 } from "./mapping/lookup.js";
 import { loadMojangPairs } from "./mapping/loaders/mojang.js";
 import { loadTinyPairsFromLoom } from "./mapping/loaders/tiny-loom.js";
-import { loadTinyPairsFromMaven } from "./mapping/loaders/tiny-maven.js";
+import { fetchYarnCoordinates, loadTinyPairsFromMaven } from "./mapping/loaders/tiny-maven.js";
 import type {
   MappingLoaderDeps,
   MappingLoaderResult
@@ -805,23 +802,6 @@ export class MappingService {
     const warnings = [...graph.warnings];
     const unobfuscatedRuntime = graph.unobfuscatedRuntime === true;
     const includeKinds = normalizeIncludedKinds(input.includeKinds);
-    const pathCache = new Map<PairKey, SourceMapping[] | undefined>();
-    const resolvePath = (
-      sourceMapping: SourceMapping,
-      targetMapping: SourceMapping
-    ): SourceMapping[] | undefined => {
-      if (sourceMapping === targetMapping) {
-        return [sourceMapping];
-      }
-      const key = pairKey(sourceMapping, targetMapping);
-      if (pathCache.has(key)) {
-        return pathCache.get(key);
-      }
-      const path = namespacePath(graph, sourceMapping, targetMapping);
-      pathCache.set(key, path);
-      return path;
-    };
-
     const classByMapping: Partial<Record<SourceMapping, MappingSymbolRecord>> = {
       [classNameMapping]: createClassSymbolRecord(className)
     };
@@ -835,7 +815,7 @@ export class MappingService {
         classNameMapping,
         mapping,
         classByMapping[classNameMapping] as MappingSymbolRecord,
-        resolvePath(classNameMapping, mapping)
+        namespacePath(graph, classNameMapping, mapping)
       );
       if (mapped.length > 1) {
         const competing = mapped.slice(0, 5).map((c) => c.symbol);
@@ -962,19 +942,11 @@ export class MappingService {
             baseMapping,
             mapping,
             baseRecord,
-            resolvePath(baseMapping, mapping)
+            namespacePath(graph, baseMapping, mapping)
           );
           let filtered = mapped;
           if (baseRecord.kind !== "class" && classIdentity) {
             filtered = filtered.filter((candidate) => candidate.owner === classIdentity.symbol);
-          }
-          if (baseRecord.kind === "method" && baseRecord.descriptor) {
-            const descriptorMatched = filtered.filter(
-              (candidate) => candidate.descriptor === baseRecord.descriptor
-            );
-            if (descriptorMatched.length > 0) {
-              filtered = descriptorMatched;
-            }
           }
           if (filtered.length > 1) {
             const competing = filtered.slice(0, 5).map((c) => c.symbol);
@@ -1221,46 +1193,16 @@ export class MappingService {
       return buildOutput(querySymbol, methodCandidates, status);
     }
 
-    // Tiny parsing stores a single descriptor per method entry (typically in the obfuscated
-    // namespace) and copies it into every namespace at load time. That means a descriptor
-    // supplied in `sourceMapping` coordinates will not string-compare equal to the record
-    // for any method whose descriptor references remapped Minecraft classes. Project the
-    // caller's descriptor to obfuscated coordinates first so class references line up with
-    // the stored record descriptors. The projection is accepted even when
-    // `projection.complete` is false: `projectMethodDescriptorToTarget` leaves every
-    // unresolvable `L...;` reference unchanged (JDK/external classes like
-    // `Ljava/lang/String;` are never in the mapping graph and pass through by design), so a
-    // partial projection still aligns the Minecraft class refs with the stored descriptor
-    // form while leaving external class refs identical to the user input. Falling back to
-    // verbatim comparison on `complete === false` would send mixed descriptors like
-    // `(Lnet/minecraft/world/item/ItemStack;Ljava/lang/String;)V` down the raw-compare path
-    // and produce false negatives in the most common lookup shape. When no class references
-    // exist at all (primitives-only descriptors such as `(I)V`) the projector marks
-    // `hadClassReferences === false` and we simply reuse the original descriptor.
-    // Stored descriptors carry whatever coordinate the tiny column used: obfuscated
-    // for merged graphs, but intermediary for a standalone Fabric yarn tiny
-    // (`tiny 2 0 intermediary named`). The descriptor namespace is not recorded
-    // per record, so project the query descriptor along every reachable base
-    // namespace and accept a match in any of them rather than assuming obfuscated.
+    // Stored descriptors may be in obfuscated or intermediary coordinates, so the
+    // query descriptor is projected into each reachable base namespace; see
+    // acceptedDescriptorForms.
     const queryDescriptor = queryRecord.descriptor as string;
-    const candidateDescriptors = new Set<string>([queryDescriptor]);
-    for (const baseNamespace of ["obfuscated", "intermediary"] as const) {
-      if (sourceMapping === baseNamespace) {
-        continue;
-      }
-      const projectionPath = namespacePath(graph, sourceMapping, baseNamespace);
-      if (!projectionPath) {
-        continue;
-      }
-      const projection = this.projectMethodDescriptorToTarget(
-        graph,
-        projectionPath,
-        queryDescriptor
-      );
-      if (projection.hadClassReferences) {
-        candidateDescriptors.add(projection.descriptor);
-      }
-    }
+    const candidateDescriptors = this.acceptedDescriptorForms(
+      graph,
+      sourceMapping,
+      queryDescriptor,
+      queryDescriptor
+    );
     const descriptorMatched = methodCandidates.filter(
       (record) => record.descriptor != null && candidateDescriptors.has(record.descriptor)
     );
@@ -1685,7 +1627,6 @@ export class MappingService {
       return {
         version,
         priority,
-        mode,
         pairs: new Map(),
         adjacency: new Map(),
         pathCache: new Map(),
@@ -1702,7 +1643,6 @@ export class MappingService {
     const graph: LoadedGraph = {
       version,
       priority,
-      mode,
       pairs: new Map(),
       adjacency: new Map(),
       pathCache: new Map(),
@@ -1878,33 +1818,6 @@ export class MappingService {
 
 const FABRIC_MAVEN = "https://maven.fabricmc.net";
 
-async function fetchYarnCoordinatesStandalone(
-  version: string,
-  fetchFn: typeof fetch = globalThis.fetch
-): Promise<string[]> {
-  const metadataUrl = `${FABRIC_MAVEN}/net/fabricmc/yarn/maven-metadata.xml`;
-  try {
-    const response = await fetchFn(metadataUrl);
-    if (!response.ok) {
-      return [];
-    }
-    const xml = await response.text();
-    const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
-      .map((match) => match[1]?.trim() ?? "")
-      .filter((value) => value.startsWith(`${version}+build.`));
-
-    const sorted = versions.sort((left, right) => {
-      const leftBuild = Number.parseInt(left.split("+build.")[1] ?? "0", 10);
-      const rightBuild = Number.parseInt(right.split("+build.")[1] ?? "0", 10);
-      return rightBuild - leftBuild;
-    });
-
-    return sorted.length > 0 ? sorted.slice(0, 3) : [];
-  } catch {
-    return [];
-  }
-}
-
 async function extractTinyFromJar(
   jarPath: string,
   outputPath: string
@@ -2040,11 +1953,12 @@ export async function resolveTinyMappingFile(
     }
   }
 
-  const yarnCoordinates = await fetchYarnCoordinatesStandalone(version, effectiveFetch);
+  const yarnCoordinates = await fetchYarnCoordinates(effectiveFetch, FABRIC_MAVEN, version, []);
 
-  // Network fallback: the metadata fetch failed/empty (fetchYarnCoordinatesStandalone
-  // swallows errors -> []). Serve the last-known-good coordinate rather than failing,
-  // so a transient Fabric Maven outage after TTL expiry does not break cache hits.
+  // Network fallback: the metadata fetch failed/empty (fetchYarnCoordinates
+  // swallows errors and returns the empty fallback). Serve the last-known-good
+  // coordinate rather than failing, so a transient Fabric Maven outage after TTL
+  // expiry does not break cache hits.
   if (yarnCoordinates.length === 0) {
     if (existingMeta) {
       const cachedCoordTiny = yarnCoordinateTinyPath(cacheDir, existingMeta.coordinate);

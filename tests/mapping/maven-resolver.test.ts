@@ -53,13 +53,7 @@ test("buildRemoteBinaryUrls emits deterministic binary URL order", () => {
   ]);
 });
 
-import {
-  enumerateLocalAlternativeSourceJars,
-  hasExistingJar,
-  localArtifactPathsFromCoordinate,
-  resolveLocalM2Candidate,
-  resolveLocalSourceJar
-} from "../../src/maven-resolver.ts";
+import { hasExistingJar } from "../../src/maven-resolver.ts";
 import { mkdtempSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -135,37 +129,6 @@ test("buildRemoteBinaryUrls includes classifier suffix in binary jar name", () =
   ]);
 });
 
-test("resolveLocalM2Candidate builds correct source and binary jar paths without classifier", () => {
-  const candidate = resolveLocalM2Candidate("/m2", "net.fabricmc:fabric-loader:0.16.0");
-  assert.equal(
-    candidate.sourceJarPath,
-    join("/m2", "net", "fabricmc", "fabric-loader", "0.16.0", "fabric-loader-0.16.0-sources.jar")
-  );
-  assert.equal(
-    candidate.binaryJarPath,
-    join("/m2", "net", "fabricmc", "fabric-loader", "0.16.0", "fabric-loader-0.16.0.jar")
-  );
-});
-
-test("resolveLocalM2Candidate inserts classifier in both source and binary jar names", () => {
-  const candidate = resolveLocalM2Candidate("/m2", "com.example:demo:1.0:client");
-  assert.equal(
-    candidate.sourceJarPath,
-    join("/m2", "com", "example", "demo", "1.0", "demo-1.0-client-sources.jar")
-  );
-  assert.equal(
-    candidate.binaryJarPath,
-    join("/m2", "com", "example", "demo", "1.0", "demo-1.0-client.jar")
-  );
-});
-
-test("localArtifactPathsFromCoordinate matches resolveLocalM2Candidate output", () => {
-  assert.deepEqual(
-    localArtifactPathsFromCoordinate("/m2", "com.example:demo:1.0"),
-    resolveLocalM2Candidate("/m2", "com.example:demo:1.0")
-  );
-});
-
 test("parseCoordinate rejects a..b as a groupId, and groupToPath still collapses empty segments", () => {
   // `a..b` is CONTAINED under the collapsing builder, so this rejection is not a
   // containment fix. It exists so the coordinate route answers exactly as the
@@ -199,47 +162,6 @@ test("hasExistingJar returns true only for existing regular files", async () => 
   assert.equal(hasExistingJar(join(root, "nonexistent.jar")), false);
   assert.equal(hasExistingJar(dirPath), false);
   assert.equal(hasExistingJar(filePath), true);
-});
-
-test("resolveLocalSourceJar prefers source jar when present and returns undefined otherwise", async () => {
-  const m2 = mkdtempSync(join(tmpdir(), "resolve-src-"));
-  const versionDir = join(m2, "com", "example", "demo", "1.0");
-  await mkdir(versionDir, { recursive: true });
-  const sourcePath = join(versionDir, "demo-1.0-sources.jar");
-  const binaryPath = join(versionDir, "demo-1.0.jar");
-
-  // (1) nothing present → undefined
-  assert.equal(resolveLocalSourceJar(m2, "com.example:demo:1.0"), undefined);
-
-  // (2) binary only → still undefined (no guess from binary)
-  await writeFile(binaryPath, "");
-  assert.equal(resolveLocalSourceJar(m2, "com.example:demo:1.0"), undefined);
-
-  // (3) sources present → returns the source path
-  await writeFile(sourcePath, "");
-  assert.equal(resolveLocalSourceJar(m2, "com.example:demo:1.0"), sourcePath);
-});
-
-test("enumerateLocalAlternativeSourceJars returns [] for missing directory and filters with prefix + .jar suffix", async () => {
-  const m2 = mkdtempSync(join(tmpdir(), "enum-src-"));
-  assert.deepEqual(
-    enumerateLocalAlternativeSourceJars(m2, "com.example:demo:1.0"),
-    [],
-    "missing version directory must return []"
-  );
-
-  const versionDir = join(m2, "com", "example", "demo", "1.0");
-  await mkdir(versionDir, { recursive: true });
-  await writeFile(join(versionDir, "demo-1.0-sources.jar"), "");
-  await writeFile(join(versionDir, "demo-1.0-extra-sources.jar"), "");
-  await writeFile(join(versionDir, "other-1.0-sources.jar"), "");
-  await writeFile(join(versionDir, "demo-1.0.jar"), "");
-
-  const found = enumerateLocalAlternativeSourceJars(m2, "com.example:demo:1.0").sort();
-  assert.deepEqual(found, [
-    join(versionDir, "demo-1.0-extra-sources.jar"),
-    join(versionDir, "demo-1.0-sources.jar")
-  ]);
 });
 
 test("isMutableMavenCoordinate flags -SNAPSHOT versions and leaves release and timestamped versions immutable", () => {

@@ -7,6 +7,7 @@ import test from "node:test";
 import { ERROR_CODES } from "../../src/errors.ts";
 import { resolveMojangTinyFile } from "../../src/mojang-tiny-mapping-service.ts";
 import type { Config } from "../../src/types.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 
 interface FetchTable {
   [url: string]: { body: string; status?: number } | { failWith: "abort" };
@@ -40,7 +41,6 @@ function makeFetchStub(table: FetchTable): typeof fetch {
 function makeVersionStub(meta: {
   clientMappingsUrl?: string;
   serverMappingsUrl?: string;
-  mappingsUrl?: string;
   versionDetailUrl?: string;
 }) {
   return {
@@ -50,41 +50,22 @@ function makeVersionStub(meta: {
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: meta.versionDetailUrl ?? "https://example.test/versions/1.21.10.json",
         clientMappingsUrl: meta.clientMappingsUrl,
-        serverMappingsUrl: meta.serverMappingsUrl,
-        mappingsUrl: meta.mappingsUrl
+        serverMappingsUrl: meta.serverMappingsUrl
       };
     }
   };
 }
 
 function makeConfig(cacheDir: string): Config {
-  return {
+  return buildTestConfig(cacheDir, {
     cacheDir,
     sqlitePath: join(cacheDir, "test.db"),
-    sourceRepos: ["https://maven.fabricmc.net"],
     localM2Path: join(cacheDir, ".m2"),
-    vineflowerJarPath: undefined,
+    sourceRepos: ["https://maven.fabricmc.net"],
     indexedSearchEnabled: false,
-    mappingSourcePriority: "loom-first",
-    maxContentBytes: 1_000_000,
-    maxSearchHits: 200,
-    maxArtifacts: 200,
-    maxCacheBytes: 2_147_483_648,
     fetchTimeoutMs: 15_000,
-    fetchRetries: 2,
-    searchScanPageSize: 250,
-    searchScanMaxBytes: 67_108_864,
-    indexInsertChunkSize: 200,
-    maxMappingGraphCache: 16,
-    maxSignatureCache: 2000,
-    maxVersionDetailCache: 256,
-    maxNbtInputBytes: 4 * 1024 * 1024,
-    maxNbtInflatedBytes: 16 * 1024 * 1024,
-    maxNbtResponseBytes: 8 * 1024 * 1024,
-    tinyRemapperJarPath: undefined,
-    remapTimeoutMs: 600_000,
-    remapMaxMemoryMb: 4096
-  };
+    fetchRetries: 2
+  });
 }
 
 const CLIENT_MAPPINGS = [
@@ -121,8 +102,7 @@ test("resolveMojangTinyFile builds merged tiny v2 from client+server mappings", 
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: "https://example.test/versions/1.21.10.json",
         clientMappingsUrl: "https://example.test/client.txt",
-        serverMappingsUrl: "https://example.test/server.txt",
-        mappingsUrl: "https://example.test/client.txt"
+        serverMappingsUrl: "https://example.test/server.txt"
       };
     }
   };
@@ -162,8 +142,7 @@ test("resolveMojangTinyFile works with client mappings only and emits warning", 
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: "https://example.test/versions/1.21.10.json",
         clientMappingsUrl: "https://example.test/client.txt",
-        serverMappingsUrl: undefined,
-        mappingsUrl: "https://example.test/client.txt"
+        serverMappingsUrl: undefined
       };
     }
   };
@@ -189,8 +168,7 @@ test("resolveMojangTinyFile throws MAPPING_UNAVAILABLE when version has no Mojan
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: "https://example.test/versions/1.21.10.json",
         clientMappingsUrl: undefined,
-        serverMappingsUrl: undefined,
-        mappingsUrl: undefined
+        serverMappingsUrl: undefined
       };
     }
   };
@@ -228,8 +206,7 @@ test("resolveMojangTinyFile reuses cached tiny output", async () => {
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: "https://example.test/versions/1.21.10.json",
         clientMappingsUrl: "https://example.test/client.txt",
-        serverMappingsUrl: undefined,
-        mappingsUrl: "https://example.test/client.txt"
+        serverMappingsUrl: undefined
       };
     }
   };
@@ -261,8 +238,7 @@ test("resolveMojangTinyFile warns when server URL is set but returns 404 and con
     fetchFn: fetchStub,
     versionService: makeVersionStub({
       clientMappingsUrl: "https://example.test/client.txt",
-      serverMappingsUrl: "https://example.test/server.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      serverMappingsUrl: "https://example.test/server.txt"
     })
   });
 
@@ -289,8 +265,7 @@ test("resolveMojangTinyFile throws MAPPING_UNAVAILABLE when every download fails
         fetchFn: fetchStub,
         versionService: makeVersionStub({
           clientMappingsUrl: "https://example.test/client.txt",
-          serverMappingsUrl: "https://example.test/server.txt",
-          mappingsUrl: "https://example.test/client.txt"
+          serverMappingsUrl: "https://example.test/server.txt"
         })
       }),
     (err: any) => {
@@ -337,8 +312,7 @@ test("resolveMojangTinyFile rejects when ProGuard input has no class entries", a
       resolveMojangTinyFile("1.21.10", config, {
         fetchFn: fetchStub,
         versionService: makeVersionStub({
-          clientMappingsUrl: "https://example.test/client.txt",
-          mappingsUrl: "https://example.test/client.txt"
+          clientMappingsUrl: "https://example.test/client.txt"
         })
       }),
     (err: any) => {
@@ -368,8 +342,7 @@ test("resolveMojangTinyFile records skip warnings for unsupported member syntax"
   const result = await resolveMojangTinyFile("1.21.10", config, {
     fetchFn: fetchStub,
     versionService: makeVersionStub({
-      clientMappingsUrl: "https://example.test/client.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      clientMappingsUrl: "https://example.test/client.txt"
     })
   });
 
@@ -397,8 +370,7 @@ test("resolveMojangTinyFile emits Conflicting class mapping warning and keeps fi
     fetchFn: fetchStub,
     versionService: makeVersionStub({
       clientMappingsUrl: "https://example.test/client.txt",
-      serverMappingsUrl: "https://example.test/server.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      serverMappingsUrl: "https://example.test/server.txt"
     })
   });
 
@@ -430,8 +402,7 @@ test("resolveMojangTinyFile dedups identical members shared between client and s
     fetchFn: fetchStub,
     versionService: makeVersionStub({
       clientMappingsUrl: "https://example.test/client.txt",
-      serverMappingsUrl: "https://example.test/server.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      serverMappingsUrl: "https://example.test/server.txt"
     })
   });
 
@@ -458,8 +429,7 @@ test("resolveMojangTinyFile converts varargs and generic types in method descrip
   const result = await resolveMojangTinyFile("1.21.10", config, {
     fetchFn: fetchStub,
     versionService: makeVersionStub({
-      clientMappingsUrl: "https://example.test/client.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      clientMappingsUrl: "https://example.test/client.txt"
     })
   });
 
@@ -467,26 +437,6 @@ test("resolveMojangTinyFile converts varargs and generic types in method descrip
   assert.match(tiny, /^\tm\t\(\[Ljava\/lang\/String;\)V\tv\tvarargs$/m);
   assert.match(tiny, /^\tm\t\(Ljava\/util\/Map;\)V\tg\tgenericArgs$/m);
   assert.match(tiny, /^\tm\t\(\)Ljava\/util\/List;\tl\tgetList$/m);
-});
-
-test("resolveMojangTinyFile falls back to mappingsUrl when clientMappingsUrl is undefined", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mojang-tiny-legacy-url-"));
-  const config = makeConfig(root);
-
-  const fetchStub = makeFetchStub({
-    "https://example.test/legacy.txt": { body: CLIENT_MAPPINGS, status: 200 }
-  });
-
-  const result = await resolveMojangTinyFile("1.21.10", config, {
-    fetchFn: fetchStub,
-    versionService: makeVersionStub({
-      clientMappingsUrl: undefined,
-      mappingsUrl: "https://example.test/legacy.txt"
-    })
-  });
-
-  const tiny = await readFile(result.path, "utf8");
-  assert.match(tiny, /^c\ta\/b\/C\tcom\/example\/ClientClass$/m);
 });
 
 test("resolveMojangTinyFile strips multiple line-info prefixes when parsing methods", async () => {
@@ -505,8 +455,7 @@ test("resolveMojangTinyFile strips multiple line-info prefixes when parsing meth
   const result = await resolveMojangTinyFile("1.21.10", config, {
     fetchFn: fetchStub,
     versionService: makeVersionStub({
-      clientMappingsUrl: "https://example.test/client.txt",
-      mappingsUrl: "https://example.test/client.txt"
+      clientMappingsUrl: "https://example.test/client.txt"
     })
   });
 

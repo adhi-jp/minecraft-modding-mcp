@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import {
   createVersionServiceStub,
   queryFromSymbol,
   createLoomService,
+  writeLoomTinyCache,
   TEST_TINY,
   TEST_SHARED_CLASS_REF_TINY,
   TEST_MOJANG_CLIENT_MAPPINGS
@@ -120,16 +121,7 @@ test("MappingService maps obfuscated -> mojang and caches repeated lookups", asy
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const first = await service.findMapping({
@@ -236,16 +228,7 @@ test("MappingService limits returned candidates while preserving ambiguity metad
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await service.findMapping({
@@ -282,16 +265,7 @@ test("MappingService maps field symbols and returns structured candidate metadat
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await service.findMapping({
@@ -317,20 +291,9 @@ test("MappingService maps descriptor-qualified methods through tiny mappings", a
   const root = await mkdtemp(join(tmpdir(), "mapping-service-method-tiny-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
@@ -368,16 +331,7 @@ test("MappingService resolves exact method descriptor through mojang client mapp
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await service.findMapping({
@@ -401,16 +355,7 @@ test("MappingService returns identity candidate when source/target mapping are e
   const root = await mkdtemp(join(tmpdir(), "mapping-service-identity-"));
   try {
     const config = buildTestConfig(root);
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const sourceMapping: SourceMapping = "yarn";

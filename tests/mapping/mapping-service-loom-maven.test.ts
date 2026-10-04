@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -32,20 +32,9 @@ test("MappingService maps obfuscated -> yarn from Loom tiny cache", async () => 
   const root = await mkdtemp(join(tmpdir(), "mapping-service-loom-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, globalThis.fetch);
     const result = await withCwd(root, () =>
@@ -273,16 +262,7 @@ test("MappingService falls back to Maven tiny when Loom cache is unavailable", a
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
@@ -457,16 +437,7 @@ test("MappingService stops Maven tiny fallback at the first successful jar per a
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     await withCwd(root, () =>
@@ -495,15 +466,12 @@ test("MappingService supports sourcePriority override over config default", asyn
       mappingSourcePriority: "loom-first"
     });
 
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(
-      loomTinyPath,
+    await writeLoomTinyCache(
+      root,
       [
         "tiny\t2\t0\tobfuscated\tintermediary",
         "c\ta/b/C\tloom/pkg/InterClass"
-      ].join("\n"),
-      "utf8"
+      ].join("\n")
     );
 
     const mavenTinyJar = join(root, "maven-tiny.jar");
@@ -528,16 +496,7 @@ test("MappingService supports sourcePriority override over config default", asyn
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
@@ -591,16 +550,7 @@ test("MappingService suppresses raw Loom miss warnings when Maven fallback resol
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
@@ -659,37 +609,6 @@ test("MappingService Loom cache version filter handles representative candidate 
       );
 
       assertVersionFilteredResult(result);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  await t.test("normalizes backslash separated candidate paths", async () => {
-    const root = await mkdtemp(join(tmpdir(), "mapping-service-backslash-path-"));
-    try {
-      const config = buildTestConfig(root, { sourceRepos: [] });
-
-      const pseudoWindowsPath121_1 = join(root, ".gradle", "loom-cache\\1.21.1\\mappings.tiny");
-      const pseudoWindowsPath121_10 = join(root, ".gradle", "loom-cache\\1.21.10\\mappings.tiny");
-      await mkdir(join(root, ".gradle"), { recursive: true });
-      await writeFile(pseudoWindowsPath121_1, `${TEST_TINY_V1}\n`, "utf8");
-      await writeFile(pseudoWindowsPath121_10, `${TEST_TINY}\n`, "utf8");
-
-      const originalGlob = fastGlob.glob;
-      fastGlob.glob = async () => [pseudoWindowsPath121_1, pseudoWindowsPath121_10];
-      try {
-        const service = new MappingService(config, createVersionServiceStub(), globalThis.fetch);
-        const result = await service.findMapping({
-          version: "1.21.1",
-          ...queryFromSymbol("a.b.C"),
-          sourceMapping: "obfuscated",
-          targetMapping: "yarn"
-        });
-
-        assertVersionFilteredResult(result);
-      } finally {
-        fastGlob.glob = originalGlob;
-      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

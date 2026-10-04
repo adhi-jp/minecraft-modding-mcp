@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,7 @@ import {
   withCwd,
   createVersionServiceStub,
   createLoomService,
+  writeLoomTinyCache,
   TEST_TINY,
   TEST_AMBIGUOUS_METHOD_TINY,
   TEST_AMBIGUOUS_METHOD_WITH_FOREIGN_NAME_TINY,
@@ -78,31 +79,8 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
     const { root, service } = await createLoomService("mapping-service-method-exact-", TEST_TINY);
     try {
       const result = await withCwd(root, () =>
-        (
-          service as unknown as {
-            resolveMethodMappingExact: (input: {
-              version: string;
-              kind: "method";
-              owner: string;
-              name: string;
-              descriptor: string;
-              sourceMapping: SourceMapping;
-              targetMapping: SourceMapping;
-              sourcePriority?: "loom-first" | "maven-first";
-            }) => Promise<{
-              resolved: boolean;
-              status: string;
-              resolvedSymbol?: {
-                name: string;
-                owner?: string;
-                descriptor?: string;
-              };
-              warnings: string[];
-            }>;
-          }
-        ).resolveMethodMappingExact({
+        service.resolveMethodMappingExact({
           version: "1.21.10",
-          kind: "method",
           owner: "a.b.C",
           name: "e",
           descriptor: "(I)V",
@@ -145,25 +123,8 @@ test("MappingService resolveMethodMappingExact resolves representative exact loo
         createVersionServiceStub("https://example.test/mappings/client.txt"),
         fetchStub
       );
-      const result = await (
-        service as unknown as {
-          resolveMethodMappingExact: (input: {
-            version: string;
-            kind: "method";
-            owner: string;
-            name: string;
-            descriptor: string;
-            sourceMapping: SourceMapping;
-            targetMapping: SourceMapping;
-          }) => Promise<{
-            resolved: boolean;
-            status: string;
-            warnings: string[];
-          }>;
-        }
-      ).resolveMethodMappingExact({
+      const result = await service.resolveMethodMappingExact({
         version: "1.21.10",
-        kind: "method",
         owner: "a.b.C",
         name: "f",
         descriptor: "(I)V",
@@ -184,25 +145,8 @@ test("MappingService resolveMethodMappingExact reports representative unresolved
     const { root, service } = await createLoomService("mapping-service-method-exact-miss-", TEST_TINY);
     try {
       const result = await withCwd(root, () =>
-        (
-          service as unknown as {
-            resolveMethodMappingExact: (input: {
-              version: string;
-              kind: "method";
-              owner: string;
-              name: string;
-              descriptor: string;
-              sourceMapping: SourceMapping;
-              targetMapping: SourceMapping;
-            }) => Promise<{
-              resolved: boolean;
-              status: string;
-              candidates: unknown[];
-            }>;
-          }
-        ).resolveMethodMappingExact({
+        service.resolveMethodMappingExact({
           version: "1.21.10",
-          kind: "method",
           owner: "a.b.C",
           name: "missing",
           descriptor: "(I)V",
@@ -226,25 +170,8 @@ test("MappingService resolveMethodMappingExact reports representative unresolved
     );
     try {
       const result = await withCwd(root, () =>
-        (
-          service as unknown as {
-            resolveMethodMappingExact: (input: {
-              version: string;
-              kind: "method";
-              owner: string;
-              name: string;
-              descriptor: string;
-              sourceMapping: SourceMapping;
-              targetMapping: SourceMapping;
-            }) => Promise<{
-              resolved: boolean;
-              status: string;
-              candidates: Array<{ name: string }>;
-            }>;
-          }
-        ).resolveMethodMappingExact({
+        service.resolveMethodMappingExact({
           version: "1.21.10",
-          kind: "method",
           owner: "a.b.C",
           name: "e",
           descriptor: "(I)V",
@@ -452,9 +379,7 @@ test("MappingService builds class API matrix across mappings", async () => {
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -464,38 +389,11 @@ test("MappingService builds class API matrix across mappings", async () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          getClassApiMatrix: (input: {
-            version: string;
-            className: string;
-            classNameMapping: SourceMapping;
-          }) => Promise<{
-            classIdentity: Record<string, string | undefined>;
-            rows: Array<{
-              kind: string;
-              descriptor?: string;
-              obfuscated?: { name: string };
-              intermediary?: { name: string };
-              yarn?: { name: string };
-              mojang?: { name: string };
-            }>;
-          }>;
-        }
-      ).getClassApiMatrix({
+      service.getClassApiMatrix({
         version: "1.21.10",
         className: "a.b.C",
         classNameMapping: "obfuscated"
@@ -523,9 +421,7 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-maxrows-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -535,16 +431,7 @@ test("MappingService getClassApiMatrix supports maxRows", async () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
@@ -583,9 +470,7 @@ test("MappingService getClassApiMatrix maps only the windowed rows (per-row mapp
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-windowmap-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -595,16 +480,7 @@ test("MappingService getClassApiMatrix maps only the windowed rows (per-row mapp
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const query = { version: "1.21.10", className: "a.b.C", classNameMapping: "obfuscated" } as const;
@@ -634,9 +510,7 @@ test("MappingService getClassApiMatrix paginates rows with a stable nextCursor",
   const root = await mkdtemp(join(tmpdir(), "mapping-service-class-matrix-cursor-"));
   try {
     const config = buildTestConfig(root, { sourceRepos: [] });
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${TEST_TINY}\n`, "utf8");
+    await writeLoomTinyCache(root, TEST_TINY);
 
     const fetchStub = (async (input: string | URL | Request) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -646,16 +520,7 @@ test("MappingService getClassApiMatrix paginates rows with a stable nextCursor",
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: "https://example.test/mappings/client.txt"
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub("https://example.test/mappings/client.txt");
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     // Injective row key: include the descriptor so overloaded members (same
@@ -840,40 +705,17 @@ test("MappingService getClassApiMatrix includes competing candidates in ambiguit
       "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
     ].join("\n");
 
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+    await writeLoomTinyCache(root, ambiguousTiny);
 
     const fetchStub = (async () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
     const service = new MappingService(config, versionServiceStub, fetchStub);
     const result = await withCwd(root, () =>
-      (
-        service as unknown as {
-          getClassApiMatrix: (input: {
-            version: string;
-            className: string;
-            classNameMapping: SourceMapping;
-          }) => Promise<{
-            warnings: string[];
-            ambiguousRowCount?: number;
-            rows: Array<{ kind: string }>;
-          }>;
-        }
-      ).getClassApiMatrix({
+      service.getClassApiMatrix({
         version: "1.21.10",
         className: "a.b.C",
         classNameMapping: "obfuscated"
@@ -902,31 +744,12 @@ test("MappingService getClassApiMatrix scopes ambiguity warnings to the returned
       "\tm\t(I)V\te\tinterMethod2\tnamedMethodAlt"
     ].join("\n");
 
-    const loomTinyPath = join(root, ".gradle", "loom-cache", "1.21.10", "mappings.tiny");
-    await mkdir(join(root, ".gradle", "loom-cache", "1.21.10"), { recursive: true });
-    await writeFile(loomTinyPath, `${ambiguousTiny}\n`, "utf8");
+    await writeLoomTinyCache(root, ambiguousTiny);
 
     const fetchStub = (async () => new Response("not found", { status: 404 })) as typeof fetch;
-    const versionServiceStub = {
-      async resolveVersionMappings(version: string) {
-        return {
-          version,
-          versionManifestUrl: "https://example.test/version_manifest_v2.json",
-          versionDetailUrl: "https://example.test/versions/1.21.10.json",
-          mappingsUrl: undefined
-        };
-      }
-    };
+    const versionServiceStub = createVersionServiceStub();
 
-    const service = new MappingService(config, versionServiceStub, fetchStub) as unknown as {
-      getClassApiMatrix: (input: {
-        version: string;
-        className: string;
-        classNameMapping: SourceMapping;
-        maxRows?: number;
-        cursor?: string;
-      }) => Promise<{ warnings: string[]; ambiguousRowCount?: number; rowCount: number; nextCursor?: string }>;
-    };
+    const service = new MappingService(config, versionServiceStub, fetchStub);
     const query = { version: "1.21.10" as const, className: "a.b.C", classNameMapping: "obfuscated" as const };
 
     // Page 1 (the non-ambiguous class row): ambiguity is NOT reported for rows the caller cannot see.

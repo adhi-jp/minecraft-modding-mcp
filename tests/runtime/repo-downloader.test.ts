@@ -1349,34 +1349,20 @@ test("resolveCachedDownload(revalidate) re-downloads when a 304 answers for byte
     freshness: "revalidate",
     retries: 0,
     timeoutMs: 2_000,
-    fetchFn,
-    // A caller's own headers ride along on both legs. One of them is a
-    // conditional validator, written in the casing a caller is free to choose:
-    // "unconditional" has to mean unconditional whatever the source, or the
-    // retry earns a second 304 and the call ends with no bytes at all.
-    requestHeaders: {
-      "if-none-match": '"caller-supplied-etag"',
-      authorization: "Bearer caller-token"
-    }
+    fetchFn
   });
 
   assert.equal(calls, 2, "a 304 confirming bytes that are gone confirms nothing - the transfer still has to happen");
   assert.deepEqual(
     conditionalHeadersIn(sentHeaders[0] ?? {}),
     { "If-None-Match": "etag-v1" },
-    "the revalidation asks about the bytes this module actually holds, under its own validator and no other"
+    "the revalidation asks about the bytes this module actually holds"
   );
   assert.deepEqual(
     conditionalHeadersIn(sentHeaders[1] ?? {}),
     {},
-    "and the retry carries no validator from any source: they all describe bytes nobody holds any more"
+    "and the retry carries no validator: it would describe bytes nobody holds any more"
   );
-  assert.equal(
-    sentHeaders[1]?.["authorization"],
-    "Bearer caller-token",
-    "while everything else the caller sent survives - only the validators are this module's to decide"
-  );
-  assert.equal(sentHeaders[0]?.["authorization"], "Bearer caller-token");
   assert.equal(result.ok, true, "a raced eviction must not surface as a raw ENOENT the caller cannot act on");
   assert.equal(result.cacheStatus, "downloaded");
   assert.equal(result.contentSha256, sha256Of("snapshot-bytes-v2"));

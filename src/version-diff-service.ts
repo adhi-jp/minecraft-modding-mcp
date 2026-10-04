@@ -207,9 +207,6 @@ function parseLibraryName(name: string): { key: string; version: string } | unde
 function collapseLibraryNames(names: string[]): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>();
   for (const name of names) {
-    if (typeof name !== "string") {
-      continue;
-    }
     const parsed = parseLibraryName(name);
     if (!parsed) {
       continue;
@@ -249,8 +246,8 @@ function versionSetsEqual(a: Set<string>, b: Set<string>): boolean {
  * cannot see.
  */
 export function diffLibraries(fromNames: string[], toNames: string[]): LibraryDiffResult {
-  const fromMap = collapseLibraryNames(fromNames ?? []);
-  const toMap = collapseLibraryNames(toNames ?? []);
+  const fromMap = collapseLibraryNames(fromNames);
+  const toMap = collapseLibraryNames(toNames);
 
   const added: string[] = [];
   const removed: string[] = [];
@@ -430,16 +427,15 @@ export class VersionDiffService {
   private async toMojangNames(
     version: string,
     classes: Set<string>
-  ): Promise<{ classes: Set<string>; namespace: ClassDiffNamespace; unmapped: number }> {
+  ): Promise<{ classes: Set<string>; namespace: ClassDiffNamespace }> {
     if (!looksObfuscated(classes)) {
-      return { classes, namespace: "mojang", unmapped: 0 };
+      return { classes, namespace: "mojang" };
     }
     const classMap = await this.loadMojangClassMap(version);
     if (!classMap) {
-      return { classes, namespace: "obfuscated", unmapped: classes.size };
+      return { classes, namespace: "obfuscated" };
     }
     const mapped = new Set<string>();
-    let unmapped = 0;
     for (const fqn of classes) {
       const mojang = classMap.get(fqn);
       if (mojang) {
@@ -448,10 +444,9 @@ export class VersionDiffService {
         // Library classes shipped inside the jar (and anything the mappings do
         // not cover) keep the name the jar carries; they are already readable.
         mapped.add(fqn);
-        unmapped += 1;
       }
     }
-    return { classes: mapped, namespace: "mojang", unmapped };
+    return { classes: mapped, namespace: "mojang" };
   }
 
   async compareVersions(input: CompareVersionsInput): Promise<CompareVersionsOutput> {

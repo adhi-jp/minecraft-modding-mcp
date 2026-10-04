@@ -237,14 +237,14 @@ export const TEST_TINY_YARN_2COL = [
   "\tm\t(Lnet/minecraft/class_1937;)V\tmethod_x\tdoThing"
 ].join("\n");
 
-export function createVersionServiceStub(mappingsUrl?: string) {
+export function createVersionServiceStub(clientMappingsUrl?: string) {
   return {
     async resolveVersionMappings(version: string) {
       return {
         version,
         versionManifestUrl: "https://example.test/version_manifest_v2.json",
         versionDetailUrl: `https://example.test/versions/${version}.json`,
-        mappingsUrl
+        clientMappingsUrl
       };
     }
   };

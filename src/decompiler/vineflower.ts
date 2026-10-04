@@ -1,7 +1,9 @@
-import { access, constants, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdirSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, join, relative, sep } from "node:path";
+
+import fastGlob from "fast-glob";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
@@ -77,46 +79,26 @@ async function assertVineflowerAvailable(vineflowerJarPath: string): Promise<voi
   }
 }
 
-async function collectJavaFilesRecursive(baseDir: string, currentDir = ""): Promise<string[]> {
-  const absoluteBase = currentDir ? join(baseDir, currentDir) : baseDir;
-  const entries = await readdir(absoluteBase, { withFileTypes: true });
-  const result: string[] = [];
-
-  for (const entry of entries) {
-    const next = currentDir ? join(currentDir, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      result.push(...await collectJavaFilesRecursive(baseDir, next));
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith(".java")) {
-      result.push(next);
-    }
-  }
-
-  return result;
-}
-
 async function collectJavaFiles(baseDir: string): Promise<string[]> {
-  try {
-    const fastGlobModule = (await import("fast-glob")) as {
-      default?: { glob: (pattern: string, options: { cwd: string; onlyFiles: boolean }) => Promise<string[]> };
-    };
-    const glob = fastGlobModule.default?.glob;
-    if (typeof glob === "function") {
-      return (await glob("**/*.java", { cwd: baseDir, onlyFiles: true }))
-        .sort((left, right) => left.localeCompare(right));
-    }
-  } catch {
-    // optional dependency: fallback to recursive traversal
-  }
-
-  return (await collectJavaFilesRecursive(baseDir))
-    .map((candidate) => candidate.split(sep).join("/"))
+  return (await fastGlob.glob("**/*.java", { cwd: baseDir, onlyFiles: true }))
     .sort((left, right) => left.localeCompare(right));
 }
 
-function readFileTreeText(filePath: string): Promise<string> {
-  return readFile(filePath, "utf8");
+async function readJavaFiles(
+  outputDir: string,
+  javaFileNames: string[]
+): Promise<DecompileResult["javaFiles"]> {
+  return mapWithConcurrencyLimit(
+    javaFileNames,
+    DECOMPILED_JAVA_READ_CONCURRENCY,
+    async (candidate) => {
+      const abs = join(outputDir, candidate);
+      return {
+        filePath: normalizeOutputPath(outputDir, abs),
+        content: await readFile(abs, "utf8")
+      };
+    }
+  );
 }
 
 function decompileOutputDir(cacheDir: string, binaryJarPath: string, signature: string): string {
@@ -183,29 +165,17 @@ export async function decompileBinaryJar(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxMemoryMb = options.maxMemoryMb ?? DEFAULT_MAX_MEMORY_MB;
   const signature = options.signature ?? basename(normalizedBinaryJarPath);
-  const outputDir = decompileOutputDir(cacheDir, normalizedBinaryJarPath, signature).replace(/[/\\]$/, "");
+  const outputDir = decompileOutputDir(cacheDir, normalizedBinaryJarPath, signature);
 
   try {
     await mkdir(outputDir, { recursive: true });
 
-    const outputDirStats = await stat(outputDir).catch(() => undefined);
-    const markerPresent = outputDirStats
-      ? await access(join(outputDir, DECOMPILE_COMPLETE_MARKER), constants.F_OK).then(() => true, () => false)
-      : false;
-    if (outputDirStats && markerPresent) {
+    const markerPresent = await access(join(outputDir, DECOMPILE_COMPLETE_MARKER), constants.F_OK)
+      .then(() => true, () => false);
+    if (markerPresent) {
       const existingJavaFiles = await collectJavaFiles(outputDir);
       if (existingJavaFiles.length > 0) {
-        const results = await mapWithConcurrencyLimit(
-          existingJavaFiles,
-          DECOMPILED_JAVA_READ_CONCURRENCY,
-          async (candidate) => {
-            const abs = join(outputDir, candidate);
-            return {
-              filePath: normalizeOutputPath(outputDir, abs),
-              content: await readFileTreeText(abs)
-            };
-          }
-        );
+        const results = await readJavaFiles(outputDir, existingJavaFiles);
         emitDecompileLog("decompile.done", {
           durationMs: Date.now() - startedAt,
           artifactIdCandidate: options.artifactIdCandidate,
@@ -261,17 +231,7 @@ export async function decompileBinaryJar(
           });
         }
 
-        const javaFiles = await mapWithConcurrencyLimit(
-          javaFileNames,
-          DECOMPILED_JAVA_READ_CONCURRENCY,
-          async (candidate) => {
-            const abs = join(outputDir, candidate);
-            return {
-              filePath: normalizeOutputPath(outputDir, abs),
-              content: await readFileTreeText(abs)
-            };
-          }
-        );
+        const javaFiles = await readJavaFiles(outputDir, javaFileNames);
 
         await writeFile(join(outputDir, DECOMPILE_COMPLETE_MARKER), profile.label, "utf8");
 

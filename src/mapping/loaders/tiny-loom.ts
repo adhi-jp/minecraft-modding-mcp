@@ -11,8 +11,6 @@ import { parseTinyMappingsInto } from "../parsers/tiny.js";
 import { resolveTinyIndexEntryBudget, selectTinyFiles } from "./tiny-loom-selection.js";
 import type { MappingLoaderResult } from "./types.js";
 
-const GLOB_SPECIAL_CHARS = /[\\!*+?()[\]{}@|]/g;
-
 export async function loadTinyPairsFromLoom(
   version: string,
   projectPath?: string,
@@ -25,27 +23,21 @@ export async function loadTinyPairsFromLoom(
   const discoveredPaths = new Set<string>();
 
   for (const root of searchRoots) {
-    let discovered: string[] = [];
     const versionRoot = join(root, version);
-    try {
-      discovered = existsSync(versionRoot)
-        ? await fastGlob.glob(["**/*.tiny", "**/*.tinyv2"], {
-            cwd: versionRoot,
-            absolute: true,
-            onlyFiles: true
-          })
-        : await fastGlob.glob([`${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tiny`, `${version.replace(GLOB_SPECIAL_CHARS, "\\$&")}/**/*.tinyv2`], {
-            cwd: root,
-            absolute: true,
-            onlyFiles: true
-          });
-    } catch {
+    if (!existsSync(versionRoot)) {
       continue;
     }
-    for (const path of discovered) {
-      if (path.replaceAll("\\", "/").includes(`/${version}/`)) {
+    try {
+      const discovered = await fastGlob.glob(["**/*.tiny", "**/*.tinyv2"], {
+        cwd: versionRoot,
+        absolute: true,
+        onlyFiles: true
+      });
+      for (const path of discovered) {
         discoveredPaths.add(path);
       }
+    } catch {
+      continue;
     }
   }
 

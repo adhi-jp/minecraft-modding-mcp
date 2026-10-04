@@ -27,7 +27,7 @@ export async function loadMojangPairs(
     };
   }
 
-  const clientMappingsUrl = metadata.clientMappingsUrl ?? metadata.mappingsUrl;
+  const clientMappingsUrl = metadata.clientMappingsUrl;
   if (!clientMappingsUrl) {
     warnings.push(`Minecraft version "${version}" does not expose client mappings URL.`);
     return {
