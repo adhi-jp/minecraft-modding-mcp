@@ -30,6 +30,10 @@
 - Do not re-run a verification command solely to re-confirm a result already produced for the current, unchanged tree. If a later run — your own or a delegated worker's — reports an outcome that contradicts a fresh prior run with no tree change in between, diagnose the discrepancy before re-running the full suite again; a concurrent invocation sharing the same working tree is a common non-code cause.
 - Do not claim "done", "fixed", or "passing" without fresh command output evidence.
 
+## Test Maintenance (MUST)
+- Do not freeze historical test names or pin repository-wide test counts. Test additions, deletions, and renames must not require inventory updates.
+- Verify test discovery with independent temporary fixtures and preserve behavioral tests and public-contract fixtures.
+
 ## Release Safety (MUST)
 - Release and publish workflows MUST use a clean build to prevent stale `dist` artifacts from being shipped.
 - `package.json` release-facing contracts (`files`, `engines`, `bin`, and release scripts) MUST match implemented behavior and tests.

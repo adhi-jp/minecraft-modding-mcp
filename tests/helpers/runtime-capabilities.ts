@@ -2,31 +2,9 @@ import { spawn } from "node:child_process";
 import type { TestContext } from "node:test";
 
 /**
- * Declared runtime capabilities for environment-guarded tests.
- *
- * Some suites can only run where the host provides something the test itself cannot
- * create: working native child-process stdio pipes, POSIX process groups, a Java
- * runtime. Guarding those with an ad-hoc `t.skip("some prose")` loses the one fact the
- * post-suite named-test set gate needs — WHICH capability was missing — so the gate can
- * only report an opaque "N tests were skipped".
- *
- * Every guard therefore DECLARES its capability here, and the skip reason is rendered in
- * a machine-readable form:
- *
- *   missing runtime capability [native-stdio-pipes]: <human explanation>
- *
- * `scripts/test-name-inventory.mjs` parses that token back out of the TAP directive, so
- * `npm test` can attribute each unproven frozen row to a named capability instead of
- * guessing. A skip that does NOT carry a declared capability is treated by the gate as an
- * un-attributed directive and always fails — the escape hatch cannot cover it.
- *
- * Detection is memoized per process (node's test runner gives each file its own process),
- * so a probe that spawns a child runs once per file instead of once per test.
- *
- * `MCP_TEST_FORCE_MISSING_CAPABILITIES` forces a comma-separated list of capability ids to
- * report as missing. It exists so the UNPROVEN path can be exercised deliberately on a
- * machine where every capability is present; without it that path is unreachable here and
- * a green run would prove nothing about it. Test-harness only — no production code reads it.
+ * Shared runtime capability detection for environment-guarded tests.
+ * Skip reasons identify the missing capability and explain the host limitation.
+ * Detection is memoized per process, so child-process probes run once per file.
  */
 
 /** Every capability an environment-guarded test may require. */
@@ -39,10 +17,7 @@ export const RUNTIME_CAPABILITY_IDS = [
 
 export type RuntimeCapabilityId = (typeof RUNTIME_CAPABILITY_IDS)[number];
 
-/** Env var that forces capabilities to report as missing. See the module comment. */
-export const FORCE_MISSING_CAPABILITIES_ENV = "MCP_TEST_FORCE_MISSING_CAPABILITIES";
-
-/** Leading token of a declared skip reason; the gate keys its attribution on this. */
+/** Leading text of a runtime capability skip reason. */
 export const MISSING_CAPABILITY_REASON_PREFIX = "missing runtime capability";
 
 type CapabilityDefinition = {
@@ -108,36 +83,7 @@ function definitionFor(id: RuntimeCapabilityId): CapabilityDefinition {
   return definition;
 }
 
-/**
- * Ids forced missing through the environment.
- *
- * An unrecognized id throws: a typo must fail loudly rather than quietly forcing nothing.
- */
-export function forcedMissingCapabilities(
-  env: NodeJS.ProcessEnv = process.env
-): Set<RuntimeCapabilityId> {
-  const raw = env[FORCE_MISSING_CAPABILITIES_ENV];
-  const forced = new Set<RuntimeCapabilityId>();
-  if (raw === undefined || raw.trim() === "") {
-    return forced;
-  }
-  for (const entry of raw.split(",")) {
-    const id = entry.trim();
-    if (id === "") {
-      continue;
-    }
-    if (!(RUNTIME_CAPABILITY_IDS as readonly string[]).includes(id)) {
-      throw new Error(
-        `${FORCE_MISSING_CAPABILITIES_ENV} names an unknown capability ${JSON.stringify(id)}; ` +
-          `known ids: ${RUNTIME_CAPABILITY_IDS.join(", ")}`
-      );
-    }
-    forced.add(id as RuntimeCapabilityId);
-  }
-  return forced;
-}
-
-/** The exact skip reason a guard emits, in the form the named-set gate parses. */
+/** The skip reason a capability guard emits. */
 export function formatMissingCapabilityReason(id: RuntimeCapabilityId): string {
   return `${MISSING_CAPABILITY_REASON_PREFIX} [${id}]: ${definitionFor(id).missingReason}`;
 }
@@ -147,9 +93,6 @@ const detectionCache = new Map<RuntimeCapabilityId, Promise<boolean>>();
 /** True when this host provides the capability. Memoized for the life of the process. */
 export async function hasRuntimeCapability(id: RuntimeCapabilityId): Promise<boolean> {
   definitionFor(id);
-  if (forcedMissingCapabilities().has(id)) {
-    return false;
-  }
   const cached = detectionCache.get(id);
   if (cached !== undefined) {
     return cached;
