@@ -346,11 +346,6 @@ export async function buildEarlyTasksForBlocked(
   projectPath: string,
   detail: "summary" | "standard" | "full",
   include: string[],
-  discovery?: {
-    mixinDiscoveryCount: number;
-    awDiscoveryCount: number;
-    atDiscoveryCount: number;
-  },
   gradleUserHome?: string
 ): Promise<TaskStatusReport | undefined> {
   if (VALIDATE_PROJECT_TASKS_OFF) {
@@ -361,27 +356,14 @@ export async function buildEarlyTasksForBlocked(
     status: "skipped"
   };
   const validatedSkipped: TaskEntryBase = { status: "skipped" };
-  const buildValidatorEntry = (
-    discoveredCount: number | undefined
-  ): TaskEntryBase => {
-    if (workspace.status !== "ok" || gradle.status !== "ok") {
-      return validatedSkipped;
-    }
-    if (minecraftArtifactResolved.status !== "ok") {
-      return validatedSkipped;
-    }
-    return discoveredCount === 0 || discoveredCount === undefined
-      ? { status: "missing" }
-      : validatedSkipped;
-  };
   const report: TaskStatusReport = {
     "workspace.detected": workspace,
     "gradle.readable": gradle,
     "loom.cache.found": loom,
     "minecraft.artifact.resolved": minecraftArtifactResolved,
-    "mixins.validated": buildValidatorEntry(discovery?.mixinDiscoveryCount),
-    "accessWideners.validated": buildValidatorEntry(discovery?.awDiscoveryCount),
-    "accessTransformers.validated": buildValidatorEntry(discovery?.atDiscoveryCount)
+    "mixins.validated": validatedSkipped,
+    "accessWideners.validated": validatedSkipped,
+    "accessTransformers.validated": validatedSkipped
   };
   return projectTaskStatusReport(report, detail, include);
 }

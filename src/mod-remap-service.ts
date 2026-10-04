@@ -55,21 +55,6 @@ export interface RemapModJarDeps {
 // build no longer serves the stale jar; the bump invalidates v2 outputs once.
 const REMAP_PIPELINE_VERSION = "v3";
 
-function normalizeTargetNamespace(target: ModRemapInput["targetMapping"]): "yarn" | "mojang" {
-  return target === "yarn" ? "yarn" : "mojang";
-}
-
-function defaultSourceNamespaceForLoader(loader: ModLoader): "intermediary" {
-  if (loader === "fabric" || loader === "quilt") {
-    return "intermediary";
-  }
-  throw createError({
-    code: ERROR_CODES.REMAP_FAILED,
-    message: `Unsupported mod loader for remapping: "${loader}". Only Fabric and Quilt mods are supported.`,
-    details: { loader }
-  });
-}
-
 function extractMinecraftVersion(
   dependencies: Array<{ modId: string; versionRange?: string }> | undefined
 ): string | undefined {
@@ -94,10 +79,11 @@ async function detectInputNamespaceForLoader(
   if (loader === "fabric" || loader === "quilt") {
     return detectFabricLikeInputNamespace(inputJar);
   }
-  return {
-    fromNamespace: defaultSourceNamespaceForLoader(loader),
-    warnings: []
-  };
+  throw createError({
+    code: ERROR_CODES.REMAP_FAILED,
+    message: `Unsupported mod loader for remapping: "${loader}". Only Fabric and Quilt mods are supported.`,
+    details: { loader }
+  });
 }
 
 function resolveOutputJarPath(
@@ -166,7 +152,7 @@ export async function remapModJar(
       details: { inputJar: normalizedInput }
     });
   }
-  const resolvedTargetNamespace = normalizeTargetNamespace(input.targetMapping);
+  const resolvedTargetNamespace = input.targetMapping;
 
   // 2. Analyze mod metadata
   const analysis = await analyzeModJar(normalizedInput);
@@ -308,15 +294,9 @@ export async function remapModJar(
     //   pass 2: obfuscated    -> mojang                via the merged mojang tiny
     const mojangTiny = await resolveMojangTinyFileFn(mcVersion, config);
     warnings.push(...mojangTiny.warnings);
-    if (fromNamespace === "intermediary") {
-      const intermediaryTiny = await resolveTinyMappingFileFn(mcVersion, "intermediary", config.cacheDir);
-      passes.push({ mappingsFile: intermediaryTiny.path, fromNamespace: "intermediary", toNamespace: "official" });
-      passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
-    } else {
-      // Defensive: an already-obfuscated input maps directly. (mojang -> mojang is
-      // handled earlier by the copy short-circuit, so this is not normally reached.)
-      passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
-    }
+    const intermediaryTiny = await resolveTinyMappingFileFn(mcVersion, "intermediary", config.cacheDir);
+    passes.push({ mappingsFile: intermediaryTiny.path, fromNamespace: "intermediary", toNamespace: "official" });
+    passes.push({ mappingsFile: mojangTiny.path, fromNamespace: "obfuscated", toNamespace: "mojang" });
   }
 
   mkdirSync(dirname(outputJar), { recursive: true });
@@ -363,7 +343,6 @@ export async function remapModJar(
     copyFileSync(tempOutput, outputJar);
 
     if (outputJar !== cachedOutput) {
-      mkdirSync(dirname(cachedOutput), { recursive: true });
       const tempCachedOutput = `${cachedOutput}.${randomBytes(4).toString("hex")}.tmp`;
       copyFileSync(tempOutput, tempCachedOutput);
       renameSync(tempCachedOutput, cachedOutput);

@@ -15,9 +15,11 @@ import type {
 import type { SourceLookupTargetInput } from "../tool-schemas.js";
 import type { MemberProjection } from "../source/class-source/members-builder.js";
 import {
+  resolveTargetSharedArtifact,
   runBatch,
   splitEntryWarnings,
-  type BatchOutput
+  type BatchOutput,
+  type SharedArtifact
 } from "./batch-runner.js";
 
 export type BatchClassMembersDeps = {
@@ -52,12 +54,6 @@ export type BatchClassMembersInput = {
   entries: readonly BatchClassMembersEntry[];
 };
 
-type SharedArtifact = {
-  artifactId: string;
-  provenance?: Record<string, unknown>;
-  warnings?: string[];
-};
-
 export class BatchClassMembersService {
   constructor(private readonly deps: BatchClassMembersDeps) {}
 
@@ -71,43 +67,7 @@ export class BatchClassMembersService {
       entries: input.entries,
       concurrency,
       failFast,
-      resolveSharedArtifact: async () => {
-        // target.kind === "artifact" reuses an already-resolved artifactId,
-        // short-circuiting resolution exactly as get-class-members's own
-        // `kind:"artifact"` target does (src/index.ts normalizeSourceLookupTarget).
-        // No provenance is invented for a reused artifact: an unknown id is left
-        // to surface per-entry (the same SOURCE_NOT_FOUND getClassMembers raises
-        // for an unknown artifactId), since resolveSharedArtifact has no way to
-        // validate existence without calling deps.resolveArtifact.
-        if (input.target.kind === "artifact") {
-          return { artifactId: input.target.artifactId };
-        }
-        const resolved = await this.deps.resolveArtifact({
-          target: input.target,
-          mapping: input.mapping,
-          sourcePriority: input.sourcePriority,
-          allowDecompile: input.allowDecompile,
-          projectPath: input.projectPath,
-          gradleUserHome: input.gradleUserHome,
-          scope: input.scope,
-          preferProjectVersion: input.preferProjectVersion,
-          strictVersion: input.strictVersion
-        });
-        return {
-          artifactId: resolved.artifactId,
-          provenance: resolved.provenance as unknown as Record<string, unknown>,
-          ...(Array.isArray(resolved.warnings) && resolved.warnings.length > 0
-            ? { warnings: [...resolved.warnings] }
-            : {})
-        };
-      },
-      artifactSummary: (artifact) => ({
-        sharedArtifactId: artifact.artifactId,
-        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
-        ...(artifact.warnings && artifact.warnings.length > 0
-          ? { sharedArtifactWarnings: artifact.warnings }
-          : {})
-      }),
+      resolveSharedArtifact: () => resolveTargetSharedArtifact(this.deps.resolveArtifact, input),
       perEntry: async (entry, _index, sharedArtifact) => {
         if (!sharedArtifact) {
           throw new Error("shared artifact not resolved");

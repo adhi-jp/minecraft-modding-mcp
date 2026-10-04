@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import { suggestSimilar } from "../mixin-validator.js";
@@ -160,26 +158,19 @@ function decodeAccessFlags(flags: number | undefined, kind: "method" | "field"):
   return labels;
 }
 
-function visibilityFromFlags(flags: number | undefined): "public" | "protected" | "private" | "package-private" {
-  if (flags == null) return "package-private";
-  if ((flags & 0x0001) !== 0) return "public";
-  if ((flags & 0x0004) !== 0) return "protected";
-  if ((flags & 0x0002) !== 0) return "private";
-  return "package-private";
-}
-
 function buildExampleSnippet(
   annotation: SuggestedAnnotation,
   member: VerifyMixinTargetInput["member"],
   match: VerifyMixinTargetMatch | undefined,
-  mixinMemberName: string | undefined
+  mixinMemberName: string | undefined,
+  visibility?: "public" | "protected" | "private" | "package-private"
 ): string {
   const accessFlags = match?.accessFlags ?? [];
   const isFinal = accessFlags.includes("final");
   const isStatic = accessFlags.includes("static");
   const targetName = member.name;
   if (annotation === "@Inject-only") {
-    return `// "${targetName}" is already visible to the mixin (target access: ${accessFlags.filter((f) => f === "public" || f === "protected" || f === "private" || f === "package-private")[0] ?? "unknown"}); no @Invoker needed — use @Inject to hook it, or @Shadow to call it from mixin code.`;
+    return `// "${targetName}" is already visible to the mixin (target access: ${visibility}); no @Invoker needed — use @Inject to hook it, or @Shadow to call it from mixin code.`;
   }
   if (annotation === "@Shadow") {
     if (member.kind === "field") {
@@ -220,7 +211,7 @@ function inferAnnotation(
     return {
       suggestedAnnotation: "@Inject-only",
       reasoning: `Target method "${member.name}" is ${visibility}; it is already visible to the mixin, so no @Invoker is needed. Use @Inject to hook it, or @Shadow to call it from mixin code.`,
-      exampleSnippet: buildExampleSnippet("@Inject-only", member, match, mixinMemberName)
+      exampleSnippet: buildExampleSnippet("@Inject-only", member, match, mixinMemberName, visibility)
     };
   }
   if (mixinMemberName) {
@@ -579,19 +570,3 @@ export class VerifyMixinTargetService {
     return { owner: translatedOwner, member: translatedMember };
   }
 }
-
-const memberDescriptorSchema = z.string().trim().min(1).optional();
-const verifyMixinTargetMemberSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("method"),
-    name: z.string().trim().min(1),
-    descriptor: memberDescriptorSchema
-  }),
-  z.object({
-    kind: z.literal("field"),
-    name: z.string().trim().min(1),
-    descriptor: memberDescriptorSchema
-  })
-]);
-
-export const verifyMixinTargetMemberSchemaExport = verifyMixinTargetMemberSchema;

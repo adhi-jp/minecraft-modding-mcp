@@ -6,7 +6,6 @@ import type { GetRegistryDataOutput } from "../registry-service.js";
 import { createError, ERROR_CODES } from "../errors.js";
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
-  buildEntryToolMeta,
   buildEntryToolResult,
   createNextAction,
   createSummarySubject,
@@ -14,8 +13,8 @@ import {
   type Summary
 } from "./response-contract.js";
 import { capArray, resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { nonEmptyString, sourceMappingSchema } from "../tool-schemas.js";
 
-const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "classes", "registry", "diff", "samples", "timings"] as const;
 
 const subjectSchema = z.discriminatedUnion("kind", [
@@ -30,7 +29,7 @@ const subjectSchema = z.discriminatedUnion("kind", [
     className: nonEmptyString,
     fromVersion: nonEmptyString,
     toVersion: nonEmptyString,
-    mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+    mapping: sourceMappingSchema.optional(),
     sourcePriority: z.enum(["loom-first", "maven-first"]).optional(),
     gradleUserHome: nonEmptyString.optional()
   }),
@@ -245,10 +244,7 @@ export class CompareMinecraftService {
           warnings: output.warnings,
           ...(summaryTruncatedGroups.length > 0
             ? {
-                meta: buildEntryToolMeta({
-                  detail,
-                  include,
-                  warnings: output.warnings,
+                meta: {
                   truncated: createTruncationMeta({
                     omittedGroups: summaryTruncatedGroups,
                     nextActions: [
@@ -260,7 +256,7 @@ export class CompareMinecraftService {
                       })
                     ]
                   })
-                })
+                }
               }
             : {})
         };

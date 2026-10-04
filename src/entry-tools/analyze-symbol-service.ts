@@ -18,8 +18,7 @@ import {
 } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 import { compactMappingResponse } from "../response-utils.js";
-
-const nonEmptyString = z.string().trim().min(1);
+import { nonEmptyString, optionalDescriptorString, sourceMappingSchema } from "../tool-schemas.js";
 
 /**
  * Reuse the expert-tool compactMappingResponse candidate projection so the entry
@@ -37,16 +36,6 @@ function projectMappingCandidates(output: { candidates?: unknown }): {
     ...(projected.candidateDetailsTruncated === true ? { candidateDetailsTruncated: true } : {})
   };
 }
-// Descriptor field that treats empty/whitespace strings as omitted so callers can pass
-// `descriptor: ""` interchangeably with omitting the field when signatureMode="name-only".
-const optionalDescriptorString = z
-  .string()
-  .optional()
-  .transform((value) => {
-    if (value === undefined) return undefined;
-    const trimmed = value.trim();
-    return trimmed.length === 0 ? undefined : trimmed;
-  });
 /**
  * Resolve subject.kind to a concrete kind. `"symbol"` is auto-detected from the
  * selector (owner+descriptor => method, owner only => field, otherwise => class)
@@ -117,9 +106,9 @@ export const analyzeSymbolShape = {
     .boolean()
     .optional()
     .describe("task=lifecycle only: include snapshot versions in the scan."),
-  sourceMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
-  targetMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
-  classNameMapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+  sourceMapping: sourceMappingSchema.optional(),
+  targetMapping: sourceMappingSchema.optional(),
+  classNameMapping: sourceMappingSchema.optional(),
   projectPath: nonEmptyString.optional(),
   gradleUserHome: nonEmptyString.optional(),
   signatureMode: z.enum(["exact", "name-only"]).default("exact"),

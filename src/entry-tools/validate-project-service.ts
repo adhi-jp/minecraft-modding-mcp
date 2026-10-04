@@ -15,12 +15,11 @@ import { handleAccessWidener } from "./validate-project/cases/access-widener.js"
 import { handleAccessTransformer } from "./validate-project/cases/access-transformer.js";
 import { handleProjectSummary } from "./validate-project/cases/project-summary.js";
 import {
-  buildEarlyTasksForBlocked,
   buildFullTaskStatusReport,
   type ValidateProjectDeps
 } from "./validate-project/internal.js";
+import { nonEmptyString, sourceMappingSchema } from "../tool-schemas.js";
 
-const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
 const WORKSPACE_TEXT_FILE_READ_CONCURRENCY = 4;
 
@@ -86,7 +85,7 @@ export const validateProjectShape = {
   task: z.enum(["project-summary", "mixin", "access-widener", "access-transformer"]),
   subject: subjectSchema,
   version: nonEmptyString.optional(),
-  mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+  mapping: sourceMappingSchema.optional(),
   atNamespace: z.enum(["srg", "mojang", "obfuscated"]).optional(),
   sourcePriority: z.enum(["loom-first", "maven-first"]).optional(),
   scope: z.enum(["vanilla", "merged", "loader"]).optional(),

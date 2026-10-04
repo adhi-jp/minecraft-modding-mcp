@@ -526,3 +526,57 @@ test("get-runtime-metrics ignores compact:true (passthrough schema + allowlist)"
   const keysWithoutCompact = Object.keys(withoutCompact.structuredContent?.result ?? {}).sort();
   assert.deepEqual(keysWithCompact, keysWithoutCompact);
 });
+
+test("truncated inspect-minecraft class-members omits meta.detailApplied at the default detail and echoes an explicit detail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "inspect-members-truncated-meta-"));
+  const jarPath = join(root, "lib.jar");
+  await createJar(jarPath, {
+    "com/example/Widget.class": buildClassFile({
+      internalName: "com/example/Widget",
+      accessFlags: 0x0001,
+      methods: [
+        { name: "alpha", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "beta", descriptor: "()V", accessFlags: 0x0001 },
+        { name: "gamma", descriptor: "()V", accessFlags: 0x0001 }
+      ]
+    })
+  });
+
+  const resolveResult = await callTool("resolve-artifact", {
+    target: { kind: "jar", value: jarPath },
+    mapping: "obfuscated"
+  }) as { structuredContent?: { result?: { artifactId?: string } } };
+  const artifactId = resolveResult.structuredContent?.result?.artifactId;
+  assert.ok(artifactId, "resolve-artifact must return an artifactId");
+
+  type MembersEnvelope = {
+    structuredContent?: {
+      meta?: {
+        detailApplied?: string;
+        truncated?: { didTruncate?: boolean };
+      };
+    };
+  };
+  const subject = {
+    kind: "class",
+    className: "com.example.Widget",
+    artifact: { type: "resolved-id", artifactId }
+  };
+
+  const byDefault = await callTool("inspect-minecraft", {
+    task: "class-members",
+    subject,
+    limit: 1
+  }) as MembersEnvelope;
+  assert.equal(byDefault.structuredContent?.meta?.truncated?.didTruncate, true);
+  assert.equal(byDefault.structuredContent?.meta?.detailApplied, undefined);
+
+  const explicit = await callTool("inspect-minecraft", {
+    task: "class-members",
+    detail: "standard",
+    subject,
+    limit: 1
+  }) as MembersEnvelope;
+  assert.equal(explicit.structuredContent?.meta?.truncated?.didTruncate, true);
+  assert.equal(explicit.structuredContent?.meta?.detailApplied, "standard");
+});

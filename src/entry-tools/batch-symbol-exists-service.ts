@@ -133,13 +133,6 @@ export class BatchSymbolExistsService {
             : {})
         };
       },
-      artifactSummary: (artifact) => ({
-        sharedArtifactId: artifact.artifactId,
-        ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
-        ...(artifact.warnings && artifact.warnings.length > 0
-          ? { sharedArtifactWarnings: artifact.warnings }
-          : {})
-      }),
       perEntry: async (entry, _index, sharedArtifact) => {
         if (!sharedArtifact) {
           throw new Error("shared artifact not resolved");
@@ -155,9 +148,8 @@ export class BatchSymbolExistsService {
           gradleUserHome: input.gradleUserHome,
           nameMode: entry.nameMode,
           signatureMode: entry.signatureMode,
-          maxCandidates: entry.maxCandidates,
-          projectPath: input.projectPath
-        } as unknown as CheckSymbolExistsInput)) as unknown as Record<string, unknown>;
+          maxCandidates: entry.maxCandidates
+        })) as unknown as Record<string, unknown>;
         const { result, warnings } = splitEntryWarnings(raw);
         const projected = projectByDetail(
           "check-symbol-exists",

@@ -5,6 +5,16 @@ import {
   type ProblemDetails,
   type SuggestedCall
 } from "../error-mapping.js";
+import type {
+  ResolveArtifactInput,
+  ResolveArtifactOutput
+} from "../source-service.js";
+import type { SourceLookupTargetInput } from "../tool-schemas.js";
+import type {
+  ArtifactScope,
+  MappingSourcePriority,
+  SourceMapping
+} from "../types.js";
 
 export const BATCH_TOOLS_OFF = process.env.BATCH_TOOLS_OFF === "1";
 
@@ -45,6 +55,75 @@ export type BatchOutput<TResult> = {
   summary: BatchSummary;
 };
 
+/** The shared artifact a batch resolves once and dispatches every entry by. */
+export type SharedArtifact = {
+  artifactId: string;
+  provenance?: Record<string, unknown>;
+  warnings?: string[];
+};
+
+type BatchArtifactSummary = {
+  sharedArtifactId?: string;
+  sharedArtifactProvenance?: Record<string, unknown>;
+  sharedArtifactWarnings?: string[];
+};
+
+/** Summary metadata for a resolved shared artifact. `runBatch` drops empty warnings. */
+export function defaultArtifactSummary(artifact: SharedArtifact): BatchArtifactSummary {
+  return {
+    sharedArtifactId: artifact.artifactId,
+    ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
+    ...(artifact.warnings ? { sharedArtifactWarnings: artifact.warnings } : {})
+  };
+}
+
+export type TargetSharedArtifactInput = {
+  target: SourceLookupTargetInput;
+  mapping?: SourceMapping;
+  sourcePriority?: MappingSourcePriority;
+  allowDecompile?: boolean;
+  projectPath?: string;
+  gradleUserHome?: string;
+  scope?: ArtifactScope;
+  preferProjectVersion?: boolean;
+  strictVersion?: boolean;
+};
+
+/**
+ * Resolves the shared artifact for a batch whose target is a source lookup
+ * target. `target.kind === "artifact"` reuses an already-resolved artifactId,
+ * short-circuiting resolution exactly as the single tools' own
+ * `kind:"artifact"` target does (src/index.ts normalizeSourceLookupTarget).
+ * No provenance is invented for a reused artifact: an unknown id is left to
+ * surface per-entry (the same SOURCE_NOT_FOUND the per-entry tool raises for an
+ * unknown artifactId), since existence cannot be validated without calling
+ * resolveArtifact.
+ */
+export async function resolveTargetSharedArtifact(
+  resolveArtifact: (input: ResolveArtifactInput) => Promise<ResolveArtifactOutput>,
+  input: TargetSharedArtifactInput
+): Promise<SharedArtifact> {
+  if (input.target.kind === "artifact") {
+    return { artifactId: input.target.artifactId };
+  }
+  const resolved = await resolveArtifact({
+    target: input.target,
+    mapping: input.mapping,
+    sourcePriority: input.sourcePriority,
+    allowDecompile: input.allowDecompile,
+    projectPath: input.projectPath,
+    gradleUserHome: input.gradleUserHome,
+    scope: input.scope,
+    preferProjectVersion: input.preferProjectVersion,
+    strictVersion: input.strictVersion
+  });
+  return {
+    artifactId: resolved.artifactId,
+    provenance: resolved.provenance as unknown as Record<string, unknown>,
+    ...(Array.isArray(resolved.warnings) ? { warnings: [...resolved.warnings] } : {})
+  };
+}
+
 export type BatchRunOptions<TEntry, TResult, TArtifact> = {
   entries: readonly TEntry[];
   concurrency: number;
@@ -54,12 +133,9 @@ export type BatchRunOptions<TEntry, TResult, TArtifact> = {
    * mapping-graph-only and does not depend on the artifact). Throws to abort the
    * batch entirely with a top-level error envelope (handled by `runTool`). */
   resolveSharedArtifact: () => Promise<TArtifact | undefined>;
-  /** Summary metadata derived from the resolved shared artifact. */
-  artifactSummary?: (artifact: TArtifact) => {
-    sharedArtifactId?: string;
-    sharedArtifactProvenance?: Record<string, unknown>;
-    sharedArtifactWarnings?: string[];
-  };
+  /** Summary metadata derived from the resolved shared artifact. Defaults to
+   * `defaultArtifactSummary`, which expects a `SharedArtifact`-shaped value. */
+  artifactSummary?: (artifact: TArtifact) => BatchArtifactSummary;
   /** Per-entry handler. Returns `{ result, warnings }` on success. Errors thrown
    * here are caught and converted to a per-entry ProblemDetails — the mapper
    * itself never throws into `mapWithConcurrencyLimit`. */
@@ -90,10 +166,10 @@ export async function runBatch<TEntry, TResult, TArtifact>(
   opts: BatchRunOptions<TEntry, TResult, TArtifact>
 ): Promise<BatchOutput<TResult>> {
   const sharedArtifact = await opts.resolveSharedArtifact();
-  const artifactSummary =
-    sharedArtifact !== undefined && opts.artifactSummary
-      ? opts.artifactSummary(sharedArtifact)
-      : {};
+  const summarize =
+    opts.artifactSummary ??
+    (defaultArtifactSummary as unknown as (artifact: TArtifact) => BatchArtifactSummary);
+  const artifactSummary = sharedArtifact !== undefined ? summarize(sharedArtifact) : {};
 
   let abort = false;
   const buildInstance = opts.buildEntryInstance ?? defaultEntryInstance;

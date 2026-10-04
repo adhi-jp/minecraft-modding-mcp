@@ -23,8 +23,8 @@ import {
   resolveDetail,
   resolveInclude
 } from "./request-normalizers.js";
+import { nonEmptyString } from "../tool-schemas.js";
 
-const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "cacheEntries", "paths", "owners", "health", "preview", "timings"] as const;
 
 export const manageCacheShape = {

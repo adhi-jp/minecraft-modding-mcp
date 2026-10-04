@@ -13,8 +13,8 @@ import {
   type Summary
 } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
+import { nonEmptyString } from "../tool-schemas.js";
 
-const nonEmptyString = z.string().trim().min(1);
 const INCLUDE_GROUPS = ["warnings", "files", "source", "samples", "timings"] as const;
 
 const subjectSchema = z.discriminatedUnion("kind", [

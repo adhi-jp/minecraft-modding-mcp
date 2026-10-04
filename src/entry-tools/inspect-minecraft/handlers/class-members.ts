@@ -1,4 +1,4 @@
-import { buildEntryToolResult, buildEntryToolMeta, createNextAction, createSummarySubject, createTruncationMeta, type DetailLevel, type Summary } from "../../response-contract.js";
+import { buildEntryToolResult, createNextAction, createSummarySubject, createTruncationMeta, type DetailLevel, type Summary } from "../../response-contract.js";
 import { type ArtifactRef, type Subject, buildClassSubject, resolveClassArtifactReference, invalidTaskSubjectError, type InspectMinecraftDeps } from "../internal.js";
 
 function artifactSelectedByFor(ref: ArtifactRef | undefined): "caller" | "tool" {
@@ -87,10 +87,7 @@ deps: InspectMinecraftDeps,
     warnings: [...artifact.warnings, ...members.warnings],
     ...(members.truncated
       ? {
-          meta: buildEntryToolMeta({
-            detail,
-            include,
-            warnings: [...artifact.warnings, ...members.warnings],
+          meta: {
             truncated: createTruncationMeta({
               omittedGroups: detail === "summary" ? ["members"] : [],
               nextActions: [
@@ -103,7 +100,7 @@ deps: InspectMinecraftDeps,
                 })
               ]
             })
-          })
+          }
         }
       : {})
   };

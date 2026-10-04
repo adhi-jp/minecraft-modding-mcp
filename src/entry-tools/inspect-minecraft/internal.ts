@@ -13,6 +13,7 @@ import type {
   SearchClassSourceOutput
 } from "../../source-service.js";
 import type { ListVersionsOutput } from "../../version-service.js";
+import { nonEmptyString, sourceMappingSchema, targetKindSchema } from "../../tool-schemas.js";
 
 export const TASKS = [
   "auto",
@@ -28,10 +29,8 @@ export const TASKS = [
 
 export const SUBJECT_KINDS = ["version", "artifact", "class", "file", "search", "workspace"] as const;
 
-const nonEmptyString = z.string().trim().min(1);
-
 const resolveTargetSchema = z.object({
-  kind: z.enum(["version", "jar", "coordinate"]),
+  kind: targetKindSchema,
   value: nonEmptyString
 });
 
@@ -74,7 +73,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("version"),
     version: nonEmptyString,
-    mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+    mapping: sourceMappingSchema.optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
     gradleUserHome: nonEmptyString.optional(),
@@ -84,7 +83,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("artifact"),
     artifact: artifactRefSchema,
-    mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+    mapping: sourceMappingSchema.optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
     gradleUserHome: nonEmptyString.optional(),
@@ -95,7 +94,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
     kind: z.literal("class"),
     className: nonEmptyString,
     artifact: artifactRefSchema.optional(),
-    mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+    mapping: sourceMappingSchema.optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     projectPath: nonEmptyString.optional(),
     gradleUserHome: nonEmptyString.optional(),
@@ -121,7 +120,7 @@ export const subjectSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),
     projectPath: nonEmptyString,
-    mapping: z.enum(["obfuscated", "mojang", "intermediary", "yarn"]).optional(),
+    mapping: sourceMappingSchema.optional(),
     scope: z.enum(["vanilla", "merged", "loader"]).optional(),
     gradleUserHome: nonEmptyString.optional(),
     preferProjectVersion: z.boolean().optional(),
@@ -346,27 +345,7 @@ export async function resolveWorkspaceArtifactReference(
   if (!artifactRef) {
     return resolveArtifactReference(deps, subject);
   }
-  if (artifactRef.type === "resolved-id") {
-    return {
-      artifactId: artifactRef.artifactId,
-      warnings: []
-    };
-  }
-  const artifact = await deps.resolveArtifact({
-    target: artifactRef.target,
-    mapping: subject.mapping,
-    scope: subject.scope,
-    projectPath: subject.projectPath,
-    ...(subject.gradleUserHome !== undefined ? { gradleUserHome: subject.gradleUserHome } : {}),
-    preferProjectVersion: subject.preferProjectVersion,
-    strictVersion: subject.strictVersion
-  });
-  return {
-    artifactId: artifact.artifactId,
-    artifact,
-    version: artifact.version,
-    warnings: [...artifact.warnings]
-  };
+  return resolveArtifactRef(deps, artifactRef, subject);
 }
 
 export function resolveTask(task: InspectMinecraftTask | undefined, subject: Subject | undefined) {
@@ -698,7 +677,7 @@ export async function resolveArtifactReference(
 async function resolveArtifactRef(
   deps: InspectMinecraftDeps,
   ref: ArtifactRef,
-  subject: Extract<Subject, { kind: "artifact" | "class" | "file" | "search" }>
+  subject: Extract<Subject, { kind: "artifact" | "class" | "file" | "search" }> | WorkspaceSubject
 ): Promise<{ artifactId: string; artifact?: ResolveArtifactOutput; version?: string; warnings: string[] }> {
   if (ref.type === "resolved-id") {
     return {

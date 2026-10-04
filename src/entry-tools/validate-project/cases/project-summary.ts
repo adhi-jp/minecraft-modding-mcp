@@ -128,7 +128,6 @@ if (!input.version && input.preferProjectVersion === false) {
     input.subject.projectPath,
     detail,
     include,
-    undefined,
     input.subject.gradleUserHome
   );
   return {
@@ -218,11 +217,7 @@ if (!resolvedVersion && (mixinConfigs.length > 0 || accessWideners.length > 0 ||
     awDiscoveryCount: accessWideners.length,
     atDiscoveryCount: accessTransformers.length
   });
-  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, {
-    mixinDiscoveryCount: mixinConfigs.length,
-    awDiscoveryCount: accessWideners.length,
-    atDiscoveryCount: accessTransformers.length
-  }, gradleUserHome);
+  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, gradleUserHome);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),
@@ -267,7 +262,7 @@ if (!resolvedVersion) {
     projectPath,
     reason: "version-not-required"
   });
-  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, undefined, gradleUserHome);
+  const tasks = await buildEarlyTasksForBlocked(projectPath, detail, include, gradleUserHome);
   return {
     ...baseResult,
     ...(tasks ? { tasks } : {}),

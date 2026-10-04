@@ -44,17 +44,13 @@ const DECOMPILED_JAVA_READ_CONCURRENCY = 8;
 const METHOD_PATTERN = /^\s*(public|private|protected)\s+.*\(/;
 const FIELD_PATTERN = /^\s*(public|private|protected)\s+(?:static\s+)?(?:final\s+)?[\w<>,\[\]?]+\s+\w+\s*[;=]/;
 
-function buildRegex(query: string): RegExp | undefined {
+function buildRegex(query: string): RegExp {
   try {
     return new RegExp(query, "gi");
   } catch {
     // If the query is not valid regex, escape it and use as literal
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    try {
-      return new RegExp(escaped, "gi");
-    } catch {
-      return undefined;
-    }
+    return new RegExp(escaped, "gi");
   }
 }
 
@@ -72,6 +68,45 @@ function extractContext(lines: string[], lineIndex: number): string {
 
 function filePathToClassName(filePath: string): string {
   return filePath.replace(/\.java$/, "").replaceAll("/", ".");
+}
+
+/**
+ * Scans `lines` for regex matches and builds line hits, stopping once
+ * `maxHits` hits are collected. `stoppedEarly` is true when the scan stopped
+ * with lines still left to inspect.
+ */
+function collectLineHits(
+  lines: string[],
+  className: string,
+  filePath: string,
+  searchType: SearchModSourceSearchType,
+  regex: RegExp,
+  maxHits: number
+): { hits: SearchModSourceHit[]; stoppedEarly: boolean } {
+  const hits: SearchModSourceHit[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (hits.length >= maxHits) {
+      return { hits, stoppedEarly: true };
+    }
+    regex.lastIndex = 0;
+    if (!regex.test(lines[i])) {
+      continue;
+    }
+
+    const lineType = classifyLine(lines[i]);
+    if (searchType !== "all" && searchType !== lineType) {
+      continue;
+    }
+
+    hits.push({
+      type: lineType,
+      name: lineType === "content" ? className : extractSymbolName(lines[i], lineType),
+      file: filePath,
+      line: i + 1,
+      context: extractContext(lines, i)
+    });
+  }
+  return { hits, stoppedEarly: false };
 }
 
 function cloneRegex(regex: RegExp): RegExp {
@@ -111,13 +146,6 @@ export class ModSearchService {
     }
 
     const regex = buildRegex(query);
-    if (!regex) {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: `Invalid search query: "${query}".`,
-        details: { query }
-      });
-    }
 
     const warnings: string[] = [];
     if (requestedLimit > MAX_LIMIT) {
@@ -135,7 +163,6 @@ export class ModSearchService {
         limit,
         regex
       });
-      warnings.push(...directResult.warnings);
       log("info", "mod-search.done", {
         jarPath,
         query,
@@ -239,10 +266,8 @@ export class ModSearchService {
     searchType: SearchModSourceSearchType;
     limit: number;
     regex: RegExp;
-  }): Promise<{ hits: SearchModSourceHit[]; totalHits: number; truncated: boolean; warnings: string[] }> {
-    const warnings: string[] = [];
+  }): Promise<{ hits: SearchModSourceHit[]; totalHits: number; truncated: boolean }> {
     const hits: SearchModSourceHit[] = [];
-    let totalHits = 0;
     let reachedLimit = false;
 
     for await (const entry of iterateJavaEntriesAsUtf8(input.jarPath)) {
@@ -258,14 +283,11 @@ export class ModSearchService {
         const simpleClassName = className.split(".").pop() ?? className;
         input.regex.lastIndex = 0;
         if (input.regex.test(simpleClassName)) {
-          totalHits += 1;
-          if (hits.length < input.limit) {
-            hits.push({
-              type: "class",
-              name: className,
-              file: filePath
-            });
-          }
+          hits.push({
+            type: "class",
+            name: className,
+            file: filePath
+          });
           if (input.searchType === "class") {
             continue;
           }
@@ -279,40 +301,25 @@ export class ModSearchService {
         input.searchType === "all"
       ) {
         const lines = entry.content.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          if (hits.length >= input.limit) {
-            reachedLimit = true;
-            break;
-          }
-          input.regex.lastIndex = 0;
-          if (!input.regex.test(lines[i])) {
-            continue;
-          }
-
-          const lineType = classifyLine(lines[i]);
-          if (input.searchType !== "all" && input.searchType !== lineType) {
-            continue;
-          }
-
-          totalHits += 1;
-          if (hits.length < input.limit) {
-            hits.push({
-              type: lineType,
-              name: lineType === "content" ? className : extractSymbolName(lines[i], lineType),
-              file: filePath,
-              line: i + 1,
-              context: extractContext(lines, i)
-            });
-          }
+        const lineScan = collectLineHits(
+          lines,
+          className,
+          filePath,
+          input.searchType,
+          input.regex,
+          input.limit - hits.length
+        );
+        hits.push(...lineScan.hits);
+        if (lineScan.stoppedEarly) {
+          reachedLimit = true;
         }
       }
     }
 
     return {
       hits,
-      totalHits,
-      truncated: reachedLimit,
-      warnings
+      totalHits: hits.length,
+      truncated: reachedLimit
     };
   }
 
@@ -358,28 +365,15 @@ export class ModSearchService {
     }
 
     const lines = content.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      if (hits.length >= input.maxHits) {
-        break;
-      }
-      input.regex.lastIndex = 0;
-      if (!input.regex.test(lines[i])) {
-        continue;
-      }
-
-      const lineType = classifyLine(lines[i]);
-      if (input.searchType !== "all" && input.searchType !== lineType) {
-        continue;
-      }
-
-      hits.push({
-        type: lineType,
-        name: lineType === "content" ? input.className : extractSymbolName(lines[i], lineType),
-        file: filePath,
-        line: i + 1,
-        context: extractContext(lines, i)
-      });
-    }
+    const lineScan = collectLineHits(
+      lines,
+      input.className,
+      filePath,
+      input.searchType,
+      input.regex,
+      input.maxHits - hits.length
+    );
+    hits.push(...lineScan.hits);
 
     return { hits };
   }

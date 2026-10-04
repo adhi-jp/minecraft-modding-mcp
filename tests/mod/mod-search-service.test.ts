@@ -266,6 +266,55 @@ test("searchModSource searches source jars directly without decompile", async ()
   assert.ok(result.warnings.some((warning) => warning.includes("source jar")));
 });
 
+test("searchModSource reports truncated with totalHits equal to returned hits when a source jar hits the limit mid-file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-source-limit-"));
+  const jarPath = join(root, "demo-sources.jar");
+  await createJar(jarPath, {
+    "com/example/Foo.java": [
+      "package com.example;",
+      "public class Foo {",
+      '  String a = "needle";',
+      '  String b = "needle";',
+      '  String c = "needle";',
+      "}"
+    ].join("\n")
+  });
+
+  const service = new ModSearchService({} as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "needle",
+    searchType: "content",
+    limit: 2
+  });
+
+  assert.equal(result.hits.length, 2);
+  assert.equal(result.totalHits, result.hits.length);
+  assert.equal(result.truncated, true);
+});
+
+test("searchModSource leaves truncated false when the only source jar hit is on the last line of the last entry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-search-source-last-line-"));
+  const jarPath = join(root, "demo-sources.jar");
+  await createJar(jarPath, {
+    "com/example/Foo.java": ["package com.example;", "public class Foo {}"].join("\n"),
+    "com/example/Bar.java": ["package com.example;", "public class Bar {}", "// needle"].join("\n")
+  });
+
+  const service = new ModSearchService({} as any);
+  const result = await service.searchModSource({
+    jarPath,
+    query: "needle",
+    searchType: "content",
+    limit: 1
+  });
+
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0]?.line, 3);
+  assert.equal(result.totalHits, 1);
+  assert.equal(result.truncated, false);
+});
+
 // ---------------------------------------------------------------------------
 // Line classification, symbol-name extraction, query validation, and the
 // invalid-regex literal fallback, all driven through searchModSource over a

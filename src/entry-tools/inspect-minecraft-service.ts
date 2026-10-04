@@ -17,10 +17,9 @@ import { handleClassMembers } from "./inspect-minecraft/handlers/class-members.j
 import { handleSearch } from "./inspect-minecraft/handlers/search.js";
 import { handleFile } from "./inspect-minecraft/handlers/file.js";
 import { handleListFiles } from "./inspect-minecraft/handlers/list-files.js";
+import { nonEmptyString } from "../tool-schemas.js";
 
 const INCLUDE_GROUPS = ["warnings", "provenance", "candidates", "members", "descriptors", "source", "files", "samples", "artifact", "timings"] as const;
-
-const nonEmptyString = z.string().trim().min(1);
 
 export const inspectMinecraftShape = {
   task: z.enum(TASKS).optional().describe("Workflow task. auto dispatches only from subject.kind and workspace focus.kind; it is not a natural-language planner."),

@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 import { createError, ERROR_CODES } from "./errors.js";
+import { limitStdio } from "./java-process.js";
 import { log } from "./logger.js";
 import { VersionService } from "./version-service.js";
 import type { Config } from "./types.js";
 
 const DATAGEN_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_STDIO_SNAPSHOT = 6_240;
 
 export type GetRegistryDataInput = {
   version: string;
@@ -79,11 +79,6 @@ function limitRegistryEntries(
     returned: maxEntries,
     truncated: true
   };
-}
-
-function limitOutput(text: string): string {
-  if (text.length <= MAX_STDIO_SNAPSHOT) return text;
-  return text.slice(-MAX_STDIO_SNAPSHOT);
 }
 
 function resolveRegistryPaths(registryDir: string): string[] {
@@ -195,14 +190,14 @@ function runDataGen(
         createError({
           code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
           message: `Registry data generation timed out for version "${version}".`,
-          details: { version, timeoutMs: DATAGEN_TIMEOUT_MS, stderrTail: limitOutput(stderr) }
+          details: { version, timeoutMs: DATAGEN_TIMEOUT_MS, stderrTail: limitStdio(stderr) }
         })
       );
     }, DATAGEN_TIMEOUT_MS);
 
     proc.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
-      stderr = limitOutput(stderr);
+      stderr = limitStdio(stderr);
     });
 
     proc.once("error", (error) => {
@@ -223,7 +218,7 @@ function runDataGen(
           createError({
             code: ERROR_CODES.REGISTRY_GENERATION_FAILED,
             message: `Data generation exited with code ${code} for version "${version}".`,
-            details: { version, code, stderrTail: limitOutput(stderr) }
+            details: { version, code, stderrTail: limitStdio(stderr) }
           })
         );
         return;
