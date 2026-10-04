@@ -53,7 +53,7 @@ deps: InspectMinecraftDeps,
         source: {
           className: source.className,
           mode: source.mode,
-          returnedRange: source.returnedRange,
+          ...(source.returnedRange ? { returnedRange: source.returnedRange } : {}),
           totalLines: source.totalLines,
           sourceText: source.sourceText
         }

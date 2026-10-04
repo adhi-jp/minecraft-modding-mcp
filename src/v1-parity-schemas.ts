@@ -2283,7 +2283,7 @@ export const V1_PARITY_SCHEMAS: Readonly<Record<string, Record<string, unknown>>
           "intermediary",
           "yarn"
         ],
-        "description": "default obfuscated"
+        "description": "Defaults to the mapping the target artifact was resolved with; obfuscated when the target has none."
       },
       "sourcePriority": {
         "type": "string",

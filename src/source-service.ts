@@ -335,7 +335,8 @@ export type GetClassSourceOutput = {
   mode: SourceMode;
   sourceText: string;
   totalLines: number;
-  returnedRange: {
+  /** Source lines returned for snippet/full; absent in metadata mode, whose outline is not a line slice. */
+  returnedRange?: {
     start: number;
     end: number;
   };

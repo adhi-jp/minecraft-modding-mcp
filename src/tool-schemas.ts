@@ -247,7 +247,7 @@ export const getClassSourceSchema = z
 export const getClassMembersShape = {
   className: nonEmptyString,
   target: sourceLookupTargetSchema.describe(SOURCE_LOOKUP_TARGET_DESCRIPTION),
-  mapping: sourceMappingSchema.optional().describe("default obfuscated"),
+  mapping: sourceMappingSchema.optional().describe("Defaults to the mapping the target artifact was resolved with; obfuscated when the target has none."),
   sourcePriority: mappingSourcePrioritySchema.optional(),
   allowDecompile: z.boolean().default(true),
   access: memberAccessSchema.default("public"),

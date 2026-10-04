@@ -222,7 +222,6 @@ test("InspectMinecraftService preserves workspace context for class source witho
         artifactId: input.artifactId ?? "artifact-class-source",
         mode: "metadata",
         totalLines: 410,
-        returnedRange: undefined,
         returnedNamespace: "mojang",
         warnings: []
       };
@@ -276,6 +275,79 @@ test("InspectMinecraftService preserves workspace context for class source witho
       strictVersion: undefined
     }
   ]);
+});
+
+test("InspectMinecraftService class-source omits returnedRange for metadata mode and keeps it for snippet mode", async () => {
+  const modes: string[] = [];
+  const service = new InspectMinecraftService(buildInspectDeps({
+    resolveArtifact: async (input) => ({
+      artifactId: "artifact-class-source-range",
+      origin: "local-jar",
+      isDecompiled: false,
+      requestedMapping: input.mapping,
+      mappingApplied: input.mapping ?? "obfuscated",
+      version: "1.21.10",
+      provenance: { requestedTarget: input.target },
+      qualityFlags: [],
+      artifactContents: {
+        sourceKind: "source-jar",
+        indexedContentKinds: ["sources"],
+        resourcesIncluded: false,
+        sourceCoverage: "full"
+      },
+      warnings: []
+    }),
+    getClassSource: async (input) => {
+      modes.push(input.mode ?? "");
+      return {
+        className: input.className,
+        artifactId: input.artifactId ?? "artifact-class-source-range",
+        mode: input.mode,
+        sourceText: "// outline",
+        totalLines: 410,
+        ...(input.mode === "snippet" ? { returnedRange: { start: 1, end: 200 } } : {}),
+        returnedNamespace: "mojang",
+        warnings: []
+      };
+    },
+    detectProjectMinecraftVersion: async () => "1.21.10"
+  }));
+
+  const subject = {
+    kind: "workspace" as const,
+    projectPath: "/workspace/demo-mod",
+    mapping: "mojang" as const,
+    focus: {
+      kind: "class" as const,
+      className: "net.minecraft.server.MinecraftServer"
+    }
+  };
+
+  const metadataResult = await service.execute({
+    task: "class-source",
+    detail: "standard",
+    subject
+  });
+  const snippetResult = await service.execute({
+    task: "class-source",
+    detail: "standard",
+    include: ["source"],
+    subject
+  });
+
+  assert.deepEqual(modes, ["metadata", "snippet"]);
+  const metadataBlock = (metadataResult as { source?: Record<string, unknown> }).source;
+  assert.ok(metadataBlock, "metadata-mode result carries the source block");
+  assert.equal(metadataBlock.mode, "metadata");
+  assert.equal(metadataBlock.totalLines, 410);
+  assert.equal(
+    Object.hasOwn(metadataBlock, "returnedRange"),
+    false,
+    "metadata mode must not emit a returnedRange key, not even an undefined one"
+  );
+  const snippetBlock = (snippetResult as { source?: Record<string, unknown> }).source;
+  assert.ok(snippetBlock, "snippet-mode result carries the source block");
+  assert.deepEqual(snippetBlock.returnedRange, { start: 1, end: 200 });
 });
 
 test("InspectMinecraftService accepts workspace class focus for class-members", async () => {

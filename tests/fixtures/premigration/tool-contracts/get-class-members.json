@@ -160,7 +160,7 @@
             "intermediary",
             "yarn"
           ],
-          "description": "default obfuscated"
+          "description": "Defaults to the mapping the target artifact was resolved with; obfuscated when the target has none."
         },
         "sourcePriority": {
           "type": "string",

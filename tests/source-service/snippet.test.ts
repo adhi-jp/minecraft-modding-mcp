@@ -309,6 +309,61 @@ test("getClassSource defaults to mode='metadata' when mode is omitted", async ()
   assert.match(result.sourceText, /\[method\] line 5\s*\n\s*void doIt\(\) \{/);
 });
 
+test("getClassSource metadata mode omits the returnedRange key and keeps totalLines and truncated", async () => {
+  const { artifactId, service, className } = await setupGetClassSource({
+    rootPrefix: "snippet-meta-norange-",
+    classInternal: "a/Snippet",
+    className: "a.Snippet",
+    sources: {
+      "a/Snippet.java": [
+        "package a;",
+        "",
+        "public class Snippet {",
+        "  int x = 1;",
+        "  void doIt() {",
+        "  }",
+        "}"
+      ].join("\n")
+    }
+  });
+
+  const result = await service.getClassSource({ artifactId, className, mode: "metadata" });
+  assert.equal(result.mode, "metadata");
+  assert.equal(Object.hasOwn(result, "returnedRange"), false, "metadata mode must not emit returnedRange");
+  assert.equal(result.totalLines, 7);
+  assert.equal(result.truncated, false);
+  assert.equal(Object.hasOwn(result, "charsTruncated"), false);
+
+  const snippet = await service.getClassSource({ artifactId, className, mode: "snippet" });
+  assert.deepEqual(snippet.returnedRange, { start: 1, end: 7 });
+});
+
+test("getClassSource metadata mode reports a maxChars cut of the outline without returnedRange", async () => {
+  const { artifactId, service, className } = await setupGetClassSource({
+    rootPrefix: "snippet-meta-maxchars-",
+    classInternal: "a/Snippet",
+    className: "a.Snippet",
+    sources: {
+      "a/Snippet.java": [
+        "package a;",
+        "",
+        "public class Snippet {",
+        "  int x = 1;",
+        "  void doIt() {",
+        "  }",
+        "}"
+      ].join("\n")
+    }
+  });
+
+  const result = await service.getClassSource({ artifactId, className, mode: "metadata", maxChars: 20 });
+  assert.equal(result.sourceText.length, 20);
+  assert.equal(result.truncated, true);
+  assert.equal(result.charsTruncated, true);
+  assert.equal(result.totalLines, 7);
+  assert.equal(Object.hasOwn(result, "returnedRange"), false);
+});
+
 test("getClassSource snippet mode applies default maxLines=200 when no range or maxLines given", async () => {
   const { artifactId, service, className } = await setupGetClassSource({
     rootPrefix: "snippet-default-200-",

@@ -30,7 +30,9 @@ import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
  * This test closes that gap at the level the drift occurs: the top-level
  * property names and the required set. It intentionally does NOT compare
  * nested shapes, descriptions, or JSON Schema dialect details — those legitimately
- * differ between the pinned draft-07 bytes and zod's current output.
+ * differ between the pinned draft-07 bytes and zod's current output. The one
+ * description this file does compare is the `mapping` description of tools that
+ * inherit the target artifact's resolved mapping, see the last test.
  */
 
 const root = mkdtempSync(join(tmpdir(), "review-c2-schema-parity-"));
@@ -120,4 +122,42 @@ test("the parity comparison detects an injected property-set drift", async () =>
     propertyNames(advertised),
     "the unperturbed pair must still agree"
   );
+});
+
+type MappingDescriptionSchema = { properties?: { mapping?: { description?: string } } };
+
+function mappingDescription(schema: MappingDescriptionSchema): string | undefined {
+  return schema.properties?.mapping?.description;
+}
+
+test("get-class-members advertises and enforces the same inherited-mapping default description", async () => {
+  await import("../../src/index.ts");
+  const { getToolSchema } = await import("../../src/tool-schema-registry.ts");
+  const { V1_PARITY_SCHEMAS } = await import("../../src/v1-parity-schemas.ts");
+
+  // get-class-members falls back to the mapping its target artifact was resolved
+  // with when `mapping` is omitted, so neither description may claim a fixed
+  // `obfuscated` default.
+  const inheritingTools = ["get-class-members"];
+  for (const name of inheritingTools) {
+    const runtime = mappingDescription(
+      z.toJSONSchema(getToolSchema(name)!, { io: "input" }) as MappingDescriptionSchema
+    );
+    const advertised = mappingDescription(V1_PARITY_SCHEMAS[name] as MappingDescriptionSchema);
+
+    assert.ok(advertised, `${name} advertises a mapping description`);
+    assert.equal(runtime, advertised, `${name}: runtime and advertised mapping descriptions differ`);
+    assert.match(advertised, /resolved with/i, `${name}: description names the resolved mapping`);
+    assert.match(advertised, /obfuscated when the target has none/i);
+    assert.doesNotMatch(advertised, /^default obfuscated$/i);
+  }
+
+  // The lifecycle and diff tools take no artifact, so their fixed default stays.
+  for (const name of ["trace-symbol-lifecycle", "diff-class-signatures"]) {
+    assert.equal(
+      mappingDescription(V1_PARITY_SCHEMAS[name] as MappingDescriptionSchema),
+      "default obfuscated",
+      `${name} keeps its fixed default description`
+    );
+  }
 });

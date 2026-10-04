@@ -1338,10 +1338,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     mode,
     sourceText,
     totalLines,
-    returnedRange: {
-      start: returnedStart,
-      end: returnedEnd
-    },
+    ...(mode !== "metadata" ? { returnedRange: { start: returnedStart, end: returnedEnd } } : {}),
     truncated,
     ...(charsTruncated ? { charsTruncated } : {}),
     ...(snippet.outOfRange ? { outOfRange: true } : {}),
