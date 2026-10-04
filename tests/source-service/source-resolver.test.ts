@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { createHash } from "node:crypto";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
@@ -560,10 +561,7 @@ test("resolveSourceTarget(targetKind=coordinate) still refuses a local binary-on
             { allowDecompile: false },
             buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
           ),
-        (error: unknown) => {
-          assert.equal((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
-          return true;
-        }
+        expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
       );
     })
   );
@@ -754,10 +752,7 @@ test("resolveSourceTarget(targetKind=coordinate) still refuses a readable local 
             { allowDecompile: false },
             buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] })
           ),
-        (error: unknown) => {
-          assert.equal((error as { code?: string }).code, ERROR_CODES.SOURCE_NOT_FOUND);
-          return true;
-        }
+        expectAppErrorCode(ERROR_CODES.SOURCE_NOT_FOUND)
       );
     })
   );
@@ -1849,10 +1844,7 @@ test("localM2CoordinateCandidatePaths keeps every candidate under the local repo
         artifactId: "..",
         version: `..${sep}m2-evil`
       }),
-    (error: any) => {
-      assert.equal(error.code, ERROR_CODES.INVALID_INPUT);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 
   // The well-formed case is unaffected: it still lands exactly where the ~/.m2

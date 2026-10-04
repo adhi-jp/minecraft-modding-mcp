@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,7 +89,7 @@ test("traversal-shaped file paths are rejected as invalid input", async () => {
   for (const filePath of ["../outside.json", "assets/../../etc/passwd", "/etc/passwd"]) {
     await assert.rejects(
       () => service.getArtifactFile({ artifactId, filePath }),
-      (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+      expectAppErrorCode("ERR_INVALID_INPUT")
     );
   }
 });
@@ -213,7 +214,7 @@ test("an invalid-UTF-8 text entry is rejected instead of silently corrupted", as
         artifactId,
         filePath: "assets/minecraft/lang/broken.json"
       }),
-    (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 
@@ -311,7 +312,7 @@ test("a root-level traversal-shaped path is still ERR_INVALID_INPUT", async () =
   for (const filePath of ["../fabric.mod.json", "/fabric.mod.json", "META-INF/../../fabric.mod.json"]) {
     await assert.rejects(
       () => service.getArtifactFile({ artifactId, filePath }),
-      (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+      expectAppErrorCode("ERR_INVALID_INPUT")
     );
   }
 });

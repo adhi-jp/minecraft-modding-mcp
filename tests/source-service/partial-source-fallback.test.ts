@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -688,8 +689,7 @@ test("SourceService getClassSource forwards allowDecompile to the binary fallbac
         className: "net.minecraft.world.item.Item",
         ...(allowDecompile === undefined ? {} : { allowDecompile })
       }),
-      (error: unknown) =>
-        (error as { code?: string }).code === ERROR_CODES.CLASS_NOT_FOUND
+      expectAppErrorCode(ERROR_CODES.CLASS_NOT_FOUND)
     );
     assert.equal(fallbackCalls.length, 1, `allowDecompile=${String(allowDecompile)} must reach the resolver once`);
     assert.equal(

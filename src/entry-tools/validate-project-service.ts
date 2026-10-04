@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
 import type { StageEmitter } from "../stage-emitter.js";
-import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 import { handleMixin } from "./validate-project/cases/mixin.js";
@@ -21,24 +20,7 @@ import { nonEmptyString, sourceMappingSchema } from "../tool-schemas.js";
 const INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
 const WORKSPACE_TEXT_FILE_READ_CONCURRENCY = 4;
 
-export type TaskStatus = "ok" | "skipped" | "missing" | "error";
-
-type TaskEntryBase = {
-  status: TaskStatus;
-  durationMs?: number;
-  error?: { code: string; detail: string };
-  warnings?: string[];
-};
-
-export type TaskStatusReport = {
-  "workspace.detected": TaskEntryBase & { evidence?: string[] };
-  "gradle.readable": TaskEntryBase & { propertiesPath?: string; buildScripts?: string[] };
-  "loom.cache.found": TaskEntryBase & { cachePath?: string };
-  "minecraft.artifact.resolved": TaskEntryBase & { artifactId?: string; mapping?: SourceMapping };
-  "mixins.validated": TaskEntryBase & { counts?: { ok: number; partial: number; invalid: number } };
-  "accessWideners.validated": TaskEntryBase & { counts?: { ok: number; invalid: number } };
-  "accessTransformers.validated": TaskEntryBase & { counts?: { ok: number; invalid: number } };
-};
+export type { TaskStatus, TaskStatusReport } from "./validate-project/internal.js";
 
 const mixinInputSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("inline"), source: nonEmptyString }),

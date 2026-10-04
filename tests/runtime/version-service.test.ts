@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -357,10 +358,7 @@ test("resolveVersionMappings rejects invalid detail payloads", async () => {
 
   await assert.rejects(
     () => svc.resolveVersionMappings("1.21.4"),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.VERSION_NOT_FOUND);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.VERSION_NOT_FOUND)
   );
 });
 
@@ -617,9 +615,6 @@ test("getVersionLibraries rejects when the version is not found in the manifest"
 
   await assert.rejects(
     () => svc.getVersionLibraries("99.99"),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.VERSION_NOT_FOUND);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.VERSION_NOT_FOUND)
   );
 });

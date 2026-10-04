@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -175,7 +176,7 @@ test("synthesizeDependencyTarget rejects path traversal characters in group/name
         { target: { kind: "dependency" } },
         { kind: "dependency", group: "../etc", name: "passwd", version: "1.0.0" }
       ),
-    (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 
@@ -279,7 +280,7 @@ test("synthesizeDependencyTarget rejects target.kind=dependency when DEPENDENCY_
           { target: { kind: "dependency" } },
           { kind: "dependency", group: "g", name: "n", version: "1.0.0" }
         ),
-      (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   });
 });
@@ -861,10 +862,7 @@ test("resolveArtifact does not read a net.minecraft library's own version as an 
       target: { kind: "coordinate", value: "net.minecraft:launchwrapper:26.1" },
       mapping: "mojang"
     }),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.MAPPING_NOT_APPLIED);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.MAPPING_NOT_APPLIED)
   );
 });
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -261,10 +262,7 @@ test("a malformed drive path is refused as invalid input, not read as a director
           { target: { kind: "workspace" }, projectPath: "C:no-separator\\proj" },
           { kind: "workspace" }
         ),
-      (error: Error & { code?: string }) => {
-        assert.equal(error.code, ERROR_CODES.INVALID_INPUT);
-        return true;
-      }
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   });
 });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -178,10 +179,7 @@ test("resolveMojangTinyFile throws MAPPING_UNAVAILABLE when version has no Mojan
       resolveMojangTinyFile("1.21.10", config, {
         versionService: versionServiceStub
       }),
-    (error: unknown) => {
-      const appError = error as { code?: string };
-      return appError.code === ERROR_CODES.MAPPING_UNAVAILABLE;
-    }
+    expectAppErrorCode(ERROR_CODES.MAPPING_UNAVAILABLE)
   );
 });
 

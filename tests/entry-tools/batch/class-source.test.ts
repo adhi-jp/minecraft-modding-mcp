@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../../helpers/expect-app-error.ts";
 import test from "node:test";
 
 import { createError, ERROR_CODES } from "../../../src/errors.ts";
@@ -445,6 +446,6 @@ test("top-level resolution failure surfaces as a thrown error (no results array)
       target: { kind: "version", value: "9.99.99" },
       entries: [{ className: "a.A" }]
     }),
-    (err: unknown) => (err as { code?: string }).code === ERROR_CODES.VERSION_NOT_FOUND
+    expectAppErrorCode(ERROR_CODES.VERSION_NOT_FOUND)
   );
 });

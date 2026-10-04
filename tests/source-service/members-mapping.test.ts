@@ -78,10 +78,6 @@ test("SourceService getClassMembers with mojang mapping remaps className and mem
   };
 
   // Stub resolveArtifact to return a versioned artifact
-  const originalResolveArtifact = (service as unknown as {
-    resolveArtifact: (input: unknown) => Promise<unknown>;
-  }).resolveArtifact.bind(service);
-
   (service as unknown as { resolveArtifact: unknown }).resolveArtifact = async (input: unknown) => {
     return {
       artifactId: "test-artifact-id",

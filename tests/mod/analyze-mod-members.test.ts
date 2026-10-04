@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,7 +103,7 @@ test("an invalid jarPath for the members task is rejected as invalid input", asy
         jarPath: "/nonexistent/missing.jar",
         className: "com.example.Anything"
       }),
-    (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 
@@ -124,6 +125,6 @@ test("getModClassMembers reports a class missing from the mod jar as CLASS_NOT_F
         jarPath,
         className: "software.bernie.geckolib.DoesNotExist"
       }),
-    (error: Error & { code?: string }) => error.code === "ERR_CLASS_NOT_FOUND"
+    expectAppErrorCode("ERR_CLASS_NOT_FOUND")
   );
 });

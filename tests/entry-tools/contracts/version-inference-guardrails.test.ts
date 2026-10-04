@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../../helpers/expect-app-error.ts";
 import test from "node:test";
 
 import { AnalyzeSymbolService, analyzeSymbolSchema } from "../../../src/entry-tools/analyze-symbol-service.ts";
@@ -109,7 +110,7 @@ test("analyze-symbol fails with a clear error when inference finds no version", 
   });
   await assert.rejects(
     () => service.execute(parsed),
-    (error: Error & { code?: string }) => error.code === "ERR_WORKSPACE_VERSION_UNRESOLVED"
+    expectAppErrorCode("ERR_WORKSPACE_VERSION_UNRESOLVED")
   );
 });
 
@@ -275,6 +276,6 @@ test("a unique workspace with no detectable version keeps the requires-artifact 
         kind: "class",
         className: "net.minecraft.world.item.ItemStack"
       } as never),
-    (error: Error & { code?: string }) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });

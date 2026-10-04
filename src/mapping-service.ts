@@ -69,7 +69,8 @@ import { loadTinyPairsFromLoom } from "./mapping/loaders/tiny-loom.js";
 import { fetchYarnCoordinates, loadTinyPairsFromMaven } from "./mapping/loaders/tiny-maven.js";
 import type {
   MappingLoaderDeps,
-  MappingLoaderResult
+  MappingLoaderResult,
+  VersionMappingsResolver
 } from "./mapping/loaders/types.js";
 import type {
   ClassApiMatrixEntry,
@@ -129,8 +130,6 @@ const SUPPORTED_MAPPINGS: ReadonlySet<SourceMapping> = new Set([
  * an inventory — find-mapping is the tool that returns the full list.
  */
 const MAX_REPORTED_DECLARING_OWNERS = 5;
-
-type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
 
 /* parsers extracted to src/mapping/parsers/{symbol-records,normalize,proguard,tiny}.ts */

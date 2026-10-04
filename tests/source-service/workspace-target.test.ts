@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -502,7 +503,7 @@ test("synthesizeWorkspaceTarget rejects target.kind=workspace when WORKSPACE_TAR
           { target: { kind: "workspace" }, projectPath: root },
           { kind: "workspace" }
         ),
-      (err: Error & { code?: string }) => err.code === ERROR_CODES.INVALID_INPUT
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   });
 });

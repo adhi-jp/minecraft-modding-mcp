@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -438,10 +439,6 @@ test("searchModSource rejects empty queries with INVALID_INPUT", async () => {
   const service = new ModSearchService(buildDecompiledStub(root, []) as any);
   await assert.rejects(
     () => service.searchModSource({ jarPath, query: "   " }),
-    (error: unknown) => {
-      const appError = error as { code?: string };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });

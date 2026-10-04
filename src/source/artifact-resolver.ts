@@ -1664,8 +1664,6 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
 }): Promise<{
   allowBinaryRemap: boolean;
   mappingVariant: MappingVariant;
-  tinyRemapperJarPath?: string;
-  mojangTinyFilePath?: string;
   warnings: string[];
 }> {
   const baseline: {
@@ -1693,9 +1691,8 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
     return baseline;
   }
 
-  let tinyRemapperJarPath: string;
   try {
-    tinyRemapperJarPath = await resolveTinyRemapperJar(
+    await resolveTinyRemapperJar(
       svc.config.cacheDir,
       svc.config.tinyRemapperJarPath
     );
@@ -1707,10 +1704,8 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
     return baseline;
   }
 
-  let mojangTinyFilePath: string;
   try {
     const mojangTiny = await resolveMojangTinyFile(input.version, svc.config);
-    mojangTinyFilePath = mojangTiny.path;
     if (mojangTiny.warnings.length > 0) {
       baseline.warnings.push(...mojangTiny.warnings);
     }
@@ -1746,8 +1741,6 @@ async function computeBinaryRemapGate(svc: SourceService, input: {
   return {
     allowBinaryRemap: true,
     mappingVariant: "mojang-remapped",
-    tinyRemapperJarPath,
-    mojangTinyFilePath,
     warnings: baseline.warnings
   };
 }

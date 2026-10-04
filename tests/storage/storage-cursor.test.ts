@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import test from "node:test";
 
 import { createRepos, seedArtifact } from "../helpers/repos.ts";
@@ -590,7 +591,7 @@ test("listFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
 
   assert.throws(
     () => files.listFiles("artifact-cursor-invalid", { limit: 10, cursor: "not-a-cursor" }),
-    (error: any) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 
@@ -605,7 +606,7 @@ test("listFiles with valid base64 but wrong schema throws ERR_INVALID_INPUT", as
   const badCursor = Buffer.from(JSON.stringify({ sortKey: 123 }), "utf8").toString("base64");
   assert.throws(
     () => files.listFiles("artifact-cursor-schema", { limit: 10, cursor: badCursor }),
-    (error: any) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 
@@ -618,7 +619,7 @@ test("searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
 
   assert.throws(
     () => files.searchFileCandidates("artifact-search-cursor-invalid", { query: "Foo", limit: 10, cursor: "garbage" }),
-    (error: any) => error.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 

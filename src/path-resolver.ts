@@ -5,11 +5,6 @@ import type { JarStatStamp } from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 
-interface ResolvedJarInfo {
-  originalPath: string;
-  resolvedPath: string;
-}
-
 const INVALID_ENTRY = /(^|\/|\\)\.\.(\/|\\|$)/;
 
 export function normalizeJarPath(jarPath: string): string {
@@ -73,14 +68,6 @@ export function normalizeJarPath(jarPath: string): string {
   }
 }
 
-export function resolveJarPathWithSymlinkCheck(jarPath: string): ResolvedJarInfo {
-  const resolvedPath = normalizeJarPath(jarPath);
-  return {
-    originalPath: jarPath,
-    resolvedPath
-  };
-}
-
 export function buildJarSignature(stats: { mtimeMs: number; size: number }): string {
   return `${Math.trunc(stats.mtimeMs)}:${stats.size}`;
 }
@@ -97,7 +84,7 @@ export function buildJarSignature(stats: { mtimeMs: number; size: number }): str
  * callers of `get-project-context`.
  */
 export function readJarStatStamp(jarPath: string): JarStatStamp {
-  const resolvedPath = resolveJarPathWithSymlinkCheck(jarPath).resolvedPath;
+  const resolvedPath = normalizeJarPath(jarPath);
   const stats = statSync(resolvedPath);
   return {
     sourcePath: resolvedPath,

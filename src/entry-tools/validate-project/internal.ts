@@ -6,7 +6,7 @@ import { buildVersionSourceSearchRoots } from "../../gradle-paths.js";
 import type { StageEmitter } from "../../stage-emitter.js";
 import type { ArtifactScope, SourceMapping } from "../../types.js";
 
-type TaskStatus = "ok" | "skipped" | "missing" | "error";
+export type TaskStatus = "ok" | "skipped" | "missing" | "error";
 
 type TaskEntryBase = {
   status: TaskStatus;
@@ -15,7 +15,7 @@ type TaskEntryBase = {
   warnings?: string[];
 };
 
-type TaskStatusReport = {
+export type TaskStatusReport = {
   "workspace.detected": TaskEntryBase & { evidence?: string[] };
   "gradle.readable": TaskEntryBase & { propertiesPath?: string; buildScripts?: string[] };
   "loom.cache.found": TaskEntryBase & { cachePath?: string };

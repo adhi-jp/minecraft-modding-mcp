@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
@@ -412,11 +413,7 @@ test("getModClassSource rejects an empty className with INVALID_INPUT", async ()
   const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
   await assert.rejects(
     () => service.getModClassSource({ jarPath, className: "   " }),
-    (error: unknown) => {
-      const appError = error as { code?: string };
-      assert.equal(appError.code, ERROR_CODES.INVALID_INPUT);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 

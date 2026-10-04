@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { writeFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -219,6 +220,6 @@ test("remapJar propagates assertJavaAvailable failures with their original code"
 
   await assert.rejects(
     () => remapJar("/tmp/fake-remapper.jar", fx.base),
-    (err: any) => err.code === ERROR_CODES.JAVA_UNAVAILABLE
+    expectAppErrorCode(ERROR_CODES.JAVA_UNAVAILABLE)
   );
 });

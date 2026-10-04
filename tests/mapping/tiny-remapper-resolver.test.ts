@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -71,10 +72,7 @@ test("resolveTinyRemapperJar throws REMAPPER_UNAVAILABLE on download failure", a
 
     await assert.rejects(
       () => resolveTinyRemapperJar(tempDir, undefined, mockFetch),
-      (error: unknown) => {
-        const appError = error as { code?: string };
-        return appError.code === ERROR_CODES.REMAPPER_UNAVAILABLE;
-      }
+      expectAppErrorCode(ERROR_CODES.REMAPPER_UNAVAILABLE)
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

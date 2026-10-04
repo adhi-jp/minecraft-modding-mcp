@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,11 +111,11 @@ test("detectCompileMapping rejects empty projectPath with INVALID_INPUT", async 
   const service = new WorkspaceMappingService();
   await assert.rejects(
     () => service.detectCompileMapping({ projectPath: "" }),
-    (err: any) => err.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
   await assert.rejects(
     () => service.detectCompileMapping({ projectPath: "   " }),
-    (err: any) => err.code === "ERR_INVALID_INPUT"
+    expectAppErrorCode("ERR_INVALID_INPUT")
   );
 });
 

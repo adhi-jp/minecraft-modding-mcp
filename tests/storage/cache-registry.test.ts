@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, mkdir, readFile, readdir, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -470,7 +471,7 @@ test("cache registry listEntries rejects invalid `olderThan` selector with ERR_I
           cacheKinds: ["downloads"],
           selector: { olderThan: value }
         } as any),
-      (err: any) => err.code === "ERR_INVALID_INPUT",
+      expectAppErrorCode("ERR_INVALID_INPUT"),
       `expected ERR_INVALID_INPUT for olderThan="${value}"`
     );
   }

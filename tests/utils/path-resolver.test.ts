@@ -19,7 +19,6 @@ import {
   readJarStatStamp,
   buildJarSignature,
   isSecureJarEntryPath,
-  resolveJarPathWithSymlinkCheck,
   validateAndNormalizeJarPath
 } from "../../src/path-resolver.ts";
 import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
@@ -99,19 +98,6 @@ test("normalizeJarPath resolves a symlink to the target's realpath", async () =>
   assert.equal(resolved, await realpath(realJar));
 });
 
-// --- resolveJarPathWithSymlinkCheck -----------------------------------------
-
-test("resolveJarPathWithSymlinkCheck preserves the original input alongside the resolved path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "path-resolver-rsws-"));
-  const realJar = join(root, "real.jar");
-  const linkJar = join(root, "link.jar");
-  await writeFile(realJar, "");
-  await symlink(realJar, linkJar);
-  const info = resolveJarPathWithSymlinkCheck(linkJar);
-  assert.equal(info.originalPath, linkJar);
-  assert.equal(info.resolvedPath, await realpath(realJar));
-});
-
 // --- readJarStatStamp / buildJarSignature ------------------------------------
 
 test("buildJarSignature emits `<truncated mtime>:<size>` format", () => {
@@ -160,7 +146,7 @@ test("validateAndNormalizeJarPath rejects empty / whitespace input with INVALID_
   for (const value of ["", "   ", "\t\n"]) {
     assert.throws(
       () => validateAndNormalizeJarPath(value),
-      (err: any) => err.code === ERROR_CODES.INVALID_INPUT,
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT),
       `expected INVALID_INPUT for ${JSON.stringify(value)}`
     );
   }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../../helpers/expect-app-error.ts";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -161,7 +162,7 @@ test("ManageCacheService normalizes read-only actions to preview mode and blocks
         executionMode: "apply",
         cacheKinds: ["downloads"]
       }),
-    (error: any) => error.code === ERROR_CODES.INVALID_INPUT
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 

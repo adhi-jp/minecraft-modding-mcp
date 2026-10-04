@@ -7,6 +7,7 @@ import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
 import { downloadToCache } from "./repo-downloader.js";
 import type { Config } from "./types.js";
+import type { VersionMappingsResolver } from "./mapping/loaders/types.js";
 import { type ResolvedVersionMappings, VersionService } from "./version-service.js";
 
 interface RawClassMapping {
@@ -31,8 +32,6 @@ interface TinyMemberRecord {
   obfuscatedName: string;
   mojangName: string;
 }
-
-type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
 interface ResolveMojangTinyDeps {
   fetchFn?: typeof fetch;

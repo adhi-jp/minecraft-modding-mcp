@@ -364,7 +364,6 @@ export async function synthesizeDependencyTarget(
   const cacheKey = `${group}:${name}`;
   const ctxBefore = svc.workspaceContextCache.read(projectPath);
   const cachedVersion = ctxBefore?.dependencyVersions.get(cacheKey);
-  const warningsBucket: string[] = [];
   if (cachedVersion) {
     const coordinate = `${group}:${name}:${cachedVersion}`;
     return {
@@ -443,7 +442,7 @@ export async function synthesizeDependencyTarget(
   return {
     target: { kind: "coordinate", value: coordinate },
     requestedMapping: input.mapping ? normalizeMapping(input.mapping) : undefined,
-    warnings: warningsBucket,
+    warnings: [],
     provenance: {
       group,
       name,

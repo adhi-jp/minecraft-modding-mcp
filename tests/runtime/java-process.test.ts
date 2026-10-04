@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -83,7 +84,7 @@ test("assertJavaAvailable does not cache unavailable-Java failures after reset",
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await assert.rejects(
       () => assertJavaAvailable(),
-      (error: unknown) => (error as { code?: string }).code === ERROR_CODES.JAVA_UNAVAILABLE
+      expectAppErrorCode(ERROR_CODES.JAVA_UNAVAILABLE)
     );
   }
 
@@ -97,7 +98,7 @@ test("assertJavaAvailable caches a success that follows a failed probe", async (
 
   await assert.rejects(
     () => assertJavaAvailable(),
-    (error: unknown) => (error as { code?: string }).code === ERROR_CODES.JAVA_UNAVAILABLE
+    expectAppErrorCode(ERROR_CODES.JAVA_UNAVAILABLE)
   );
   await assertJavaAvailable();
   await assertJavaAvailable();

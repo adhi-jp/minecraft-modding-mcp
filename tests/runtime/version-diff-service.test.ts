@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,10 +40,7 @@ test("compareVersions throws when registry-only comparison fails", async () => {
         toVersion: "1.21.1",
         category: "registry"
       }),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.REGISTRY_GENERATION_FAILED);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.REGISTRY_GENERATION_FAILED)
   );
 });
 
@@ -55,10 +53,7 @@ test("compareVersions rejects blank version inputs", async () => {
         fromVersion: "  ",
         toVersion: "1.21.1"
       }),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.INVALID_INPUT);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
   );
 });
 

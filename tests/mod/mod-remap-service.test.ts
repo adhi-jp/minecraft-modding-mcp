@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -127,10 +128,7 @@ test("remapModJar rejects non-.jar input", async () => {
 
     await assert.rejects(
       () => remapModJar(input, config),
-      (error: unknown) => {
-        const appError = error as { code?: string };
-        return appError.code === ERROR_CODES.INVALID_INPUT;
-      }
+      expectAppErrorCode(ERROR_CODES.INVALID_INPUT)
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -148,10 +146,7 @@ test("remapModJar rejects missing input jar", async () => {
 
     await assert.rejects(
       () => remapModJar(input, config),
-      (error: unknown) => {
-        const appError = error as { code?: string };
-        return appError.code === ERROR_CODES.JAR_NOT_FOUND;
-      }
+      expectAppErrorCode(ERROR_CODES.JAR_NOT_FOUND)
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -174,10 +169,7 @@ test("remapModJar rejects unknown loader", async () => {
 
     await assert.rejects(
       () => remapModJar(input, config),
-      (error: unknown) => {
-        const appError = error as { code?: string };
-        return appError.code === ERROR_CODES.REMAP_FAILED;
-      }
+      expectAppErrorCode(ERROR_CODES.REMAP_FAILED)
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -580,10 +581,7 @@ test("resolveArtifact does not read a direct coordinate's own version as an unob
       target: { kind: "coordinate", value: "com.example:libunobf:26.0.2" },
       mapping: "mojang"
     }),
-    (error: unknown) => {
-      assert.equal((error as { code?: string }).code, ERROR_CODES.MAPPING_NOT_APPLIED);
-      return true;
-    }
+    expectAppErrorCode(ERROR_CODES.MAPPING_NOT_APPLIED)
   );
 });
 

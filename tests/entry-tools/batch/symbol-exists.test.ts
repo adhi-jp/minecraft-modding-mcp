@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { expectAppErrorCode } from "../../helpers/expect-app-error.ts";
 import test from "node:test";
 
 import { createError, ERROR_CODES } from "../../../src/errors.ts";
@@ -171,7 +172,7 @@ test("ERR_WORKSPACE_VERSION_UNRESOLVED when shared artifact lacks Minecraft vers
       ...baseInput,
       entries: [{ kind: "class", name: "a.A" }]
     }),
-    (err: unknown) => (err as { code?: string }).code === ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED
+    expectAppErrorCode(ERROR_CODES.WORKSPACE_VERSION_UNRESOLVED)
   );
 });
 
