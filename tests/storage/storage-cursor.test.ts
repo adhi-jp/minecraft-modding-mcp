@@ -29,11 +29,11 @@ test("filesRepo.searchFiles cursor advances without duplicating previous hit", a
     }
   ]);
 
-  const first = files.searchFiles(artifactId, { query: "Foo", limit: 1 });
+  const first = files.searchFileCandidates(artifactId, { query: "Foo", limit: 1 });
   assert.equal(first.items.length, 1);
   assert.ok(first.nextCursor);
 
-  const second = files.searchFiles(artifactId, { query: "Foo", limit: 1, cursor: first.nextCursor });
+  const second = files.searchFileCandidates(artifactId, { query: "Foo", limit: 1, cursor: first.nextCursor });
   assert.equal(second.items.length, 1);
   assert.notEqual(first.items[0]?.filePath, second.items[0]?.filePath);
 });
@@ -83,80 +83,6 @@ test("filesRepo.listFiles prefix filter returns only matching files", async () =
   const page = files.listFiles(artifactId, { limit: 100, prefix: "net/minecraft/" });
   assert.equal(page.items.length, 2);
   assert.ok(page.items.every((p) => p.startsWith("net/minecraft/")));
-});
-
-test("symbolsRepo.findSymbols cursor is deterministic for same symbol names", async () => {
-  const { artifacts, files, symbols } = await createRepos();
-  const artifactId = "artifact-symbol-cursor";
-  seedArtifact(artifacts, artifactId);
-  files.replaceFilesForArtifact(artifactId, [
-    {
-      filePath: "a/A.java",
-      content: "class A { void Dup() {} }",
-      contentBytes: 25,
-      contentHash: "fa"
-    },
-    {
-      filePath: "a/B.java",
-      content: "class B { void Dup() {} }",
-      contentBytes: 25,
-      contentHash: "fb"
-    },
-    {
-      filePath: "a/C.java",
-      content: "class C { void Dup() {} }",
-      contentBytes: 25,
-      contentHash: "fc"
-    }
-  ]);
-
-  symbols.replaceSymbolsForArtifact(artifactId, [
-    {
-      filePath: "a/A.java",
-      symbolKind: "method",
-      symbolName: "Dup",
-      qualifiedName: "a.A.Dup",
-      line: 10
-    },
-    {
-      filePath: "a/B.java",
-      symbolKind: "method",
-      symbolName: "Dup",
-      qualifiedName: "a.B.Dup",
-      line: 11
-    },
-    {
-      filePath: "a/C.java",
-      symbolKind: "method",
-      symbolName: "Dup",
-      qualifiedName: "a.C.Dup",
-      line: 12
-    }
-  ]);
-
-  const collected = new Set<string>();
-  let cursor: string | undefined = undefined;
-  for (let i = 0; i < 4; i += 1) {
-    const page = symbols.findSymbols({
-      artifactId,
-      symbolKind: "method",
-      symbolNamePrefix: "Dup",
-      exact: false,
-      limit: 1,
-      cursor
-    });
-    if (page.items.length === 0) {
-      break;
-    }
-    const row = page.items[0];
-    collected.add(`${row.symbolName}:${row.filePath}:${row.line}`);
-    cursor = page.nextCursor;
-    if (!cursor) {
-      break;
-    }
-  }
-
-  assert.equal(collected.size, 3);
 });
 
 test("filesRepo.searchFileCandidates returns merged path/content matches with stable cursor", async () => {
@@ -341,7 +267,7 @@ test("symbolsRepo.findScopedSymbols supports contains + package prefix filtering
       symbolKind?: string;
       packagePrefix?: string;
       limit: number;
-    }) => { items: Array<{ filePath: string; symbolName: string }>; nextCursor: string | undefined };
+    }) => { items: Array<{ filePath: string; symbolName: string }> };
   }).findScopedSymbols({
     artifactId,
     query: "tick",
@@ -399,7 +325,7 @@ test("symbolsRepo.findScopedSymbols filters by a symbolKinds IN-list, excluding 
       match: "exact";
       symbolKinds?: string[];
       limit: number;
-    }) => { items: Array<{ filePath: string; symbolName: string; symbolKind: string }>; nextCursor: string | undefined };
+    }) => { items: Array<{ filePath: string; symbolName: string; symbolKind: string }> };
   }).findScopedSymbols({
     artifactId,
     query: "Main",
@@ -553,7 +479,7 @@ test("filesRepo.searchFiles does not re-emit a both-tier hit as a content hit ac
   const collected: string[] = [];
   let cursor: string | undefined = undefined;
   for (let page = 0; page < 10; page += 1) {
-    const result = files.searchFiles(artifactId, { query: "Foo", limit: 1, cursor });
+    const result = files.searchFileCandidates(artifactId, { query: "Foo", limit: 1, cursor });
     if (result.items.length === 0) break;
     collected.push(...result.items.map((item) => item.filePath));
     cursor = result.nextCursor;
@@ -583,8 +509,6 @@ test("filesRepo path search treats LIKE wildcard characters literally", async ()
     result.items.map((item) => item.filePath),
     ["net/minecraft/block_entity/Thing.java"]
   );
-
-  assert.equal(files.countPathCandidates(artifactId, "block_entity"), 1);
 });
 
 test("filesRepo.listFiles omits nextCursor on the final partial page", async () => {
@@ -654,65 +578,6 @@ test("filesRepo.searchFileCandidates cursor pushdown reduces scanned rows for de
   }
 });
 
-test("filesRepo.countTextCandidates and countPathCandidates return correct counts", async () => {
-  const { artifacts, files } = await createRepos();
-  const artifactId = "artifact-count";
-  seedArtifact(artifacts, artifactId);
-
-  files.replaceFilesForArtifact(artifactId, [
-    { filePath: "a/Foo.java", content: "class Foo { String needle = 1; }", contentBytes: 32, contentHash: "ca" },
-    { filePath: "b/Bar.java", content: "class Bar { String needle = 2; }", contentBytes: 32, contentHash: "cb" },
-    { filePath: "c/Baz.java", content: "class Baz { void noop() {} }", contentBytes: 28, contentHash: "cc" }
-  ]);
-
-  const textCount = files.countTextCandidates(artifactId, "needle");
-  assert.ok(textCount >= 2, `expected at least 2 text matches, got ${textCount}`);
-
-  const pathCount = files.countPathCandidates(artifactId, "Foo");
-  assert.equal(pathCount, 1);
-});
-
-test("symbolsRepo.countScopedSymbols returns correct count", async () => {
-  const { artifacts, files, symbols } = await createRepos();
-  const artifactId = "artifact-symbol-count";
-  seedArtifact(artifacts, artifactId);
-
-  files.replaceFilesForArtifact(artifactId, [
-    { filePath: "a/A.java", content: "class A {}", contentBytes: 10, contentHash: "sa" },
-    { filePath: "b/B.java", content: "class B {}", contentBytes: 10, contentHash: "sb" }
-  ]);
-
-  symbols.replaceSymbolsForArtifact(artifactId, [
-    { filePath: "a/A.java", symbolKind: "method", symbolName: "tick", qualifiedName: "a.A.tick", line: 2 },
-    { filePath: "a/A.java", symbolKind: "method", symbolName: "tickUpdate", qualifiedName: "a.A.tickUpdate", line: 3 },
-    { filePath: "b/B.java", symbolKind: "class", symbolName: "B", qualifiedName: "b.B", line: 1 }
-  ]);
-
-  const prefixCount = symbols.countScopedSymbols({
-    artifactId,
-    query: "tick",
-    match: "prefix",
-    symbolKind: "method"
-  });
-  assert.equal(prefixCount, 2);
-
-  const containsCount = symbols.countScopedSymbols({
-    artifactId,
-    query: "tick",
-    match: "contains",
-    symbolKind: "method"
-  });
-  assert.equal(containsCount, 2);
-
-  const exactCount = symbols.countScopedSymbols({
-    artifactId,
-    query: "tick",
-    match: "exact",
-    symbolKind: "method"
-  });
-  assert.equal(exactCount, 1);
-});
-
 // ---------------------------------------------------------------------------
 // Invalid cursor rejection
 // ---------------------------------------------------------------------------
@@ -752,7 +617,7 @@ test("searchFiles with invalid cursor throws ERR_INVALID_INPUT", async () => {
   ]);
 
   assert.throws(
-    () => files.searchFiles("artifact-search-cursor-invalid", { query: "Foo", limit: 10, cursor: "garbage" }),
+    () => files.searchFileCandidates("artifact-search-cursor-invalid", { query: "Foo", limit: 10, cursor: "garbage" }),
     (error: any) => error.code === "ERR_INVALID_INPUT"
   );
 });

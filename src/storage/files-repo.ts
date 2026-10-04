@@ -44,21 +44,10 @@ export interface SearchFilesOptions {
   pathPrefix?: string;
 }
 
-export interface SearchFilesResult {
-  filePath: string;
-  score: number;
-  matchedIn: "path" | "content" | "both";
-  preview: string;
-}
-
 export interface SearchFileCandidateResult {
   filePath: string;
   score: number;
   matchedIn: "path" | "content" | "both";
-}
-
-export interface SearchFilesWithContentResult extends SearchFilesResult {
-  content: string;
 }
 
 export interface ListFileRowsOptions {
@@ -67,38 +56,39 @@ export interface ListFileRowsOptions {
   prefix?: string;
 }
 
-function buildCursor(sortKey: string): string {
-  return Buffer.from(JSON.stringify({ sortKey } as CursorPayload), "utf8").toString("base64");
+function invalidCursorError() {
+  return createError({
+    code: ERROR_CODES.INVALID_INPUT,
+    message: "Invalid pagination cursor.",
+    details: {
+      nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
+    }
+  });
 }
 
-function parseCursor(cursor: string | undefined): CursorPayload | undefined {
+/** Decode a base64 JSON cursor; anything undecodable or rejected by `guard` is an invalid cursor. */
+function parseJsonCursor<T>(cursor: string | undefined, guard: (parsed: unknown) => parsed is T): T | undefined {
   if (!cursor) {
     return undefined;
   }
 
   try {
-    const decoded = Buffer.from(cursor, "base64").toString("utf8");
-    const parsed = JSON.parse(decoded) as CursorPayload;
-    if (typeof parsed.sortKey !== "string") {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Invalid pagination cursor.",
-        details: {
-          nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
-        }
-      });
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64").toString("utf8"));
+    if (guard(parsed)) {
+      return parsed;
     }
-    return parsed;
-  } catch (err) {
-    if (err instanceof Error && "code" in err) throw err;
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "Invalid pagination cursor.",
-      details: {
-        nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
-      }
-    });
+  } catch {
+    // Falls through to the invalid-cursor error below.
   }
+  throw invalidCursorError();
+}
+
+function buildCursor(sortKey: string): string {
+  return Buffer.from(JSON.stringify({ sortKey } as CursorPayload), "utf8").toString("base64");
+}
+
+function parseCursor(cursor: string | undefined): CursorPayload | undefined {
+  return parseJsonCursor(cursor, (parsed): parsed is CursorPayload => typeof (parsed as CursorPayload).sortKey === "string");
 }
 
 function buildSearchCursor(score: number, filePath: string): string {
@@ -106,33 +96,12 @@ function buildSearchCursor(score: number, filePath: string): string {
 }
 
 function parseSearchCursor(cursor: string | undefined): SearchCursorPayload | undefined {
-  if (!cursor) {
-    return undefined;
-  }
-
-  try {
-    const decoded = Buffer.from(cursor, "base64").toString("utf8");
-    const parsed = JSON.parse(decoded) as SearchCursorPayload;
-    if (typeof parsed.score !== "number" || typeof parsed.filePath !== "string") {
-      throw createError({
-        code: ERROR_CODES.INVALID_INPUT,
-        message: "Invalid pagination cursor.",
-        details: {
-          nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
-        }
-      });
-    }
-    return parsed;
-  } catch (err) {
-    if (err instanceof Error && "code" in err) throw err;
-    throw createError({
-      code: ERROR_CODES.INVALID_INPUT,
-      message: "Invalid pagination cursor.",
-      details: {
-        nextAction: "Omit the cursor parameter to start from the first page, or use a cursor value from a previous response."
-      }
-    });
-  }
+  return parseJsonCursor(
+    cursor,
+    (parsed): parsed is SearchCursorPayload =>
+      typeof (parsed as SearchCursorPayload).score === "number" &&
+      typeof (parsed as SearchCursorPayload).filePath === "string"
+  );
 }
 
 function nextCursorFromRows(rows: { file_path: string }[], limit: number): string | undefined {
@@ -169,20 +138,6 @@ function isAfterSearchCursor(
     return false;
   }
   return compareFilePaths(hit.filePath, cursor.filePath) > 0;
-}
-
-function buildPreview(content: string, query: string): string {
-  const normalizedQuery = query.toLowerCase();
-  const normalizedContent = content.toLowerCase();
-  const index = normalizedContent.indexOf(normalizedQuery);
-  if (index < 0) {
-    return content.slice(0, 120);
-  }
-  const start = Math.max(0, index - 24);
-  const end = Math.min(content.length, index + normalizedQuery.length + 24);
-  const prefix = start > 0 ? "..." : "";
-  const suffix = end < content.length ? "..." : "";
-  return `${prefix}${content.slice(start, end)}${suffix}`.replace(/\s+/g, " ").trim();
 }
 
 function tokenizeIndexedQuery(query: string): string[] {
@@ -237,10 +192,6 @@ export class FilesRepo {
   private readonly searchFtsStmt;
   private readonly getByPathsStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
   private readonly classLookupStmtCache = new Map<number, ReturnType<SqliteDatabase["prepare"]>>();
-  // Fixed-SQL statements built outside the constructor; cached (LRU by SQL text)
-  // so hot paths do not re-prepare per call.
-  private readonly dynamicStmtCache = new Map<string, ReturnType<SqliteDatabase["prepare"]>>();
-  private static readonly DYNAMIC_STMT_CACHE_MAX = 64;
 
   constructor(private readonly db: SqliteDatabase) {
     this.deleteStmt = this.db.prepare(`
@@ -302,23 +253,6 @@ export class FilesRepo {
     `);
   }
 
-  private prepareCached(sql: string): ReturnType<SqliteDatabase["prepare"]> {
-    const cached = this.dynamicStmtCache.get(sql);
-    if (cached) {
-      // Refresh recency so hot statements survive eviction.
-      this.dynamicStmtCache.delete(sql);
-      this.dynamicStmtCache.set(sql, cached);
-      return cached;
-    }
-    const stmt = this.db.prepare(sql);
-    this.dynamicStmtCache.set(sql, stmt);
-    if (this.dynamicStmtCache.size > FilesRepo.DYNAMIC_STMT_CACHE_MAX) {
-      const oldest = this.dynamicStmtCache.keys().next().value;
-      if (oldest !== undefined) this.dynamicStmtCache.delete(oldest);
-    }
-    return stmt;
-  }
-
   clearFilesForArtifact(artifactId: string): void {
     this.deleteStmt.run([artifactId]);
   }
@@ -340,13 +274,6 @@ export class FilesRepo {
     const transaction = this.db.transaction(() => {
       this.clearFilesForArtifact(artifactId);
       this.insertFilesForArtifact(artifactId, files);
-    });
-    transaction();
-  }
-
-  deleteFilesForArtifact(artifactId: string): void {
-    const transaction = this.db.transaction(() => {
-      this.clearFilesForArtifact(artifactId);
     });
     transaction();
   }
@@ -563,102 +490,6 @@ export class FilesRepo {
     };
   }
 
-  searchFilesWithContent(
-    artifactId: string,
-    options: SearchFilesOptions
-  ): PagedResult<SearchFilesWithContentResult> & { scannedRows: number; dbRoundtrips: number } {
-    const page = this.searchFileCandidates(artifactId, options);
-    if (page.items.length === 0) {
-      return {
-        items: [],
-        nextCursor: page.nextCursor,
-        scannedRows: page.scannedRows,
-        dbRoundtrips: page.dbRoundtrips
-      };
-    }
-
-    const rows = this.getFileContentsByPaths(
-      artifactId,
-      page.items.map((item) => item.filePath)
-    );
-    const byPath = new Map(rows.map((row) => [row.filePath, row]));
-
-    return {
-      items: page.items
-        .map((item) => {
-          const contentRow = byPath.get(item.filePath);
-          if (!contentRow) {
-            return undefined;
-          }
-          return {
-            filePath: item.filePath,
-            score: item.score,
-            matchedIn: item.matchedIn,
-            preview: buildPreview(contentRow.content, options.query),
-            content: contentRow.content
-          } as SearchFilesWithContentResult;
-        })
-        .filter((row): row is SearchFilesWithContentResult => row != null),
-      nextCursor: page.nextCursor,
-      scannedRows: page.scannedRows + rows.length,
-      dbRoundtrips: page.dbRoundtrips + 1
-    };
-  }
-
-  countTextCandidates(artifactId: string, query: string): number {
-    const normalized = query.trim();
-    if (!normalized) {
-      return 0;
-    }
-    const ftsQuery = buildIndexedMatchQuery(normalized, "contains");
-    if (!ftsQuery) {
-      return 0;
-    }
-    try {
-      const row = this.prepareCached(
-        `SELECT COUNT(*) AS cnt FROM files_fts WHERE artifact_id = ? AND files_fts MATCH ?`
-      ).get(artifactId, ftsQuery) as { cnt: number } | undefined;
-      return row?.cnt ?? 0;
-    } catch {
-      log("warn", "storage.files.count_text_candidates_failed", {
-        artifactId,
-        query: ftsQuery
-      });
-      return 0;
-    }
-  }
-
-  countPathCandidates(artifactId: string, query: string): number {
-    const normalized = query.trim();
-    if (!normalized) {
-      return 0;
-    }
-    const likeQuery = `%${escapeLikeNeedle(normalized)}%`;
-    const row = this.prepareCached(
-      `SELECT COUNT(*) AS cnt FROM files WHERE artifact_id = ? AND file_path LIKE ? ESCAPE '\\'`
-    ).get(artifactId, likeQuery) as { cnt: number } | undefined;
-    return row?.cnt ?? 0;
-  }
-
-  findFirstFilePathByName(artifactId: string, fileName: string): string | undefined {
-    const normalized = fileName.trim();
-    if (!normalized) {
-      return undefined;
-    }
-
-    const row = this.prepareCached(`
-        SELECT file_path
-        FROM files
-        WHERE artifact_id = ?
-          AND (file_path = ? OR file_path LIKE ? ESCAPE '\\')
-        ORDER BY file_path ASC
-        LIMIT 1
-      `)
-      .get(artifactId, normalized, `%/${normalized}`) as { file_path?: string } | undefined;
-
-    return row?.file_path;
-  }
-
   private getClassLookupStmt(exactPathCount: number): ReturnType<SqliteDatabase["prepare"]> {
     const cached = this.classLookupStmtCache.get(exactPathCount);
     if (cached) {
@@ -744,35 +575,6 @@ export class FilesRepo {
     ) as { file_path?: string } | undefined;
 
     return row?.file_path;
-  }
-
-  searchFiles(artifactId: string, options: SearchFilesOptions): PagedResult<SearchFilesResult> {
-    const page = this.searchFilesWithContent(artifactId, options);
-    return {
-      items: page.items.map(({ content: _content, ...rest }) => rest),
-      nextCursor: page.nextCursor
-    };
-  }
-
-  totalContentBytes(): number {
-    const row = this.db
-      .prepare(`
-        SELECT COALESCE(SUM(content_bytes), 0) AS total
-        FROM files
-      `)
-      .get() as { total?: number } | undefined;
-    return row?.total ?? 0;
-  }
-
-  contentBytesForArtifact(artifactId: string): number {
-    const row = this.db
-      .prepare(`
-        SELECT COALESCE(SUM(content_bytes), 0) AS total
-        FROM files
-        WHERE artifact_id = ?
-      `)
-      .get([artifactId]) as { total?: number } | undefined;
-    return row?.total ?? 0;
   }
 
   private getFileContentsByPathsStmt(pathCount: number) {

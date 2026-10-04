@@ -36,7 +36,7 @@ test("findScopedSymbols returns an empty page for a whitespace-only query", asyn
   ]);
 
   const result = repos.symbols.findScopedSymbols({ artifactId, query: "   ", match: "contains", limit: 10 });
-  assert.deepEqual(result, { items: [], nextCursor: undefined });
+  assert.deepEqual(result, { items: [] });
 });
 
 test("findScopedSymbols treats an empty symbolKinds array as no kind filter", async () => {
@@ -98,62 +98,7 @@ test("findScopedSymbols filters file paths with a caller-supplied LIKE pattern",
   );
 });
 
-test("findScopedSymbols cursor returns only rows strictly after the name/path/line tuple", async () => {
-  const repos = await createRepos();
-  const artifactId = "artifact-scoped-cursor";
-  seedArtifact(repos.artifacts, artifactId);
-  seedDupSymbols(repos, artifactId);
-
-  const result = repos.symbols.findScopedSymbols({
-    artifactId,
-    query: "Dup",
-    match: "exact",
-    limit: 10,
-    cursor: { symbolName: "Dup", filePath: "a/A.java", line: 10 }
-  });
-
-  assert.deepEqual(
-    result.items.map((row) => `${row.filePath}:${row.line}`),
-    ["a/B.java:11", "a/C.java:12"]
-  );
-  assert.equal(result.nextCursor, undefined);
-});
-
-test("findScopedSymbols paginates via its base64 next cursor without duplicates", async () => {
-  const repos = await createRepos();
-  const artifactId = "artifact-scoped-paging";
-  seedArtifact(repos.artifacts, artifactId);
-  seedDupSymbols(repos, artifactId);
-
-  const collected: string[] = [];
-  let cursor: { symbolName: string; filePath: string; line: number } | undefined = undefined;
-  let pages = 0;
-  for (let i = 0; i < 5; i += 1) {
-    const page = repos.symbols.findScopedSymbols({ artifactId, query: "Dup", match: "exact", limit: 1, cursor });
-    if (page.items.length === 0) break;
-    pages += 1;
-    for (const row of page.items) {
-      collected.push(`${row.symbolName}:${row.filePath}:${row.line}`);
-    }
-    if (!page.nextCursor) {
-      cursor = undefined;
-      break;
-    }
-    // The repo emits an encoded base64 cursor but accepts a decoded tuple object.
-    assert.equal(typeof page.nextCursor, "string");
-    cursor = JSON.parse(Buffer.from(page.nextCursor, "base64").toString("utf8")) as {
-      symbolName: string;
-      filePath: string;
-      line: number;
-    };
-  }
-
-  assert.equal(pages, 3);
-  assert.deepEqual(collected, ["Dup:a/A.java:10", "Dup:a/B.java:11", "Dup:a/C.java:12"]);
-  assert.equal(cursor, undefined, "final page carries no cursor");
-});
-
-test("findScopedSymbols without an explicit limit returns all matches and no next cursor", async () => {
+test("findScopedSymbols without an explicit limit returns all matches", async () => {
   const repos = await createRepos();
   const artifactId = "artifact-scoped-nolimit";
   seedArtifact(repos.artifacts, artifactId);
@@ -161,7 +106,6 @@ test("findScopedSymbols without an explicit limit returns all matches and no nex
 
   const result = repos.symbols.findScopedSymbols({ artifactId, query: "Dup", match: "exact" });
   assert.equal(result.items.length, 3);
-  assert.equal(result.nextCursor, undefined);
 });
 
 test("findScopedSymbols normalizes package prefixes written with dots or trailing separators", async () => {
@@ -243,6 +187,23 @@ test("findScopedSymbols prefix and contains match case-insensitively while exact
   );
 });
 
+test("findScopedSymbols exact match finds a stored name that starts with a non-ASCII capital", async () => {
+  const repos = await createRepos();
+  const artifactId = "artifact-scoped-non-ascii";
+  seedArtifact(repos.artifacts, artifactId);
+  seedFiles(repos, artifactId, ["a/Äpfel.java"]);
+  repos.symbols.replaceSymbolsForArtifact(artifactId, [
+    { filePath: "a/Äpfel.java", symbolKind: "class", symbolName: "Äpfel", qualifiedName: "a.Äpfel", line: 1 }
+  ]);
+
+  const result = repos.symbols.findScopedSymbols({ artifactId, query: "Äpfel", match: "exact" });
+
+  assert.deepEqual(
+    result.items.map((row) => row.symbolName),
+    ["Äpfel"]
+  );
+});
+
 test("findScopedSymbols treats LIKE wildcards in the query as literal characters", async () => {
   const repos = await createRepos();
   const artifactId = "artifact-scoped-escape";
@@ -259,52 +220,6 @@ test("findScopedSymbols treats LIKE wildcards in the query as literal characters
     result.items.map((row) => row.symbolName),
     ["tick_server"]
   );
-});
-
-test("countScopedSymbols returns 0 for a blank query", async () => {
-  const repos = await createRepos();
-  const artifactId = "artifact-count-blank";
-  seedArtifact(repos.artifacts, artifactId);
-  seedFiles(repos, artifactId, ["a/A.java"]);
-  repos.symbols.replaceSymbolsForArtifact(artifactId, [
-    { filePath: "a/A.java", symbolKind: "method", symbolName: "tick", qualifiedName: "a.A.tick", line: 2 }
-  ]);
-
-  assert.equal(repos.symbols.countScopedSymbols({ artifactId, query: "  ", match: "contains" }), 0);
-});
-
-test("countScopedSymbols restricts the count to the normalized package prefix", async () => {
-  const repos = await createRepos();
-  const artifactId = "artifact-count-package";
-  seedArtifact(repos.artifacts, artifactId);
-  seedFiles(repos, artifactId, ["net/minecraft/server/Main.java", "net/minecraft/client/Client.java"]);
-  repos.symbols.replaceSymbolsForArtifact(artifactId, [
-    {
-      filePath: "net/minecraft/server/Main.java",
-      symbolKind: "method",
-      symbolName: "tick",
-      qualifiedName: "net.minecraft.server.Main.tick",
-      line: 2
-    },
-    {
-      filePath: "net/minecraft/client/Client.java",
-      symbolKind: "method",
-      symbolName: "tick",
-      qualifiedName: "net.minecraft.client.Client.tick",
-      line: 3
-    }
-  ]);
-
-  const scoped = repos.symbols.countScopedSymbols({
-    artifactId,
-    query: "tick",
-    match: "exact",
-    packagePrefix: "net.minecraft.server"
-  });
-  assert.equal(scoped, 1);
-
-  const unscoped = repos.symbols.countScopedSymbols({ artifactId, query: "tick", match: "exact" });
-  assert.equal(unscoped, 2);
 });
 
 test("findScopedSymbols maps a missing qualified name to undefined in returned rows", async () => {

@@ -78,7 +78,7 @@ test("filesRepo indexed text search treats a mid-query FTS5 operator as literal 
     ["net/minecraft/util/NotHolder.java"]
   );
 
-  assert.equal(files.countTextCandidates(artifactId, "a NOT b"), 1);
+  assert.equal(files.searchFileCandidates(artifactId, { query: "a NOT b", limit: 20, mode: "text" }).items.length, 1);
 });
 
 test("filesRepo indexed text search leaves an ordinary separator-heavy query's results unchanged", async () => {

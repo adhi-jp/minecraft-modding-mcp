@@ -334,9 +334,7 @@ export async function buildRebuiltArtifactData(svc: SourceService, resolved: Res
     // the original obfuscated jar. Persistence in upsertArtifact happens after this
     // function returns, so the swap reaches both the database row and the
     // resolveArtifact response.
-    if (decompileInputJarPath !== resolved.binaryJarPath) {
-      resolved.binaryJarPath = decompileInputJarPath;
-    }
+    resolved.binaryJarPath = decompileInputJarPath;
     const vineflowerPath = await resolveVineflowerJar(
       svc.config.cacheDir,
       svc.config.vineflowerJarPath
@@ -477,25 +475,11 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
       }
       resolved.isDecompiled = false;
     }
-    // Mojang binary-remap reconciliation on the warm cache hit path:
-    // resolveSourceTargetInternal always returns the original binary jar
-    // (resolver does not know about prior remap output), so without this
-    // step a warm-cache resolve would return mappingApplied="mojang"
-    // alongside binaryJarPath pointing at the obfuscated client jar.
-    // maybeRemapBinaryForMojang short-circuits on a healthy cache hit
-    // (existsSync + ZIP magic) and re-remaps when the cache is missing
-    // or corrupted, so this also recovers from out-of-band cache loss.
-    const transformChain = resolved.provenance?.transformChain ?? [];
-    if (transformChain.includes("binary-remap:obf->mojang") && resolved.binaryJarPath) {
-      const reconciledBinaryJarPath = await maybeRemapBinaryForMojang(svc, resolved);
-      if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
-        resolved.binaryJarPath = reconciledBinaryJarPath;
-      }
-    }
+    await reconcileMojangBinaryJar(svc, resolved);
     // The row's binary_jar_path tracks whatever the resolver just proved usable.
     // Every warm resolve re-walks the filesystem cascade from scratch, so a
     // binary companion that only landed on disk after this row was written is
-    // found again here - as is the remapped jar the block above just reconciled
+    // found again here - as is the remapped jar the call above just reconciled
     // - and both reach the resolveArtifact response while the persisted column
     // keeps whatever it had. That is the contradiction this write prevents:
     // resolve-artifact reporting a binaryJarPath, and get-class-members on the
@@ -528,13 +512,7 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
   const inflight = svc.state.inflightArtifactIngests.get(resolved.artifactId);
   if (inflight) {
     await inflight;
-    const transformChain = resolved.provenance?.transformChain ?? [];
-    if (transformChain.includes("binary-remap:obf->mojang") && resolved.binaryJarPath) {
-      const reconciledBinaryJarPath = await maybeRemapBinaryForMojang(svc, resolved);
-      if (reconciledBinaryJarPath !== resolved.binaryJarPath) {
-        resolved.binaryJarPath = reconciledBinaryJarPath;
-      }
-    }
+    await reconcileMojangBinaryJar(svc, resolved);
     return;
   }
 
@@ -546,6 +524,24 @@ export async function ingestIfNeeded(svc: SourceService, resolved: ResolvedSourc
     if (svc.state.inflightArtifactIngests.get(resolved.artifactId) === ingestPromise) {
       svc.state.inflightArtifactIngests.delete(resolved.artifactId);
     }
+  }
+}
+
+/**
+ * Mojang binary-remap reconciliation for resolves that skip the rebuild (warm
+ * cache hit, or waiting on another caller's in-flight ingest):
+ * resolveSourceTargetInternal always returns the original binary jar
+ * (resolver does not know about prior remap output), so without this
+ * step such a resolve would return mappingApplied="mojang"
+ * alongside binaryJarPath pointing at the obfuscated client jar.
+ * maybeRemapBinaryForMojang returns the input jar when no remap is promised,
+ * short-circuits on a healthy cache hit (existsSync + ZIP magic) and
+ * re-remaps when the cache is missing or corrupted, so this also recovers
+ * from out-of-band cache loss.
+ */
+async function reconcileMojangBinaryJar(svc: SourceService, resolved: ResolvedSourceArtifact): Promise<void> {
+  if (resolved.binaryJarPath) {
+    resolved.binaryJarPath = await maybeRemapBinaryForMojang(svc, resolved);
   }
 }
 

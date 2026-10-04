@@ -4,10 +4,6 @@ import { join } from "node:path";
 import { log } from "../logger.js";
 import type { SourceService } from "../source-service.js";
 
-export function hasAnyFiles(svc: SourceService, artifactId: string): boolean {
-  return svc.filesRepo.listFiles(artifactId, { limit: 1 }).items.length > 0;
-}
-
 /**
  * Best-effort cleanup of `<cacheDir>/remapped/<artifactId>.jar` written by
  * the binary-remap path. Called from cache-eviction so the Mojang-remapped
@@ -16,13 +12,11 @@ export function hasAnyFiles(svc: SourceService, artifactId: string): boolean {
  * swallowed: orphaned jars remain visible to `manage-cache` under the
  * `binary-remap` cache kind and can be reclaimed there.
  */
-export function unlinkRemappedJarForArtifact(svc: SourceService, artifactId: string): void {
+function unlinkRemappedJarForArtifact(svc: SourceService, artifactId: string): void {
   releaseRemappedJarBytes(svc, artifactId);
   const remappedJarPath = join(svc.config.cacheDir, "remapped", `${artifactId}.jar`);
   try {
-    if (existsSync(remappedJarPath)) {
-      rmSync(remappedJarPath, { recursive: true, force: true });
-    }
+    rmSync(remappedJarPath, { recursive: true, force: true });
   } catch {
     // ignore: orphaned jar is still reclaimable via manage-cache binary-remap kind.
   }
@@ -72,10 +66,9 @@ export function enforceCacheLimits(svc: SourceService): void {
     const artifactCountBefore = artifactCount;
     const totalBytesBefore = totalBytes;
     const remappedBytesForCandidate = svc.state.remappedJarBytes.get(candidate.key) ?? 0;
-    svc.filesRepo.deleteFilesForArtifact(candidate.key);
     svc.artifactsRepo.deleteArtifact(candidate.key);
     unlinkRemappedJarForArtifact(svc, candidate.key);
-    removeCacheMetrics(svc, candidate.key, false);
+    removeCacheMetrics(svc, candidate.key);
     artifactCount = Math.max(0, artifactCount - 1);
     totalBytes = Math.max(
       0,
@@ -167,15 +160,10 @@ export function upsertCacheMetrics(svc: SourceService, artifactId: string, total
   publishCacheMetrics(svc);
 }
 
-export function removeCacheMetrics(svc: SourceService, artifactId: string, publish = true): void {
+function removeCacheMetrics(svc: SourceService, artifactId: string): void {
   const existing = svc.state.lru.remove(artifactId);
-  if (!existing) {
-    refreshCacheMetrics(svc);
-    return;
-  }
-  svc.state.cacheTotalContentBytes = Math.max(0, svc.state.cacheTotalContentBytes - existing.totalContentBytes);
-  if (publish) {
-    publishCacheMetrics(svc);
+  if (existing) {
+    svc.state.cacheTotalContentBytes = Math.max(0, svc.state.cacheTotalContentBytes - existing.totalContentBytes);
   }
 }
 

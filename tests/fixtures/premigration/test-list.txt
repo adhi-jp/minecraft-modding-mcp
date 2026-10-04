@@ -697,8 +697,6 @@
 0	ok	consumeFieldType rejects an empty L; reference token
 0	ok	consumeFieldType rejects array depth beyond 255 dimensions
 0	ok	consumeFieldType rejects void as an array element but allows a bare void return
-0	ok	countScopedSymbols restricts the count to the normalized package prefix
-0	ok	countScopedSymbols returns 0 for a blank query
 0	ok	createDirectWorkerBridgeTransport connects to the CLI worker over bash-managed stdio
 0	ok	createDirectWorkerBridgeTransport rejects startup promptly when the bridge process exits before FIFO open
 0	ok	createWorkspaceContextCache clear removes everything
@@ -849,7 +847,6 @@
 0	ok	fatal worker exception exits, restarts, replays initialization, and serves the next call
 0	ok	filesRepo keeps prepared path-count statements hot instead of clearing the entire cache
 0	ok	filesRepo path search treats LIKE wildcard characters literally
-0	ok	filesRepo.countTextCandidates and countPathCandidates return correct counts
 0	ok	filesRepo.listFiles omits nextCursor on the final partial page
 0	ok	filesRepo.listFiles paginates through all files without duplicates
 0	ok	filesRepo.listFiles prefix filter returns only matching files
@@ -883,15 +880,6 @@
 0	ok	find-mapping signatureMode=exact still rejects method lookups missing a descriptor
 0	ok	find-mapping signatureMode=name-only still rejects malformed descriptors
 0	ok	find-member-mapping resource forwards owner for field/method lookups
-0	ok	findBestClassFilePath breaks ties within a tier by ascending file path
-0	ok	findBestClassFilePath falls back to a simple-name match, then to a dotted-suffix qualified name
-0	ok	findBestClassFilePath ignores non-class symbols and returns undefined when nothing matches
-0	ok	findBestClassFilePath prefers an exact qualified name over a simple-name match
-0	ok	findBestClassFilePath returns undefined when the class or simple name is blank
-0	ok	findBySymbolNames matches case and whitespace variants of one name without duplicating rows and orders by name, path, then line
-0	ok	findBySymbolNames matches stored names case-insensitively and preserves original casing
-0	ok	findBySymbolNames returns an empty array when every name is blank
-0	ok	findBySymbolNames trims input names and drops blank entries
 0	ok	findClassIncludingNested deduplicates names deterministically and honors limit
 0	ok	findClassIncludingNested normalizes inner classes to their outer source path
 0	ok	findClassIncludingNested omits vanilla obfuscation advice for a shell miss
@@ -901,22 +889,14 @@
 0	ok	findContentMatchIndex treats content prefix as a substring (contains) match
 0	ok	findPackedTarball resolves the tarball from pack destination without npm json output
 0	ok	findPackedTarball throws a descriptive error when no tarball was produced
-0	ok	findScopedSymbols cursor returns only rows strictly after the name/path/line tuple
 0	ok	findScopedSymbols filters file paths with a caller-supplied LIKE pattern
 0	ok	findScopedSymbols maps a missing qualified name to undefined in returned rows
 0	ok	findScopedSymbols normalizes package prefixes written with dots or trailing separators
-0	ok	findScopedSymbols paginates via its base64 next cursor without duplicates
 0	ok	findScopedSymbols prefix and contains match case-insensitively while exact match is case-sensitive
 0	ok	findScopedSymbols returns an empty page for a whitespace-only query
 0	ok	findScopedSymbols treats LIKE wildcards in the query as literal characters
 0	ok	findScopedSymbols treats an empty symbolKinds array as no kind filter
-0	ok	findScopedSymbols without an explicit limit returns all matches and no next cursor
-0	ok	findSymbols exact-match pagination visits each duplicate-name row exactly once
-0	ok	findSymbols ignores a base64 cursor whose payload has wrong field types
-0	ok	findSymbols ignores an undecodable cursor and serves the first page
-0	ok	findSymbols returns an empty page without a next cursor when limit is 0
-0	ok	findSymbols with exact match returns only symbols whose name equals the query
-0	ok	findSymbols without a name prefix returns every symbol and maps a missing qualified name to undefined
+0	ok	findScopedSymbols without an explicit limit returns all matches
 0	ok	get-artifact-file accepts a flat artifactId (unchanged)
 0	ok	get-artifact-file accepts a target instead of artifactId
 0	ok	get-artifact-file rejects artifactId and target together
@@ -1026,17 +1006,7 @@
 0	ok	list-artifact-files points assets prefixes at the read-through path
 0	ok	list-artifact-files rejects artifactId and target together
 0	ok	list-artifact-files rejects neither artifactId nor target
-0	ok	listDistinctFilePathsByKind returns an empty array for a kind with no rows
-0	ok	listDistinctFilePathsByKind returns each matching file once in ascending path order
 0	ok	listRegisteredTools returns names in sorted order
-0	ok	listSymbolsForArtifact returns every symbol ordered by name, file path, then line
-0	ok	listSymbolsForArtifact with a kind filter returns only symbols of that kind
-0	ok	listSymbolsForFile returns an empty array for a file with no indexed symbols
-0	ok	listSymbolsForFile returns only that file's symbols ordered by line then name
-0	ok	listSymbolsForFiles applies the symbol kind filter to every requested file
-0	ok	listSymbolsForFiles deduplicates repeated input paths
-0	ok	listSymbolsForFiles groups symbols per file and omits files without symbols
-0	ok	listSymbolsForFiles returns an empty map for an empty path list
 0	ok	listVersions aborts a hung manifest fetch after the configured timeout
 0	ok	listVersions includes snapshots, clamps limit, and returns sorted unique cached versions
 0	ok	listVersions warns when limit is clamped above 200 and omits warnings otherwise
@@ -1459,11 +1429,9 @@
 0	ok	surfaces the issues block at summary detail only when include lists issues
 0	ok	symbolExistsButSignatureFailed does not block normal signature-resolved targets
 0	ok	symbolExistsButSignatureFailed produces tool_issue warning and skipped members
-0	ok	symbolsRepo.countScopedSymbols returns correct count
 0	ok	symbolsRepo.findScopedSymbols filters by a symbolKinds IN-list, excluding non-type kinds
 0	ok	symbolsRepo.findScopedSymbols supports contains + package prefix filtering
 0	ok	symbolsRepo.findScopedSymbols treats LIKE wildcard characters literally
-0	ok	symbolsRepo.findSymbols cursor is deterministic for same symbol names
 0	ok	synthesizeDependencyTarget carries umbrella POM adoption provenance to the coordinate target
 0	ok	synthesizeDependencyTarget reads architectury_version from gradle.properties
 0	ok	synthesizeDependencyTarget refuses to pick when modules-2 has multiple cached versions

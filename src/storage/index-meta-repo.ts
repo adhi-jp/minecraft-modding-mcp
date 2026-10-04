@@ -23,7 +23,6 @@ export interface ArtifactIndexMetaRow {
   ftsRowsCount: number;
   indexedAt: string;
   indexDurationMs: number;
-  lastError?: string;
 }
 
 export interface UpsertArtifactIndexMetaInput {
@@ -35,7 +34,6 @@ export interface UpsertArtifactIndexMetaInput {
   ftsRowsCount: number;
   indexedAt: string;
   indexDurationMs: number;
-  lastError?: string;
 }
 
 function toRow(record: IndexMetaRecord): ArtifactIndexMetaRow {
@@ -47,15 +45,13 @@ function toRow(record: IndexMetaRecord): ArtifactIndexMetaRow {
     symbolsCount: record.symbols_count,
     ftsRowsCount: record.fts_rows_count,
     indexedAt: record.indexed_at,
-    indexDurationMs: record.index_duration_ms,
-    lastError: record.last_error ?? undefined
+    indexDurationMs: record.index_duration_ms
   };
 }
 
 export class IndexMetaRepo {
   private readonly getStmt;
   private readonly upsertStmt;
-  private readonly deleteStmt;
 
   constructor(private readonly db: SqliteDatabase) {
     this.getStmt = this.db.prepare<IndexMetaRecord>(`
@@ -106,11 +102,6 @@ export class IndexMetaRepo {
         index_duration_ms = excluded.index_duration_ms,
         last_error = excluded.last_error
     `);
-
-    this.deleteStmt = this.db.prepare(`
-      DELETE FROM artifact_index_meta
-      WHERE artifact_id = ?
-    `);
   }
 
   get(artifactId: string): ArtifactIndexMetaRow | undefined {
@@ -131,11 +122,7 @@ export class IndexMetaRepo {
       fts_rows_count: input.ftsRowsCount,
       indexed_at: input.indexedAt,
       index_duration_ms: Math.max(0, Math.trunc(input.indexDurationMs)),
-      last_error: input.lastError ?? null
+      last_error: null
     });
-  }
-
-  delete(artifactId: string): void {
-    this.deleteStmt.run([artifactId]);
   }
 }

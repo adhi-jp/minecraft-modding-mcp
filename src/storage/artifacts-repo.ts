@@ -112,7 +112,6 @@ export class ArtifactsRepo {
   private readonly setAliasStmt;
   private readonly updateBinaryJarPathStmt;
   private readonly deleteStmt;
-  private readonly listStmt;
   private readonly countStmt;
   private readonly totalContentBytesStmt;
   private readonly listLruWithContentBytesStmt;
@@ -194,29 +193,6 @@ export class ArtifactsRepo {
     `);
 
     this.deleteStmt = this.db.prepare(`DELETE FROM artifacts WHERE artifact_id = ?`);
-
-    this.listStmt = this.db.prepare<ArtifactRepoRecord>(`
-      SELECT
-        artifact_id,
-        alias,
-        origin,
-        coordinate,
-        version,
-        binary_jar_path,
-        source_jar_path,
-        repo_url,
-        requested_mapping,
-        mapping_applied,
-        provenance_json,
-        quality_flags_json,
-        artifact_signature,
-        is_decompiled,
-        created_at,
-        updated_at
-      FROM artifacts
-      ORDER BY updated_at ASC
-      LIMIT ?
-    `);
 
     this.countStmt = this.db.prepare<{ total: number }>(`
       SELECT COUNT(*) AS total
@@ -304,10 +280,6 @@ export class ArtifactsRepo {
 
   deleteArtifact(artifactId: string): void {
     this.deleteStmt.run([artifactId]);
-  }
-
-  listArtifactsByLru(limit: number): ArtifactRow[] {
-    return this.listStmt.all([limit]).map(toArtifactRow);
   }
 
   countArtifacts(): number {

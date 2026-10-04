@@ -45,8 +45,14 @@ test("search perf smoke (10k files, indexed vs scan)", async () => {
   });
   files.replaceFilesForArtifact(artifactId, records);
 
+  // The indexed path production search takes: candidate lookup, then content hydration.
+  const indexedSearch = () => {
+    const candidates = files.searchFileCandidates(artifactId, { query: "runGameLoopToken", limit: 200 });
+    return files.getFileContentsByPaths(artifactId, candidates.items.map((item) => item.filePath));
+  };
+
   // Warm cache
-  files.searchFiles(artifactId, { query: "runGameLoopToken", limit: 200 });
+  indexedSearch();
 
   const allFilePaths: string[] = [];
   let cursor: string | undefined;
@@ -63,7 +69,7 @@ test("search perf smoke (10k files, indexed vs scan)", async () => {
   const scanDurations: number[] = [];
   for (let i = 0; i < 30; i += 1) {
     const searchStart = performance.now();
-    const searchResult = files.searchFiles(artifactId, { query: "runGameLoopToken", limit: 200 });
+    const searchResult = indexedSearch();
     searchDurations.push(performance.now() - searchStart);
 
     const scanStart = performance.now();
@@ -82,7 +88,7 @@ test("search perf smoke (10k files, indexed vs scan)", async () => {
     }
     scanDurations.push(performance.now() - scanStart);
 
-    const target = searchResult.items[i % searchResult.items.length];
+    const target = searchResult[i % searchResult.length];
     assert.ok(target);
     assert.ok(scanned.length > 0);
   }

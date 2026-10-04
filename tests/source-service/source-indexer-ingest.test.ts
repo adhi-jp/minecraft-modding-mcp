@@ -110,8 +110,7 @@ test("ingestIfNeeded shares an in-flight rebuild for the same artifact", async (
         },
         insertFilesForArtifact(_artifactId: string, files: unknown[]) {
           storedFiles.push(...files);
-        },
-        deleteFilesForArtifact() {}
+        }
       },
       symbolsRepo: {
         clearSymbolsForArtifact() {},
