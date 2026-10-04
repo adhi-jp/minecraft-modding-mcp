@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { DiffClassSignaturesOutput } from "../source-service.js";
+import type { SourceMapping } from "../types.js";
 import { diffLibraries, type CompareVersionsOutput, type LibraryDiffResult } from "../version-diff-service.js";
 import type { GetRegistryDataOutput } from "../registry-service.js";
 import { createError, ERROR_CODES } from "../errors.js";
@@ -68,7 +69,7 @@ type CompareMinecraftDeps = {
     className: string;
     fromVersion: string;
     toVersion: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
     includeFullDiff?: boolean;

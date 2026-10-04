@@ -1,13 +1,13 @@
 /**
- * Shared harness library for the pre-migration baseline captures.
+ * Normalization used when comparing live server output against the frozen
+ * pre-migration fixtures under tests/fixtures/premigration/.
  *
- * Talks to the PRODUCTION server (`node --import tsx src/cli.ts`, i.e. the
- * stdio supervisor + worker pair) over newline-delimited JSON-RPC exactly like
- * a legacy 2025-11-25 client, and freezes normalized fixtures under
- * tests/fixtures/premigration/.
+ * The original capture harness that produced those fixtures is no longer in
+ * the tree (see tests/fixtures/premigration/README.md); only the
+ * normalization the comparison tests import is kept here.
  *
- * NORMALIZATION RULES (applied by normalizeCaptured / writeFixture; also
- * documented in tests/fixtures/premigration/README.md — keep in sync):
+ * NORMALIZATION RULES (applied by normalizeCaptured; also documented in
+ * tests/fixtures/premigration/README.md — keep in sync):
  *  N1. JSON object keys are sorted recursively (stable byte order), EXCEPT
  *      subtrees explicitly marked verbatim (tool-contract `inputSchema`
  *      subtrees keep wire property order for legacy byte comparison).
@@ -30,30 +30,18 @@
  *  N5. Every fixture records the environment variables that select behavior
  *      (`env` field), with scratch paths normalized per N2. Fixtures contain
  *      no capture timestamps; the capture date/commit live in the README.
+ *      (Recorded at capture time; not applied by this module.)
  */
 
-import { spawn, execSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures", "premigration");
 
-/** Scratch root for server caches/pid files; overridable, never the repo. */
+/** Scratch root recorded in the frozen fixtures as <SCRATCH>. */
 export const SCRATCH_ROOT =
   process.env.PREMIGRATION_SCRATCH ?? join(tmpdir(), "premigration-p1-0");
-
-export function scratchPath(...parts) {
-  const p = join(SCRATCH_ROOT, ...parts);
-  mkdirSync(p.endsWith(".pid") || p.includes(".") ? dirname(p) : p, { recursive: true });
-  return p;
-}
-
-export function gitHead() {
-  return execSync("git rev-parse HEAD", { cwd: REPO_ROOT, encoding: "utf8" }).trim();
-}
 
 // ---------------------------------------------------------------------------
 // Normalization
@@ -153,259 +141,4 @@ export function defaultPathReplacements() {
     [homedir(), "<HOME>"]
   ];
   return entries.sort((a, b) => b[0].length - a[0].length);
-}
-
-/** Normalize an env record for fixture embedding (paths only; rule N5). */
-export function normalizeEnvForFixture(env) {
-  const out = {};
-  for (const key of Object.keys(env).sort()) {
-    out[key] = normalizeCaptured(env[key]);
-  }
-  return out;
-}
-
-export function writeFixture(relativePath, data) {
-  const target = join(FIXTURES_DIR, relativePath);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  return target;
-}
-
-// ---------------------------------------------------------------------------
-// Server session (legacy newline-delimited JSON-RPC client)
-// ---------------------------------------------------------------------------
-
-export const LEGACY_PROTOCOL_VERSION = "2025-11-25";
-
-/**
- * A production-server session. Spawns `node --import tsx src/cli.ts` from the
- * repo root (the real supervisor entry; the supervisor spawns the worker with
- * the same execArgv). Client traffic is newline-delimited JSON-RPC.
- */
-export class ServerSession {
-  constructor({ label, env = {}, pidFile } = {}) {
-    this.label = label ?? "session";
-    this.extraEnv = env;
-    this.pidFile = pidFile;
-    this.nextId = 1;
-    this.pendingReplies = new Map(); // id -> {resolve}
-    this.messages = []; // every parsed message from server stdout, in order
-    this.stderr = "";
-    this.exited = false;
-    this.child = undefined;
-    this.buffer = "";
-    this.messageListeners = new Set();
-  }
-
-  baseEnv() {
-    return {
-      ...process.env,
-      MCP_CACHE_DIR: scratchPath("cache"),
-      MCP_SQLITE_PATH: join(scratchPath("cache"), "source-cache.db"),
-      ...(this.pidFile ? { MCP_SUPERVISOR_CHILD_PID_FILE: this.pidFile } : {}),
-      ...this.extraEnv
-    };
-  }
-
-  /** Env vars that select server behavior, for fixture recording (rule N5). */
-  recordedEnv() {
-    const record = {
-      MCP_CACHE_DIR: scratchPath("cache"),
-      MCP_SQLITE_PATH: join(scratchPath("cache"), "source-cache.db"),
-      ...(this.pidFile ? { MCP_SUPERVISOR_CHILD_PID_FILE: this.pidFile } : {}),
-      ...this.extraEnv
-    };
-    return normalizeEnvForFixture(record);
-  }
-
-  start() {
-    this.child = spawn(
-      process.execPath,
-      ["--import", "tsx", join(REPO_ROOT, "src", "cli.ts")],
-      {
-        cwd: REPO_ROOT,
-        env: this.baseEnv(),
-        stdio: ["pipe", "pipe", "pipe"]
-      }
-    );
-    this.child.stdout.on("data", (chunk) => this.onStdout(chunk));
-    this.child.stderr.on("data", (chunk) => {
-      this.stderr += chunk.toString();
-    });
-    this.child.once("exit", () => {
-      this.exited = true;
-    });
-    return this;
-  }
-
-  onStdout(chunk) {
-    this.buffer += chunk.toString();
-    let index;
-    while ((index = this.buffer.indexOf("\n")) >= 0) {
-      const line = this.buffer.slice(0, index).trim();
-      this.buffer = this.buffer.slice(index + 1);
-      if (!line) continue;
-      let message;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        continue; // non-JSON stdout noise would be a bug; ignore for capture
-      }
-      this.messages.push(message);
-      const id = message.id;
-      if ((typeof id === "string" || typeof id === "number") && this.pendingReplies.has(String(id))) {
-        const waiter = this.pendingReplies.get(String(id));
-        this.pendingReplies.delete(String(id));
-        waiter.resolve(message);
-      }
-      for (const listener of [...this.messageListeners]) listener(message);
-    }
-  }
-
-  send(message) {
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
-  }
-
-  /** Send a request with the next sequential id; returns {id, reply: Promise}. */
-  request(method, params, { timeoutMs = 30_000 } = {}) {
-    const id = this.nextId++;
-    const message = { jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) };
-    const reply = this.waitForReply(id, timeoutMs, method);
-    this.send(message);
-    return { id, request: message, reply };
-  }
-
-  waitForReply(id, timeoutMs, methodLabel = "") {
-    return new Promise((resolvePromise, rejectPromise) => {
-      const timer = setTimeout(() => {
-        this.pendingReplies.delete(String(id));
-        rejectPromise(
-          new Error(`[${this.label}] timeout waiting for reply id=${id} ${methodLabel}`)
-        );
-      }, timeoutMs);
-      timer.unref?.();
-      this.pendingReplies.set(String(id), {
-        resolve: (message) => {
-          clearTimeout(timer);
-          resolvePromise(message);
-        }
-      });
-    });
-  }
-
-  async handshake({ clientName = "premigration-harness" } = {}) {
-    const init = this.request("initialize", {
-      protocolVersion: LEGACY_PROTOCOL_VERSION,
-      capabilities: {},
-      clientInfo: { name: clientName, version: "0.0.0" }
-    });
-    const reply = await init.reply;
-    if (reply.error) {
-      throw new Error(`[${this.label}] initialize failed: ${JSON.stringify(reply.error)}`);
-    }
-    this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-    return reply;
-  }
-
-  readWorkerPid() {
-    if (!this.pidFile || !existsSync(this.pidFile)) return undefined;
-    const raw = readFileSync(this.pidFile, "utf8").trim();
-    const pid = Number.parseInt(raw, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
-  }
-
-  async waitForWorkerReady({ timeoutMs = 60_000 } = {}) {
-    const deadline = Date.now() + timeoutMs;
-    // The supervisor consumes the READY marker line itself; observe readiness
-    // via the pid file plus a successful round-trip instead.
-    while (Date.now() < deadline) {
-      const pid = this.readWorkerPid();
-      if (pid !== undefined && isProcessAlive(pid)) return pid;
-      await sleep(50);
-    }
-    throw new Error(`[${this.label}] worker never became ready`);
-  }
-
-  signalWorker(signal) {
-    const pid = this.readWorkerPid();
-    if (pid === undefined) throw new Error(`[${this.label}] no worker pid recorded`);
-    process.kill(pid, signal);
-    return pid;
-  }
-
-  /** Graceful stop (stdin close -> supervisor shutdown kills worker group), then hard kill. */
-  async stop() {
-    const workerPid = this.readWorkerPid();
-    try {
-      this.child.stdin.end();
-    } catch {
-      /* already closed */
-    }
-    const deadline = Date.now() + 5_000;
-    while (!this.exited && Date.now() < deadline) {
-      await sleep(50);
-    }
-    if (!this.exited) {
-      try {
-        this.child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-    // Belt and braces: the worker runs detached in its own process group.
-    if (workerPid !== undefined) {
-      for (const target of [-workerPid, workerPid]) {
-        try {
-          process.kill(target, "SIGKILL");
-        } catch {
-          /* ESRCH: already dead — the normal case */
-        }
-      }
-    }
-    await sleep(100);
-  }
-}
-
-export function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-
-export function sleep(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
-}
-
-// ---------------------------------------------------------------------------
-// Flag configurations (tools/list membership)
-// ---------------------------------------------------------------------------
-
-export const FLAG_CONFIGS = [
-  { name: "default", env: {} },
-  { name: "verify-mixin-target-off", env: { VERIFY_MIXIN_TARGET_OFF: "1" } },
-  { name: "batch-tools-off", env: { BATCH_TOOLS_OFF: "1" } },
-  { name: "both-off", env: { VERIFY_MIXIN_TARGET_OFF: "1", BATCH_TOOLS_OFF: "1" } }
-];
-
-export const VERIFY_MIXIN_TARGET_TOOL = "verify-mixin-target";
-export const BATCH_TOOLS = [
-  "batch-class-source",
-  "batch-class-members",
-  "batch-symbol-exists",
-  "batch-mappings"
-];
-
-/** Expected membership for a flag config, derived from the pinned EXPECTED_TOOLS. */
-export function expectedToolsForConfig(expectedTools, flagEnv) {
-  let names = [...expectedTools];
-  if (flagEnv.VERIFY_MIXIN_TARGET_OFF === "1") {
-    names = names.filter((name) => name !== VERIFY_MIXIN_TARGET_TOOL);
-  }
-  if (flagEnv.BATCH_TOOLS_OFF === "1") {
-    names = names.filter((name) => !BATCH_TOOLS.includes(name));
-  }
-  return names;
 }

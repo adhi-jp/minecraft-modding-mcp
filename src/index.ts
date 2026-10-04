@@ -18,7 +18,6 @@ import {
 } from "./registration-adapter.js";
 
 import { objectResult } from "./mcp-helpers.js";
-import { runWithRequestContext } from "./request-context.js";
 import { prepareToolInput } from "./tool-input.js";
 import {
   DETAIL_ENABLED_TOOL_NAMES,
@@ -301,7 +300,7 @@ const analyzeModService = new AnalyzeModService({
   decompileModJar: (input) => sourceService.decompileModJar(input),
   getModClassSource: (input) => sourceService.getModClassSource(input),
   searchModSource: (input) => sourceService.searchModSource(input),
-  remapModJar: (input) => remapModJar(input, config) as unknown as Promise<Record<string, unknown> & { warnings?: string[] }>,
+  remapModJar: (input) => remapModJar(input, config),
   getModClassMembers: (input) => sourceService.getModClassMembers(input)
 });
 const validateProjectService = new ValidateProjectService({
@@ -314,22 +313,6 @@ const validateProjectService = new ValidateProjectService({
   discoverAccessTransformers: discoverWorkspaceAccessTransformers,
   detectProjectMinecraftVersion: (projectPath) =>
     workspaceMappingService.detectProjectMinecraftVersion(projectPath),
-  resolveArtifact: async (input) => {
-    const output = await sourceService.resolveArtifact({
-      target: input.target,
-      mapping: input.mapping,
-      sourcePriority: input.sourcePriority,
-      projectPath: input.projectPath,
-      gradleUserHome: input.gradleUserHome,
-      scope: input.scope,
-      preferProjectVersion: input.preferProjectVersion
-    });
-    return {
-      artifactId: output.artifactId,
-      mappingApplied: output.mappingApplied,
-      warnings: output.warnings
-    };
-  },
   probeMinecraftArtifact: (input) => sourceService.probeMinecraftArtifact(input)
 });
 const manageCacheService = new ManageCacheService({
@@ -382,48 +365,7 @@ const verifyMixinTargetService = new VerifyMixinTargetService({
         : undefined
     };
   },
-  getSignature: (input) =>
-    (sourceService as unknown as {
-      explorerService: {
-        getSignature: (input: Record<string, unknown>) => Promise<{
-          classAccessFlags?: number;
-          constructors: Array<Record<string, unknown>>;
-          methods: Array<Record<string, unknown>>;
-          fields: Array<Record<string, unknown>>;
-          warnings: string[];
-        }>;
-      };
-    }).explorerService.getSignature(input) as Promise<{
-      classAccessFlags?: number;
-      constructors: Array<{
-        ownerFqn: string;
-        name: string;
-        javaSignature: string;
-        jvmDescriptor: string;
-        accessFlags: number;
-        isSynthetic: boolean;
-        sourceLine?: number;
-      }>;
-      methods: Array<{
-        ownerFqn: string;
-        name: string;
-        javaSignature: string;
-        jvmDescriptor: string;
-        accessFlags: number;
-        isSynthetic: boolean;
-        sourceLine?: number;
-      }>;
-      fields: Array<{
-        ownerFqn: string;
-        name: string;
-        javaSignature: string;
-        jvmDescriptor: string;
-        accessFlags: number;
-        isSynthetic: boolean;
-        sourceLine?: number;
-      }>;
-      warnings: string[];
-    }>
+  getSignature: (input) => sourceService.explorerService.getSignature(input)
 });
 
 const batchClassSourceService = new BatchClassSourceService({
@@ -584,98 +526,94 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   let normalizedInput: unknown = rawInput;
 
   try {
-    return await runWithRequestContext({ requestId }, async () => {
-      const preparedInput = prepareToolInput(rawInput);
-      normalizedInput = preparedInput.normalizedInput;
-      const { removedOfficialPaths, suggestedReplacementInput } = preparedInput;
-      if (removedOfficialPaths.length > 0) {
-        throw createError({
-          code: ERROR_CODES.INVALID_INPUT,
-          message: `The "official" mapping namespace was removed. Use "obfuscated" instead.`,
-          details: {
-            fieldErrors: removedOfficialPaths.map((path) => ({
-              path,
-              message: `"official" is no longer supported for this field. Use "obfuscated".`,
-              code: "invalid_enum_value"
-            })),
-            nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
-            // Route construction through buildSuggestedCall to satisfy the D12
-            // invariant (tests/suggested-call-invariant.test.ts): every emitted
-            // suggestedCall must be built by the helper. The downstream
-            // mapErrorToProblem gate re-validates on emission; that second pass is
-            // the intentional, cheap cost of the two complementary safety gates.
-            ...(suggestedReplacementInput
-              ? buildSuggestedCall({
-                  tool,
-                  params: suggestedReplacementInput as Record<string, unknown>
-                })
-              : {})
-          }
-        });
-      }
-
-      const parsedInput = schema.parse(normalizedInput);
-      const payload = await (
-        HEAVY_TOOL_NAMES.has(tool)
-          ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
-          : action(parsedInput)
-      );
-      const { result, warnings, meta: resultMeta } = splitWarnings(payload);
-
-      // Expert tools share the entry-tool detail/include response contract (the old
-      // per-tool `compact` boolean is gone). projectByDetail reproduces the previous
-      // compact defaults byte-identically: resolution tools default detail=summary
-      // (old compact:true), source/file tools default detail=standard (old compact:false).
-      // The legacy includeProvenance/includeDescriptors flags are folded into the
-      // include set as aliases so Phase-4 behavior is preserved.
-      const shapeInput = readResponseShapeInput(parsedInput);
-      const effectiveDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
-        ? (shapeInput.detail ?? "summary")
-        : (shapeInput.detail ?? DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary");
-      let projectedResult = result;
-      if (DETAIL_ENABLED_TOOL_NAMES.has(tool)) {
-        projectedResult = projectByDetail(
-          tool,
-          projectedResult as Record<string, unknown>,
-          effectiveDetail,
-          shapeInput.include
-        );
-      }
-
-      // Entry, expert, and batch tools report the applied detail/include shape in meta.
-      // detailApplied is omitted when it matches the tool's default to keep responses lean.
-      const defaultDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
-        ? "summary"
-        : DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary";
-      const entryMeta =
-        ENTRY_TOOL_NAMES.has(tool) ||
-        DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
-        BATCH_DETAIL_TOOL_NAMES.has(tool)
-          ? buildEntryToolMeta({
-              detail: effectiveDetail,
-              defaultDetail,
-              include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
-            })
-          : undefined;
-
-      const durationMs = Date.now() - startedAt;
-      recordToolCallBestEffort(tool, durationMs);
-      const warningDetails = capWarningDetailsForSummary(
-        classifyWarnings(warnings),
-        effectiveDetail === "summary"
-      );
-      return objectResult({
-        result: projectedResult,
-        meta: {
-          ...(entryMeta ?? {}),
-          ...resultMeta,
-          requestId,
-          tool,
-          durationMs,
-          ...(warnings.length > 0 ? { warnings } : {}),
-          ...(warningDetails.length > 0 ? { warningDetails } : {})
-        } satisfies ToolMeta
+    const preparedInput = prepareToolInput(rawInput);
+    normalizedInput = preparedInput.normalizedInput;
+    const { removedOfficialPaths, suggestedReplacementInput } = preparedInput;
+    if (removedOfficialPaths.length > 0) {
+      throw createError({
+        code: ERROR_CODES.INVALID_INPUT,
+        message: `The "official" mapping namespace was removed. Use "obfuscated" instead.`,
+        details: {
+          fieldErrors: removedOfficialPaths.map((path) => ({
+            path,
+            message: `"official" is no longer supported for this field. Use "obfuscated".`,
+            code: "invalid_enum_value"
+          })),
+          nextAction: `Replace "official" with "obfuscated" in mapping-related fields and retry.`,
+          // Route construction through buildSuggestedCall to satisfy the D12
+          // invariant (tests/suggested-call-invariant.test.ts): every emitted
+          // suggestedCall must be built by the helper. The downstream
+          // mapErrorToProblem gate re-validates on emission; that second pass is
+          // the intentional, cheap cost of the two complementary safety gates.
+          ...(suggestedReplacementInput
+            ? buildSuggestedCall({
+                tool,
+                params: suggestedReplacementInput as Record<string, unknown>
+              })
+            : {})
+        }
       });
+    }
+
+    const parsedInput = schema.parse(normalizedInput);
+    const payload = await (
+      HEAVY_TOOL_NAMES.has(tool)
+        ? heavyToolExecutionGate.run(tool, () => action(parsedInput))
+        : action(parsedInput)
+    );
+    const { result, warnings, meta: resultMeta } = splitWarnings(payload);
+
+    // Expert tools share the entry-tool detail/include response contract:
+    // resolution tools default to detail=summary, source/file tools to
+    // detail=standard, and includeProvenance/includeDescriptors are aliases
+    // folded into the include set.
+    const shapeInput = readResponseShapeInput(parsedInput);
+    const effectiveDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+      ? (shapeInput.detail ?? "summary")
+      : (shapeInput.detail ?? DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary");
+    let projectedResult = result;
+    if (DETAIL_ENABLED_TOOL_NAMES.has(tool)) {
+      projectedResult = projectByDetail(
+        tool,
+        projectedResult as Record<string, unknown>,
+        effectiveDetail,
+        shapeInput.include
+      );
+    }
+
+    // Entry, expert, and batch tools report the applied detail/include shape in meta.
+    // detailApplied is omitted when it matches the tool's default to keep responses lean.
+    const defaultDetail: ResponseDetailLevel = ENTRY_TOOL_NAMES.has(tool)
+      ? "summary"
+      : DEFAULT_DETAIL_BY_TOOL[tool] ?? "summary";
+    const entryMeta =
+      ENTRY_TOOL_NAMES.has(tool) ||
+      DETAIL_ENABLED_TOOL_NAMES.has(tool) ||
+      BATCH_DETAIL_TOOL_NAMES.has(tool)
+        ? buildEntryToolMeta({
+            detail: effectiveDetail,
+            defaultDetail,
+            include: shapeInput.include.size > 0 ? [...shapeInput.include] : undefined
+          })
+        : undefined;
+
+    const durationMs = Date.now() - startedAt;
+    recordToolCallBestEffort(tool, durationMs);
+    const warningDetails = capWarningDetailsForSummary(
+      classifyWarnings(warnings),
+      effectiveDetail === "summary"
+    );
+    return objectResult({
+      result: projectedResult,
+      meta: {
+        ...(entryMeta ?? {}),
+        ...resultMeta,
+        requestId,
+        tool,
+        durationMs,
+        ...(warnings.length > 0 ? { warnings } : {}),
+        ...(warningDetails.length > 0 ? { warningDetails } : {})
+      } satisfies ToolMeta
     });
   } catch (caughtError) {
     // A raw SQLite corruption error surfaced mid-call (as opposed to at DB

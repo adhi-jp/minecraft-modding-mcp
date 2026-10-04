@@ -691,7 +691,6 @@
 0	ok	computeValidationStatus: degradedReason='stage-budget-pre-target' alone is partial
 0	ok	computeValidationStatus: targetsDeferredBudget alone promotes to partial
 0	ok	concurrent nested-jar extractions of the same entry all succeed
-0	ok	concurrent request contexts do not leak into each other
 0	ok	consecutive replay failures use one exponential retry owner and adoption resets it
 0	ok	constructor pseudo-name <init> is not treated as a placeholder
 0	ok	consumeFieldType rejects an empty L; reference token
@@ -938,7 +937,6 @@
 0	ok	getModClassSource normalizes jarPath before class lookup
 0	ok	getModClassSource rejects an empty className with INVALID_INPUT
 0	ok	getModClassSource throws CLASS_NOT_FOUND when the class is absent from decompiled output
-0	ok	getRequestContext returns undefined outside a request context
 0	ok	getSignature opens the jar once for the whole inheritance hierarchy
 0	ok	getSignature throw is captured into status, not propagated
 0	ok	parseCoordinate rejects a..b as a groupId, and groupToPath still collapses empty segments
@@ -1063,7 +1061,6 @@
 0	ok	nbtBase64ToTypedJson rejects malformed nbtBase64 input
 0	ok	nbtBase64ToTypedJson rejects oversized base64 before Buffer.from decode allocation
 0	ok	nbtBase64ToTypedJson treats truncated gzip payload as parse failure, not limit exceeded
-0	ok	nested request contexts restore the outer context
 0	ok	network-local NBT/runtime tools declare openWorldHint:false; network/cache tools do not
 0	ok	new error codes are part of the ErrorCode union
 0	ok	normal operation retries unresolved cleanup tokens and unblocks restart and queued work
@@ -1342,7 +1339,6 @@
 0	ok	runJavaProcess normalizes path args when normalizePathArgs is true
 0	ok	runJavaProcess rejects with JAVA_PROCESS_FAILED when java cannot be spawned
 0	ok	runJavaProcess resolves with a non-zero exitCode when the target jar is missing
-0	ok	runWithRequestContext propagates context across await boundaries
 0	ok	running cancellation followed by shutdown emits no terminal response or replacement
 0	ok	running cancellation suppresses a worker response and drains queued work
 0	ok	running cancellation suppresses timeout output but still recovers queued work
@@ -1464,7 +1460,6 @@
 0	ok	the test-layout contract stays in the contracts domain
 0	ok	the unique-workspace auto-resolve falls back to on-demand version detection
 0	ok	timeout-first cancellation does not create a second terminal response
-0	ok	tool actions observe the requestId emitted in response metadata
 0	ok	tool contract manifest keeps Japanese purpose rows localized
 0	ok	tool contract manifest reflects current top-level workflow tool purpose summaries
 0	ok	tool contract manifest renders compact two-column tables

@@ -3,6 +3,10 @@ import { dirname, join } from "node:path";
 
 import { normalizePathForHost } from "../path-converter.js";
 import type { AnalyzeModOptions, ModAnalysisResult } from "../mod-analyzer.js";
+import type { DecompileModJarOutput, GetModClassSourceOutput } from "../mod-decompile-service.js";
+import type { ModRemapResult } from "../mod-remap-service.js";
+import type { SearchModSourceOutput } from "../mod-search-service.js";
+import type { GetModClassMembersOutput } from "../source-service.js";
 import { createError, ERROR_CODES } from "../errors.js";
 import { z } from "zod";
 import { buildIncludeSchema, detailSchema, executionModeSchema, positiveIntSchema } from "./entry-tool-schema.js";
@@ -85,29 +89,29 @@ type AnalyzeModDeps = {
     jarPath: string;
     includeFiles?: boolean;
     maxFiles?: number;
-  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  }) => Promise<DecompileModJarOutput>;
   getModClassSource: (input: {
     jarPath: string;
     className: string;
     maxLines?: number;
     maxChars?: number;
-  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  }) => Promise<GetModClassSourceOutput>;
   searchModSource: (input: {
     jarPath: string;
     query: string;
     searchType?: "class" | "method" | "field" | "content" | "all";
     limit?: number;
-  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  }) => Promise<SearchModSourceOutput>;
   remapModJar: (input: {
     inputJar: string;
     outputJar?: string;
     mcVersion?: string;
     targetMapping: "yarn" | "mojang";
-  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  }) => Promise<ModRemapResult>;
   getModClassMembers: (input: {
     jarPath: string;
     className: string;
-  }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
+  }) => Promise<GetModClassMembersOutput>;
 };
 
 function deriveOutputJar(inputJar: string, analysis: ModAnalysisResult, targetMapping: "yarn" | "mojang") {
@@ -181,7 +185,7 @@ export class AnalyzeModService {
               decompile: output
             }
           }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
+          warnings: output.warnings
         };
       }
       case "search": {
@@ -214,7 +218,7 @@ export class AnalyzeModService {
               hits: output
             }
           }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
+          warnings: output.warnings
         };
       }
       case "class-source": {
@@ -251,7 +255,7 @@ export class AnalyzeModService {
               source: output
             }
           }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
+          warnings: output.warnings
         };
       }
       case "members": {
@@ -285,7 +289,7 @@ export class AnalyzeModService {
             },
             alwaysBlocks: ["members"]
           }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
+          warnings: output.warnings
         };
       }
       case "remap": {
@@ -383,7 +387,7 @@ export class AnalyzeModService {
             },
             alwaysBlocks: ["operation"]
           }),
-          warnings: Array.isArray(output.warnings) ? output.warnings : []
+          warnings: output.warnings
         };
       }
     }

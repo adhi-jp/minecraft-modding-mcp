@@ -1,3 +1,5 @@
+import { sourcePathToFqcn } from "../source/shared-utils.js";
+
 export interface ExtractedSymbol {
   symbolKind: "class" | "interface" | "enum" | "record" | "method" | "field";
   symbolName: string;
@@ -60,7 +62,7 @@ function lineIndexToLine(lineNo: number): number {
 export function extractSymbolsFromSource(filePath: string, content: string): Array<ExtractedSymbol> {
   const lines = content.split(/\r?\n/);
   const symbols: ExtractedSymbol[] = [];
-  const qualifiedName = filePath.replace(/\.java$/, "").replaceAll("/", ".");
+  const qualifiedName = sourcePathToFqcn(filePath);
 
   for (let index = 0; index < lines.length; index += 1) {
     const rawLine = lines[index] ?? "";

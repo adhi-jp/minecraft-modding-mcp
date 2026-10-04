@@ -1,8 +1,13 @@
 # Pre-migration baselines
 
 Golden fixtures captured against the **untouched SDK v1 build** (before any
-MCP 2026-07-28 migration edit). The capture harnesses under
-`scripts/premigration/` are the authoritative procedure record.
+MCP 2026-07-28 migration edit). The one-off capture harnesses that produced
+them were removed from the tree after the migration; the procedure is the one
+recorded at commit `7964871` (`git show 7964871`), and the fixtures can no
+longer be re-captured against a current build. The fixtures are regenerated
+only in the derived sense: `src/v1-parity-schemas.ts` is rebuilt from the
+`tool-contracts/*.json` files with
+`node scripts/premigration/generate-v1-parity-schemas.mjs`.
 
 - Capture date: **2026-08-08**
 - Commit: **2a17b66d2975e37835061dd87ea34f9a449ba61f** (branch `feature/mcp-spec-2026-07-28`, clean tracked tree)
@@ -11,13 +16,13 @@ MCP 2026-07-28 migration edit). The capture harnesses under
   (`initialize` `protocolVersion: "2025-11-25"` + `notifications/initialized`)
   unless a fixture says otherwise
 - Node v24.13.0, Linux (WSL2); `@modelcontextprotocol/sdk` 1.27.1, zod 3.x per lockfile
-- Harnesses: `scripts/premigration/*.mjs` (run with `node --import tsx …`;
-  each fixture names its harness in its `harness` field)
+- Harnesses: each fixture names the harness that produced it in its `harness`
+  field; those scripts exist only in git history (commit `7964871`)
 
 ## Normalization rules
 
-Applied by `scripts/premigration/lib.mjs` (`normalizeCaptured`); the harness
-comments are the authoritative copy. Summary:
+Applied by `scripts/premigration/lib.mjs` (`normalizeCaptured`), which the
+comparison tests import; its header comment is the authoritative copy. Summary:
 
 - **N1** — JSON object keys sorted recursively, EXCEPT subtrees marked
   verbatim: the `advertised.inputSchema` subtree of `tool-contracts/*.json`
@@ -41,8 +46,12 @@ comments are the authoritative copy. Summary:
   `MCP_CACHE_DIR`/`MCP_SQLITE_PATH` into the scratch dir so the user cache is
   untouched. Fixtures carry no timestamps; date/commit live only in this file.
 
-Comparing post-migration output: re-run the same harness and diff — the
-normalization is deterministic, so byte equality of normalized fixtures is the
+Comparing live output: the capture procedure is the one recorded at commit
+`7964871` and cannot be re-run against the current tree. The comparison tests
+(`tests/stdio/stdio-problemdetails-envelope-goldens.test.ts`,
+`tests/stdio/stdio-tool-contract-snapshots.test.ts`) instead normalize live
+output with `normalizeCaptured` and compare it with the frozen fixtures — the
+normalization is deterministic, so byte equality of normalized output is the
 comparison contract (for `inputSchema`, byte equality of the verbatim subtree).
 
 ## Post-capture edits
@@ -126,9 +135,9 @@ variant.
 ### `problemdetails/*.json`
 
 One golden per distinct Zod failure kind observed across ALL 41 registered
-tool schemas, selected registry-driven (see
-`scripts/premigration/capture-problemdetails.mjs`; offline `safeParse` proves
-each case fails with exactly its kind before it is sent, so validation always
+tool schemas, selected registry-driven (by the `capture-problemdetails.mjs` harness at
+commit `7964871`; offline `safeParse` proved
+each case failed with exactly its kind before it was sent, so validation always
 fails before real work). Kinds captured: `invalid_type.missing-required`,
 `invalid_type.wrong-type`, `invalid_enum_value`, `unrecognized_keys`
 (`.strict()` batch entry), `too_small.array`, `too_small.number` (positive

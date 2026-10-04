@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { isAppError } from "../../errors.js";
 import { buildVersionSourceSearchRoots } from "../../gradle-paths.js";
 import type { StageEmitter } from "../../stage-emitter.js";
-import type { SourceMapping } from "../../types.js";
+import type { ArtifactScope, SourceMapping } from "../../types.js";
 
 const VALIDATE_PROJECT_TASKS_OFF = process.env.VALIDATE_PROJECT_TASKS_OFF === "1";
 
@@ -29,11 +29,11 @@ type TaskStatusReport = {
 
 type MinecraftArtifactProbeInput = {
   target: { kind: "version"; value: string };
-  mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+  mapping?: SourceMapping;
   sourcePriority?: "loom-first" | "maven-first";
   projectPath?: string;
   gradleUserHome?: string;
-  scope?: "vanilla" | "merged" | "loader";
+  scope?: ArtifactScope;
   preferProjectVersion?: boolean;
 };
 
@@ -61,11 +61,11 @@ export type ValidateProjectDeps = {
   validateAccessWidener: (input: {
     content: string;
     version: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     projectPath?: string;
     gradleUserHome?: string;
-    scope?: "vanilla" | "merged" | "loader";
+    scope?: ArtifactScope;
     preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   validateAccessTransformer?: (input: {
@@ -75,7 +75,7 @@ export type ValidateProjectDeps = {
     sourcePriority?: "loom-first" | "maven-first";
     projectPath?: string;
     gradleUserHome?: string;
-    scope?: "vanilla" | "merged" | "loader";
+    scope?: ArtifactScope;
     preferProjectVersion?: boolean;
   }) => Promise<Record<string, unknown> & { warnings?: string[] }>;
   discoverMixins: (projectPath: string, configPaths?: string[]) => Promise<string[]>;
@@ -83,7 +83,6 @@ export type ValidateProjectDeps = {
   discoverAccessTransformers?: (projectPath: string) => Promise<string[]>;
   detectProjectMinecraftVersion?: (projectPath: string) => Promise<string | undefined>;
   probeMinecraftArtifact?: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>;
-  resolveArtifact?: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>;
 };
 
 // Helpers live as free functions so ValidateProjectService keeps its baseline
@@ -208,11 +207,11 @@ async function probeMinecraftArtifactResolved(
   artifactProbe: (input: MinecraftArtifactProbeInput) => Promise<MinecraftArtifactProbeOutput>,
   args: {
     version: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     projectPath: string;
     gradleUserHome?: string;
-    scope?: "vanilla" | "merged" | "loader";
+    scope?: ArtifactScope;
     preferProjectVersion?: boolean;
   },
   stageEmitter?: StageEmitter
@@ -375,10 +374,10 @@ export async function buildFullTaskStatusReport(
     detail: "summary" | "standard" | "full";
     include: string[];
     resolvedVersion: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
-    scope?: "vanilla" | "merged" | "loader";
+    scope?: ArtifactScope;
     preferProjectVersion?: boolean;
     mixinDiscoveryCount: number;
     mixinCaughtErrors: number;
@@ -402,8 +401,8 @@ export async function buildFullTaskStatusReport(
   let minecraftArtifactResolved: TaskStatusReport["minecraft.artifact.resolved"];
   if (workspace.status !== "ok" || gradle.status !== "ok") {
     minecraftArtifactResolved = { status: "skipped" };
-  } else if (deps.probeMinecraftArtifact ?? deps.resolveArtifact) {
-    const artifactProbe = deps.probeMinecraftArtifact ?? deps.resolveArtifact!;
+  } else if (deps.probeMinecraftArtifact) {
+    const artifactProbe = deps.probeMinecraftArtifact;
     minecraftArtifactResolved = await probeMinecraftArtifactResolved(artifactProbe, {
       version: args.resolvedVersion,
       mapping: args.mapping,

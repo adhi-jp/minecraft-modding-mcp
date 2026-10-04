@@ -7,6 +7,7 @@ import { log } from "./logger.js";
 import { ModDecompileService } from "./mod-decompile-service.js";
 import { validateAndNormalizeJarPath } from "./path-resolver.js";
 import { analyzeModJar } from "./mod-analyzer.js";
+import { sourcePathToFqcn } from "./source/shared-utils.js";
 import { iterateJavaEntriesAsUtf8 } from "./source-jar-reader.js";
 
 export type SearchModSourceSearchType = "class" | "method" | "field" | "content" | "all";
@@ -64,10 +65,6 @@ function extractContext(lines: string[], lineIndex: number): string {
   const start = Math.max(0, lineIndex - CONTEXT_LINES);
   const end = Math.min(lines.length - 1, lineIndex + CONTEXT_LINES);
   return lines.slice(start, end + 1).join("\n");
-}
-
-function filePathToClassName(filePath: string): string {
-  return filePath.replace(/\.java$/, "").replaceAll("/", ".");
 }
 
 /**
@@ -277,7 +274,7 @@ export class ModSearchService {
       }
 
       const filePath = entry.filePath;
-      const className = filePathToClassName(filePath);
+      const className = sourcePathToFqcn(filePath);
 
       if (input.searchType === "class" || input.searchType === "all") {
         const simpleClassName = className.split(".").pop() ?? className;

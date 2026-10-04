@@ -1,5 +1,6 @@
 import { buildSuggestedCall } from "../build-suggested-call.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
+import type { GetSignatureOutput, SignatureMember } from "../minecraft-explorer-service.js";
 import { suggestSimilar } from "../mixin-validator.js";
 import type {
   ArtifactProvenance,
@@ -71,24 +72,6 @@ export type VerifyMixinTargetOutput = {
   };
 };
 
-type ExplorerSignatureMember = {
-  ownerFqn: string;
-  name: string;
-  javaSignature: string;
-  jvmDescriptor: string;
-  accessFlags: number;
-  isSynthetic: boolean;
-  sourceLine?: number;
-};
-
-type ExplorerSignatureOutput = {
-  classAccessFlags?: number;
-  constructors: ExplorerSignatureMember[];
-  methods: ExplorerSignatureMember[];
-  fields: ExplorerSignatureMember[];
-  warnings: string[];
-};
-
 export type VerifyMixinTargetDeps = {
   resolveArtifact: (input: {
     target: ResolveArtifactTargetInput;
@@ -113,7 +96,7 @@ export type VerifyMixinTargetDeps = {
     access: "public" | "all";
     includeSynthetic: boolean;
     includeInherited: boolean;
-  }) => Promise<ExplorerSignatureOutput>;
+  }) => Promise<Pick<GetSignatureOutput, "classAccessFlags" | "constructors" | "methods" | "fields" | "warnings">>;
   /**
    * Optional mapping translator used by autoRemap to convert owner/member names
    * from the request namespace into the artifact namespace. When absent,
@@ -270,13 +253,12 @@ function deriveVisibility(
   return "package-private";
 }
 
-function buildMatch(member: ExplorerSignatureMember, kind: "method" | "field"): VerifyMixinTargetMatch {
+function buildMatch(member: SignatureMember, kind: "method" | "field"): VerifyMixinTargetMatch {
   return {
     name: member.name,
     descriptor: member.jvmDescriptor,
     accessFlags: decodeAccessFlags(member.accessFlags, kind),
-    javaSignature: member.javaSignature,
-    ...(member.sourceLine ? { sourceLine: member.sourceLine } : {})
+    javaSignature: member.javaSignature
   };
 }
 
@@ -376,7 +358,7 @@ export class VerifyMixinTargetService {
         }
       });
     }
-    let signature: ExplorerSignatureOutput;
+    let signature: Awaited<ReturnType<VerifyMixinTargetDeps["getSignature"]>>;
     try {
       signature = await this.deps.getSignature({
         fqn: owner,
@@ -409,7 +391,7 @@ export class VerifyMixinTargetService {
     }
     warnings.push(...(signature.warnings ?? []));
 
-    const memberPool: ExplorerSignatureMember[] =
+    const memberPool: SignatureMember[] =
       member.kind === "method"
         ? [...signature.constructors, ...signature.methods]
         : [...signature.fields];

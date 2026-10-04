@@ -9,6 +9,7 @@ import type {
   ResolveWorkspaceSymbolOutput,
   TraceSymbolLifecycleOutput
 } from "../source-service.js";
+import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolResult,
@@ -199,7 +200,7 @@ type AnalyzeSymbolDeps = {
     name: string;
     owner?: string;
     descriptor?: string;
-    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourceMapping: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
     nameMode?: "fqcn" | "auto";
@@ -212,8 +213,8 @@ type AnalyzeSymbolDeps = {
     name: string;
     owner?: string;
     descriptor?: string;
-    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourceMapping: SourceMapping;
+    targetMapping: SourceMapping;
     gradleUserHome?: string;
     nameMode?: "fqcn" | "auto";
     signatureMode?: "exact" | "name-only";
@@ -224,15 +225,15 @@ type AnalyzeSymbolDeps = {
     owner: string;
     name: string;
     descriptor: string;
-    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    targetMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourceMapping: SourceMapping;
+    targetMapping: SourceMapping;
     gradleUserHome?: string;
     maxCandidates?: number;
   }) => Promise<ResolveMethodMappingExactOutput>;
   traceSymbolLifecycle: (input: {
     symbol: string;
     descriptor?: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
     fromVersion?: string;
@@ -248,14 +249,14 @@ type AnalyzeSymbolDeps = {
     name: string;
     owner?: string;
     descriptor?: string;
-    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourceMapping: SourceMapping;
     gradleUserHome?: string;
     maxCandidates?: number;
   }) => Promise<ResolveWorkspaceSymbolOutput>;
   getClassApiMatrix: (input: {
     version: string;
     className: string;
-    classNameMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    classNameMapping: SourceMapping;
     includeKinds?: ("class" | "field" | "method")[];
     gradleUserHome?: string;
     maxRows?: number;

@@ -1,5 +1,6 @@
 import { levenshteinDistance, suggestSimilar } from "../mixin/helpers.js";
 import type { SourceService } from "../source-service.js";
+import { sourcePathToFqcn } from "./shared-utils.js";
 
 export interface DidYouMeanCandidate {
   className: string;
@@ -21,7 +22,7 @@ const MAX_CANDIDATES = 8;
 const EDIT_DISTANCE_POOL_PREFIX = 4;
 
 export function fqnOfRow(row: { qualifiedName?: string; filePath: string }): string {
-  return row.qualifiedName ?? row.filePath.replace(/\.java$/, "").replaceAll("/", ".");
+  return row.qualifiedName ?? sourcePathToFqcn(row.filePath);
 }
 
 /**

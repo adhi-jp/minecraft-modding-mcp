@@ -10,6 +10,7 @@ import { resolveVineflowerJar } from "./vineflower-resolver.js";
 import { analyzeModJar, type ModAnalysisResult } from "./mod-analyzer.js";
 import { buildJarSignature, validateAndNormalizeJarPath } from "./path-resolver.js";
 import { sliceToMaxCharsSafe, writeSourceToOutputFile } from "./text-truncate.js";
+import { sourcePathToFqcn } from "./source/shared-utils.js";
 import type { Config } from "./types.js";
 
 export type DecompileModJarInput = {
@@ -68,10 +69,6 @@ function classNameToFilePath(className: string): string {
   return className.replaceAll(".", "/") + ".java";
 }
 
-function filePathToClassName(filePath: string): string {
-  return filePath.replace(/\.java$/, "").replaceAll("/", ".");
-}
-
 function clampPositiveInt(value: number | undefined): number | undefined {
   if (!Number.isFinite(value) || value == null) {
     return undefined;
@@ -112,7 +109,7 @@ export class ModDecompileService {
       if (matched) {
         const content = await readFile(join(outputDir, matched), "utf8");
         sourceResult = {
-          className: filePathToClassName(matched),
+          className: sourcePathToFqcn(matched),
           content,
           totalLines: content.split("\n").length
         };
@@ -128,7 +125,7 @@ export class ModDecompileService {
     let filesTruncated: boolean | undefined;
     let filesOmitted: boolean | undefined;
     if (!input.className) {
-      const classNames = files.map(filePathToClassName);
+      const classNames = files.map(sourcePathToFqcn);
       if (!includeFiles) {
         returnedFileCount = 0;
         filesOmitted = true;
@@ -216,7 +213,7 @@ export class ModDecompileService {
     }
 
     return {
-      className: filePathToClassName(matched),
+      className: sourcePathToFqcn(matched),
       content,
       totalLines,
       truncated,

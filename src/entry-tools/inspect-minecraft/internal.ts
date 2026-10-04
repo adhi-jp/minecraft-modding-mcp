@@ -13,6 +13,7 @@ import type {
   SearchClassSourceOutput
 } from "../../source-service.js";
 import type { ListVersionsOutput } from "../../version-service.js";
+import type { SourceMapping, ArtifactScope } from "../../types.js";
 import { nonEmptyString, sourceMappingSchema, targetKindSchema } from "../../tool-schemas.js";
 
 export const TASKS = [
@@ -189,9 +190,9 @@ export type InspectMinecraftDeps = {
     // drop the workspace mapping and resolve a different artifactId.
     target:
       | { kind: "version" | "jar" | "coordinate"; value: string }
-      | { kind: "workspace"; scope?: "vanilla" | "merged" | "loader"; strict?: boolean };
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    scope?: "vanilla" | "merged" | "loader";
+      | { kind: "workspace"; scope?: ArtifactScope; strict?: boolean };
+    mapping?: SourceMapping;
+    scope?: ArtifactScope;
     projectPath?: string;
     gradleUserHome?: string;
     preferProjectVersion?: boolean;
@@ -204,7 +205,7 @@ export type InspectMinecraftDeps = {
     name: string;
     owner?: string;
     descriptor?: string;
-    sourceMapping: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    sourceMapping: SourceMapping;
     sourcePriority?: "loom-first" | "maven-first";
     gradleUserHome?: string;
     nameMode?: "fqcn" | "auto";
@@ -215,8 +216,8 @@ export type InspectMinecraftDeps = {
     className: string;
     artifactId?: string;
     target?: { kind: "version" | "jar" | "coordinate"; value: string };
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    scope?: "vanilla" | "merged" | "loader";
+    mapping?: SourceMapping;
+    scope?: ArtifactScope;
     projectPath?: string;
     gradleUserHome?: string;
     preferProjectVersion?: boolean;
@@ -229,8 +230,8 @@ export type InspectMinecraftDeps = {
     className: string;
     artifactId?: string;
     target?: { kind: "version" | "jar" | "coordinate"; value: string };
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
-    scope?: "vanilla" | "merged" | "loader";
+    mapping?: SourceMapping;
+    scope?: ArtifactScope;
     projectPath?: string;
     gradleUserHome?: string;
     preferProjectVersion?: boolean;
@@ -510,7 +511,7 @@ export async function resolveBinaryBackedClass(
   className: string,
   input: {
     version?: string;
-    mapping?: "obfuscated" | "mojang" | "intermediary" | "yarn";
+    mapping?: SourceMapping;
     gradleUserHome?: string;
   }
 ): Promise<{ className: string; warnings: string[] } | undefined> {

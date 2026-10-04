@@ -33,7 +33,7 @@ test("validate-project tasks A1: all probes ok when workspace, gradle, artifact,
     discoverMixins: async () => [mixinPath],
     discoverAccessWideners: async () => [],
     discoverAccessTransformers: async () => [],
-    resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+    probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
   });
 
   const result = (await service.execute({
@@ -101,7 +101,6 @@ test("validate-project tasks A1b: project summary uses lightweight artifact prob
   await writeBareGradleWorkspace(root);
 
   let lightweightProbeCalls = 0;
-  let heavyResolveCalls = 0;
   const service = new ValidateProjectService({
     validateMixin: async () => ({ summary: { valid: 0, partial: 0, invalid: 0 }, warnings: [] }),
     validateAccessWidener: async () => ({ valid: true, header: "", namespace: "named", issues: [], warnings: [] }),
@@ -116,10 +115,6 @@ test("validate-project tasks A1b: project summary uses lightweight artifact prob
         mappingApplied: "obfuscated" as const,
         warnings: ["lightweight probe"]
       };
-    },
-    resolveArtifact: async () => {
-      heavyResolveCalls += 1;
-      throw new Error("heavy resolve should not be used for project-summary task probes");
     }
   } as any);
 
@@ -136,7 +131,6 @@ test("validate-project tasks A1b: project summary uses lightweight artifact prob
   assert.equal(artifactTask.artifactId, "probe-only-minecraft-1.21.10");
   assert.deepEqual(artifactTask.warnings, ["lightweight probe"]);
   assert.equal(lightweightProbeCalls, 1);
-  assert.equal(heavyResolveCalls, 0);
 });
 
 test("validate-project tasks A2: workspace.detected missing causes downstream skipped, headline blocked preserved", async () => {
@@ -182,7 +176,7 @@ test("validate-project tasks A3: minecraft.artifact.resolved error preserves act
     discoverMixins: async () => [mixinPath],
     discoverAccessWideners: async () => [],
     discoverAccessTransformers: async () => [],
-    resolveArtifact: async () => {
+    probeMinecraftArtifact: async () => {
       throw new Error("simulated artifact resolution failure");
     }
   });
@@ -252,7 +246,7 @@ test("validate-project tasks A4: discovery 0 paths sets corresponding entry to m
     discoverMixins: async () => [],
     discoverAccessWideners: async () => [],
     discoverAccessTransformers: async () => [],
-    resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+    probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
   });
 
   const result = (await service.execute({
@@ -283,7 +277,7 @@ test("validate-project tasks A5: VALIDATE_PROJECT_TASKS_OFF=1 omits the tasks fi
       discoverMixins: async () => [],
       discoverAccessWideners: async () => [],
       discoverAccessTransformers: async () => [],
-      resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+      probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
     });
     const result = await service.execute({
       task: "project-summary",
@@ -316,7 +310,7 @@ test("validate-project tasks A6: detail=summary or include without workspace str
     discoverMixins: async () => [mixinPath],
     discoverAccessWideners: async () => [],
     discoverAccessTransformers: async () => [],
-    resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated" as const, warnings: [] })
+    probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated" as const, warnings: [] })
   };
 
   const summary = (await new ValidateProjectService(baseDeps).execute({
@@ -355,7 +349,7 @@ test("validate-project tasks A7: callers ignoring tasks see byte-identical other
     discoverMixins: async () => [],
     discoverAccessWideners: async () => [],
     discoverAccessTransformers: async () => [],
-    resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+    probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
   });
 
   const result = (await service.execute({
@@ -426,7 +420,7 @@ test("validate-project mixin validation: parallel aggregation matches sequential
       discoverMixins: async () => configs,
       discoverAccessWideners: async () => [],
       discoverAccessTransformers: async () => [],
-      resolveArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
+      probeMinecraftArtifact: async () => ({ artifactId: "minecraft-1.21.10", mappingApplied: "obfuscated", warnings: [] })
     });
 
   const run = async (stages?: Array<{ stage: string; meta: Record<string, unknown> }>) =>

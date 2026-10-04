@@ -4,6 +4,11 @@ import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import type { SourceMapping } from "../types.js";
 
+/** Converts a `.java` source path (pkg/Outer.java) to its dotted class name (pkg.Outer). */
+export function sourcePathToFqcn(filePath: string): string {
+  return filePath.replace(/\.java$/, "").replaceAll("/", ".");
+}
+
 export function normalizePathStyle(path: string): string {
   return path.replaceAll("\\", "/");
 }
