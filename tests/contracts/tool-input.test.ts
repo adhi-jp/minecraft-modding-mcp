@@ -105,7 +105,7 @@ test("prepareToolInput coerces every POSITIVE_INT_FIELD_NAMES entry from a numer
   }
 });
 
-test("prepareToolInput leaves non-numeric values, leading-zero-only and signed numerics unchanged", () => {
+test("prepareToolInput leaves non-numeric and signed numeric strings unchanged", () => {
   for (const field of POSITIVE_INT_FIELD_NAMES) {
     const prepared = prepareToolInput({ [field]: "abc" });
     const normalized = prepared.normalizedInput as Record<string, unknown>;

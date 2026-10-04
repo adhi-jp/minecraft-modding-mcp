@@ -62,7 +62,7 @@
 0	ok	C8: public method returns @Inject-only with reasoning
 0	ok	C9: workspace target populates provenance.workspaceResolution
 0	ok	COMPACT_MAPPING_TOOL_NAMES is a subset of COMPACT_ENABLED_TOOL_NAMES
-0	ok	COMPACT_SOURCE / MEMBERS / LIGHT tool name sets are subsets of COMPACT_ENABLED
+0	ok	COMPACT_LIGHT tool name set is a subset of DETAIL_ENABLED
 0	ok	CompareMinecraftService emits truncation metadata when summary samples are clipped
 0	ok	CompareMinecraftService falls back to artifact follow-up when migration overview has class counts without representative class names
 0	ok	CompareMinecraftService forwards sourcePriority for class diffs
@@ -427,7 +427,6 @@
 0	ok	WorkspaceMappingService detects mojang mapping from officialMojangMappings
 0	ok	WorkspaceMappingService detects yarn mapping from Fabric coordinates in Gradle Kotlin DSL
 0	ok	WorkspaceMappingService reports unresolved when modules disagree on mapping
-0	ok	Zod z.object() strips compact from schemas that do not define it
 0	ok	a binary asset entry answers with metadata and an explicit reason instead of content
 0	ok	a caller maxBytes below the read-through cap wins
 0	ok	a class absent from a version-target artifact suggests a vanilla-scope retry with existing enum values
@@ -664,9 +663,9 @@
 0	ok	compactMappingResponse preserves empty candidates for not_found (P1 strips later)
 0	ok	compactMappingResponse preserves upstream candidatesTruncated when tail slimming also fires
 0	ok	compactMappingResponse slims unresolved candidates beyond the top-3 and flags candidateDetailsTruncated
-0	ok	compactMembersResponse + compactResponse preserves empty member buckets
-0	ok	compactMembersResponse omits context + metadata and preserves members/counts
-0	ok	compactMembersResponse preserves decompiledFallback and decompiledMemberCounts
+0	ok	projectByDetail get-class-members summary preserves empty member buckets
+0	ok	projectByDetail get-class-members summary omits context + metadata and preserves members/counts
+0	ok	projectByDetail get-class-members summary preserves decompiledFallback and decompiledMemberCounts
 0	ok	compactResponse is shallow — nested empty structures stay
 0	ok	compactResponse preserveKeys keeps empty arrays/objects listed in the set
 0	ok	compactResponse preserveKeys still drops null/undefined values
@@ -680,10 +679,6 @@
 0	ok	compactResponse strips empty objects
 0	ok	compactResponse strips null values
 0	ok	compactResponse strips undefined values
-0	ok	compactSourceResponse + compactResponse pipeline strips empty warnings
-0	ok	compactSourceResponse is idempotent and passes through unknown keys
-0	ok	compactSourceResponse omits provenance / artifactContents / qualityFlags and preserves payload
-0	ok	compactSourceResponse reduces serialized size vs full response
 0	ok	compareVersions filters class diffs, ignores nested classes, and warns on truncation
 0	ok	compareVersions keeps class results when registry comparison fails in all mode
 0	ok	compareVersions rejects blank version inputs
@@ -1003,9 +998,6 @@
 0	ok	isAppError returns false for arbitrary Error objects with a `code` property
 0	ok	isAppError returns false for non-Error values that look error-like
 0	ok	isAppError returns true for AppError instances created via createError
-0	ok	isCompactEnabled default path: compact omitted or explicit false returns false
-0	ok	isCompactEnabled handles null/undefined/array parsedInput safely
-0	ok	isCompactEnabled respects allowlist and compact flag
 0	ok	isOptionArg only matches values starting with '-'
 0	ok	isSafeMavenVersionToken accepts boundary lengths (1, 200) and the allowed character set
 0	ok	isSafeMavenVersionToken rejects empty, oversize, traversal, and unsafe characters
@@ -1199,7 +1191,6 @@
 0	ok	parseProguardMethod returns undefined for a field-style line without parentheses
 0	ok	parseProguardMethod translates owner/param classes when given an obfuscation lookup
 0	ok	parses a descriptor-suffixed symbol into a method record
-0	ok	passthrough schema lets compact survive but allowlist blocks it
 0	ok	path converter detects windows, wsl mount, and unc path styles
 0	ok	pathContainsVersion matches whole version tokens, not coarse substrings
 0	ok	per-entry mode / startLine / endLine / maxLines / maxChars forward to getClassSource
@@ -1212,7 +1203,7 @@
 0	ok	prepareToolInput coerces every POSITIVE_INT_FIELD_NAMES entry from a numeric string to a number
 0	ok	prepareToolInput coerces only documented top-level numeric string fields
 0	ok	prepareToolInput coercion does not descend into nested objects or arrays
-0	ok	prepareToolInput leaves non-numeric values, leading-zero-only and signed numerics unchanged
+0	ok	prepareToolInput leaves non-numeric and signed numeric strings unchanged
 0	ok	prepareToolInput leaves valid mapping namespaces alone
 0	ok	prepareToolInput only reports removed official mapping namespace on tool fields
 0	ok	prepareToolInput passes through non-object inputs unchanged
@@ -1477,8 +1468,8 @@
 0	ok	status=partial when decompiled fallback rescues the call
 0	ok	statusForErrorCode buckets cover the documented groups (400 / 404 / 422 / 503 / 500)
 0	ok	statusForErrorCode returns 500 for unknown codes (default fallback)
-0	ok	stripMembersDiagnostics omits the 3 diagnostics by default but KEEPS context
-0	ok	stripSourceDiagnostics omits the 3 diagnostics by default while keeping source payload
+0	ok	stripDiagnostics omits the 3 diagnostics by default but KEEPS members context
+0	ok	stripDiagnostics omits the 3 diagnostics by default while keeping source payload
 0	ok	stripping status leaves byte-identical primary fields for a normal members result
 0	ok	strips a method descriptor before taking the trailing simple name
 0	ok	strips a single line-info prefix from a method signature

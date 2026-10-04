@@ -555,7 +555,7 @@ export function extractAllowlistedContext(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function extractFieldErrors(details: unknown): ProblemFieldError[] | undefined {
+export function extractFieldErrorsFromDetails(details: unknown): ProblemFieldError[] | undefined {
   if (typeof details !== "object" || details == null) return undefined;
   const raw = (details as Record<string, unknown>).fieldErrors;
   if (!Array.isArray(raw)) return undefined;
@@ -573,7 +573,7 @@ function extractFieldErrors(details: unknown): ProblemFieldError[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-function extractHints(details: unknown): string[] | undefined {
+export function toHints(details: unknown): string[] | undefined {
   if (typeof details !== "object" || details == null) return undefined;
   const next = (details as Record<string, unknown>).nextAction;
   if (typeof next !== "string" || !next.trim()) return undefined;
@@ -592,8 +592,8 @@ export function errorToBatchEntryProblem(
   options?: { suggestedCall?: SuggestedCall }
 ): ProblemDetails {
   if (isAppError(caughtError)) {
-    const baseHints = extractHints(caughtError.details);
-    const fieldErrors = extractFieldErrors(caughtError.details);
+    const baseHints = toHints(caughtError.details);
+    const fieldErrors = extractFieldErrorsFromDetails(caughtError.details);
     const context = extractAllowlistedContext(caughtError.details);
     const didYouMean = extractDidYouMean(caughtError.details);
     const nestedJarsField = extractNestedJarsField(caughtError.details);

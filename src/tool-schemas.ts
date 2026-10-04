@@ -576,30 +576,28 @@ export const diffClassSignaturesShape = {
 };
 export const diffClassSignaturesSchema = z.object(diffClassSignaturesShape);
 
-export const findMappingShape = {
-  version: nonEmptyString,
-  kind: workspaceSymbolKindSchema,
-  name: nonEmptyString,
-  owner: optionalNonEmptyString,
-  descriptor: optionalDescriptorString.describe("JVM descriptor; optional when signatureMode='name-only'. Empty = omitted."),
-  sourceMapping: sourceMappingSchema,
-  targetMapping: sourceMappingSchema,
-  sourcePriority: mappingSourcePrioritySchema.optional(),
-  gradleUserHome: gradleUserHomeSchema,
-  nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
-  signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
-  disambiguation: z
-    .object({
-      ownerHint: optionalNonEmptyString,
-      descriptorHint: optionalNonEmptyString
-    })
-    .partial()
-    .optional(),
-  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200"),
-  detail: detailParam("summary"),
-  include: responseIncludeParam
+type SymbolKindInput = {
+  kind: "class" | "field" | "method";
+  name: string;
+  owner?: string | undefined;
+  descriptor?: string | undefined;
 };
-export const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
+
+type SymbolKindRules = {
+  /** Whether kind=class must carry a fully-qualified (dotted) name. */
+  fqcnRequired: boolean;
+  /** Whether kind=method must carry a descriptor. */
+  methodDescriptorRequired: boolean;
+  methodDescriptorMessage: string;
+};
+
+// Shared owner/name/descriptor consistency rules for the symbol-lookup tools
+// (kind = class | field | method). Callers vary only in the two rule hooks.
+function refineSymbolKindInput(
+  value: SymbolKindInput,
+  ctx: z.RefinementCtx,
+  rules: SymbolKindRules
+): void {
   if (value.kind === "class") {
     if (value.owner) {
       ctx.addIssue({
@@ -615,7 +613,7 @@ export const findMappingSchema = z.object(findMappingShape).superRefine((value, 
         path: ["descriptor"]
       });
     }
-    if (value.nameMode !== "auto" && !value.name.includes(".")) {
+    if (rules.fqcnRequired && !value.name.includes(".")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "name must be fully-qualified class name when kind=class.",
@@ -651,13 +649,47 @@ export const findMappingSchema = z.object(findMappingShape).superRefine((value, 
     return;
   }
 
-  if (!value.descriptor && value.signatureMode !== "name-only") {
+  if (!value.descriptor && rules.methodDescriptorRequired) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "descriptor is required when kind=method (use signatureMode='name-only' to match by name only).",
+      message: rules.methodDescriptorMessage,
       path: ["descriptor"]
     });
   }
+}
+
+const NAME_ONLY_DESCRIPTOR_REQUIRED_MESSAGE =
+  "descriptor is required when kind=method (use signatureMode='name-only' to match by name only).";
+
+export const findMappingShape = {
+  version: nonEmptyString,
+  kind: workspaceSymbolKindSchema,
+  name: nonEmptyString,
+  owner: optionalNonEmptyString,
+  descriptor: optionalDescriptorString.describe("JVM descriptor; optional when signatureMode='name-only'. Empty = omitted."),
+  sourceMapping: sourceMappingSchema,
+  targetMapping: sourceMappingSchema,
+  sourcePriority: mappingSourcePrioritySchema.optional(),
+  gradleUserHome: gradleUserHomeSchema,
+  nameMode: classNameModeSchema.default("auto").describe(NAME_MODE_DESCRIPTION),
+  signatureMode: z.enum(["exact", "name-only"]).default("name-only").describe(SIGNATURE_MODE_DESCRIPTION),
+  disambiguation: z
+    .object({
+      ownerHint: optionalNonEmptyString,
+      descriptorHint: optionalNonEmptyString
+    })
+    .partial()
+    .optional(),
+  maxCandidates: optionalPositiveInt.default(5).describe("default 5, max 200"),
+  detail: detailParam("summary"),
+  include: responseIncludeParam
+};
+export const findMappingSchema = z.object(findMappingShape).superRefine((value, ctx) => {
+  refineSymbolKindInput(value, ctx, {
+    fqcnRequired: value.nameMode !== "auto",
+    methodDescriptorRequired: value.signatureMode !== "name-only",
+    methodDescriptorMessage: NAME_ONLY_DESCRIPTOR_REQUIRED_MESSAGE
+  });
 });
 
 // Strict shortcut for find-mapping(kind=method, signatureMode=exact): identical inputs,
@@ -743,61 +775,11 @@ export const resolveWorkspaceSymbolShape = {
 export const resolveWorkspaceSymbolSchema = z
   .object(resolveWorkspaceSymbolShape)
   .superRefine((value, ctx) => {
-    if (value.kind === "class") {
-      if (value.owner) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "owner is not allowed when kind=class.",
-          path: ["owner"]
-        });
-      }
-      if (value.descriptor) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "descriptor is not allowed when kind=class.",
-          path: ["descriptor"]
-        });
-      }
-      if (!value.name.includes(".")) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "name must be fully-qualified class name when kind=class.",
-          path: ["name"]
-        });
-      }
-      return;
-    }
-    if (!value.owner) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "owner is required when kind is field or method.",
-        path: ["owner"]
-      });
-    }
-    if (/[\s./()]/.test(value.name)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "name must be a simple member name when kind is field or method.",
-        path: ["name"]
-      });
-    }
-    if (value.kind === "field") {
-      if (value.descriptor) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "descriptor is not allowed when kind=field.",
-          path: ["descriptor"]
-        });
-      }
-      return;
-    }
-    if (!value.descriptor) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "descriptor is required when kind=method.",
-        path: ["descriptor"]
-      });
-    }
+    refineSymbolKindInput(value, ctx, {
+      fqcnRequired: true,
+      methodDescriptorRequired: true,
+      methodDescriptorMessage: "descriptor is required when kind=method."
+    });
   });
 
 export const checkSymbolExistsShape = {
@@ -816,62 +798,11 @@ export const checkSymbolExistsShape = {
   include: responseIncludeParam
 };
 export const checkSymbolExistsSchema = z.object(checkSymbolExistsShape).superRefine((value, ctx) => {
-  if (value.kind === "class") {
-    if (value.owner) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "owner is not allowed when kind=class.",
-        path: ["owner"]
-      });
-    }
-    if (value.descriptor) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "descriptor is not allowed when kind=class.",
-        path: ["descriptor"]
-      });
-    }
-    if (value.nameMode !== "auto" && !value.name.includes(".")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "name must be fully-qualified class name when kind=class.",
-        path: ["name"]
-      });
-    }
-    return;
-  }
-
-  if (!value.owner) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "owner is required when kind is field or method.",
-      path: ["owner"]
-    });
-  }
-  if (/[\s./()]/.test(value.name)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "name must be a simple member name when kind is field or method.",
-      path: ["name"]
-    });
-  }
-  if (value.kind === "field") {
-    if (value.descriptor) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "descriptor is not allowed when kind=field.",
-        path: ["descriptor"]
-      });
-    }
-    return;
-  }
-  if (!value.descriptor && value.signatureMode !== "name-only") {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "descriptor is required when kind=method (use signatureMode='name-only' to match by name only).",
-      path: ["descriptor"]
-    });
-  }
+  refineSymbolKindInput(value, ctx, {
+    fqcnRequired: value.nameMode !== "auto",
+    methodDescriptorRequired: value.signatureMode !== "name-only",
+    methodDescriptorMessage: NAME_ONLY_DESCRIPTOR_REQUIRED_MESSAGE
+  });
 });
 
 export const nbtToJsonShape = {

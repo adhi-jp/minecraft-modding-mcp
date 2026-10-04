@@ -9,9 +9,11 @@ import {
 import {
   extractAllowlistedContext,
   extractDidYouMean,
+  extractFieldErrorsFromDetails,
   extractNestedJarsField,
   problemClassification,
   statusForErrorCode,
+  toHints,
   type ExampleCall,
   type ProblemDetails,
   type ProblemFieldError,
@@ -93,17 +95,12 @@ type Zod4Issue = {
   values?: unknown[];
   keys?: string[];
   origin?: string;
-  minimum?: number | bigint;
-  maximum?: number | bigint;
+  minimum?: number;
+  maximum?: number;
   inclusive?: boolean;
   exact?: boolean;
   note?: string;
   options?: unknown[];
-  divisor?: number;
-  format?: string;
-  prefix?: string;
-  suffix?: string;
-  includes?: string;
   input?: unknown;
 };
 
@@ -118,19 +115,9 @@ function zod3ParsedType(data: unknown): string {
       return Number.isNaN(data) ? "nan" : "number";
     case "boolean":
       return "boolean";
-    case "function":
-      return "function";
-    case "bigint":
-      return "bigint";
-    case "symbol":
-      return "symbol";
     case "object":
       if (data === null) return "null";
       if (Array.isArray(data)) return "array";
-      if (typeof (data as { then?: unknown }).then === "function") return "promise";
-      if (data instanceof Map) return "map";
-      if (data instanceof Set) return "set";
-      if (data instanceof Date) return "date";
       return "object";
     default:
       return "unknown";
@@ -161,7 +148,6 @@ function zod3SizeMessage(issue: Zod4Issue, kind: "small" | "big"): string | unde
   const exact = issue.exact === true;
   switch (origin) {
     case "array":
-    case "set":
       return kind === "small"
         ? `Array must contain ${exact ? "exactly" : inclusive ? "at least" : "more than"} ${limit} element(s)`
         : `Array must contain ${exact ? "exactly" : inclusive ? "at most" : "less than"} ${limit} element(s)`;
@@ -173,14 +159,6 @@ function zod3SizeMessage(issue: Zod4Issue, kind: "small" | "big"): string | unde
       return kind === "small"
         ? `Number must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${limit}`
         : `Number must be ${exact ? "exactly" : inclusive ? "less than or equal to" : "less than"} ${limit}`;
-    case "bigint":
-      return kind === "small"
-        ? `BigInt must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${limit}`
-        : `BigInt must be ${exact ? "exactly" : inclusive ? "less than or equal to" : "less than"} ${limit}`;
-    case "date":
-      return kind === "small"
-        ? `Date must be ${exact ? "exactly equal to" : inclusive ? "greater than or equal to" : "greater than"} ${new Date(Number(limit))}`
-        : `Date must be ${exact ? "exactly" : inclusive ? "smaller than or equal to" : "smaller than"} ${new Date(Number(limit))}`;
     default:
       return undefined;
   }
@@ -298,29 +276,6 @@ function toZod3ParityIssue(
         message: `Unrecognized key(s) in object: ${zod3JoinValues(keys, ", ")}`
       };
     }
-    case "not_multiple_of": {
-      return {
-        code,
-        message: issue.divisor === undefined
-          ? issue.message
-          : `Number must be a multiple of ${issue.divisor}`
-      };
-    }
-    case "invalid_format": {
-      if (!issue.message.startsWith("Invalid ")) return { code: "invalid_string", message: issue.message };
-      switch (issue.format) {
-        case "regex":
-          return { code: "invalid_string", message: "Invalid" };
-        case "starts_with":
-          return { code: "invalid_string", message: `Invalid input: must start with "${issue.prefix ?? ""}"` };
-        case "ends_with":
-          return { code: "invalid_string", message: `Invalid input: must end with "${issue.suffix ?? ""}"` };
-        case "includes":
-          return { code: "invalid_string", message: `Invalid input: must include "${issue.includes ?? ""}"` };
-        default:
-          return { code: "invalid_string", message: `Invalid ${issue.format ?? "string"}` };
-      }
-    }
     case "custom":
       return { code, message: issue.message };
     default:
@@ -339,23 +294,6 @@ export function toFieldErrorsFromZod(error: ZodError, ...rawInput: [unknown?]): 
       code: parity.code
     };
   });
-}
-
-export function toHints(details: unknown): string[] | undefined {
-  if (typeof details !== "object" || details == null) {
-    return undefined;
-  }
-
-  const hints: string[] = [];
-  const maybeNextAction = (details as Record<string, unknown>).nextAction;
-  if (typeof maybeNextAction === "string" && maybeNextAction.trim()) {
-    hints.push(maybeNextAction.trim());
-  }
-
-  if (hints.length === 0) {
-    return undefined;
-  }
-  return hints;
 }
 
 export function extractValidatedSuggestionAndExamples(details: unknown): {
@@ -451,42 +389,6 @@ export function extractFailedStageFromDetails(details: unknown): string | undefi
     return maybeStage;
   }
   return undefined;
-}
-
-export function extractFieldErrorsFromDetails(details: unknown): ProblemFieldError[] | undefined {
-  if (typeof details !== "object" || details == null) {
-    return undefined;
-  }
-
-  const maybeFieldErrors = (details as Record<string, unknown>).fieldErrors;
-  if (!Array.isArray(maybeFieldErrors)) {
-    return undefined;
-  }
-
-  const normalized = maybeFieldErrors
-    .map((entry) => {
-      if (typeof entry !== "object" || entry == null) {
-        return undefined;
-      }
-      const asRecord = entry as Record<string, unknown>;
-      const path = asRecord.path;
-      const message = asRecord.message;
-      const code = asRecord.code;
-      if (typeof path !== "string" || typeof message !== "string") {
-        return undefined;
-      }
-      return {
-        path,
-        message,
-        code: typeof code === "string" ? code : undefined
-      };
-    })
-    .filter(
-      (entry): entry is { path: string; message: string; code: string | undefined } =>
-        entry != null
-    );
-
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1273,12 +1175,10 @@ const HINT_ASKABLE_PARAMETERS = [
   "artifactId",
   "mapping",
   "atNamespace",
-  "awNamespace",
   "scope",
   "className",
   "content",
   "jarPath",
-  "mixinConfigPath",
   "sourcePriority"
 ] as const;
 

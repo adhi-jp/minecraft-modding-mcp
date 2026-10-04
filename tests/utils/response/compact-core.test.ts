@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { z } from "zod";
 
 import {
   compactResponse,
   compactArtifactResponse,
   compactMappingResponse,
-  isCompactEnabled,
-  COMPACT_ENABLED_TOOL_NAMES,
+  DETAIL_ENABLED_TOOL_NAMES,
   COMPACT_MAPPING_TOOL_NAMES,
-  COMPACT_SOURCE_TOOL_NAMES,
-  COMPACT_MEMBERS_TOOL_NAMES,
   COMPACT_LIGHT_TOOL_NAMES
 } from "../../../src/response-utils.ts";
 
@@ -86,70 +82,21 @@ test("compactResponse preserves Date values and class instances (non-plain objec
   assert.equal("plainEmpty" in classResult, false);
 });
 
-test("isCompactEnabled respects allowlist and compact flag", () => {
-  // Allowlisted tool with compact:true → true
-  for (const tool of COMPACT_ENABLED_TOOL_NAMES) {
-    assert.equal(isCompactEnabled(tool, { compact: true }), true, tool);
-    assert.equal(isCompactEnabled(tool, { compact: false }), false, tool);
-  }
-  // Allowlisted tool with no compact field → false
-  assert.equal(isCompactEnabled("resolve-artifact", { version: "1.20.1" }), false);
-  // Non-allowlisted tool even with compact:true → false
-  assert.equal(isCompactEnabled("list-versions", { compact: true }), false);
-  assert.equal(isCompactEnabled("get-runtime-metrics", { compact: true }), false);
-  assert.equal(isCompactEnabled("get-artifact-file", { compact: true }), false);
-});
-
-test("isCompactEnabled handles null/undefined/array parsedInput safely", () => {
-  assert.equal(isCompactEnabled("resolve-artifact", null), false);
-  assert.equal(isCompactEnabled("resolve-artifact", undefined), false);
-  assert.equal(isCompactEnabled("resolve-artifact", [1, 2]), false);
-});
-
-test("isCompactEnabled default path: compact omitted or explicit false returns false", () => {
-  assert.equal(isCompactEnabled("find-mapping", {}), false);
-  assert.equal(isCompactEnabled("resolve-artifact", {}), false);
-  assert.equal(isCompactEnabled("check-symbol-exists", { kind: "class", name: "Foo" }), false);
-  assert.equal(isCompactEnabled("find-mapping", { compact: false }), false);
-  assert.equal(isCompactEnabled("resolve-artifact", { compact: false }), false);
-});
-
-test("Zod z.object() strips compact from schemas that do not define it", () => {
-  const schema = z.object({ name: z.string() });
-  const parsed = schema.parse({ name: "test", compact: true });
-  assert.equal("compact" in parsed, false);
-});
-
-test("passthrough schema lets compact survive but allowlist blocks it", () => {
-  const passthroughSchema = z.object({}).passthrough();
-  const parsed = passthroughSchema.parse({ compact: true });
-  assert.equal((parsed as Record<string, unknown>).compact, true, "compact survives passthrough");
-  assert.equal(isCompactEnabled("get-runtime-metrics", parsed), false, "allowlist blocks it");
-});
-
 test("COMPACT_MAPPING_TOOL_NAMES is a subset of COMPACT_ENABLED_TOOL_NAMES", () => {
   for (const tool of COMPACT_MAPPING_TOOL_NAMES) {
-    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
+    assert.equal(DETAIL_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in DETAIL_ENABLED`);
   }
 });
 
-test("COMPACT_SOURCE / MEMBERS / LIGHT tool name sets are subsets of COMPACT_ENABLED", () => {
-  for (const tool of COMPACT_SOURCE_TOOL_NAMES) {
-    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
-  }
-  for (const tool of COMPACT_MEMBERS_TOOL_NAMES) {
-    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
-  }
+test("COMPACT_LIGHT tool name set is a subset of DETAIL_ENABLED", () => {
   for (const tool of COMPACT_LIGHT_TOOL_NAMES) {
-    assert.equal(COMPACT_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in COMPACT_ENABLED`);
+    assert.equal(DETAIL_ENABLED_TOOL_NAMES.has(tool), true, `${tool} should be in DETAIL_ENABLED`);
   }
 });
 
 test("projection tool name sets are pairwise disjoint", () => {
   const groups = [
     ["mapping", COMPACT_MAPPING_TOOL_NAMES],
-    ["source", COMPACT_SOURCE_TOOL_NAMES],
-    ["members", COMPACT_MEMBERS_TOOL_NAMES],
     ["light", COMPACT_LIGHT_TOOL_NAMES]
   ] as const;
   for (let i = 0; i < groups.length; i += 1) {
@@ -166,7 +113,7 @@ test("projection tool name sets are pairwise disjoint", () => {
 });
 
 test("resolve-artifact is in COMPACT_ENABLED but not in COMPACT_MAPPING", () => {
-  assert.equal(COMPACT_ENABLED_TOOL_NAMES.has("resolve-artifact"), true);
+  assert.equal(DETAIL_ENABLED_TOOL_NAMES.has("resolve-artifact"), true);
   assert.equal(COMPACT_MAPPING_TOOL_NAMES.has("resolve-artifact"), false);
 });
 

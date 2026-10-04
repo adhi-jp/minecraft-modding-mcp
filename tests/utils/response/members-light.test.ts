@@ -3,9 +3,9 @@ import test from "node:test";
 
 import {
   compactResponse,
-  compactMembersResponse,
   compactLightResponse,
-  stripMembersDiagnostics,
+  projectByDetail,
+  stripDiagnostics,
   TOOL_PRESERVE_PAYLOAD_KEYS
 } from "../../../src/response-utils.ts";
 
@@ -25,8 +25,8 @@ const MEMBERS_FIXTURE: Record<string, unknown> = {
   artifactContents: { sourceKind: "source-jar", indexedContentKinds: ["class"], resourcesIncluded: false, sourceCoverage: "full" }
 };
 
-test("compactMembersResponse omits context + metadata and preserves members/counts", () => {
-  const result = compactMembersResponse(MEMBERS_FIXTURE);
+test("projectByDetail get-class-members summary omits context + metadata and preserves members/counts", () => {
+  const result = projectByDetail("get-class-members", MEMBERS_FIXTURE, "summary", new Set());
   for (const key of ["provenance", "artifactContents", "qualityFlags", "context"]) {
     assert.equal(key in result, false, `${key} should be omitted`);
   }
@@ -39,25 +39,25 @@ test("compactMembersResponse omits context + metadata and preserves members/coun
   assert.deepEqual(result.counts, MEMBERS_FIXTURE.counts);
 });
 
-test("stripMembersDiagnostics omits the 3 diagnostics by default but KEEPS context", () => {
-  const result = stripMembersDiagnostics(MEMBERS_FIXTURE);
+test("stripDiagnostics omits the 3 diagnostics by default but KEEPS members context", () => {
+  const result = stripDiagnostics(MEMBERS_FIXTURE);
   for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
     assert.equal(key in result, false, `${key} should be omitted by default`);
   }
-  // Unlike compactMembersResponse, the default strip retains members `context`.
+  // Unlike detail=summary, the default strip retains members `context`.
   assert.ok("context" in result, "context must survive the default (non-compact) strip");
   for (const key of ["className", "members", "counts"]) {
     assert.ok(key in result, `${key} should survive the default strip`);
   }
 });
 
-test("compactMembersResponse preserves decompiledFallback and decompiledMemberCounts", () => {
+test("projectByDetail get-class-members summary preserves decompiledFallback and decompiledMemberCounts", () => {
   const withFallback = {
     ...MEMBERS_FIXTURE,
     decompiledFallback: { constructors: [], fields: [], methods: [{ name: "tick", line: 10, kind: "method" }], origin: "source-extracted" },
     decompiledMemberCounts: { constructors: 0, fields: 0, methods: 1, total: 1 }
   };
-  const result = compactMembersResponse(withFallback);
+  const result = projectByDetail("get-class-members", withFallback, "summary", new Set());
   assert.ok("decompiledFallback" in result);
   assert.ok("decompiledMemberCounts" in result);
 });
@@ -163,7 +163,7 @@ test("compactLightResponse + compactResponse preserves empty items for list-arti
   assert.deepEqual(compacted.items, []);
 });
 
-test("compactMembersResponse + compactResponse preserves empty member buckets", () => {
+test("projectByDetail get-class-members summary preserves empty member buckets", () => {
   // Defensive coverage: service currently returns { constructors, fields, methods }
   // (non-empty object, not subject to compact stripping), but if a future refactor
   // returned `members: {}` for a class with zero members, the preserveKeys guard
@@ -175,8 +175,7 @@ test("compactMembersResponse + compactResponse preserves empty member buckets", 
     artifactContents: { sourceKind: "source-jar", indexedContentKinds: [], resourcesIncluded: false, sourceCoverage: "full" },
     warnings: []
   };
-  const projected = compactMembersResponse(input);
-  const compacted = compactResponse(projected, TOOL_PRESERVE_PAYLOAD_KEYS["get-class-members"]);
+  const compacted = projectByDetail("get-class-members", input, "summary", new Set());
   assert.ok("members" in compacted, "empty members object must survive");
   assert.ok("counts" in compacted);
   assert.equal("artifactContents" in compacted, false);

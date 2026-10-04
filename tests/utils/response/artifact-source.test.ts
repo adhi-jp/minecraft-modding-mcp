@@ -4,8 +4,7 @@ import test from "node:test";
 import {
   compactResponse,
   compactArtifactResponse,
-  compactSourceResponse,
-  stripSourceDiagnostics
+  stripDiagnostics
 } from "../../../src/response-utils.ts";
 
 const ARTIFACT_FIXTURE: Record<string, unknown> = {
@@ -101,29 +100,8 @@ test("compactArtifactResponse + compactResponse pipeline on resolve-artifact sha
   }
 });
 
-test("compactSourceResponse omits provenance / artifactContents / qualityFlags and preserves payload", () => {
-  const result = compactSourceResponse(SOURCE_FIXTURE);
-  for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
-    assert.equal(key in result, false, `${key} should be omitted`);
-  }
-  for (const key of [
-    "className", "mode", "sourceText", "totalLines", "returnedRange", "truncated",
-    "origin", "artifactId", "requestedMapping", "mappingApplied", "returnedNamespace"
-  ]) {
-    assert.ok(key in result, `${key} should survive compact`);
-  }
-  assert.equal(result.sourceText, SOURCE_FIXTURE.sourceText);
-});
-
-test("compactSourceResponse is idempotent and passes through unknown keys", () => {
-  const input = { ...SOURCE_FIXTURE, customField: "extra" };
-  const once = compactSourceResponse(input);
-  assert.deepEqual(once, compactSourceResponse(once));
-  assert.equal(once.customField, "extra");
-});
-
-test("stripSourceDiagnostics omits the 3 diagnostics by default while keeping source payload", () => {
-  const result = stripSourceDiagnostics(SOURCE_FIXTURE);
+test("stripDiagnostics omits the 3 diagnostics by default while keeping source payload", () => {
+  const result = stripDiagnostics(SOURCE_FIXTURE);
   for (const key of ["provenance", "artifactContents", "qualityFlags"]) {
     assert.equal(key in result, false, `${key} should be omitted by default`);
   }
@@ -131,29 +109,7 @@ test("stripSourceDiagnostics omits the 3 diagnostics by default while keeping so
     assert.ok(key in result, `${key} should survive the default strip`);
   }
   // Idempotent w.r.t. a later compact pass.
-  assert.deepEqual(stripSourceDiagnostics(result), result);
-});
-
-test("compactSourceResponse + compactResponse pipeline strips empty warnings", () => {
-  const input: Record<string, unknown> = {
-    ...SOURCE_FIXTURE,
-    warnings: []
-  };
-  const projected = compactSourceResponse(input);
-  const compacted = compactResponse(projected);
-  assert.equal("warnings" in compacted, false, "empty warnings should be stripped by compactResponse");
-  assert.equal("provenance" in compacted, false);
-  assert.equal("sourceText" in compacted, true);
-});
-
-test("compactSourceResponse reduces serialized size vs full response", () => {
-  const compact = compactSourceResponse(SOURCE_FIXTURE);
-  const fullBytes = Buffer.byteLength(JSON.stringify(SOURCE_FIXTURE), "utf8");
-  const compactBytes = Buffer.byteLength(JSON.stringify(compact), "utf8");
-  assert.ok(
-    compactBytes < fullBytes,
-    `compact (${compactBytes}B) should be smaller than full (${fullBytes}B)`
-  );
+  assert.deepEqual(stripDiagnostics(result), result);
 });
 
 test("compactArtifactResponse reduces serialized size below 60% of full", () => {

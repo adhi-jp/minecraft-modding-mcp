@@ -7,13 +7,11 @@ import {
   problemClassification,
   extractAllowlistedContext,
   extractDidYouMean,
-  extractNestedJarsField
+  extractFieldErrorsFromDetails,
+  extractNestedJarsField,
+  toHints
 } from "./error-mapping.js";
-import {
-  toHints,
-  extractValidatedSuggestionAndExamples,
-  extractFieldErrorsFromDetails
-} from "./tool-guidance.js";
+import { extractValidatedSuggestionAndExamples } from "./tool-guidance.js";
 
 type ObjectResultOptions = {
   isError?: boolean;

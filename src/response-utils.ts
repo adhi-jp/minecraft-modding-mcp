@@ -1,21 +1,8 @@
 /**
- * Compact-mode response utilities.
+ * Response projection utilities for the `detail` / `include` response contract.
  *
  * Applied at the public boundary (runTool) only — internal service types are never modified.
  */
-
-/** Tools that accept the `compact` parameter. */
-export const COMPACT_ENABLED_TOOL_NAMES = new Set([
-  "resolve-artifact",
-  "find-mapping",
-  "resolve-method-mapping-exact",
-  "resolve-workspace-symbol",
-  "check-symbol-exists",
-  "get-class-source",
-  "get-class-members",
-  "search-class-source",
-  "list-artifact-files"
-]);
 
 /** Mapping-oriented tools that get additional field projection via compactMappingResponse. */
 export const COMPACT_MAPPING_TOOL_NAMES = new Set([
@@ -23,16 +10,6 @@ export const COMPACT_MAPPING_TOOL_NAMES = new Set([
   "resolve-method-mapping-exact",
   "resolve-workspace-symbol",
   "check-symbol-exists"
-]);
-
-/** Source-oriented tools (get-class-source) that get compactSourceResponse projection. */
-export const COMPACT_SOURCE_TOOL_NAMES = new Set([
-  "get-class-source"
-]);
-
-/** Member-listing tools (get-class-members) that get compactMembersResponse projection. */
-export const COMPACT_MEMBERS_TOOL_NAMES = new Set([
-  "get-class-members"
 ]);
 
 /**
@@ -44,26 +21,6 @@ export const COMPACT_LIGHT_TOOL_NAMES = new Set([
   "search-class-source",
   "list-artifact-files"
 ]);
-
-/**
- * Double-gated compact check: tool must be in the allowlist AND parsedInput.compact must be true.
- * Prevents activation on passthrough schemas where Zod doesn't strip unknown keys.
- */
-export function isCompactEnabled(
-  tool: string,
-  parsedInput: unknown
-): boolean {
-  if (!COMPACT_ENABLED_TOOL_NAMES.has(tool)) return false;
-  if (
-    parsedInput &&
-    typeof parsedInput === "object" &&
-    !Array.isArray(parsedInput) &&
-    (parsedInput as Record<string, unknown>).compact === true
-  ) {
-    return true;
-  }
-  return false;
-}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
@@ -174,52 +131,24 @@ export function compactArtifactResponse(
   return projectOmitKeys(obj, omit);
 }
 
-/** Fields to omit from get-class-source in compact mode. */
-const SOURCE_COMPACT_OMIT_KEYS = new Set([
+/** Diagnostic fields that get-class-source / get-class-members drop unless the caller opts in. */
+const DIAGNOSTIC_OMIT_KEYS = new Set([
   "provenance",
   "artifactContents",
   "qualityFlags"
 ]);
 
-/** get-class-source compact: drop provenance, artifactContents, qualityFlags. */
-export function compactSourceResponse(
-  obj: Record<string, unknown>
-): Record<string, unknown> {
-  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
-}
-
-/** Fields to omit from get-class-members in compact mode. */
-const MEMBERS_COMPACT_OMIT_KEYS = new Set([
-  "provenance",
-  "artifactContents",
-  "qualityFlags",
-  "context"
-]);
-
-/** get-class-members compact: drop provenance, artifactContents, qualityFlags, context. */
-export function compactMembersResponse(
-  obj: Record<string, unknown>
-): Record<string, unknown> {
-  return projectOmitKeys(obj, MEMBERS_COMPACT_OMIT_KEYS);
-}
-
 /**
  * Default diagnostic strip for get-class-source / get-class-members. Drops the
  * three diagnostic fields (provenance, artifactContents, qualityFlags) that the
- * common path never needs, applied unless the caller passes includeProvenance.
- * Unlike compactMembersResponse this KEEPS members' `context` — only compact:true
- * drops context. Reuses SOURCE_COMPACT_OMIT_KEYS (exactly those three keys).
+ * common path never needs, applied unless the caller passes includeProvenance
+ * or requests detail=full. Members' `context` is kept here; only detail=summary
+ * drops it.
  */
-export function stripSourceDiagnostics(
+export function stripDiagnostics(
   obj: Record<string, unknown>
 ): Record<string, unknown> {
-  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
-}
-
-export function stripMembersDiagnostics(
-  obj: Record<string, unknown>
-): Record<string, unknown> {
-  return projectOmitKeys(obj, SOURCE_COMPACT_OMIT_KEYS);
+  return projectOmitKeys(obj, DIAGNOSTIC_OMIT_KEYS);
 }
 
 /** Fields to omit from search-class-source / list-artifact-files in compact mode. */
@@ -336,7 +265,17 @@ export function compactMappingResponse(
 export type ResponseDetailLevel = "summary" | "standard" | "full";
 
 /** Expert + batch tools that accept the detail/include response contract. */
-export const DETAIL_ENABLED_TOOL_NAMES = COMPACT_ENABLED_TOOL_NAMES;
+export const DETAIL_ENABLED_TOOL_NAMES = new Set([
+  "resolve-artifact",
+  "find-mapping",
+  "resolve-method-mapping-exact",
+  "resolve-workspace-symbol",
+  "check-symbol-exists",
+  "get-class-source",
+  "get-class-members",
+  "search-class-source",
+  "list-artifact-files"
+]);
 
 /** Per-tool default detail level, chosen so default output is byte-identical to the old compact defaults. */
 export const DEFAULT_DETAIL_BY_TOOL: Record<string, ResponseDetailLevel> = {
@@ -370,8 +309,7 @@ export function projectByDetail(
   // kept at detail=full or when include opts provenance back in.
   const keepDiagnostics = detail === "full" || include.has("provenance");
   if (!keepDiagnostics) {
-    if (tool === "get-class-source") out = stripSourceDiagnostics(out);
-    if (tool === "get-class-members") out = stripMembersDiagnostics(out);
+    if (tool === "get-class-source" || tool === "get-class-members") out = stripDiagnostics(out);
   }
 
   if (detail === "summary") {

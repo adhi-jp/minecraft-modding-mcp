@@ -84,18 +84,25 @@ test("AppError carries name === 'AppError' for diagnostic logging", () => {
 import { statusForErrorCode } from "../../src/error-mapping.ts";
 
 test("every ERROR_CODES value maps to a documented HTTP status (no untyped 500 fallback)", () => {
-  // All 36 codes must map to one of the documented buckets. The buckets we
-  // document live in `src/error-mapping.ts`; the fallback is `500` for any
-  // code that the switch does not handle. ERR_DB_FAILURE / ERR_WORKER_RESTART /
-  // ERR_MIXIN_PARSE_FAILED / ERR_INTERNAL / ERR_ARTIFACT_RESOLUTION_FAILED
-  // currently fall through to 500 intentionally.
-  const allCodes = Object.values(ERROR_CODES);
+  // Codes that deliberately fall through to the 500 fallback in
+  // `src/error-mapping.ts`. Every other code must map to a non-500 status, so a
+  // newly added code cannot silently pick up the default.
+  const intendedInternalServerError = new Set<string>([
+    ERROR_CODES.DB_FAILURE,
+    ERROR_CODES.WORKER_RESTART,
+    ERROR_CODES.MIXIN_PARSE_FAILED,
+    ERROR_CODES.INTERNAL,
+    ERROR_CODES.ARTIFACT_RESOLUTION_FAILED,
+    ERROR_CODES.PROVENANCE_INCOMPLETE
+  ]);
   const allowedStatuses = new Set([400, 404, 408, 409, 412, 413, 422, 500, 502, 503]);
-  for (const code of allCodes) {
+  for (const code of Object.values(ERROR_CODES)) {
     const status = statusForErrorCode(code);
-    assert.ok(
-      allowedStatuses.has(status),
-      `ERROR_CODE ${code} mapped to unexpected status ${status}`
+    assert.ok(allowedStatuses.has(status), `ERROR_CODE ${code} mapped to unexpected status ${status}`);
+    assert.equal(
+      status === 500,
+      intendedInternalServerError.has(code),
+      `ERROR_CODE ${code} mapped to ${status}; classify it deliberately in statusForErrorCode or in the intended-500 set`
     );
   }
 });

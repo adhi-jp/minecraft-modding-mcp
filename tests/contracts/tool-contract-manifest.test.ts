@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   TOOL_SURFACE_SECTION_IDS,
   renderToolSurfaceSection
-} from "../../src/tool-contract-manifest.ts";
+} from "../helpers/tool-contract-manifest.ts";
 
 function extractGeneratedTable(readme: string, sectionId: string): string {
   const startMarker = `<!-- BEGIN GENERATED TOOL TABLE: ${sectionId} -->`;
