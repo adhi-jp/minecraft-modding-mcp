@@ -10,9 +10,9 @@ import { listJarEntries, readJarEntryAsUtf8 } from "./source-jar-reader.js";
 // ---------------------------------------------------------------------------
 
 export type ModLoader = "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
-export type ModJarKind = "binary" | "source" | "mixed";
+type ModJarKind = "binary" | "source" | "mixed";
 
-export interface ModDependency {
+interface ModDependency {
   modId: string;
   versionRange?: string;
   kind: "required" | "optional" | "recommends" | "conflicts";

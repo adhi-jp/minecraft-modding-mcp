@@ -18,12 +18,12 @@ import {
  * Jar-in-Jar shell. Real Fabric API umbrella jars carry zero to a handful of
  * marker classes while every API class lives in META-INF/jars.
  */
-export const SHELL_JAR_MAX_OUTER_CLASSES = 8;
+const SHELL_JAR_MAX_OUTER_CLASSES = 8;
 
 export const NESTED_JAR_CACHE_DIRNAME = "nested-jars";
 
 /** Environment variable that overrides {@link loadMaxNestedJarEntryBytes}. */
-export const MAX_NESTED_JAR_ENTRY_BYTES_ENV = "MCP_MAX_NESTED_JAR_ENTRY_BYTES";
+const MAX_NESTED_JAR_ENTRY_BYTES_ENV = "MCP_MAX_NESTED_JAR_ENTRY_BYTES";
 
 /**
  * Ceiling on ONE nested jar entry's uncompressed size, because extraction
@@ -58,12 +58,12 @@ export function loadMaxNestedJarEntryBytes(
   return Math.max(parsed, MIN_MAX_NESTED_JAR_ENTRY_BYTES);
 }
 
-export interface NestedJarMatch {
+interface NestedJarMatch {
   entryName: string;
   extractedPath: string;
 }
 
-export interface NestedClassMatch {
+interface NestedClassMatch {
   qualifiedName: string;
   filePath: string;
   line: number;
@@ -255,7 +255,7 @@ export async function detectShellJarInventory(jarPath: string): Promise<string[]
  * covers the outer jar path, its signature, and the entry name, so the same
  * shell always maps to the same extracted file and re-resolution reuses it.
  */
-export function nestedJarCachePath(
+function nestedJarCachePath(
   cacheDir: string,
   outerJarPath: string,
   outerSignature: string,
@@ -273,7 +273,7 @@ export function nestedJarCachePath(
  * for real against a plain filesystem under the allowed test commands.
  * Defaults to the module-level `rename` from node:fs/promises.
  */
-export interface ExtractNestedJarDeps {
+interface ExtractNestedJarDeps {
   rename?: typeof rename;
 }
 
@@ -359,7 +359,7 @@ export async function extractNestedJar(
  * class list only. A nested jar that is itself a shell surfaces its content
  * when resolved directly as its own artifact.
  */
-export async function findNestedJarsContainingClass(args: {
+async function findNestedJarsContainingClass(args: {
   cacheDir: string;
   outerJarPath: string;
   outerSignature: string;

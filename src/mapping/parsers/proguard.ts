@@ -12,7 +12,7 @@ import {
 import { pairKey } from "./normalize.js";
 
 /** Map of proguard primitive type names to JVM type characters. */
-export const PROGUARD_PRIMITIVES: Record<string, string> = {
+const PROGUARD_PRIMITIVES: Record<string, string> = {
   void: "V", boolean: "Z", byte: "B", char: "C",
   short: "S", int: "I", long: "J", float: "F", double: "D"
 };

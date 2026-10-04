@@ -48,8 +48,7 @@ import * as fileAccess from "./source/file-access.js";
 import { type StageEmitter } from "./stage-emitter.js";
 import {
   WorkspaceMappingService,
-  type WorkspaceCompileMappingOutput,
-  type WorkspaceProjectLoader
+  type WorkspaceCompileMappingOutput
 } from "./workspace-mapping-service.js";
 import {
   getProcessWorkspaceContextCache,
@@ -153,13 +152,6 @@ export type ArtifactContentsSummary = {
   sourceCoverage: "full" | "partial";
 };
 
-type MappingFallbackSuggestion = {
-  suggestedCall?: { tool: string; params: Record<string, unknown> };
-  exampleCalls?: Array<{ tool: string; params: Record<string, unknown>; reason: string }>;
-  _suggestedCallPrimaryDropped?: true;
-  nextAction: string;
-};
-
 export type SymbolKind = "class" | "interface" | "enum" | "record" | "method" | "field";
 type SearchIntent = "symbol" | "text" | "path";
 type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -241,7 +233,7 @@ export type GetArtifactFileOutput = {
   contentOmittedReason?: string;
 };
 
-export type GetModClassMembersInput = {
+type GetModClassMembersInput = {
   jarPath: string;
   className: string;
 };
@@ -284,7 +276,7 @@ export type FindMappingInput = MappingFindMappingInput;
 export type FindMappingOutput = MappingFindMappingOutput;
 export type ResolveMethodMappingExactInput = MappingResolveMethodMappingExactInput;
 export type ResolveMethodMappingExactOutput = MappingResolveMethodMappingExactOutput;
-export type GetClassApiMatrixInput = MappingClassApiMatrixInput;
+type GetClassApiMatrixInput = MappingClassApiMatrixInput;
 export type GetClassApiMatrixOutput = MappingClassApiMatrixOutput;
 export type CheckSymbolExistsInput = MappingSymbolExistenceInput;
 export type CheckSymbolExistsOutput = MappingSymbolExistenceOutput;
@@ -584,8 +576,6 @@ export type DiffClassSignaturesOutput = {
   warnings: string[];
 };
 
-export type { IndexArtifactInput, IndexArtifactOutput } from "./source/indexer.js";
-
 export type ValidateMixinInput = {
   input:
     | {
@@ -663,7 +653,7 @@ export type ValidateMixinBatchResult = {
   errorDetails?: Record<string, unknown>;
 };
 
-export type ValidateMixinBatchIssueSummaryItem = {
+type ValidateMixinBatchIssueSummaryItem = {
   kind: string;
   confidence: string;
   category: string;

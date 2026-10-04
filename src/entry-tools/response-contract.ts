@@ -29,9 +29,7 @@ export const CANONICAL_INCLUDE_GROUPS = [
   "registry"
 ] as const;
 
-export type IncludeGroup = (typeof CANONICAL_INCLUDE_GROUPS)[number];
-
-export type SummaryStatus =
+type SummaryStatus =
   | "ok"
   | "partial"
   | "ambiguous"
@@ -55,7 +53,7 @@ export type Summary = {
   notes?: string[];
 };
 
-export type TruncationMeta = {
+type TruncationMeta = {
   didTruncate: true;
   reason: "limit";
   omittedGroups?: string[];

@@ -16,7 +16,7 @@ export type StageEmitterExtra = {
   sendNotification?: (notification: { method: string; params?: unknown }) => Promise<void>;
 };
 
-export type StageEmitterOptions = {
+type StageEmitterOptions = {
   disabled?: boolean;
 };
 

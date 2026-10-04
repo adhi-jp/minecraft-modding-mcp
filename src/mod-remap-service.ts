@@ -9,7 +9,7 @@ import { resolveTinyMappingFile, type ResolvedTinyMapping } from "./mapping-serv
 import { resolveMojangTinyFile } from "./mojang-tiny-mapping-service.js";
 import { analyzeModJar, type ModLoader } from "./mod-analyzer.js";
 import { normalizePathForHost } from "./path-converter.js";
-import { detectFabricLikeInputNamespace, listJarEntries, readJarEntryAsBuffer } from "./source-jar-reader.js";
+import { detectFabricLikeInputNamespace } from "./source-jar-reader.js";
 import { remapJar } from "./tiny-remapper-service.js";
 import { resolveTinyRemapperJar } from "./tiny-remapper-resolver.js";
 import type { Config } from "./types.js";
@@ -40,7 +40,7 @@ export interface ModRemapResult {
  * Injectable external dependencies, used by tests to drive the remap pipeline
  * without spawning Java or downloading mapping jars. Production callers omit it.
  */
-export interface RemapModJarDeps {
+interface RemapModJarDeps {
   remapJar?: typeof remapJar;
   resolveTinyMappingFile?: typeof resolveTinyMappingFile;
   resolveMojangTinyFile?: typeof resolveMojangTinyFile;

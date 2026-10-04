@@ -8,7 +8,7 @@ import { VersionService } from "./version-service.js";
 import { RegistryService, type RegistryData } from "./registry-service.js";
 import type { Config } from "./types.js";
 
-export type CompareVersionsCategory = "classes" | "registry" | "all";
+type CompareVersionsCategory = "classes" | "registry" | "all";
 
 /**
  * Namespace the compared class names live in.
@@ -20,7 +20,7 @@ export type CompareVersionsCategory = "classes" | "registry" | "all";
  * the official mappings for both versions can be loaded, and the namespace is
  * always reported so a zero result is never ambiguous.
  */
-export type ClassDiffNamespace = "mojang" | "obfuscated";
+type ClassDiffNamespace = "mojang" | "obfuscated";
 
 export type CompareVersionsInput = {
   fromVersion: string;

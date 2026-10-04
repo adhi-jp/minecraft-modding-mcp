@@ -41,7 +41,7 @@ interface UpsertArtifactInput {
   timestamp: string;
 }
 
-export interface ArtifactContentBytesRow {
+interface ArtifactContentBytesRow {
   artifactId: string;
   totalContentBytes: number;
   updatedAt: string;

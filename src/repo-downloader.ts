@@ -56,7 +56,7 @@ export interface DownloadResult {
   path?: string;
 }
 
-export interface DownloadOptions {
+interface DownloadOptions {
   timeoutMs?: number;
   retries?: number;
   fetchFn?: typeof fetch;
@@ -99,9 +99,9 @@ export type CacheFreshness = "immutable" | "revalidate";
  *   A *definitive* rejection never lands here: see
  *   {@link DEFINITIVE_REJECTION_STATUS_CODES}.
  */
-export type DownloadCacheStatus = "downloaded" | "hit" | "revalidated" | "stale";
+type DownloadCacheStatus = "downloaded" | "hit" | "revalidated" | "stale";
 
-export interface CachedDownloadSuccess {
+interface CachedDownloadSuccess {
   ok: true;
   cacheStatus: DownloadCacheStatus;
   statusCode?: number;
@@ -117,7 +117,7 @@ export interface CachedDownloadSuccess {
   lastModified?: string;
 }
 
-export interface CachedDownloadFailure {
+interface CachedDownloadFailure {
   ok: false;
   statusCode?: number;
   etag?: string;
@@ -131,7 +131,7 @@ export interface CachedDownloadFailure {
  * caller cannot accidentally derive a different identity for a cache hit than
  * for a fresh download.
  */
-export type CachedDownloadResult = CachedDownloadSuccess | CachedDownloadFailure;
+type CachedDownloadResult = CachedDownloadSuccess | CachedDownloadFailure;
 
 /**
  * Sidecar schema generation.
@@ -280,7 +280,7 @@ export function clearRememberedRejections(): void {
 }
 
 /** The persisted identity and freshness record for one cached download. */
-export interface DownloadSidecar {
+interface DownloadSidecar {
   version: number;
   url: string;
   contentSha256: string;
@@ -549,7 +549,7 @@ function declaredContentLength(headerValue: string | null): number | undefined {
 }
 
 /** Which of the two size checks refused the transfer. */
-export type DownloadLimitStage = "content-length" | "stream";
+type DownloadLimitStage = "content-length" | "stream";
 
 /**
  * Refuse an oversized transfer, in the shape `src/nbt/pipeline.ts` established

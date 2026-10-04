@@ -309,7 +309,7 @@ function resolveLocalCoordinateBinaryCandidates(
  * emits exactly that, and so does a jar carrying only `META-INF/`. Both are
  * observed here, never refused.
  */
-export const BINARY_JAR_NO_CLASSES_FLAG = "binary-jar-no-classes";
+const BINARY_JAR_NO_CLASSES_FLAG = "binary-jar-no-classes";
 
 /**
  * Case-SENSITIVE, matching every other `.class` test in this repository

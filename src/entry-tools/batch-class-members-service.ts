@@ -27,7 +27,7 @@ export type BatchClassMembersDeps = {
   getClassMembers: (input: GetClassMembersInput) => Promise<GetClassMembersOutput>;
 };
 
-export type BatchClassMembersEntry = {
+type BatchClassMembersEntry = {
   className: string;
   access?: "public" | "all";
   includeSynthetic?: boolean;

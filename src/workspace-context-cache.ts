@@ -5,7 +5,7 @@ import { LruList } from "./lru-list.js";
 import type { SourceMapping } from "./types.js";
 import type { WorkspaceProjectLoader } from "./workspace-mapping-service.js";
 
-export type WorkspaceContextEvidence = {
+type WorkspaceContextEvidence = {
   source: string;
   field: string;
   value?: string;
@@ -19,7 +19,7 @@ export type WorkspaceContextEvidence = {
  * project's build files invalidates the cached context immediately instead
  * of waiting out the TTL.
  */
-export type WorkspaceContextFingerprintEntry =
+type WorkspaceContextFingerprintEntry =
   | { path: string; mtimeMs: number; size: number }
   | { path: string; absent: true };
 
@@ -43,7 +43,7 @@ export interface WorkspaceContextCache {
   clear(): void;
 }
 
-export type WorkspaceContextCacheOptions = {
+type WorkspaceContextCacheOptions = {
   maxEntries?: number;
   ttlMs?: number;
   clock?: () => number;
@@ -171,8 +171,4 @@ export function getProcessWorkspaceContextCache(): WorkspaceContextCache {
     processCache = createWorkspaceContextCache();
   }
   return processCache;
-}
-
-export function resetProcessWorkspaceContextCacheForTesting(): void {
-  processCache = undefined;
 }

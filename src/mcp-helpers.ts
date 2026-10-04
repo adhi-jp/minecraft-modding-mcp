@@ -95,7 +95,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * pre-handler, and era-conflict admission keeps modern claims off legacy
  * connections). Reads only public context surface (`ctx.mcpReq.envelope`).
  */
-export function isModernEraRequest(ctx: Pick<ServerContext, "mcpReq"> | undefined): boolean {
+function isModernEraRequest(ctx: Pick<ServerContext, "mcpReq"> | undefined): boolean {
   const envelope = ctx?.mcpReq?.envelope as Record<string, unknown> | undefined;
   return (
     typeof envelope?.[PROTOCOL_VERSION_META_KEY] === "string" &&

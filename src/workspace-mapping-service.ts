@@ -12,11 +12,11 @@ import type { SourceMapping } from "./types.js";
 
 const WORKSPACE_FILE_READ_CONCURRENCY = 4;
 
-export type WorkspaceCompileMappingInput = {
+type WorkspaceCompileMappingInput = {
   projectPath: string;
 };
 
-export type WorkspaceMappingEvidence = {
+type WorkspaceMappingEvidence = {
   filePath: string;
   mapping: SourceMapping;
   reason: string;
@@ -31,20 +31,20 @@ export type WorkspaceCompileMappingOutput = {
 
 export type WorkspaceProjectLoader = "fabric" | "quilt" | "forge" | "neoforge" | "unknown";
 
-export type WorkspaceLoaderEvidence = {
+type WorkspaceLoaderEvidence = {
   filePath: string;
   loader: WorkspaceProjectLoader;
   reason: string;
 };
 
-export type WorkspaceProjectLoaderOutput = {
+type WorkspaceProjectLoaderOutput = {
   resolved: boolean;
   loader?: WorkspaceProjectLoader;
   evidence: WorkspaceLoaderEvidence[];
   warnings: string[];
 };
 
-export type DependencyVersionResolution =
+type DependencyVersionResolution =
   | {
       resolved: true;
       version: string;
@@ -59,7 +59,7 @@ export type DependencyVersionResolution =
       attempts: string[];
     };
 
-export type DependencyVersionOptions = {
+type DependencyVersionOptions = {
   includeSnapshots?: boolean;
 };
 

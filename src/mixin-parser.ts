@@ -11,7 +11,7 @@ export type ParsedMixinTarget = {
  * One `@Mixin`-annotated class in the file. A file can hold several (nested or top-level),
  * and each member is validated only against the targets of the class that owns it.
  */
-export type ParsedMixinClass = {
+type ParsedMixinClass = {
   /** Simple name of the annotated class. */
   className: string;
   /** Targets named by this class's own `@Mixin` annotation. */

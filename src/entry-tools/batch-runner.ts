@@ -16,7 +16,7 @@ import type {
   SourceMapping
 } from "../types.js";
 
-export type BatchEntryOk<TResult> = {
+type BatchEntryOk<TResult> = {
   index: number;
   status: "ok";
   result: TResult;
@@ -24,7 +24,7 @@ export type BatchEntryOk<TResult> = {
   durationMs: number;
 };
 
-export type BatchEntryError = {
+type BatchEntryError = {
   index: number;
   status: "error";
   error: ProblemDetails;
@@ -32,9 +32,9 @@ export type BatchEntryError = {
   durationMs: number;
 };
 
-export type BatchEntryResult<TResult> = BatchEntryOk<TResult> | BatchEntryError;
+type BatchEntryResult<TResult> = BatchEntryOk<TResult> | BatchEntryError;
 
-export type BatchSummary = {
+type BatchSummary = {
   total: number;
   ok: number;
   error: number;
@@ -67,7 +67,7 @@ type BatchArtifactSummary = {
 };
 
 /** Summary metadata for a resolved shared artifact. `runBatch` drops empty warnings. */
-export function defaultArtifactSummary(artifact: SharedArtifact): BatchArtifactSummary {
+function defaultArtifactSummary(artifact: SharedArtifact): BatchArtifactSummary {
   return {
     sharedArtifactId: artifact.artifactId,
     ...(artifact.provenance ? { sharedArtifactProvenance: artifact.provenance } : {}),
@@ -75,7 +75,7 @@ export function defaultArtifactSummary(artifact: SharedArtifact): BatchArtifactS
   };
 }
 
-export type TargetSharedArtifactInput = {
+type TargetSharedArtifactInput = {
   target: SourceLookupTargetInput;
   mapping?: SourceMapping;
   sourcePriority?: MappingSourcePriority;
@@ -122,7 +122,7 @@ export async function resolveTargetSharedArtifact(
   };
 }
 
-export type BatchRunOptions<TEntry, TResult, TArtifact> = {
+type BatchRunOptions<TEntry, TResult, TArtifact> = {
   entries: readonly TEntry[];
   concurrency: number;
   failFast: boolean;
@@ -150,10 +150,6 @@ export type BatchRunOptions<TEntry, TResult, TArtifact> = {
     sharedArtifact: TArtifact | undefined,
     error: unknown
   ) => SuggestedCall | undefined;
-  /** Generate a fresh request-instance id per entry — defaults to the same
-   * scheme `runTool` uses (`<base36-time>-<base36-rand>`). Per-entry uniqueness
-   * is required so callers can correlate failed entries individually. */
-  buildEntryInstance?: (index: number) => string;
 };
 
 function defaultEntryInstance(index: number): string {
@@ -170,7 +166,6 @@ export async function runBatch<TEntry, TResult, TArtifact>(
   const artifactSummary = sharedArtifact !== undefined ? summarize(sharedArtifact) : {};
 
   let abort = false;
-  const buildInstance = opts.buildEntryInstance ?? defaultEntryInstance;
 
   const results = await mapWithConcurrencyLimit(
     opts.entries,
@@ -182,7 +177,7 @@ export async function runBatch<TEntry, TResult, TArtifact>(
         return {
           index,
           status: "error",
-          error: buildBatchAbortedProblem(buildInstance(index)),
+          error: buildBatchAbortedProblem(defaultEntryInstance(index)),
           warnings: [],
           durationMs: Date.now() - startedAt
         };
@@ -201,7 +196,7 @@ export async function runBatch<TEntry, TResult, TArtifact>(
         const suggestedCall = opts.buildErrorSuggestedCall(entry, sharedArtifact, caught);
         const problem = errorToBatchEntryProblem(
           caught,
-          buildInstance(index),
+          defaultEntryInstance(index),
           suggestedCall ? { suggestedCall } : undefined
         );
         if (opts.failFast) {

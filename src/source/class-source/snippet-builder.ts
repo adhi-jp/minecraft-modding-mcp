@@ -2,7 +2,7 @@ import * as classSourceHelpers from "../class-source-helpers.js";
 import { sliceToMaxCharsSafe } from "../../text-truncate.js";
 import type { SourceMode } from "../../source-service.js";
 
-export type SnippetBuildInput = {
+type SnippetBuildInput = {
   filePath: string;
   content: string;
   mode: SourceMode;
@@ -12,7 +12,7 @@ export type SnippetBuildInput = {
   maxChars: number | undefined;
 };
 
-export type SnippetBuildResult = {
+type SnippetBuildResult = {
   sourceText: string;
   totalLines: number;
   returnedStart: number;

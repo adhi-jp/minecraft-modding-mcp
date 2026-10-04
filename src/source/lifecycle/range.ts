@@ -2,7 +2,7 @@ import { buildSuggestedCall } from "../../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../../errors.js";
 import type { SourceService } from "../../source-service.js";
 
-export type ManifestRange = {
+type ManifestRange = {
   /** Manifest version ids, oldest first. */
   chronological: string[];
   fromVersion: string;

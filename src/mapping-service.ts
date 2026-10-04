@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -14,69 +14,38 @@ import { VersionService, isUnobfuscatedVersion } from "./version-service.js";
 import type {
   DirectionIndex,
   MappingLookupSource,
-  MappingSymbolKind,
   MappingSymbolRecord,
   PairKey,
   PairRecord
 } from "./mapping/internal-types.js";
 import {
-  addLookupEntries,
-  addToSetMap,
   buildSymbolKey,
-  classNameParts,
   createClassSymbolRecord,
-  createDirectionIndex,
-  createFieldSymbolRecord,
-  createMethodSymbolRecord,
-  exactLookupKeys,
   mergeDirectionIndexes,
-  normalizedVariants,
-  normalizeMappedSymbolOutput,
-  parseFieldName,
-  registerRecord,
-  simpleLookupKeys,
-  simpleName,
-  stripLineInfo
+  normalizeMappedSymbolOutput
 } from "./mapping/parsers/symbol-records.js";
 import {
   buildAdjacency,
   buildTargetRecordIndex,
-  ensurePairIndex,
-  pairKey,
-  parsePairKey
+  pairKey
 } from "./mapping/parsers/normalize.js";
-import {
-  PROGUARD_PRIMITIVES,
-  parseProguardMethod,
-  proguardTypeToJvm
-} from "./mapping/parsers/proguard.js";
-import {
-  addPairRecords,
-  normalizeTinyNamespace
-} from "./mapping/parsers/tiny.js";
 import type {
   CandidateAccumulator,
   GraphLoadMode,
-  LoadedGraph,
-  MatchRankKey
+  LoadedGraph
 } from "./mapping/internal-types.js";
 import {
-  DESCRIPTOR_FALLBACK_CONFIDENCE,
   MATCH_RANK,
   MAX_CANDIDATES
 } from "./mapping/internal-types.js";
 import {
-  addCandidates,
   applyDisambiguationHints,
-  clampCandidateLimit,
   clampRowLimit,
   collectExactRecordIndex,
   collectTargetRecords,
-  consumeFieldType,
   effectiveLoomSearchProjectPath,
   inferAmbiguityReasons,
   invalidInputError,
-  isValidMethodDescriptor,
   limitResolutionCandidates,
   lookupCandidates,
   lookupExactClassBySimpleName,
@@ -86,19 +55,14 @@ import {
   mappingPriorityFromInput,
   mappingSourceOrder,
   namespacePath,
-  normalizeDescriptorHint,
   normalizeIncludedKinds,
-  normalizeMemberName,
-  normalizeMethodDescriptor,
-  normalizeOwnerHint,
   normalizeQuerySymbol,
   pathToTransformChain,
   pathUsesSource,
   projectLookupCandidateDescriptor,
   requiresOnlyObfuscatedMojangGraph,
   toLookupCandidate,
-  toResolutionCandidate,
-  toSymbolReference
+  toResolutionCandidate
 } from "./mapping/lookup.js";
 import { loadMojangPairs } from "./mapping/loaders/mojang.js";
 import { loadTinyPairsFromLoom } from "./mapping/loaders/tiny-loom.js";
@@ -120,16 +84,11 @@ import type {
   FindMappingOutput,
   MappingLookupCandidate,
   MappingLookupProvenance,
-  MappingMatchKind,
   ResolveMethodMappingExactInput,
   ResolveMethodMappingExactOutput,
-  ResolutionCandidate,
   SymbolExistenceInput,
   SymbolExistenceOutput,
-  SymbolQueryInput,
-  SymbolQueryKind,
   SymbolReference,
-  SymbolResolutionOutput,
   SymbolResolutionStatus
 } from "./mapping/types.js";
 

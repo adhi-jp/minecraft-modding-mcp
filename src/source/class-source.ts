@@ -249,7 +249,7 @@ function classNameToClassPath(className: string): string {
   return packagePath ? `${packagePath}/${typePath}` : typePath;
 }
 
-export function resolveClassFilePath(svc: SourceService, artifactId: string, className: string): string | undefined {
+function resolveClassFilePath(svc: SourceService, artifactId: string, className: string): string | undefined {
   const normalizedClassName = className.trim();
   const classPath = classNameToClassPath(normalizedClassName);
   if (!classPath) {
@@ -380,7 +380,7 @@ export function reportedArtifactNamespace(svc: SourceService, artifact: Artifact
   return reportedNamespace(label, artifactResolver.isProvenUnobfuscatedRuntime(provenance));
 }
 
-export function buildFallbackProvenance(svc: SourceService, input: {
+function buildFallbackProvenance(svc: SourceService, input: {
   artifactId: string;
   origin: ResolvedSourceArtifact["origin"];
   requestedMapping: SourceMapping;
@@ -639,7 +639,7 @@ export function buildClassSourceNotFoundError(svc: SourceService, input: {
   });
 }
 
-export function buildDecompiledFallback(svc: SourceService, artifactId: string, lookupClassName: string, memberPattern: string | undefined, maxMembers: number): { fallback: DecompiledFallback; counts: NonNullable<GetClassMembersOutput["decompiledMemberCounts"]>; truncated: boolean } | undefined {
+function buildDecompiledFallback(svc: SourceService, artifactId: string, lookupClassName: string, memberPattern: string | undefined, maxMembers: number): { fallback: DecompiledFallback; counts: NonNullable<GetClassMembersOutput["decompiledMemberCounts"]>; truncated: boolean } | undefined {
   const filePath = resolveClassFilePath(svc, artifactId, lookupClassName);
   if (!filePath) {
     return undefined;

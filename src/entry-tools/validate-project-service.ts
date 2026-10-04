@@ -8,14 +8,12 @@ import { mapWithConcurrencyLimit } from "../concurrency.js";
 import type { StageEmitter } from "../stage-emitter.js";
 import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
-import { buildEntryToolResult, createSummarySubject } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 import { handleMixin } from "./validate-project/cases/mixin.js";
 import { handleAccessWidener } from "./validate-project/cases/access-widener.js";
 import { handleAccessTransformer } from "./validate-project/cases/access-transformer.js";
 import { handleProjectSummary } from "./validate-project/cases/project-summary.js";
 import {
-  buildFullTaskStatusReport,
   type ValidateProjectDeps
 } from "./validate-project/internal.js";
 import { nonEmptyString, sourceMappingSchema } from "../tool-schemas.js";
@@ -146,7 +144,7 @@ export const validateProjectSchema = z.object(validateProjectShape).superRefine(
 
 export type ValidateProjectInput = z.infer<typeof validateProjectSchema>;
 
-export type ValidateProjectExecuteOptions = {
+type ValidateProjectExecuteOptions = {
   stageEmitter?: StageEmitter;
 };
 

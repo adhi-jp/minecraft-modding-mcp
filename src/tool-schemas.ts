@@ -27,22 +27,22 @@ export type SearchSymbolKind = "class" | "interface" | "enum" | "record" | "meth
 export type MemberAccess = "public" | "all";
 export type WorkspaceSymbolKind = "class" | "field" | "method";
 
-export const SOURCE_MAPPINGS = ["obfuscated", "mojang", "intermediary", "yarn"] as const;
-export const SOURCE_PRIORITIES = ["loom-first", "maven-first"] as const;
-export const TARGET_KINDS = ["version", "jar", "coordinate"] as const;
-export const SEARCH_INTENTS = ["symbol", "text", "path"] as const;
-export const SEARCH_MATCHES = ["exact", "prefix", "contains", "regex"] as const;
-export const SEARCH_SYMBOL_KINDS = ["class", "interface", "enum", "record", "method", "field"] as const;
-export const MEMBER_ACCESS = ["public", "all"] as const;
-export const WORKSPACE_SYMBOL_KINDS = ["class", "field", "method"] as const;
-export const CLASS_NAME_MODES = ["fqcn", "auto"] as const;
-export const SOURCE_MODES = ["metadata", "snippet", "full"] as const;
-export const ARTIFACT_SCOPES = ["vanilla", "merged", "loader"] as const;
-export const DECODE_COMPRESSIONS = ["none", "gzip", "auto"] as const;
-export const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
+const SOURCE_MAPPINGS = ["obfuscated", "mojang", "intermediary", "yarn"] as const;
+const SOURCE_PRIORITIES = ["loom-first", "maven-first"] as const;
+const TARGET_KINDS = ["version", "jar", "coordinate"] as const;
+const SEARCH_INTENTS = ["symbol", "text", "path"] as const;
+const SEARCH_MATCHES = ["exact", "prefix", "contains", "regex"] as const;
+const SEARCH_SYMBOL_KINDS = ["class", "interface", "enum", "record", "method", "field"] as const;
+const MEMBER_ACCESS = ["public", "all"] as const;
+const WORKSPACE_SYMBOL_KINDS = ["class", "field", "method"] as const;
+const CLASS_NAME_MODES = ["fqcn", "auto"] as const;
+const SOURCE_MODES = ["metadata", "snippet", "full"] as const;
+const ARTIFACT_SCOPES = ["vanilla", "merged", "loader"] as const;
+const DECODE_COMPRESSIONS = ["none", "gzip", "auto"] as const;
+const ENCODE_COMPRESSIONS = ["none", "gzip"] as const;
 
 export const nonEmptyString = z.string().trim().min(1);
-export const optionalNonEmptyString = z.string().trim().min(1).optional();
+const optionalNonEmptyString = z.string().trim().min(1).optional();
 
 /**
  * zod3-parity integer check. zod3's `.int()` accepted every `Number.isInteger`
@@ -69,7 +69,7 @@ export const zod3ParityIntCheck = (payload: z.core.ParsePayload<number>): void =
 };
 
 export const optionalPositiveInt = z.number().check(zod3ParityIntCheck).positive().optional();
-export const gradleUserHomeSchema = optionalNonEmptyString.describe(
+const gradleUserHomeSchema = optionalNonEmptyString.describe(
   "Gradle user home for Loom cache lookups (overrides GRADLE_USER_HOME)."
 );
 
@@ -87,18 +87,18 @@ export const optionalDescriptorString = z
   });
 
 export const sourceMappingSchema = z.enum(SOURCE_MAPPINGS);
-export const mappingSourcePrioritySchema = z.enum(SOURCE_PRIORITIES);
+const mappingSourcePrioritySchema = z.enum(SOURCE_PRIORITIES);
 export const targetKindSchema = z.enum(TARGET_KINDS);
-export const searchIntentSchema = z.enum(SEARCH_INTENTS);
-export const searchMatchSchema = z.enum(SEARCH_MATCHES);
-export const searchSymbolKindSchema = z.enum(SEARCH_SYMBOL_KINDS);
-export const memberAccessSchema = z.enum(MEMBER_ACCESS);
-export const workspaceSymbolKindSchema = z.enum(WORKSPACE_SYMBOL_KINDS);
-export const classNameModeSchema = z.enum(CLASS_NAME_MODES);
-export const sourceModeSchema = z.enum(SOURCE_MODES);
-export const artifactScopeSchema = z.enum(ARTIFACT_SCOPES);
-export const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
-export const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
+const searchIntentSchema = z.enum(SEARCH_INTENTS);
+const searchMatchSchema = z.enum(SEARCH_MATCHES);
+const searchSymbolKindSchema = z.enum(SEARCH_SYMBOL_KINDS);
+const memberAccessSchema = z.enum(MEMBER_ACCESS);
+const workspaceSymbolKindSchema = z.enum(WORKSPACE_SYMBOL_KINDS);
+const classNameModeSchema = z.enum(CLASS_NAME_MODES);
+const sourceModeSchema = z.enum(SOURCE_MODES);
+const artifactScopeSchema = z.enum(ARTIFACT_SCOPES);
+const decodeCompressionSchema = z.enum(DECODE_COMPRESSIONS);
+const encodeCompressionSchema = z.enum(ENCODE_COMPRESSIONS);
 
 export type ResolveArtifactTargetInput =
   | {
@@ -125,13 +125,13 @@ export type SourceLookupTargetInput =
     }
   | ResolveArtifactTargetInput;
 
-export const workspaceTargetSchema = z.object({
+const workspaceTargetSchema = z.object({
   kind: z.literal("workspace"),
   scope: artifactScopeSchema.optional(),
   strict: z.boolean().optional()
 });
 
-export const dependencyTargetSchema = z.object({
+const dependencyTargetSchema = z.object({
   kind: z.literal("dependency"),
   group: nonEmptyString.describe('Maven group, e.g. "net.fabricmc.fabric-api" or "dev.architectury".'),
   name: nonEmptyString.describe('Maven artifact name, e.g. "fabric-api" or "architectury".'),
@@ -163,25 +163,25 @@ export const sourceLookupTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("artifact"), artifactId: nonEmptyString })
 ]);
 
-export const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
+const RESOLVE_ARTIFACT_TARGET_DESCRIPTION =
   'Object, not string. e.g. {"kind":"version","value":"1.21.10"}, {"kind":"workspace"}, or to inspect a loader/Fabric dependency like vanilla: {"kind":"dependency","group":"net.fabricmc.fabric-api","name":"fabric-api","versionFromProject":true} (needs projectPath) or with an explicit "version".';
-export const SOURCE_LOOKUP_TARGET_DESCRIPTION =
+const SOURCE_LOOKUP_TARGET_DESCRIPTION =
   'Same shape as resolve-artifact target (incl. {"kind":"dependency",...} to read a Fabric/loader dependency class like vanilla), plus {"kind":"artifact","artifactId":"..."} to reuse a resolved artifact. Object, not string.';
-export const SOURCE_SCOPE_DESCRIPTION =
+const SOURCE_SCOPE_DESCRIPTION =
   "vanilla = Mojang client jar only; merged = merged runtime discovery; loader = loader-transformed runtime jars.";
 
 // Shared describe() text reused by every symbol-lookup tool so the contract reads
 // identically on find-mapping and check-symbol-exists (and any future sibling).
-export const MEMBER_PATTERN_DESCRIPTION =
+const MEMBER_PATTERN_DESCRIPTION =
   'Case-insensitive substring filter on member names. Use "|" for OR alternatives, e.g. "getStateForPlacement|canSurvive|setPlacedBy" (each token is matched as a substring, not a regex).';
 
-export const memberProjectionSchema = z.enum(["names", "signatures", "full"]);
-export const MEMBER_PROJECTION_DESCRIPTION =
+const memberProjectionSchema = z.enum(["names", "signatures", "full"]);
+const MEMBER_PROJECTION_DESCRIPTION =
   'Per-member field projection: "names" (member name only), "signatures" (name + javaSignature, no jvmDescriptor), or "full" (default; complete member shape). Use "names"/"signatures" to cut response tokens for existence/signature checks.';
 
-export const SIGNATURE_MODE_DESCRIPTION =
+const SIGNATURE_MODE_DESCRIPTION =
   "exact: descriptor required for kind=method; name-only (default): match by owner+name only.";
-export const NAME_MODE_DESCRIPTION =
+const NAME_MODE_DESCRIPTION =
   "auto (default): FQCN, or dotless name where allowed; fqcn: require FQCN.";
 
 export const listVersionsShape = {
@@ -313,9 +313,9 @@ export const verifyMixinTargetShape = {
 };
 export const verifyMixinTargetSchema = z.object(verifyMixinTargetShape);
 
-export const batchSymbolKindSchema = z.enum(["class", "field", "method"]);
+const batchSymbolKindSchema = z.enum(["class", "field", "method"]);
 
-export const batchClassSourceEntrySchema = z.object({
+const batchClassSourceEntrySchema = z.object({
   className: nonEmptyString,
   mode: sourceModeSchema.optional(),
   startLine: optionalPositiveInt,
@@ -371,7 +371,7 @@ export const batchClassSourceSchema = z.object(batchClassSourceShape).superRefin
   }
 });
 
-export const batchClassMembersEntrySchema = z.object({
+const batchClassMembersEntrySchema = z.object({
   className: nonEmptyString,
   access: memberAccessSchema.optional(),
   includeSynthetic: z.boolean().optional(),
@@ -399,14 +399,14 @@ export const batchClassMembersShape = {
 };
 export const batchClassMembersSchema = z.object(batchClassMembersShape);
 
-export const batchSymbolExistsTargetSchema = z.discriminatedUnion("kind", [
+const batchSymbolExistsTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("version"), value: nonEmptyString }),
   workspaceTargetSchema
 ]).describe(
   'Only kind="version" or kind="workspace"; other kinds carry library versions, not MC versions.'
 );
 
-export const batchSymbolExistsEntrySchema = z.object({
+const batchSymbolExistsEntrySchema = z.object({
   kind: batchSymbolKindSchema,
   name: nonEmptyString,
   owner: optionalNonEmptyString,
@@ -434,7 +434,7 @@ export const batchSymbolExistsShape = {
 };
 export const batchSymbolExistsSchema = z.object(batchSymbolExistsShape);
 
-export const batchMappingsEntrySchema = z
+const batchMappingsEntrySchema = z
   .object({
     kind: batchSymbolKindSchema,
     name: nonEmptyString,
@@ -721,7 +721,7 @@ export const resolveMethodMappingExactSchema = z
     }
   });
 
-export const classApiKindsSchema = z.string().superRefine((value, ctx) => {
+const classApiKindsSchema = z.string().superRefine((value, ctx) => {
   const tokens = value
     .split(",")
     .map((entry) => entry.trim().toLowerCase())
@@ -949,8 +949,8 @@ export const getRegistryDataShape = {
 };
 export const getRegistryDataSchema = z.object(getRegistryDataShape);
 
-export const COMPARE_VERSIONS_CATEGORIES = ["classes", "registry", "all"] as const;
-export const compareVersionsCategorySchema = z.enum(COMPARE_VERSIONS_CATEGORIES);
+const COMPARE_VERSIONS_CATEGORIES = ["classes", "registry", "all"] as const;
+const compareVersionsCategorySchema = z.enum(COMPARE_VERSIONS_CATEGORIES);
 
 export const compareVersionsShape = {
   fromVersion: nonEmptyString.describe("Older Minecraft version (e.g. 1.20.4)"),
@@ -978,8 +978,8 @@ export const getModClassSourceShape = {
 };
 export const getModClassSourceSchema = z.object(getModClassSourceShape);
 
-export const MOD_SEARCH_TYPES = ["class", "method", "field", "content", "all"] as const;
-export const modSearchTypeSchema = z.enum(MOD_SEARCH_TYPES);
+const MOD_SEARCH_TYPES = ["class", "method", "field", "content", "all"] as const;
+const modSearchTypeSchema = z.enum(MOD_SEARCH_TYPES);
 
 export const searchModSourceShape = {
   jarPath: nonEmptyString.describe("Local path to the mod JAR file"),
@@ -989,8 +989,8 @@ export const searchModSourceShape = {
 };
 export const searchModSourceSchema = z.object(searchModSourceShape);
 
-export const REMAP_TARGETS = ["yarn", "mojang"] as const;
-export const remapTargetSchema = z.enum(REMAP_TARGETS);
+const REMAP_TARGETS = ["yarn", "mojang"] as const;
+const remapTargetSchema = z.enum(REMAP_TARGETS);
 
 export const remapModJarShape = {
   inputJar: nonEmptyString.describe("Path to the mod JAR file"),

@@ -1,6 +1,6 @@
 import { sourcePathToFqcn } from "../source/shared-utils.js";
 
-export interface ExtractedSymbol {
+interface ExtractedSymbol {
   symbolKind: "class" | "interface" | "enum" | "record" | "method" | "field";
   symbolName: string;
   qualifiedName: string | undefined;

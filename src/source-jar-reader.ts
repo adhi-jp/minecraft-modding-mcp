@@ -37,17 +37,17 @@ export interface ZipFile {
   ): void;
 }
 
-export interface JavaEntryText {
+interface JavaEntryText {
   filePath: string;
   content: string;
 }
 
-export interface JarEntryText {
+interface JarEntryText {
   filePath: string;
   content: string;
 }
 
-export interface CollectMatchedJarEntriesOptions {
+interface CollectMatchedJarEntriesOptions {
   maxBytes?: number;
   maxEntries?: number;
   continueOnError?: boolean;
@@ -144,7 +144,7 @@ function readNextEntry(zipFile: ZipFile): Promise<ZipEntry | undefined> {
  * - `observed`: the running total of bytes actually received, i.e. the entry
  *   ran past the budget mid-stream (its declared size was absent or a lie).
  */
-export type EntryTooLargeSize = {
+type EntryTooLargeSize = {
   bytes: number;
   source: "declared" | "observed";
 };
@@ -294,9 +294,9 @@ export async function hasAnyJarEntry(
 }
 
 /** Root entry in which a Minecraft runtime jar names its own release (`"id": "26.2"`). */
-export const MINECRAFT_VERSION_JSON_ENTRY = "version.json";
+const MINECRAFT_VERSION_JSON_ENTRY = "version.json";
 /** Class every Minecraft runtime jar ships, under its Mojang name, from 26.1 on. */
-export const MINECRAFT_SHARED_CONSTANTS_ENTRY = "net/minecraft/SharedConstants.class";
+const MINECRAFT_SHARED_CONSTANTS_ENTRY = "net/minecraft/SharedConstants.class";
 /** The real file is under 1 KiB; anything far larger is not the file this looks for. */
 const MAX_VERSION_JSON_BYTES = 64 * 1024;
 
@@ -304,7 +304,7 @@ const MAX_VERSION_JSON_BYTES = 64 * 1024;
  * What an archive walk saw that bears on "is this the Minecraft runtime jar?".
  * Raw observations only: judging them is the resolver's job.
  */
-export interface MinecraftRuntimeJarSignals {
+interface MinecraftRuntimeJarSignals {
   hasSharedConstantsClass: boolean;
   /**
    * Text of the root `version.json`; absent when the entry is missing, larger
@@ -511,7 +511,7 @@ function readEntryStreamPrefix(
   });
 }
 
-export interface JarEntryReader {
+interface JarEntryReader {
   getEntryBuffer(entryPath: string): Promise<Buffer>;
   close(): void;
 }
@@ -627,7 +627,7 @@ async function collectMatchedJarEntries<T>(
   }, deps);
 }
 
-export interface JarEntryBuffer {
+interface JarEntryBuffer {
   filePath: string;
   content: Buffer;
 }
@@ -640,7 +640,7 @@ export interface JarReaderOpenDeps {
   openZipFile?: (jarPath: string) => Promise<ZipFile>;
 }
 
-export interface CollectMatchedJarEntriesAsBuffersOptions extends CollectMatchedJarEntriesOptions {
+interface CollectMatchedJarEntriesAsBuffersOptions extends CollectMatchedJarEntriesOptions {
   /**
    * Checked only after an entry has been SUCCESSFULLY read and pushed onto the
    * result (the success path), with the result array so far; returning true

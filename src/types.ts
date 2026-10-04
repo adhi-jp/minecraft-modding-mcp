@@ -1,7 +1,7 @@
 export type SourceOrigin = "local-jar" | "local-m2" | "remote-repo" | "decompiled";
 export type SourceMapping = "obfuscated" | "mojang" | "intermediary" | "yarn";
 export type AccessTransformerNamespace = "srg" | "mojang" | "obfuscated";
-export type RuntimeValidationNamespace = SourceMapping | AccessTransformerNamespace;
+type RuntimeValidationNamespace = SourceMapping | AccessTransformerNamespace;
 export type MappingSourcePriority = "loom-first" | "maven-first";
 
 export type ArtifactTargetKind = "version" | "jar" | "coordinate";
@@ -166,12 +166,6 @@ export interface RuntimeValidationProvenance<
   scopeFallback?: { requested: string; applied: string; reason: string };
 }
 
-export interface ErrorEnvelope {
-  code: string;
-  message: string;
-  details?: Record<string, unknown>;
-}
-
 export interface Config {
   cacheDir: string;
   sqlitePath: string;
@@ -227,13 +221,6 @@ export interface JarStatStamp {
     mtimeMs: number;
     size: number;
   };
-}
-
-export interface SourceSearchHit {
-  filePath: string;
-  score: number;
-  matchedIn: "path" | "content" | "both";
-  preview: string;
 }
 
 export interface ArtifactRow {

@@ -25,7 +25,7 @@ import { V1_PARITY_SCHEMAS } from "./v1-parity-schemas.js";
  * VERBATIM in tools/list. The zod fallback only applies to tools without a
  * frozen fixture (none today).
  */
-export function appValidated<S extends z.ZodObject>(
+function appValidated<S extends z.ZodObject>(
   name: string,
   schema: S
 ): StandardSchemaWithJSON<unknown, z.output<S>> {
@@ -45,7 +45,7 @@ export function appValidated<S extends z.ZodObject>(
  * Tool handler shape used by all app registrations: raw (unvalidated) args
  * plus the v2 ServerContext. Handlers delegate validation to runTool().
  */
-export type AppToolHandler = (
+type AppToolHandler = (
   args: unknown,
   ctx: ServerContext
 ) => Promise<CallToolResult>;
@@ -79,7 +79,7 @@ export function registerAppTool(
 // like registerAppTool() but appends a note steering agents to the entry tools
 // first. Entry tools, batch tools, and the NBT/runtime utilities (which have no
 // entry equivalent) keep their plain descriptions via registerAppTool().
-export const EXPERT_TOOL_NOTE =
+const EXPERT_TOOL_NOTE =
   " Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.";
 
 export function registerExpertTool(

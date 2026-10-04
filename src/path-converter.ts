@@ -71,7 +71,7 @@ export function isUncWslPath(pathValue: string): boolean {
   return UNC_WSL_PATH.test(pathValue);
 }
 
-export function validatePathFormat(pathValue: string, runtimeInfo?: PathRuntimeInfo): string | undefined {
+function validatePathFormat(pathValue: string, runtimeInfo?: PathRuntimeInfo): string | undefined {
   const runtime = runtimeInfo ?? detectPathRuntime();
   const trimmed = pathValue.trim();
 

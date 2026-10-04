@@ -11,7 +11,7 @@ import { normalizePathStyle } from "./source/shared-utils.js";
 import type { Config } from "./types.js";
 import { isUnobfuscatedVersion } from "./version-service.js";
 
-export type MappingNamespace = "obfuscated" | "mojang" | "intermediary" | "yarn";
+type MappingNamespace = "obfuscated" | "mojang" | "intermediary" | "yarn";
 
 type SignatureAccess = "public" | "all";
 

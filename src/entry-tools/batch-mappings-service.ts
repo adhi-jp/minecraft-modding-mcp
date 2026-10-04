@@ -18,7 +18,7 @@ import {
 
 type SymbolKind = "class" | "field" | "method";
 
-export type BatchMappingsEntry = {
+type BatchMappingsEntry = {
   kind: SymbolKind;
   name: string;
   owner?: string;

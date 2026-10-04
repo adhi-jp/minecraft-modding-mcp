@@ -1,29 +1,29 @@
 import { getToolSchema, validateToolParams } from "./tool-schema-registry.js";
 
-export type SuggestedCallExample = {
+type SuggestedCallExample = {
   params: unknown;
   reason: string;
 };
 
-export type SuggestedCallSpec = {
+type SuggestedCallSpec = {
   tool: string;
   params: unknown;
   examples?: SuggestedCallExample[];
 };
 
-export type ValidatedSuggestedCall = {
+type ValidatedSuggestedCall = {
   tool: string;
   params: Record<string, unknown>;
 };
 
-export type ValidatedExampleCall = {
+type ValidatedExampleCall = {
   tool: string;
   params: Record<string, unknown>;
   reason: string;
   valid: true;
 };
 
-export type SuggestedCallOutput = {
+type SuggestedCallOutput = {
   suggestedCall?: ValidatedSuggestedCall;
   exampleCalls?: ValidatedExampleCall[];
   /** Set to `true` when the caller supplied `params` but the gate dropped it.

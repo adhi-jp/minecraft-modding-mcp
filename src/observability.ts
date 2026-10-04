@@ -1,4 +1,4 @@
-export interface MetricTimingSnapshot {
+interface MetricTimingSnapshot {
   count: number;
   totalMs: number;
   avgMs: number;
@@ -7,7 +7,7 @@ export interface MetricTimingSnapshot {
   p99Ms: number;
 }
 
-export interface CacheArtifactByteAccountingRow {
+interface CacheArtifactByteAccountingRow {
   artifact_id: string;
   content_bytes: number;
   updated_at: string;

@@ -2,7 +2,7 @@
 // next offset plus a context key derived from the query, so a cursor minted for
 // one query is rejected (and the scan restarts) when replayed against another.
 
-export type OffsetCursor = {
+type OffsetCursor = {
   offset: number;
   contextKey: string;
 };

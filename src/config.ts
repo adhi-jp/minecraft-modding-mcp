@@ -332,7 +332,7 @@ export function stableArtifactId(parts: string[]): string {
   return createHash("sha256").update(normalizer).digest("hex");
 }
 
-export interface ArtifactAliasInput {
+interface ArtifactAliasInput {
   artifactId: string;
   kind: ArtifactTargetKind;
   value: string;

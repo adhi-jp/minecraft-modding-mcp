@@ -5,7 +5,7 @@ import type { JarStatStamp } from "./types.js";
 import { normalizePathForHost } from "./path-converter.js";
 import { createError, ERROR_CODES, isAppError } from "./errors.js";
 
-export interface ResolvedJarInfo {
+interface ResolvedJarInfo {
   originalPath: string;
   resolvedPath: string;
 }

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir, rm, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
@@ -25,9 +25,9 @@ export const PUBLIC_CACHE_KINDS = [
   "workspace"
 ] as const;
 
-export type PublicCacheKind = (typeof PUBLIC_CACHE_KINDS)[number];
+type PublicCacheKind = (typeof PUBLIC_CACHE_KINDS)[number];
 
-export const CACHE_HEALTH_STATES = [
+const CACHE_HEALTH_STATES = [
   "healthy",
   "partial",
   "stale",
@@ -36,9 +36,9 @@ export const CACHE_HEALTH_STATES = [
   "in_use"
 ] as const;
 
-export type CacheHealthState = (typeof CACHE_HEALTH_STATES)[number];
+type CacheHealthState = (typeof CACHE_HEALTH_STATES)[number];
 
-export type CacheSelector = {
+type CacheSelector = {
   artifactId?: string;
   version?: string;
   jarPath?: string;
@@ -50,7 +50,7 @@ export type CacheSelector = {
   projectPath?: string;
 };
 
-export type CacheKindSummary = {
+type CacheKindSummary = {
   cacheKind: PublicCacheKind;
   entryCount: number;
   totalBytes: number;

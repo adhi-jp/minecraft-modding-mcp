@@ -76,7 +76,6 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
   ]);
 
   const loadSignature = async (
-    version: string,
     jarPath: string,
     obfuscatedClassName: string
   ): Promise<SignatureSnapshot | undefined> => {
@@ -103,8 +102,8 @@ export async function diffClassSignatures(svc: SourceService, input: DiffClassSi
   };
 
   const [fromSignature, toSignature] = await Promise.all([
-    loadSignature(fromVersion, fromResolved.jarPath, obfuscatedFromClassName),
-    loadSignature(toVersion, toResolved.jarPath, obfuscatedToClassName)
+    loadSignature(fromResolved.jarPath, obfuscatedFromClassName),
+    loadSignature(toResolved.jarPath, obfuscatedToClassName)
   ]);
 
   const warnings: string[] = [...mappingWarnings];

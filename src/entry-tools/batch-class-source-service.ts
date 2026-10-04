@@ -23,7 +23,7 @@ import {
 
 type SourceMode = "metadata" | "snippet" | "full";
 
-export type BatchClassSourceEntry = {
+type BatchClassSourceEntry = {
   className: string;
   mode?: SourceMode;
   startLine?: number;

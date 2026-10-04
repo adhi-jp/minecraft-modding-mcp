@@ -15,20 +15,20 @@ type SearchCursorPayload = {
   filePath: string;
 };
 
-export interface IndexedFile {
+interface IndexedFile {
   filePath: string;
   content: string;
   contentBytes: number;
   contentHash: string;
 }
 
-export interface ListFilesOptions {
+interface ListFilesOptions {
   limit: number;
   cursor?: string;
   prefix?: string;
 }
 
-export interface SearchFilesOptions {
+interface SearchFilesOptions {
   limit: number;
   query: string;
   match?: "exact" | "prefix" | "contains" | "regex";
@@ -44,13 +44,13 @@ export interface SearchFilesOptions {
   pathPrefix?: string;
 }
 
-export interface SearchFileCandidateResult {
+interface SearchFileCandidateResult {
   filePath: string;
   score: number;
   matchedIn: "path" | "content" | "both";
 }
 
-export interface ListFileRowsOptions {
+interface ListFileRowsOptions {
   limit: number;
   cursor?: string;
   prefix?: string;

@@ -3,7 +3,6 @@ import { createError, ERROR_CODES } from "../errors.js";
 import type {
   NbtListElementType,
   NbtNodeType,
-  NbtTagName,
   TypedNbtDocument,
   TypedNbtValidationIssue
 } from "./types.js";
@@ -316,4 +315,4 @@ export function assertValidTypedNbtDocument(value: unknown): asserts value is Ty
   }
 }
 
-export type { TypedNbtDocument, TypedNbtValidationIssue } from "./types.js";
+export type { TypedNbtDocument } from "./types.js";

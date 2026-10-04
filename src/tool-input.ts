@@ -12,7 +12,7 @@ const POSITIVE_INT_FIELD_NAMES = new Set([
 
 const MAPPING_FIELD_NAMES = new Set(["mapping", "sourceMapping", "targetMapping", "classNameMapping"]);
 
-export type PreparedToolInput = {
+type PreparedToolInput = {
   normalizedInput: unknown;
   removedOfficialPaths: string[];
   suggestedReplacementInput?: Record<string, unknown>;

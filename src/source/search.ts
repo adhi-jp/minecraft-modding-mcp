@@ -36,13 +36,11 @@ const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
 const GLOB_REGEX_CACHE = new Map<string, RegExp>();
 
-export { MAX_REGEX_QUERY_LENGTH, MAX_REGEX_RESULT_LIMIT };
-
 function isSymbolKind(value: string): value is SymbolKind {
   return SYMBOL_KINDS.includes(value as SymbolKind);
 }
 
-export function normalizeIntent(intent: SearchIntent | undefined): SearchIntent {
+function normalizeIntent(intent: SearchIntent | undefined): SearchIntent {
   if (intent === "path" || intent === "text") {
     return intent;
   }
@@ -56,7 +54,7 @@ export function normalizeMatch(match: SearchMatch | undefined): SearchMatch {
   return "prefix";
 }
 
-export function buildGlobRegex(pattern: string): RegExp {
+function buildGlobRegex(pattern: string): RegExp {
   const cached = GLOB_REGEX_CACHE.get(pattern);
   if (cached) {
     GLOB_REGEX_CACHE.delete(pattern);
@@ -91,7 +89,7 @@ export function buildGlobRegex(pattern: string): RegExp {
   return rememberCachedRegex(GLOB_REGEX_CACHE, pattern, new RegExp(`^${result}$`));
 }
 
-export function globToSqlLike(pattern: string): string {
+function globToSqlLike(pattern: string): string {
   let result = "";
   for (const char of pattern) {
     if (char === "*") {
@@ -115,7 +113,7 @@ function packagePrefixPath(packagePrefix: string): string {
   return `${packagePrefix.replace(/\.+/g, "/").replace(/\/+$/, "")}/`;
 }
 
-export function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
+function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
   if (!packagePrefix) {
     return true;
   }
@@ -130,7 +128,7 @@ export function checkPackagePrefix(filePath: string, packagePrefix?: string): bo
  * glob regex (indexed paths are stored with `/` separators), so both exact
  * checks still run on every candidate.
  */
-export function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefined {
+function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefined {
   const packagePath = scope?.packagePrefix ? packagePrefixPath(scope.packagePrefix) : undefined;
   let globPath: string | undefined;
   if (scope?.fileGlob) {
@@ -146,7 +144,7 @@ export function indexedScopePathPrefix(scope: SearchScope | undefined): string |
   return packagePath ?? globPath;
 }
 
-export function buildSearchCursorContext(input: {
+function buildSearchCursorContext(input: {
   artifactId: string;
   query: string;
   intent: SearchIntent;
@@ -170,7 +168,7 @@ function toLower(value: string): string {
   return value.toLocaleLowerCase();
 }
 
-export function compileRegex(query: string): RegExp {
+function compileRegex(query: string): RegExp {
   try {
     return new RegExp(query, "i");
   } catch {
@@ -182,7 +180,7 @@ export function compileRegex(query: string): RegExp {
   }
 }
 
-export function findMatchIndex(target: string, query: string, match: SearchMatch, pattern?: RegExp): number {
+function findMatchIndex(target: string, query: string, match: SearchMatch, pattern?: RegExp): number {
   if (!query) {
     return -1;
   }
@@ -241,7 +239,7 @@ export function findContentMatchIndex(content: string, query: string, match: Sea
   return normalizedContent.indexOf(normalizedQuery);
 }
 
-export function scoreSymbolMatch(match: SearchMatch, index: number, symbolKind: SymbolKind): number {
+function scoreSymbolMatch(match: SearchMatch, index: number, symbolKind: SymbolKind): number {
   const matchBase =
     match === "exact" ? 350 : match === "prefix" ? 310 : match === "contains" ? 270 : 250;
   const kindBonus =
@@ -256,12 +254,12 @@ export function scoreSymbolMatch(match: SearchMatch, index: number, symbolKind: 
   return matchBase + kindBonus + Math.max(0, 80 - Math.min(80, index));
 }
 
-export function scoreTextMatch(match: SearchMatch, index: number): number {
+function scoreTextMatch(match: SearchMatch, index: number): number {
   const matchBase = match === "exact" ? 280 : match === "prefix" ? 250 : match === "contains" ? 220 : 200;
   return matchBase + Math.max(0, 90 - Math.min(90, Math.floor(index / 2)));
 }
 
-export function scorePathMatch(match: SearchMatch, index: number): number {
+function scorePathMatch(match: SearchMatch, index: number): number {
   const matchBase = match === "exact" ? 260 : match === "prefix" ? 230 : match === "contains" ? 210 : 190;
   return matchBase + Math.max(0, 100 - Math.min(100, index));
 }
@@ -516,7 +514,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
   }
 }
 
-export function searchSymbolIntent(
+function searchSymbolIntent(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -543,7 +541,7 @@ export function searchSymbolIntent(
   }
 }
 
-export function searchTextIntentIndexed(
+function searchTextIntentIndexed(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -604,7 +602,7 @@ export function searchTextIntentIndexed(
   return isCandidateWindowFull(indexed);
 }
 
-export function searchPathIntentIndexed(
+function searchPathIntentIndexed(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -692,7 +690,7 @@ function searchScanBudgetWarning(byteBudget: number): string {
   return `search scan budget of ${byteBudget} bytes reached; results may be incomplete. Narrow the query or scope (packagePrefix / fileGlob) to scan fewer files.`;
 }
 
-export function searchTextIntent(
+function searchTextIntent(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -801,7 +799,7 @@ export function searchTextIntent(
   }
 }
 
-export function searchPathIntent(
+function searchPathIntent(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -847,7 +845,7 @@ export function searchPathIntent(
   }
 }
 
-export function findSymbolHits(
+function findSymbolHits(
   svc: SourceService,
   artifactId: string,
   query: string,
@@ -932,11 +930,11 @@ export function findSymbolHits(
   return result;
 }
 
-export function indexedCandidateLimit(svc: SourceService): number {
+function indexedCandidateLimit(svc: SourceService): number {
   return Math.min(Math.max(svc.config.maxSearchHits * 5, 500), 5000);
 }
 
-export function indexedCandidateLimitForMatch(svc: SourceService, match: SearchMatch): number {
+function indexedCandidateLimitForMatch(svc: SourceService, match: SearchMatch): number {
   const base = indexedCandidateLimit(svc);
   if (match === "exact" || match === "prefix") {
     // Exact/prefix matches are more selective — fewer candidates needed

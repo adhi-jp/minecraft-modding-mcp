@@ -18,7 +18,7 @@ export type GetRegistryDataInput = {
   maxEntriesPerRegistry?: number;
 };
 
-export type RegistryEntry = {
+type RegistryEntry = {
   protocol_id: number;
 };
 

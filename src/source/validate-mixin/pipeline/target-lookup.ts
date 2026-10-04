@@ -64,7 +64,7 @@ function findValidateMixinClassMapping(svc: SourceService, input: {
   return pending;
 }
 
-export async function processSingleMixinTarget(
+async function processSingleMixinTarget(
   svc: SourceService,
   ctx: MutableMixinPipelineContext,
   target: ParsedMixinTarget,

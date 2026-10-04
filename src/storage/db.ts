@@ -9,11 +9,6 @@ import { runMigrations } from "./migrations.js";
 import { createError, ERROR_CODES, isAppError } from "../errors.js";
 import { log } from "../logger.js";
 
-// Re-exported for callers that already import the predicate from this module
-// (it now lives in ./sqlite.js so the Database wrapper can call it directly
-// without a module cycle back to this file).
-export { isRawSqliteCorruptionError };
-
 type SqliteDatabase = InstanceType<typeof Database>;
 
 type Logger = {
@@ -22,7 +17,7 @@ type Logger = {
   error: (message: string, details?: Record<string, unknown>) => void;
 };
 
-export interface InitializedDatabase {
+interface InitializedDatabase {
   db: SqliteDatabase;
   schemaVersion: number;
 }

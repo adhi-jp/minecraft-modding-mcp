@@ -41,8 +41,6 @@ export interface TypedNbtValidationIssue {
   actualType: string;
 }
 
-export type JsonPatchOpCode = "add" | "remove" | "replace" | "test";
-
 export interface JsonPatchOperation {
   op: string;
   path: string;
@@ -50,7 +48,7 @@ export interface JsonPatchOperation {
   value?: unknown;
 }
 
-export interface ApplyJsonPatchMeta {
+interface ApplyJsonPatchMeta {
   appliedOps: number;
   testOps: number;
   changed: boolean;

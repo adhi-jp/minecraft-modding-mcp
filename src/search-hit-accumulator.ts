@@ -31,7 +31,7 @@ export interface SearchHitAccumulator {
   };
 }
 
-export function scoreHitOrder(left: SearchSourceHit, right: SearchSourceHit): number {
+function scoreHitOrder(left: SearchSourceHit, right: SearchSourceHit): number {
   if (right.score !== left.score) {
     return right.score - left.score;
   }

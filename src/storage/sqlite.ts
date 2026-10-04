@@ -58,7 +58,7 @@ export function isRawSqliteCorruptionError(error: unknown): boolean {
  * swallows that error - a wrapping catch block elsewhere in the codebase can
  * no longer hide a runtime corruption from this observer.
  */
-export type SqliteCorruptionObserver = (error: unknown) => void;
+type SqliteCorruptionObserver = (error: unknown) => void;
 
 export class Statement<T = unknown> {
   constructor(

@@ -17,7 +17,7 @@ import {
 } from "./symbol-records.js";
 import { ensurePairIndex } from "./normalize.js";
 
-export function normalizeTinyNamespace(namespace: string): SourceMapping | undefined {
+function normalizeTinyNamespace(namespace: string): SourceMapping | undefined {
   const normalized = namespace.trim().toLowerCase();
   if (normalized === "obfuscated" || normalized === "official") {
     return "obfuscated";
@@ -45,7 +45,7 @@ export function normalizeTinyNamespace(namespace: string): SourceMapping | undef
  * descriptors. Callers that merge several files into one index must compare this
  * value — see `src/mapping/loaders/tiny-loom-selection.ts`.
  */
-export type TinyHeader = {
+type TinyHeader = {
   descriptorNamespace: SourceMapping | string;
   /** Recognized namespaces paired with their data-column offset, in file order. */
   columns: Array<{ mapping: SourceMapping; columnIndex: number }>;
@@ -116,7 +116,7 @@ export function countIndexEntries(pairs: Map<PairKey, DirectionIndex>): number {
   return total;
 }
 
-export type TinyParseOptions = {
+type TinyParseOptions = {
   /**
    * Stop parsing once the target holds this many index slots (see
    * {@link countIndexEntries}). Guards a single unbounded accumulator against
@@ -125,7 +125,7 @@ export type TinyParseOptions = {
   maxIndexEntries?: number;
 };
 
-export type TinyParseResult = {
+type TinyParseResult = {
   /** False when the header was not usable, so nothing was added. */
   parsed: boolean;
   /** True when `maxIndexEntries` stopped the parse before the last line. */

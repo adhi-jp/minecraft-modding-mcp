@@ -30,7 +30,7 @@ export const CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapab
 export const CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo";
 
 /** The five legacy handshake protocol versions the worker supports. */
-export const LEGACY_PROTOCOL_VERSIONS = [
+const LEGACY_PROTOCOL_VERSIONS = [
   "2025-11-25",
   "2025-06-18",
   "2025-03-26",
@@ -50,7 +50,7 @@ export const ERA_SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = [
 /** Process-lifetime era state. The lock is one-way and survives worker restarts. */
 export type Era = "unselected" | "legacy" | "modern";
 
-export type EraSignalClassification = "modern-signal" | "claim-less" | "claim-shaped-invalid";
+type EraSignalClassification = "modern-signal" | "claim-less" | "claim-shaped-invalid";
 
 export type EraSignal = {
   classification: EraSignalClassification;

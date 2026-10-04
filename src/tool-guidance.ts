@@ -58,19 +58,19 @@ export const SUGGESTED_CALL_DEFAULTS = {
   includeIssues: true
 } as const;
 
-export function isSuggestedCallDefault(
+function isSuggestedCallDefault(
   field: keyof typeof SUGGESTED_CALL_DEFAULTS,
   value: unknown
 ): boolean {
   return value === SUGGESTED_CALL_DEFAULTS[field];
 }
 
-export const ANALYZE_MOD_INCLUDE_GROUPS = ["warnings", "files", "source", "samples", "timings"] as const;
-export const ANALYZE_MOD_LEGACY_METADATA_INCLUDES = ["metadata", "entrypoints", "mixins", "dependencies"] as const;
-export const VALIDATE_PROJECT_INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
-export const VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES = ["detectedConfig", "mixins", "accessWideners"] as const;
+const ANALYZE_MOD_INCLUDE_GROUPS = ["warnings", "files", "source", "samples", "timings"] as const;
+const ANALYZE_MOD_LEGACY_METADATA_INCLUDES = ["metadata", "entrypoints", "mixins", "dependencies"] as const;
+const VALIDATE_PROJECT_INCLUDE_GROUPS = ["warnings", "issues", "workspace", "recovery"] as const;
+const VALIDATE_PROJECT_LEGACY_WORKSPACE_INCLUDES = ["detectedConfig", "mixins", "accessWideners"] as const;
 
-export const VALIDATION_FALLBACK_HINT =
+const VALIDATION_FALLBACK_HINT =
   "suggested call payload failed schema validation; using fallback examples";
 
 // ---------------------------------------------------------------------------
@@ -380,7 +380,7 @@ export function extractValidatedSuggestionAndExamples(details: unknown): {
   return { suggestedCall, exampleCalls, primaryDropped };
 }
 
-export function extractFailedStageFromDetails(details: unknown): string | undefined {
+function extractFailedStageFromDetails(details: unknown): string | undefined {
   if (typeof details !== "object" || details == null) {
     return undefined;
   }
@@ -391,17 +391,17 @@ export function extractFailedStageFromDetails(details: unknown): string | undefi
   return undefined;
 }
 
-export function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value != null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
 }
 
-export function asNonEmptyString(value: unknown): string | undefined {
+function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-export function asStringArray(value: unknown): string[] | undefined {
+function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim())
     ? value as string[]
     : undefined;
@@ -413,7 +413,7 @@ export function truncateSuggestionText(value: string, maxLength = 500): string {
     : value;
 }
 
-export function parseJsonObjectString(value: string): Record<string, unknown> | undefined {
+function parseJsonObjectString(value: string): Record<string, unknown> | undefined {
   if (!value.trim().startsWith("{")) {
     return undefined;
   }
@@ -426,7 +426,7 @@ export function parseJsonObjectString(value: string): Record<string, unknown> | 
   }
 }
 
-export function inferTargetKindFromString(value: string): SourceTargetInput["kind"] {
+function inferTargetKindFromString(value: string): SourceTargetInput["kind"] {
   if (/[\\/]/.test(value) || /\.jar$/i.test(value)) {
     return "jar";
   }
@@ -436,7 +436,7 @@ export function inferTargetKindFromString(value: string): SourceTargetInput["kin
   return "version";
 }
 
-export function copySourceLookupSuggestionFields(
+function copySourceLookupSuggestionFields(
   tool: "get-class-source" | "get-class-members",
   source: Record<string, unknown>
 ): Record<string, unknown> {
@@ -663,7 +663,7 @@ export function buildValidateMixinSuggestedParams(normalizedInput: unknown): Rec
   };
 }
 
-export function buildResolveArtifactSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+function buildResolveArtifactSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
   const record = asObjectRecord(normalizedInput);
   if (!record) {
     return {
@@ -709,7 +709,7 @@ export function buildResolveArtifactSuggestedParams(normalizedInput: unknown): R
   return result;
 }
 
-export function buildSourceLookupSuggestedParams(
+function buildSourceLookupSuggestedParams(
   tool: "get-class-source" | "get-class-members",
   normalizedInput: unknown
 ): Record<string, unknown> {
@@ -734,7 +734,7 @@ export function buildSourceLookupSuggestedParams(
   return result;
 }
 
-export function filterAllowedIncludeValues(
+function filterAllowedIncludeValues(
   values: string[] | undefined,
   allowed: readonly string[]
 ): string[] {
@@ -746,7 +746,7 @@ export function filterAllowedIncludeValues(
   return [...new Set(filtered)];
 }
 
-export function buildAnalyzeModSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
+function buildAnalyzeModSuggestedParams(normalizedInput: unknown): Record<string, unknown> {
   const record = asObjectRecord(normalizedInput);
   if (!record) {
     return {
@@ -1094,7 +1094,7 @@ function buildInspectMinecraftInvalidFocusGuidance(normalizedInput: unknown): In
   };
 }
 
-export function buildInvalidInputGuidance(
+function buildInvalidInputGuidance(
   tool: string,
   normalizedInput: unknown
 ): InvalidInputGuidance | undefined {

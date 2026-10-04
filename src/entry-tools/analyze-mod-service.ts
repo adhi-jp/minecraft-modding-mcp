@@ -13,8 +13,7 @@ import { buildIncludeSchema, detailSchema, executionModeSchema, positiveIntSchem
 import {
   buildEntryToolResult,
   createNextAction,
-  createSummarySubject,
-  type Summary
+  createSummarySubject
 } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
 import { nonEmptyString } from "../tool-schemas.js";
@@ -81,7 +80,7 @@ export const analyzeModSchema = z.object(analyzeModShape).superRefine((value, ct
   }
 });
 
-export type AnalyzeModInput = z.infer<typeof analyzeModSchema>;
+type AnalyzeModInput = z.infer<typeof analyzeModSchema>;
 
 type AnalyzeModDeps = {
   analyzeModJar: (jarPath: string, options?: AnalyzeModOptions) => Promise<ModAnalysisResult>;

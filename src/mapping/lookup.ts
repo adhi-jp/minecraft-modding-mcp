@@ -39,7 +39,7 @@ import { pairKey } from "./parsers/normalize.js";
 export type { DescriptorProjection };
 export { MAX_CANDIDATES };
 
-export function addCandidates(
+function addCandidates(
   target: Map<string, CandidateAccumulator>,
   index: DirectionIndex,
   symbols: Set<string> | undefined,
@@ -265,7 +265,7 @@ export function toLookupCandidate(record: MappingSymbolRecord): MappingLookupCan
   };
 }
 
-export function toSymbolReference(record: MappingSymbolRecord): SymbolReference {
+function toSymbolReference(record: MappingSymbolRecord): SymbolReference {
   return {
     kind: record.kind,
     name: record.kind === "class" ? record.symbol : record.name,
@@ -297,7 +297,7 @@ export function invalidInputError(message: string, details: Record<string, unkno
   });
 }
 
-export function normalizeMemberName(name: string): string {
+function normalizeMemberName(name: string): string {
   const normalized = name.trim();
   if (!normalized || /[\s./()]/.test(normalized)) {
     throw invalidInputError(
@@ -488,7 +488,7 @@ export function normalizeQuerySymbol(
   };
 }
 
-export function normalizeOwnerHint(ownerHint: string | undefined): string | undefined {
+function normalizeOwnerHint(ownerHint: string | undefined): string | undefined {
   const normalized = ownerHint?.trim();
   if (!normalized) {
     return undefined;
@@ -496,7 +496,7 @@ export function normalizeOwnerHint(ownerHint: string | undefined): string | unde
   return normalizeMappedSymbolOutput(normalized);
 }
 
-export function normalizeDescriptorHint(descriptorHint: string | undefined): string | undefined {
+function normalizeDescriptorHint(descriptorHint: string | undefined): string | undefined {
   const normalized = descriptorHint?.trim();
   return normalized || undefined;
 }
@@ -700,7 +700,7 @@ export function inferAmbiguityReasons(
   return reasons;
 }
 
-export function clampCandidateLimit(limit: number | undefined): number {
+function clampCandidateLimit(limit: number | undefined): number {
   if (!Number.isFinite(limit) || limit == null) {
     return MAX_CANDIDATES;
   }

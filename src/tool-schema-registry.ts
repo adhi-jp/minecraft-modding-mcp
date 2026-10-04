@@ -13,7 +13,7 @@ export function getToolSchema(name: string): z.ZodTypeAny | undefined {
   return registry.get(name);
 }
 
-export type ValidateToolParamsResult =
+type ValidateToolParamsResult =
   | { valid: true; data: unknown }
   | { valid: false; errors: Array<{ path: string; message: string }> };
 

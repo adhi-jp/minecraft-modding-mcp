@@ -21,7 +21,7 @@ const VINEFLOWER_FLAG_PROFILES: ReadonlyArray<{ label: string; flags: string[] }
   { label: "safe",    flags: ["-din=0", "-rbr=0", "-dgs=0"] },
 ];
 
-export interface DecompileResult {
+interface DecompileResult {
   outputDir: string;
   javaFiles: Array<{
     filePath: string;

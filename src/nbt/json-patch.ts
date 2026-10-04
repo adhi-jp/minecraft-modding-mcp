@@ -251,7 +251,7 @@ function resolveParent(
   return { parent: cursor, key: tokens[tokens.length - 1], enclosingNode, enclosingPointer };
 }
 
-function readValueAtPath(root: unknown, tokens: string[], opIndex: number, path: string): unknown {
+function readValueAtPath(root: unknown, tokens: string[], opIndex: number): unknown {
   if (tokens.length === 0) {
     return root;
   }
@@ -324,7 +324,7 @@ export function applyJsonPatch(document: TypedNbtDocument, patch: unknown): Appl
     const tokens = parsePointer(operation.path, i);
 
     if (operation.op === "test") {
-      const actual = readValueAtPath(working, tokens, i, operation.path);
+      const actual = readValueAtPath(working, tokens, i);
       testOps += 1;
       if (!isDeepStrictEqual(actual, operation.value)) {
         patchConflict("JSON Patch test operation failed.", {

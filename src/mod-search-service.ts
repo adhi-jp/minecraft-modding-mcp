@@ -10,7 +10,7 @@ import { analyzeModJar } from "./mod-analyzer.js";
 import { sourcePathToFqcn } from "./source/shared-utils.js";
 import { iterateJavaEntriesAsUtf8 } from "./source-jar-reader.js";
 
-export type SearchModSourceSearchType = "class" | "method" | "field" | "content" | "all";
+type SearchModSourceSearchType = "class" | "method" | "field" | "content" | "all";
 
 export type SearchModSourceInput = {
   jarPath: string;
@@ -19,7 +19,7 @@ export type SearchModSourceInput = {
   limit?: number;
 };
 
-export type SearchModSourceHit = {
+type SearchModSourceHit = {
   type: "class" | "method" | "field" | "content";
   name: string;
   file: string;

@@ -14,7 +14,6 @@ import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-too
 import {
   buildEntryToolResult,
   createSummarySubject,
-  type DetailLevel,
   type Summary
 } from "./response-contract.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
@@ -190,7 +189,7 @@ export const analyzeSymbolSchema = z.object(analyzeSymbolShape).superRefine((val
   }
 });
 
-export type AnalyzeSymbolInput = z.infer<typeof analyzeSymbolSchema>;
+type AnalyzeSymbolInput = z.infer<typeof analyzeSymbolSchema>;
 
 type AnalyzeSymbolDeps = {
   detectProjectMinecraftVersion: (projectPath: string) => Promise<string | undefined>;

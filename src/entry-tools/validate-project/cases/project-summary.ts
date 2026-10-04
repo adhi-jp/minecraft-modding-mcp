@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { mapWithConcurrencyLimit } from "../../../concurrency.js";
 import { buildEntryToolResult, createSummarySubject, type DetailLevel } from "../../response-contract.js";
 import { ERROR_CODES, createError, isAppError } from "../../../errors.js";
-import { buildSuggestedCall } from "../../../build-suggested-call.js";
 import type { StageEmitter } from "../../../stage-emitter.js";
 import type { ValidateProjectInput } from "../../validate-project-service.js";
 import { buildEarlyTasksForBlocked, buildFullTaskStatusReport, type ValidateProjectDeps } from "../internal.js";

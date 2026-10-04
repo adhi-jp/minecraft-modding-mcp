@@ -4,7 +4,7 @@ import type { MappingSourcePriority, SourceMapping } from "../../types.js";
 import { remapSignatureMembers } from "../lifecycle/mapping-helpers.js";
 import { matchesMemberPattern } from "../member-pattern.js";
 
-export type RemappedMembers = {
+type RemappedMembers = {
   constructors: SignatureMember[];
   fields: SignatureMember[];
   methods: SignatureMember[];
@@ -16,7 +16,7 @@ export type RemappedMembers = {
   };
 };
 
-export type RemapMembersInput = {
+type RemapMembersInput = {
   signatureConstructors: SignatureMember[];
   signatureFields: SignatureMember[];
   signatureMethods: SignatureMember[];
@@ -83,7 +83,7 @@ export async function remapAndCountMembers(
   return { constructors, fields, methods, counts };
 }
 
-export type MemberSliceResult = {
+type MemberSliceResult = {
   constructors: SignatureMember[];
   fields: SignatureMember[];
   methods: SignatureMember[];
@@ -140,7 +140,7 @@ export function sliceMembersWithLimit(
 }
 
 /** Slim per-member wire shape: only what an agent reading Java needs. */
-export type WireMember = {
+type WireMember = {
   name: string;
   javaSignature: string;
   /**
@@ -220,7 +220,7 @@ export function projectMembersForWire(
  */
 export type MemberProjection = "names" | "signatures" | "full";
 
-export type ProjectedMember = {
+type ProjectedMember = {
   name: string;
   javaSignature?: string;
   jvmDescriptor?: string;

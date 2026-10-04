@@ -40,7 +40,7 @@ export function contentDigestSignature(value: string): ContentDigestSignature {
  * layout with no producer that varies it; it is written out because the digest
  * depends on every part.
  */
-export interface JarArtifactIdSpec {
+interface JarArtifactIdSpec {
   readonly space: "jar";
   /** Symlink-resolved, so two names for one file cannot mint two ids. */
   readonly jarPath: string;
@@ -68,7 +68,7 @@ export interface JarArtifactIdSpec {
  * The signature is a content digest of the bytes this cascade resolved, the
  * same as the jar space's.
  */
-export interface CoordinateArtifactIdSpec {
+interface CoordinateArtifactIdSpec {
   readonly space: "coordinate";
   readonly coordinate: string;
   /**
@@ -80,7 +80,7 @@ export interface CoordinateArtifactIdSpec {
   readonly mappingVariant?: MappingVariant;
 }
 
-export type ArtifactIdSpec = JarArtifactIdSpec | CoordinateArtifactIdSpec;
+type ArtifactIdSpec = JarArtifactIdSpec | CoordinateArtifactIdSpec;
 
 /**
  * The qualifier the decompile route puts on a jar's signature. Shared so the
@@ -107,7 +107,7 @@ export function composeArtifactId(spec: ArtifactIdSpec): string {
   return stableArtifactId(parts);
 }
 
-export interface JarArtifactIdentity {
+interface JarArtifactIdentity {
   /** The symlink-resolved path the signature was read from and the id composed from. */
   readonly resolvedPath: string;
   /** The signature as published in `ResolvedSourceArtifact.artifactSignature`, qualifier included. */
@@ -115,7 +115,7 @@ export interface JarArtifactIdentity {
   readonly artifactId: string;
 }
 
-export interface JarArtifactIdentityOptions {
+interface JarArtifactIdentityOptions {
   readonly signatureQualifier?: string;
   readonly mappingVariant?: MappingVariant;
 }

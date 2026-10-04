@@ -31,7 +31,7 @@ export function resolveGradleUserHomePath(gradleUserHome?: string): string {
   );
 }
 
-export type GradleCacheSearchInput =
+type GradleCacheSearchInput =
   | string
   | {
       projectPath?: string;

@@ -323,7 +323,7 @@ function projectTaskStatusReport(
   return projected as TaskStatusReport;
 }
 
-export async function runUpstreamProbes(projectPath: string, gradleUserHome?: string): Promise<{
+async function runUpstreamProbes(projectPath: string, gradleUserHome?: string): Promise<{
   workspace: TaskStatusReport["workspace.detected"];
   gradle: TaskStatusReport["gradle.readable"];
   loom: TaskStatusReport["loom.cache.found"];

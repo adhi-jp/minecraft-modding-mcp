@@ -11,7 +11,7 @@ export function pairKey(sourceMapping: SourceMapping, targetMapping: SourceMappi
   return `${sourceMapping}->${targetMapping}`;
 }
 
-export function parsePairKey(key: PairKey): { sourceMapping: SourceMapping; targetMapping: SourceMapping } {
+function parsePairKey(key: PairKey): { sourceMapping: SourceMapping; targetMapping: SourceMapping } {
   const separator = key.indexOf("->");
   const source = separator >= 0 ? key.slice(0, separator) : key;
   const target = separator >= 0 ? key.slice(separator + 2) : "";

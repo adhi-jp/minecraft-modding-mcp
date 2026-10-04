@@ -36,7 +36,7 @@ export type ValidateMixinStage =
   | "parse"
   | "target-lookup";
 
-export type MixinPipelineScopeFallback = {
+type MixinPipelineScopeFallback = {
   requested: string;
   applied: string;
   reason: string;

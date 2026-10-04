@@ -167,7 +167,7 @@ function removeCacheMetrics(svc: SourceService, artifactId: string): void {
   }
 }
 
-export function publishCacheMetrics(svc: SourceService): void {
+function publishCacheMetrics(svc: SourceService): void {
   svc.metrics.setCacheEntries(svc.state.lru.size);
   svc.metrics.setCacheTotalContentBytes(svc.state.cacheTotalContentBytes);
 }

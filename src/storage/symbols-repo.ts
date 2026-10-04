@@ -3,7 +3,7 @@ import type { SymbolRow } from "../types.js";
 
 type SqliteDatabase = InstanceType<typeof Database>;
 
-export interface IndexedSymbol {
+interface IndexedSymbol {
   filePath: string;
   symbolKind: string;
   symbolName: string;
@@ -13,7 +13,7 @@ export interface IndexedSymbol {
 
 type ScopedSymbolMatch = "exact" | "prefix" | "contains";
 
-export interface FindScopedSymbolsOptions {
+interface FindScopedSymbolsOptions {
   artifactId: string;
   query: string;
   match: ScopedSymbolMatch;

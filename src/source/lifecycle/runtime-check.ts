@@ -17,7 +17,7 @@ import type {
  * jar, malformed class file) - and `result` is then the fallback base with the
  * explanatory warning appended, so it still carries the caller's own status.
  */
-export interface UnobfuscatedRuntimeCheck {
+interface UnobfuscatedRuntimeCheck {
   verified: boolean;
   result: CheckSymbolExistsOutput;
 }

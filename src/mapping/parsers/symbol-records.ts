@@ -77,7 +77,7 @@ export function buildSymbolKey(record: MappingSymbolRecord): string {
   return `${record.kind}|${record.owner ?? ""}|${record.name}|${record.descriptor ?? ""}`;
 }
 
-export function classNameParts(classFqn: string): { owner?: string; name: string } {
+function classNameParts(classFqn: string): { owner?: string; name: string } {
   const separatorIndex = classFqn.lastIndexOf(".");
   if (separatorIndex <= 0 || separatorIndex >= classFqn.length - 1) {
     return {
@@ -151,7 +151,7 @@ export function simpleLookupKeys(record: MappingSymbolRecord): string[] {
   return [record.name];
 }
 
-export function registerRecord(index: DirectionIndex, record: MappingSymbolRecord): string {
+function registerRecord(index: DirectionIndex, record: MappingSymbolRecord): string {
   const key = buildSymbolKey(record);
   if (!index.records.has(key)) {
     index.records.set(key, record);

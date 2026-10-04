@@ -1,12 +1,12 @@
-export type AccessTransformerAccessAction =
+type AccessTransformerAccessAction =
   | "public"
   | "protected"
   | "package-private"
   | "private";
 
-export type AccessTransformerFinalAction = "add" | "remove";
+type AccessTransformerFinalAction = "add" | "remove";
 
-export type AccessTransformerTargetKind =
+type AccessTransformerTargetKind =
   | "class"
   | "field"
   | "method"

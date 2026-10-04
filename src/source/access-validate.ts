@@ -1,6 +1,5 @@
 import { parseAccessTransformer } from "../access-transformer-parser.js";
 import { parseAccessWidener } from "../access-widener-parser.js";
-import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import {
   validateParsedAccessTransformer,
@@ -12,7 +11,6 @@ import type {
   ResolvedTargetMembers
 } from "../mixin-validator.js";
 import type { SourceService } from "../source-service.js";
-import { remapSignatureMembers } from "./lifecycle.js";
 import { normalizeMapping, normalizeOptionalString } from "./shared-utils.js";
 import type {
   ValidateAccessTransformerInput,

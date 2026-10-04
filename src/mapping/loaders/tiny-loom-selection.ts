@@ -17,7 +17,7 @@ const HEADER_PROBE_BYTES = 64 * 1024;
  * mappings (2,080 MB peak / 6,755,994 slots ~= 323 B; the Mojang proguard index
  * lands at 330 B). Rounded up so the derived budget errs toward stopping early.
  */
-export const HEAP_BYTES_PER_INDEX_ENTRY = 340;
+const HEAP_BYTES_PER_INDEX_ENTRY = 340;
 
 /** Share of the heap still free at load time that a single tiny load may claim. */
 const HEAP_BUDGET_FRACTION = 0.7;
@@ -53,7 +53,7 @@ export function resolveTinyIndexEntryBudget(
   return Math.min(MAX_INDEX_ENTRY_BUDGET, Math.max(MIN_INDEX_ENTRY_BUDGET, derived));
 }
 
-export type TinyFileCandidate = {
+type TinyFileCandidate = {
   path: string;
   bytes: number;
   /**
@@ -64,7 +64,7 @@ export type TinyFileCandidate = {
   namespaces: SourceMapping[];
 };
 
-export type TinySelection = {
+type TinySelection = {
   /** Files to merge, in the order they should be merged. */
   selected: TinyFileCandidate[];
   /** Files whose bytes duplicate an already-selected file exactly. */

@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, dirname, resolve as resolvePath } from "node:path";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
@@ -26,7 +26,7 @@ import type {
   ValidateMixinResultSource
 } from "../source-service.js";
 import { NOOP_STAGE_EMITTER, type StageEmitter } from "../stage-emitter.js";
-import type { ArtifactScope, MappingSourcePriority, SourceMapping } from "../types.js";
+import type { ArtifactScope, MappingSourcePriority } from "../types.js";
 import type { FindMappingOutput as MappingFindMappingOutput } from "../mapping-service.js";
 import { reportedNamespace } from "../mapping-pipeline-service.js";
 import { isUnobfuscatedVersion } from "../version-service.js";

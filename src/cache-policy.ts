@@ -41,22 +41,22 @@ import type { CacheHint } from "@modelcontextprotocol/server";
  */
 
 /** cacheScope for every surface this server emits cache hints for. */
-export const APP_CACHE_SCOPE = "private" as const;
+const APP_CACHE_SCOPE = "private" as const;
 
 /** resources/list and resources/templates/list: 1 hour. */
-export const RESOURCE_LISTS_TTL_MS = 3_600_000;
+const RESOURCE_LISTS_TTL_MS = 3_600_000;
 
 /** resources/read of mc://versions/list: 5 minutes. */
-export const VERSIONS_LIST_READ_TTL_MS = 300_000;
+const VERSIONS_LIST_READ_TTL_MS = 300_000;
 
 /** resources/read of mc://metrics: live counters, never cache. */
-export const METRICS_READ_TTL_MS = 0;
+const METRICS_READ_TTL_MS = 0;
 
 /** resources/read of the seven template resources (class-source, class-source-json, artifact-file, find-mapping, find-member-mapping, class-members, artifact-metadata): 1 minute. */
-export const RESOURCE_READ_TTL_MS = 60_000;
+const RESOURCE_READ_TTL_MS = 60_000;
 
 /** ProblemDetails resource reads: never cache, regardless of the class row. */
-export const PROBLEM_DETAILS_READ_TTL_MS = 0;
+const PROBLEM_DETAILS_READ_TTL_MS = 0;
 
 /** Per-operation hints handed to the McpServer constructor (`cacheHints`). */
 export const RESOURCE_LISTS_CACHE_HINT: Readonly<CacheHint> = Object.freeze({

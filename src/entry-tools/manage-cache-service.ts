@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import {
   type CacheRegistry,
-  type CacheSelector,
   PUBLIC_CACHE_KINDS
 } from "../cache-registry.js";
 import { createError, ERROR_CODES } from "../errors.js";
@@ -50,7 +49,7 @@ export const manageCacheShape = {
 
 export const manageCacheSchema = z.object(manageCacheShape);
 
-export type ManageCacheInput = z.infer<typeof manageCacheSchema>;
+type ManageCacheInput = z.infer<typeof manageCacheSchema>;
 
 export class ManageCacheService {
   constructor(private readonly deps: { registry: CacheRegistry }) {}

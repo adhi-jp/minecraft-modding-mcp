@@ -1,5 +1,3 @@
-import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
-
 import {
   McpServer,
   type CallToolResult,
@@ -46,7 +44,7 @@ import { ToolExecutionGate } from "./tool-execution-gate.js";
 import { SERVER_IDENTITY, SERVER_VERSION } from "./server-identity.js";
 import { STDIO_WORKER_MODE_ENV } from "./stdio-supervisor.js";
 import { capWarningDetailsForSummary, classifyWarnings } from "./warning-details.js";
-import type { ArtifactScope, MappingSourcePriority, SourceMapping, SourceTargetInput } from "./types.js";
+import type { ArtifactScope } from "./types.js";
 import { WorkspaceMappingService } from "./workspace-mapping-service.js";
 import {
   InspectMinecraftService,
@@ -105,8 +103,6 @@ import {
   type SearchIntent,
   type SearchMatch,
   type SearchSymbolKind,
-  nonEmptyString,
-  optionalPositiveInt,
   analyzeModJarSchema,
   analyzeModJarShape,
   batchClassMembersSchema,

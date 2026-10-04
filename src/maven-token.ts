@@ -29,7 +29,7 @@ export type MavenSegmentComponent = "groupId" | "artifactId" | "version" | "clas
  * Everything else is out, path separators and NUL and control characters
  * included - a segment becomes a directory or file name verbatim.
  */
-export const SAFE_MAVEN_TOKEN_RE = /^[A-Za-z0-9._+-]+$/;
+const SAFE_MAVEN_TOKEN_RE = /^[A-Za-z0-9._+-]+$/;
 
 /**
  * The same set plus U+0020, for a VALUE segment (`version`, `classifier`).

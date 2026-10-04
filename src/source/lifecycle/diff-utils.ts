@@ -22,7 +22,7 @@ export function sortDiffMembers(members: DiffMember[]): DiffMember[] {
   });
 }
 
-export function sortDiffMemberChanges(changes: DiffMemberChange[]): DiffMemberChange[] {
+function sortDiffMemberChanges(changes: DiffMemberChange[]): DiffMemberChange[] {
   return [...changes].sort((left, right) => {
     const keyCompare = left.key.localeCompare(right.key);
     if (keyCompare !== 0) {
@@ -38,7 +38,7 @@ export function sortDiffMemberChanges(changes: DiffMemberChange[]): DiffMemberCh
   });
 }
 
-export function changedMemberFields(
+function changedMemberFields(
   fromMember: DiffMember,
   toMember: DiffMember,
   includeDescriptor: boolean

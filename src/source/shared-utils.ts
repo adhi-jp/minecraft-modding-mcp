@@ -93,7 +93,7 @@ export function dedupeQualityFlags(qualityFlags: readonly string[]): string[] {
   return deduped;
 }
 
-export const MAX_HELPER_REGEX_CACHE = 128;
+const MAX_HELPER_REGEX_CACHE = 128;
 
 /** Stores `regex` under `key`, evicting the oldest entry once the cache is full. */
 export function rememberCachedRegex(cache: Map<string, RegExp>, key: string, regex: RegExp): RegExp {

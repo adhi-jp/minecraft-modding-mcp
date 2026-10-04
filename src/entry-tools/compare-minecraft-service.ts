@@ -55,7 +55,7 @@ export const compareMinecraftShape = {
 
 export const compareMinecraftSchema = z.object(compareMinecraftShape);
 
-export type CompareMinecraftInput = z.infer<typeof compareMinecraftSchema>;
+type CompareMinecraftInput = z.infer<typeof compareMinecraftSchema>;
 
 type CompareMinecraftDeps = {
   compareVersions: (input: {
@@ -97,7 +97,7 @@ function compareStatusFromCounts(changedCount: number): Summary["status"] {
 /** Default bound on migration-overview's library enrichment (see `libraryDiffDeadlineMs`). */
 const DEFAULT_LIBRARY_DIFF_DEADLINE_MS = 5000;
 
-export type CompareMinecraftOptions = {
+type CompareMinecraftOptions = {
   /**
    * Deadline in milliseconds for fetching both sides' library lists during
    * migration-overview, so a restart with cached jars but no network access

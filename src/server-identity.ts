@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
  * construction; the live-SDK drift-guard test
  * (tests/stdio/stdio-supervisor-synthetic-drift.test.ts) proves it end-to-end.
  */
-export type ServerIdentity = { name: string; version: string };
+type ServerIdentity = { name: string; version: string };
 
 export const SERVER_NAME = "@adhisang/minecraft-modding-mcp";
 

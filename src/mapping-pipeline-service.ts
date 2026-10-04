@@ -2,7 +2,7 @@ import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import type { ResolvedSourceArtifact, SourceMapping, SourceTargetInput } from "./types.js";
 
-export interface MappingPipelineInput {
+interface MappingPipelineInput {
   requestedMapping: SourceMapping;
   target: SourceTargetInput;
   resolved: ResolvedSourceArtifact;
@@ -17,7 +17,7 @@ export interface MappingPipelineInput {
   allowBinaryRemap?: boolean;
 }
 
-export interface MappingPipelineResult {
+interface MappingPipelineResult {
   mappingApplied: SourceMapping;
   qualityFlags: string[];
   transformChain: string[];

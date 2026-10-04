@@ -65,7 +65,7 @@ export type ListVersionsInput = {
   limit?: number;
 };
 
-export type VersionEntry = {
+type VersionEntry = {
   id: string;
   unobfuscated: boolean;
 };
@@ -82,14 +82,14 @@ export type ListVersionsOutput = {
   warnings?: string[];
 };
 
-export type ResolvedVersionJar = {
+type ResolvedVersionJar = {
   version: string;
   jarPath: string;
   source: "downloaded";
   clientJarUrl: string;
 };
 
-export type ResolvedServerJar = {
+type ResolvedServerJar = {
   version: string;
   jarPath: string;
   source: "downloaded";
@@ -104,7 +104,7 @@ export type ResolvedVersionMappings = {
   serverMappingsUrl?: string;
 };
 
-export type ListVersionIdsInput = {
+type ListVersionIdsInput = {
   includeSnapshots?: boolean;
 };
 

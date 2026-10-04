@@ -30,14 +30,14 @@ export type VerifyMixinTargetInput = {
   strictVersion?: boolean;
 };
 
-export type VerifyMixinTargetMatch = {
+type VerifyMixinTargetMatch = {
   name: string;
   descriptor: string;
   accessFlags: string[];
   javaSignature?: string;
 };
 
-export type VerifyMixinTargetCandidate = {
+type VerifyMixinTargetCandidate = {
   name: string;
   descriptor: string;
   reason: string;
@@ -45,7 +45,7 @@ export type VerifyMixinTargetCandidate = {
 
 type SuggestedAnnotation = "@Shadow" | "@Accessor" | "@Invoker" | "@Inject-only";
 
-export type AccessorAdvice = {
+type AccessorAdvice = {
   suggestedAnnotation: SuggestedAnnotation | null;
   reasoning: string;
   exampleSnippet: string;
@@ -56,7 +56,7 @@ export type AccessorAdvice = {
   }>;
 };
 
-export type VerifyMixinTargetOutput = {
+type VerifyMixinTargetOutput = {
   exists: boolean;
   resolvedOwner: { className: string; mapping: SourceMapping };
   matches: VerifyMixinTargetMatch[];

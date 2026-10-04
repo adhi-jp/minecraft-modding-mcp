@@ -28,14 +28,12 @@ export const TASKS = [
   "list-files"
 ] as const;
 
-export const SUBJECT_KINDS = ["version", "artifact", "class", "file", "search", "workspace"] as const;
-
 const resolveTargetSchema = z.object({
   kind: targetKindSchema,
   value: nonEmptyString
 });
 
-export const artifactRefSchema = z.discriminatedUnion("type", [
+const artifactRefSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("resolved-id"),
     artifactId: nonEmptyString
@@ -46,7 +44,7 @@ export const artifactRefSchema = z.discriminatedUnion("type", [
   })
 ]);
 
-export const workspaceFocusSchema = z.discriminatedUnion("kind", [
+const workspaceFocusSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("class").describe("Select class inspection."),
     className: nonEmptyString.describe("Fully-qualified class name to inspect."),
@@ -132,13 +130,13 @@ export const subjectSchema = z.discriminatedUnion("kind", [
 
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 export type Subject = z.infer<typeof subjectSchema>;
-export type WorkspaceSubject = Extract<Subject, { kind: "workspace" }>;
-export type WorkspaceClassFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "class" }>;
-export type WorkspaceSearchFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "search" }>;
-export type WorkspaceFileFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "file" }>;
-export type InspectMinecraftTask = typeof TASKS[number];
-export type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
-export type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
+type WorkspaceSubject = Extract<Subject, { kind: "workspace" }>;
+type WorkspaceClassFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "class" }>;
+type WorkspaceSearchFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "search" }>;
+type WorkspaceFileFocus = Extract<z.infer<typeof workspaceFocusSchema>, { kind: "file" }>;
+type InspectMinecraftTask = typeof TASKS[number];
+type ConcreteInspectMinecraftTask = Exclude<InspectMinecraftTask, "auto">;
+type ArtifactContextTask = "class-overview" | "class-source" | "class-members" | "search" | "file" | "list-files";
 
 /**
  * Read at call time, never at module load: tests flip WORKSPACE_TARGET_OFF per
@@ -275,7 +273,7 @@ export type InspectMinecraftDeps = {
 // Helpers live as free functions so InspectMinecraftService keeps its baseline
 // declaration surface (constructor + execute only).
 
-export function requireWorkspaceClassFocus(subject: Subject): WorkspaceClassFocus {
+function requireWorkspaceClassFocus(subject: Subject): WorkspaceClassFocus {
   if (subject.kind !== "workspace" || subject.focus?.kind !== "class") {
     throw createError({
       code: ERROR_CODES.INVALID_INPUT,
@@ -455,7 +453,7 @@ async function buildArtifactContextSuggestedCall(
   });
 }
 
-export function taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
+function taskForSubject(subject: Subject): ConcreteInspectMinecraftTask {
   return resolveTask(undefined, subject) as ConcreteInspectMinecraftTask;
 }
 

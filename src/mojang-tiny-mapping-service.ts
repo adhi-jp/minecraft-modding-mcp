@@ -34,12 +34,12 @@ interface TinyMemberRecord {
 
 type VersionMappingsResolver = Pick<VersionService, "resolveVersionMappings">;
 
-export interface ResolveMojangTinyDeps {
+interface ResolveMojangTinyDeps {
   fetchFn?: typeof fetch;
   versionService?: VersionMappingsResolver;
 }
 
-export interface ResolveMojangTinyResult {
+interface ResolveMojangTinyResult {
   path: string;
   warnings: string[];
 }

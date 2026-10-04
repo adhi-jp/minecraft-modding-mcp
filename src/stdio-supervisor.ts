@@ -168,7 +168,7 @@ export function shouldRetainUnavailableNotification(method: string): boolean {
   return method === "notifications/initialized";
 }
 
-export type RestartReservation = {
+type RestartReservation = {
   notBefore: number;
   delayMs: number;
 };
@@ -232,7 +232,7 @@ export async function settleTreeCleanupWithin(
   });
 }
 
-export type SupervisorOptions = {
+type SupervisorOptions = {
   entryFile: string;
   validateProjectTimeoutMs?: number;
   clientWriter?: (message: JSONRPCMessage) => void;
@@ -259,7 +259,7 @@ export type ExitInfo = {
   signal: NodeJS.Signals | null;
 };
 
-export type RetryRecommendation = "narrow-query" | "clear-cache" | "report-bug" | "same-request";
+type RetryRecommendation = "narrow-query" | "clear-cache" | "report-bug" | "same-request";
 
 export type RestartContext = {
   toolName: string | undefined;
@@ -515,7 +515,7 @@ function redactValue(
   return undefined;
 }
 
-export type RedactedToolArgs = {
+type RedactedToolArgs = {
   args: Record<string, unknown>;
   /** `true` when redaction replaced any value with a sentinel; supervisor uses this to decide whether to surface `suggestedCall`. */
   modified: boolean;
@@ -589,7 +589,7 @@ export function buildSupervisorQueueLimitReply(id: RequestId, method: string): J
   });
 }
 
-export type BuildValidateProjectTimeoutReplyInput = {
+type BuildValidateProjectTimeoutReplyInput = {
   request: PendingRequestSnapshot;
   phase: "queue" | "running";
   deadlineMs: number;
@@ -820,7 +820,7 @@ export function buildExitTimestampGroups(
   return { prunedByTool, updatedByTool };
 }
 
-export type BuildWorkerRestartReplyOptions = {
+type BuildWorkerRestartReplyOptions = {
   structuredRestartDisabled?: boolean;
 };
 

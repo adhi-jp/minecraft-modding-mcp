@@ -49,21 +49,21 @@ const defaultBinaryRemapDeps: BinaryRemapDeps = {
   randomSuffix: () => Math.random().toString(36).slice(2, 8) || "0"
 };
 
-export type IndexRebuildReason =
+type IndexRebuildReason =
   | "force"
   | "missing_meta"
   | "schema_mismatch"
   | "signature_mismatch"
   | "already_current";
 
-export interface IndexedFileRecord {
+interface IndexedFileRecord {
   filePath: string;
   content: string;
   contentBytes: number;
   contentHash: string;
 }
 
-export interface RebuiltArtifactData {
+interface RebuiltArtifactData {
   files: IndexedFileRecord[];
   symbols: Array<{
     filePath: string;
@@ -139,7 +139,7 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
     };
   }
 
-  const resolved = toResolvedArtifact(svc, artifact);
+  const resolved = toResolvedArtifact(artifact);
   const rebuilt = await rebuildAndPersistArtifactIndex(svc, resolved, reason);
   svc.metrics.recordReindex();
   return {
@@ -157,7 +157,7 @@ export async function indexArtifact(svc: SourceService, input: IndexArtifactInpu
   };
 }
 
-export function fallbackArtifactSignature(artifactId: string): string {
+function fallbackArtifactSignature(artifactId: string): string {
   return createHash("sha256").update(artifactId).digest("hex");
 }
 
@@ -182,7 +182,7 @@ export function resolveIndexRebuildReason(input: {
   return "already_current";
 }
 
-export function toResolvedArtifact(svc: SourceService, artifact: ArtifactRow): ResolvedSourceArtifact {
+function toResolvedArtifact(artifact: ArtifactRow): ResolvedSourceArtifact {
   return {
     artifactId: artifact.artifactId,
     artifactAlias: artifact.alias,
@@ -202,7 +202,7 @@ export function toResolvedArtifact(svc: SourceService, artifact: ArtifactRow): R
   };
 }
 
-export async function rebuildAndPersistArtifactIndex(
+async function rebuildAndPersistArtifactIndex(
   svc: SourceService,
   resolved: ResolvedSourceArtifact,
   reason: Exclude<IndexRebuildReason, "already_current">
@@ -715,7 +715,7 @@ export async function maybeRemapBinaryForMojang(
   }
 }
 
-export async function recordRemappedJarBytesFromDisk(svc: SourceService, artifactId: string, path: string): Promise<void> {
+async function recordRemappedJarBytesFromDisk(svc: SourceService, artifactId: string, path: string): Promise<void> {
   try {
     const fileStat = await stat(path);
     if (!fileStat.isFile()) {
@@ -787,15 +787,6 @@ async function describePathKind(path: string): Promise<"missing" | "file" | "dir
   }
 }
 
-export async function runBinaryRemap(svc: SourceService, input: {
-  version: string;
-  inputJar: string;
-  remappedDir: string;
-  remappedJarPath: string;
-}): Promise<string> {
-  return runBinaryRemapWithDeps(svc, input, defaultBinaryRemapDeps);
-}
-
 export async function runBinaryRemapWithDeps(svc: SourceService, input: {
   version: string;
   inputJar: string;
@@ -865,7 +856,7 @@ export async function runBinaryRemapWithDeps(svc: SourceService, input: {
   }
 }
 
-export async function loadFromSourceJar(svc: SourceService, sourceJarPath: string): Promise<IndexedFileRecord[]> {
+async function loadFromSourceJar(svc: SourceService, sourceJarPath: string): Promise<IndexedFileRecord[]> {
   const files: IndexedFileRecord[] = [];
   for await (const entry of iterateJavaEntriesAsUtf8(sourceJarPath, svc.config.maxContentBytes)) {
   files.push({

@@ -25,7 +25,7 @@ export interface ArtifactIndexMetaRow {
   indexDurationMs: number;
 }
 
-export interface UpsertArtifactIndexMetaInput {
+interface UpsertArtifactIndexMetaInput {
   artifactId: string;
   artifactSignature: string;
   indexSchemaVersion: number;

@@ -10,7 +10,7 @@ import type { ApplyJsonPatchResult } from "./types.js";
 
 export type DecodeCompression = "none" | "gzip" | "auto";
 export type EncodeCompression = "none" | "gzip";
-export interface NbtLimits {
+interface NbtLimits {
   maxInputBytes: number;
   maxInflatedBytes: number;
   maxResponseBytes: number;
@@ -19,28 +19,28 @@ export interface NbtLimits {
 type NbtLimitStage = "decode-input" | "inflate" | "decode-output" | "encode-output" | "patch-output";
 type NbtLimitField = "nbtBase64" | "typedJson" | "result";
 
-export const DEFAULT_NBT_LIMITS: NbtLimits = {
+const DEFAULT_NBT_LIMITS: NbtLimits = {
   maxInputBytes: 4 * 1024 * 1024,
   maxInflatedBytes: 16 * 1024 * 1024,
   maxResponseBytes: 8 * 1024 * 1024
 };
 
-export interface NbtToJsonInput {
+interface NbtToJsonInput {
   nbtBase64: string;
   compression?: DecodeCompression;
 }
 
-export interface JsonToNbtInput {
+interface JsonToNbtInput {
   typedJson: unknown;
   compression?: EncodeCompression;
 }
 
-export interface ApplyPatchInput {
+interface ApplyPatchInput {
   typedJson: unknown;
   patch: unknown;
 }
 
-export interface NbtToJsonOutput {
+interface NbtToJsonOutput {
   typedJson: TypedNbtDocument;
   meta: {
     compressionDetected: "none" | "gzip";
@@ -48,7 +48,7 @@ export interface NbtToJsonOutput {
   };
 }
 
-export interface JsonToNbtOutput {
+interface JsonToNbtOutput {
   nbtBase64: string;
   meta: {
     outputBytes: number;

@@ -28,7 +28,7 @@ import {
 
 type SymbolKind = "class" | "field" | "method";
 
-export type BatchSymbolExistsEntry = {
+type BatchSymbolExistsEntry = {
   kind: SymbolKind;
   name: string;
   owner?: string;
@@ -44,7 +44,7 @@ export type BatchSymbolExistsEntry = {
  * Minecraft version, so querying the Minecraft mapping graph with that value
  * would be a category error. The zod schema rejects the disallowed kinds.
  */
-export type BatchSymbolExistsTarget =
+type BatchSymbolExistsTarget =
   | (SourceTargetInput & { kind: "version" })
   | WorkspaceTargetInput;
 

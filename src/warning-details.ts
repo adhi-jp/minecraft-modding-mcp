@@ -3,9 +3,9 @@
 // without parsing prose. The original text is NOT duplicated here; each entry
 // references its warning by position via `index` (read `meta.warnings[index]`).
 
-export type WarningCategory = "pagination" | "mapping" | "coverage" | "validation" | "general";
+type WarningCategory = "pagination" | "mapping" | "coverage" | "validation" | "general";
 
-export type WarningSeverity = "warning" | "info";
+type WarningSeverity = "warning" | "info";
 
 export type WarningDetail = {
   /** Stable machine code for the warning family. */

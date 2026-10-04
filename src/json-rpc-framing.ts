@@ -7,10 +7,10 @@ const MIN_MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_CONTENT_LENGTH_HEADER_BYTES = 8 * 1024;
 const DEFAULT_INCOMPLETE_FRAME_IDLE_MS = 30_000;
 
-export type FramingMode = "unknown" | "line" | "content-length";
+type FramingMode = "unknown" | "line" | "content-length";
 export type ConcreteFramingMode = Exclude<FramingMode, "unknown">;
 
-export type ParsedJsonRpcFrame = {
+type ParsedJsonRpcFrame = {
   message: JSONRPCMessage;
   mode: ConcreteFramingMode;
 };
@@ -20,12 +20,12 @@ export type ParsedJsonRpcFrame = {
  * identified by. Only the reader's own scheduler/clearer pair interprets it,
  * so a test can substitute a plain object for a real timer.
  */
-export type FrameIdleTimerHandle = unknown;
-export type FrameIdleTimerScheduler = (
+type FrameIdleTimerHandle = unknown;
+type FrameIdleTimerScheduler = (
   callback: () => void,
   delayMs: number
 ) => FrameIdleTimerHandle;
-export type FrameIdleTimerClearer = (handle: FrameIdleTimerHandle) => void;
+type FrameIdleTimerClearer = (handle: FrameIdleTimerHandle) => void;
 
 const scheduleIdleTimer: FrameIdleTimerScheduler = (callback, delayMs) => {
   const timer = setNodeTimeout(callback, delayMs);

@@ -1,6 +1,6 @@
-export type LogLevel = "info" | "warn" | "error";
+type LogLevel = "info" | "warn" | "error";
 
-export type LogDetails = Record<string, unknown>;
+type LogDetails = Record<string, unknown>;
 
 function serializeLog(level: LogLevel, event: string, details?: LogDetails): string {
   return JSON.stringify({

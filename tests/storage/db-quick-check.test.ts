@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,12 +7,11 @@ import {
   attachRuntimeCorruptionObserver,
   clearIntegrityCheckRequestFiles,
   convertRuntimeSqliteCorruption,
-  isRawSqliteCorruptionError,
   listIntegrityCheckRequestFiles,
   openDatabase,
   requestFullIntegrityCheck
 } from "../../src/storage/db.ts";
-import RawDatabase from "../../src/storage/sqlite.ts";
+import RawDatabase, { isRawSqliteCorruptionError } from "../../src/storage/sqlite.ts";
 import { withTempDir } from "../helpers/temp-dir.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 

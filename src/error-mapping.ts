@@ -147,7 +147,7 @@ const MAX_NESTED_JARS_TOTAL_BYTES = 8 * 1024;
  * says whether it is complete. Both keys are omitted when there is nothing to
  * publish, so the object spreads directly into a ProblemDetails.
  */
-export type NestedJarsField = {
+type NestedJarsField = {
   nestedJars?: string[];
   nestedJarsTruncated?: boolean;
 };
@@ -250,7 +250,7 @@ const ISSUE_ORIGIN_VALUES = new Set<string>([
  * every new code. The key is not in `CONTEXT_ALLOWLIST`, so it cannot leak into
  * the public `context` blob.
  */
-export function extractIssueOriginOverride(details: unknown): IssueOrigin | undefined {
+function extractIssueOriginOverride(details: unknown): IssueOrigin | undefined {
   const raw = (details as { issueOrigin?: unknown } | undefined)?.issueOrigin;
   return typeof raw === "string" && ISSUE_ORIGIN_VALUES.has(raw)
     ? (raw as IssueOrigin)

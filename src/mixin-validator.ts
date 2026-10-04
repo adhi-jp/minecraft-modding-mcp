@@ -7,9 +7,6 @@
 export type {
   AccessTransformerValidationResult,
   AccessWidenerValidationResult,
-  AggregatedWarningGroup,
-  ConfidenceBreakdown,
-  ConfidencePenalty,
   IssueCategory,
   IssueConfidence,
   MappingHealthReport,
@@ -17,12 +14,8 @@ export type {
   MixinValidationProvenance,
   MixinValidationResult,
   ResolutionPath,
-  ResolvedMember,
   ResolvedTargetMembers,
-  StructuredWarning,
   TargetOutcome,
-  ValidationIssue,
-  ValidationStatus,
   ValidationSummary
 } from "./mixin/types.js";
 

@@ -47,7 +47,6 @@ import type {
 } from "../types.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
 import type { WorkspaceProjectLoader } from "../workspace-mapping-service.js";
-import * as indexer from "./indexer.js";
 import {
   dedupeQualityFlags,
   hasPartialNetMinecraftCoverage,
@@ -191,7 +190,7 @@ export function isDependencyLikeArtifact(input: {
   return !coordinateNamesMinecraftRuntime(coordinate);
 }
 
-export type VersionSourceDiscovery = {
+type VersionSourceDiscovery = {
   searchedPaths: string[];
   candidateArtifacts: string[];
   selectedSourceJarPath?: string;
@@ -219,9 +218,9 @@ type RuntimeJarCandidate = {
  * - `project-anchored`: the jar sits inside the caller's own project build
  *   directory and the project declares exactly the requested Minecraft version.
  */
-export type RuntimeVersionEvidence = "exact-token" | "loader-token" | "project-anchored";
+type RuntimeVersionEvidence = "exact-token" | "loader-token" | "project-anchored";
 
-export type MappingFallbackSuggestion = {
+type MappingFallbackSuggestion = {
   suggestedCall?: { tool: string; params: Record<string, unknown> };
   exampleCalls?: Array<{ tool: string; params: Record<string, unknown>; reason: string }>;
   nextAction: string;
@@ -445,7 +444,7 @@ export function inferRuntimeJarMinecraftVersion(path: string): string | undefine
  * declares, never a library's own release number. A Loom-mapped 1.x jar carries
  * both signals too; its `1.x` id is what keeps it out. The path is never read.
  */
-export function provenUnobfuscatedRuntimeJarVersion(scan: JavaSourceScan | undefined): string | undefined {
+function provenUnobfuscatedRuntimeJarVersion(scan: JavaSourceScan | undefined): string | undefined {
   const signals = scan?.minecraftRuntimeSignals;
   if (!scan || scan.hasJavaSources || !signals?.hasSharedConstantsClass || signals.versionJsonText === undefined) {
     return undefined;
