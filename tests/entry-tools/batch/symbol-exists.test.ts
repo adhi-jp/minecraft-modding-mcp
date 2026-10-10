@@ -19,6 +19,7 @@ function buildDeps(opts: {
   failName?: string;
   resolved?: ResolveArtifactOutput;
   resolveCallSpy?: { count: number };
+  checkedNames?: string[];
 }): BatchSymbolExistsDeps {
   return {
     resolveArtifact: async () => {
@@ -26,6 +27,7 @@ function buildDeps(opts: {
       return opts.resolved ?? buildResolved();
     },
     checkSymbolExists: async (input) => {
+      opts.checkedNames?.push(input.name);
       if (opts.failName && input.name === opts.failName) {
         throw createError({
           code: ERROR_CODES.CLASS_NOT_FOUND,
@@ -177,19 +179,23 @@ test("ERR_WORKSPACE_VERSION_UNRESOLVED when shared artifact lacks Minecraft vers
 });
 
 test("E2: failFast=false (default) keeps running and preserves the entry's underlying code", async () => {
-  const service = new BatchSymbolExistsService(buildDeps({ failName: "Doom" }));
+  const checkedNames: string[] = [];
+  const service = new BatchSymbolExistsService(buildDeps({ failName: "example.Doom", checkedNames }));
   const out = await service.execute({
     ...baseInput,
+    // Dispatch the second entry only after the first fails, so the default matters.
+    concurrency: 1,
     entries: [
-      { kind: "class", name: "Doom" },
-      { kind: "class", name: "OkB" }
+      { kind: "class", name: "example.Doom" },
+      { kind: "class", name: "example.OkB" }
     ]
   });
   assert.equal((out.results[0] as { error: { code: string } }).error.code, ERROR_CODES.CLASS_NOT_FOUND);
-  // Second entry must still be processed (no abort).
-  assert.ok("result" in (out.results[1] as object) || "error" in (out.results[1] as object));
-  if ("result" in (out.results[1] as object)) {
-    const r = (out.results[1] as { result: { status: string } }).result;
-    assert.equal(r.status, "resolved");
-  }
+  const second = out.results[1]!;
+  assert.equal(second.status, "ok", "the default must dispatch the entry after a failure");
+  assert.ok("result" in second);
+  assert.equal(second.result.status, "resolved");
+  assert.equal(out.summary.ok, 1);
+  assert.equal(out.summary.error, 1);
+  assert.deepEqual(checkedNames, ["example.Doom", "example.OkB"]);
 });
