@@ -8,7 +8,7 @@ import { createJarEntryReader } from "./source-jar-reader.js";
 import { artifactIdNamesMinecraftRuntime, firstMinecraftVersionToken } from "./source/artifact-resolver.js";
 import { matchesMemberPattern } from "./source/member-pattern.js";
 import { normalizePathStyle } from "./source/shared-utils.js";
-import type { Config } from "./types.js";
+import type { Config, JarStatStamp } from "./types.js";
 import { isUnobfuscatedVersion } from "./version-service.js";
 
 type MappingNamespace = "obfuscated" | "mojang" | "intermediary" | "yarn";
@@ -841,8 +841,11 @@ export class MinecraftExplorerService {
     const includeSynthetic = input.includeSynthetic ?? false;
     const includeInherited = input.includeInherited ?? false;
     const memberPattern = input.memberPattern ? lower(input.memberPattern) : undefined;
+    const jarStat = readJarStatStamp(jarPath);
     const cacheKey = [
       jarPath,
+      jarStat.signatureParts.mtimeMs,
+      jarStat.signatureParts.size,
       fqn,
       access,
       includeSynthetic ? "1" : "0",
@@ -857,7 +860,7 @@ export class MinecraftExplorerService {
         methods: cached.methods,
         fields: cached.fields,
         warnings: cached.warnings,
-        context: this.contextForJar(jarPath, input.dependencyOrigin)
+        context: this.contextForJar(jarPath, jarStat, input.dependencyOrigin)
       };
     }
 
@@ -1154,11 +1157,11 @@ export class MinecraftExplorerService {
       methods: output.methods,
       fields: output.fields,
       warnings: output.warnings,
-      context: this.contextForJar(jarPath, input.dependencyOrigin)
+      context: this.contextForJar(jarPath, jarStat, input.dependencyOrigin)
     };
   }
 
-  private contextForJar(jarPath: string, dependencyOrigin = false): ResponseContext {
+  private contextForJar(jarPath: string, jarStat: JarStatStamp, dependencyOrigin = false): ResponseContext {
     // extractVersionFromPath takes the first version-shaped token (release,
     // pre-release/rc, or YYwNNa snapshot id) anywhere in the path, which only
     // means anything for vanilla jars stored under version-numbered
@@ -1184,7 +1187,7 @@ export class MinecraftExplorerService {
       // is also the right default for a dependency jar's own bytecode namespace.
       mappingNamespace:
         minecraftVersion && isUnobfuscatedVersion(minecraftVersion) ? "mojang" : "obfuscated",
-      jarSignature: readJarStatStamp(jarPath).sourceArtifactId,
+      jarSignature: jarStat.sourceArtifactId,
       generatedAt: new Date().toISOString()
     };
   }

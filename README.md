@@ -286,7 +286,7 @@ Start with these top-level workflow tools unless you already know the exact spec
 
 ### Source Exploration
 
-Tools for browsing Minecraft versions, resolving source artifacts, and reading or searching decompiled source code.
+Tools for browsing Minecraft versions, resolving source artifacts, and reading or searching decompiled source code. `get-class-members` reuses a JAR signature at the same path while its modification time and size are unchanged; a change to either value triggers a fresh signature read.
 
 <!-- BEGIN GENERATED TOOL TABLE: source-exploration -->
 | Tool | Purpose |

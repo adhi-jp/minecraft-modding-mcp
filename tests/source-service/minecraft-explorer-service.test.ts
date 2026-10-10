@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -577,7 +577,7 @@ test("MinecraftExplorerService treats memberPattern \"|\" as OR alternatives", a
   ]);
 });
 
-test("MinecraftExplorerService reuses cached signatures but refreshes response context", async () => {
+test("MinecraftExplorerService reloads signatures when a jar is rebuilt at the same path", async () => {
   const root = await mkdtemp(join(tmpdir(), "explorer-cache-"));
   const jarPath = join(root, "demo-1.21.4.jar");
   const firstJar = {
@@ -594,7 +594,6 @@ test("MinecraftExplorerService reuses cached signatures but refreshes response c
 
   const first = await service.getSignature({ jarPath, fqn: "com.example.Cached" });
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
   await createJar(jarPath, {
     "com/example/Cached.class": buildClassFile({
       internalName: "com/example/Cached",
@@ -605,23 +604,65 @@ test("MinecraftExplorerService reuses cached signatures but refreshes response c
     }),
     "com/example/Extra.class": buildClassFile({ internalName: "com/example/Extra" })
   });
-  await writeFile(join(root, "touch.txt"), "cache-bust");
-
   const second = await service.getSignature({ jarPath, fqn: "com.example.Cached" });
 
   assert.deepEqual(first.methods.map((method) => method.name), ["first"]);
-  assert.deepEqual(second.methods.map((method) => method.name), ["first"]);
-  assert.notEqual(second.context.generatedAt, first.context.generatedAt);
+  assert.deepEqual(second.methods.map((method) => method.name), ["second"]);
   assert.notEqual(second.context.jarSignature, first.context.jarSignature);
 });
 
-test("MinecraftExplorerService avoids delete/set churn and spread copies on cache hits", async () => {
-  const source = await readFile(new URL("../../src/minecraft-explorer-service.ts", import.meta.url), "utf8");
-  const block =
-    source.match(/const cached = this\.signatureCache\.touch\(cacheKey\);[\s\S]*?const classEntryPath =/)?.[0] ?? "";
+test("MinecraftExplorerService reloads a same-size jar rewrite when its modification time changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-cache-same-size-"));
+  const jarPath = join(root, "demo-1.21.4.jar");
+  await createJar(jarPath, {
+    "com/example/Cached.class": buildClassFile({
+      internalName: "com/example/Cached",
+      methods: [{ name: "first", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const firstTime = new Date("2020-01-01T00:00:00Z");
+  await utimes(jarPath, firstTime, firstTime);
+  const firstStat = await stat(jarPath);
+  const service = createService(root);
+  const first = await service.getSignature({ jarPath, fqn: "com.example.Cached" });
 
-  assert.doesNotMatch(block, /this\.signatureCache\.delete\(cacheKey\);\s*this\.signatureCache\.set\(cacheKey, cached\);/);
-  assert.doesNotMatch(block, /return\s*\{\s*\.\.\.cached,/);
+  await createJar(jarPath, {
+    "com/example/Cached.class": buildClassFile({
+      internalName: "com/example/Cached",
+      methods: [{ name: "other", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const secondTime = new Date("2020-01-02T00:00:00Z");
+  await utimes(jarPath, secondTime, secondTime);
+  const secondStat = await stat(jarPath);
+  assert.equal(secondStat.size, firstStat.size, "the fixture must isolate modification-time invalidation");
+  assert.notEqual(secondStat.mtimeMs, firstStat.mtimeMs);
+
+  const second = await service.getSignature({ jarPath, fqn: "com.example.Cached" });
+  assert.deepEqual(first.methods.map((method) => method.name), ["first"]);
+  assert.deepEqual(second.methods.map((method) => method.name), ["other"]);
+  assert.notEqual(second.context.jarSignature, first.context.jarSignature);
+});
+
+test("MinecraftExplorerService reuses unchanged signatures without reopening the jar", async () => {
+  const root = await mkdtemp(join(tmpdir(), "explorer-cache-hit-"));
+  const jarPath = await createExplorerJar(root, "demo-1.21.4.jar", {
+    "com/example/Cached.class": buildClassFile({
+      internalName: "com/example/Cached",
+      methods: [{ name: "first", descriptor: "()V", accessFlags: ACC_PUBLIC }]
+    })
+  });
+  const service = createService(root);
+  const input = { jarPath, fqn: "com.example.Cached" };
+
+  __resetZipOpenCount();
+  const first = await service.getSignature(input);
+  assert.equal(__getZipOpenCount(), 1);
+  const second = await service.getSignature(input);
+
+  assert.deepEqual(second.methods.map((method) => method.name), ["first"]);
+  assert.equal(second.context.jarSignature, first.context.jarSignature);
+  assert.equal(__getZipOpenCount(), 1, "an unchanged cache hit must not read the jar again");
 });
 
 test("MinecraftExplorerService reports unknown minecraftVersion for a dependency-origin jar", async () => {
