@@ -360,6 +360,8 @@ Tools for extracting metadata from mod JARs, decompiling mod source, searching m
 | `remap-mod-jar` | Remap a Fabric or Quilt mod JAR to `yarn` or `mojang` names |
 <!-- END GENERATED TOOL TABLE: mod-analysis -->
 
+`analyze-mod-jar` treats `lowcodefml` in `META-INF/mods.toml` as Forge; `META-INF/neoforge.mods.toml` or a NeoForge loader value identifies NeoForge.
+
 ### Validation
 
 Tools for validating Mixin source, Access Widener files, and Forge/NeoForge Access Transformer files against a target Minecraft version. Workspace options let validation use loader/runtime context when a project path is available.

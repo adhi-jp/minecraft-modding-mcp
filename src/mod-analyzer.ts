@@ -289,10 +289,9 @@ function parseForgeMod(
 
   const firstMod = toml.mods?.[0];
 
-  // Determine Forge vs NeoForge from modLoader field
+  // lowcodefml is shared by Forge and NeoForge, so it cannot distinguish them.
   const modLoaderValue = toml.modLoader?.toLowerCase() ?? "";
-  const isNeoForge =
-    modLoaderValue.includes("neoforge") || modLoaderValue.includes("lowcodefml");
+  const isNeoForge = modLoaderValue.includes("neoforge");
 
   // Also check for neoforge.mods.toml presence
   const hasNeoforgeToml = entries.includes("META-INF/neoforge.mods.toml");

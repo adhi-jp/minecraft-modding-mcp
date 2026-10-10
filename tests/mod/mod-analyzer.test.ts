@@ -208,29 +208,50 @@ file = "accesstransformer_extra.cfg"
 });
 
 // ---------------------------------------------------------------------------
-// 5. NeoForge detection via modLoader field in mods.toml
+// 5. lowcodefml is shared by Forge and NeoForge
 // ---------------------------------------------------------------------------
 
-test("analyzeModJar detects NeoForge from modLoader=lowcodefml in mods.toml", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mod-neoforge2-"));
-  const jarPath = join(root, "neoforge2-example.jar");
+test("analyzeModJar keeps Forge lowcodefml mods as Forge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-forge-lowcode-"));
+  const jarPath = join(root, "forge-lowcode-example.jar");
   const toml = `
 modLoader = "lowcodefml"
 loaderVersion = "[1,)"
 
 [[mods]]
-modId = "neomod2"
+modId = "forgedata"
 version = "2.0.0"
 `;
   await createJar(jarPath, {
     "META-INF/mods.toml": toml,
-    "com/example/NeoMod2.class": Buffer.alloc(4)
+    "data/forgedata/tags/items/example.json": "{\"values\":[]}"
+  });
+
+  const result = await analyzeModJar(jarPath);
+
+  assert.equal(result.loader, "forge");
+  assert.equal(result.modId, "forgedata");
+});
+
+test("analyzeModJar recognizes NeoForge lowcodefml mods by neoforge.mods.toml", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-neoforge-lowcode-"));
+  const jarPath = join(root, "neoforge-lowcode-example.jar");
+  await createJar(jarPath, {
+    "META-INF/neoforge.mods.toml": `
+modLoader = "lowcodefml"
+loaderVersion = "[1,)"
+
+[[mods]]
+modId = "neodata"
+version = "2.0.0"
+`,
+    "data/neodata/tags/items/example.json": "{\"values\":[]}"
   });
 
   const result = await analyzeModJar(jarPath);
 
   assert.equal(result.loader, "neoforge");
-  assert.equal(result.modId, "neomod2");
+  assert.equal(result.modId, "neodata");
 });
 
 // ---------------------------------------------------------------------------

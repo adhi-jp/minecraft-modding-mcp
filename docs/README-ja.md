@@ -335,7 +335,7 @@ Minecraft バージョン間でのクラス / レジストリ変更比較と、�
 
 ### Mod 解析
 
-Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mod コード検索、Mod 名前空間のリマッピングを行うツール群です。
+Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mod コード検索、Mod 名前空間のリマッピングを行うツール群です。`META-INF/mods.toml` の `lowcodefml` は Forge として分類します。NeoForge は NeoForge のローダー値、または `META-INF/neoforge.mods.toml` によって判定します。
 
 <!-- BEGIN GENERATED TOOL TABLE: mod-analysis -->
 | ツール | 役割 |
