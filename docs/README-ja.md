@@ -291,6 +291,8 @@ Minecraft バージョンの参照、ソースアーティファクトの解決�
 | `index-artifact` | 既存アーティファクトのインデックスメタデータを再構築する |
 <!-- END GENERATED TOOL TABLE: source-exploration -->
 
+ソースインデックスからの検索では、完全修飾クラス名をそのファイル内の外側から内側までの型の連鎖と照合し、指定された表記で返します。別のインデックス対象ファイルにある同名型が、存在しない型の代わりに返されることはありません。
+
 `26.1+` のような難読化されていないリリースでは、`obfuscated` はランタイム jar に含まれるままの名前を指し、それはすでに Mojang 名です。`obfuscated` と `mojang` のどちらも受け付け、`obfuscated` と報告されるはずの名前空間フィールド（`mappingApplied`、`returnedNamespace` など）は `mojang` と報告されます。こうしたアーティファクトには `provenance.unobfuscatedRuntime: true` が付きます。`requestedMapping` は書き換えられないため、`mapping` を省略したか `obfuscated` を指定したリクエストで `requestedMapping: "obfuscated"` と `mappingApplied: "mojang"` が並ぶのは同一の名前を指すだけで、フォールバックではありません。アーティファクト系・クラス系のツールが 26.1+ のターゲットを `intermediary` や `yarn` で解決した場合は、警告付きでランタイムの名前にフォールバックし `mojang` と報告します。ライフサイクル系のツールは指定された `intermediary` / `yarn` をそのまま報告します。解決済みの `artifactId` に明示的な `intermediary` / `yarn` を渡した場合はこのフォールバックを行わず、`get-class-source` と `get-class-members` の `mappingApplied` は `mojang` ですが、`get-class-members` と `batch-class-members` の各エントリは `returnedNamespace` に指定された名前を保持します。バージョンが `26.x` に見えるだけの依存 jar、`manage-cache` のメタデータ、Access Widener / Access Transformer 検証の provenance は `obfuscated` のままです。詳しくは [tool-reference.md → Namespace Definitions](tool-reference.md#namespace-definitions) を参照してください。
 
 ### バージョン比較とシンボル追跡

@@ -768,6 +768,69 @@ function resolveNestedTypeChain(
   return undefined;
 }
 
+function findQualifiedClassMatch(
+  svc: SourceService,
+  artifactId: string,
+  className: string
+): FindClassMatch | undefined {
+  const filePath = resolveClassFilePath(svc, artifactId, className);
+  if (!filePath) return undefined;
+  const row = svc.filesRepo.getFileContent(artifactId, filePath);
+  if (!row) return undefined;
+
+  // File lookup can fall back to another same-named type. Verify its package
+  // and declaration chain before assigning the caller's qualified name to it.
+  const packagePrefix = filePath.slice(0, filePath.lastIndexOf("/") + 1).replaceAll("/", ".");
+  const normalizedClassName = className.replaceAll("$", ".");
+  if (!normalizedClassName.startsWith(packagePrefix)) return undefined;
+  const typeNames = normalizedClassName.slice(packagePrefix.length).split(".");
+  const typeSymbols = extractSymbolsFromSource(filePath, row.content)
+    .filter((symbol) => TYPE_SYMBOL_KINDS.includes(symbol.symbolKind));
+
+  // The first type declaration is top-level. Ordinary top-level lookups need
+  // no brace scans; only another top-level type or a nested lookup needs ranges.
+  let rootSymbol = typeSymbols[0]?.symbolName === typeNames[0] ? typeSymbols[0] : undefined;
+  let lines: string[] | undefined;
+  let strippedLines: string[] | undefined;
+  if (!rootSymbol) {
+    lines = row.content.split(/\r?\n/);
+    strippedLines = classSourceHelpers.stripBraceNoise(lines);
+    const rootRanges = classSourceHelpers.computeNestedTypeRanges(
+      lines, typeSymbols, { declarationLine: 0, endLine: lines.length }, strippedLines
+    );
+    rootSymbol = typeSymbols.find((symbol) =>
+      symbol.symbolName === typeNames[0] && rootRanges.some((range) => range.declarationLine === symbol.line)
+    );
+  }
+  if (!rootSymbol) return undefined;
+
+  let selectedSymbol = rootSymbol;
+  if (typeNames.length > 1) {
+    lines ??= row.content.split(/\r?\n/);
+    strippedLines ??= classSourceHelpers.stripBraceNoise(lines);
+    let body = classSourceHelpers.scanBraceRange(lines, rootSymbol.line, strippedLines);
+    for (const typeName of typeNames.slice(1)) {
+      const children = classSourceHelpers.computeNestedTypeRanges(lines, typeSymbols, body, strippedLines);
+      const child = typeSymbols.find((symbol) =>
+        symbol.symbolName === typeName && children.some((range) => range.declarationLine === symbol.line)
+      );
+      if (!child) return undefined;
+      selectedSymbol = child;
+      body = children.find((range) => range.declarationLine === child.line)!;
+    }
+  }
+
+  return {
+    qualifiedName: className,
+    filePath,
+    line: selectedSymbol.line,
+    symbolKind: selectedSymbol.symbolKind,
+    ...(typeNames.length > 1
+      ? { nested: true, enclosingClass: `${packagePrefix}${rootSymbol.symbolName}` }
+      : {})
+  };
+}
+
 export function findClass(svc: SourceService, input: FindClassInput): FindClassOutput {
   const className = input.className.trim();
   if (!className) {
@@ -791,49 +854,12 @@ export function findClass(svc: SourceService, input: FindClassInput): FindClassO
   const isQualified = className.includes(".");
 
   if (isQualified) {
-    // The innermost simple name (handles both dot- and $-separated inner types).
-    const simpleName = className.split(/[.$]/).at(-1) ?? className;
-    const directPath = `${classNameToClassPath(className)}.java`;
-    // The extractor stores ONE (outer) qualifiedName per file, so a nested type's
-    // FQCN never equals any stored qualifiedName and its synthetic file path
-    // (pkg/Outer/Inner.java) does not exist. resolveClassFilePath maps the FQCN —
-    // inner classes included — to the real outer file, which we match on.
-    const resolvedFilePath = resolveClassFilePath(svc, artifactId, className);
-    const result = svc.symbolsRepo.findScopedSymbols({
-      artifactId,
-      query: simpleName,
-      match: "exact",
-      symbolKinds: TYPE_SYMBOL_KINDS,
-      limit: limit * 5
-    });
-    const matches = result.items
-      .filter((row) => {
-        const rowQualified = fqnOfRow(row);
-        return (
-          rowQualified === className ||
-          row.filePath === directPath ||
-          (resolvedFilePath != null && row.filePath === resolvedFilePath)
-        );
-      })
-      .map((row) => {
-        const rowQualified = fqnOfRow(row);
-        // For an inner-class match the stored qualifiedName is the outer type; the
-        // caller asked for the full nested FQCN, so report that.
-        const isInnerMatch = rowQualified !== className && row.filePath !== directPath;
-        return {
-          qualifiedName: isInnerMatch ? className : rowQualified,
-          filePath: row.filePath,
-          line: row.line,
-          symbolKind: row.symbolKind,
-          ...(isInnerMatch ? { nested: true, enclosingClass: rowQualified } : {})
-        };
-      })
-      .slice(0, limit);
+    const match = findQualifiedClassMatch(svc, artifactId, className);
     return finishFindClass(svc, {
       artifact,
       artifactId,
       className,
-      matches,
+      matches: match ? [match] : [],
       warnings
     });
   }

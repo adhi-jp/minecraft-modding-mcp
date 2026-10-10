@@ -317,7 +317,7 @@ test("SourceService findClass resolves qualified names even with many same-name 
   const found = service.findClass({
     className: "z.desired.Main",
     artifactId: resolved.artifactId,
-    limit: 20
+    limit: 1
   });
 
   assert.equal(found.total, 1);
@@ -325,7 +325,7 @@ test("SourceService findClass resolves qualified names even with many same-name 
   assert.equal(found.matches[0]?.filePath, "z/desired/Main.java");
 });
 
-test("SourceService findClass pushes type symbolKinds and a bounded limit to findScopedSymbols", async () => {
+test("SourceService findClass pushes type symbolKinds and a bounded limit to unqualified symbol lookup", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-findclass-pushdown-"));
   const service = new SourceService(buildTestConfig(root));
@@ -353,16 +353,115 @@ test("SourceService findClass pushes type symbolKinds and a bounded limit to fin
     return original(options);
   };
 
-  // Unqualified branch and qualified branch must BOTH push the kind filter to SQL
-  // and bound the over-fetch at limit*5 (not the old hard-coded 5000).
+  // Qualified lookup validates declarations in one file instead of fetching a
+  // globally bounded symbol pool; unqualified lookup still filters kinds in SQL.
   service.findClass({ className: "Main", artifactId: "pushdown-artifact", limit: 7 });
   service.findClass({ className: "pkg.Main", artifactId: "pushdown-artifact", limit: 7 });
 
-  assert.equal(captured.length, 2);
+  assert.equal(captured.length, 1);
   for (const call of captured) {
     assert.deepEqual(call.symbolKinds, ["class", "interface", "enum", "record"]);
-    assert.equal(call.limit, 35);
+    assert.ok(
+      call.limit !== undefined && call.limit >= 7 && call.limit <= 35,
+      "unqualified lookup should satisfy the requested size within its candidate budget"
+    );
   }
+});
+
+test("SourceService findClass validates the full qualified nesting chain", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-find-class-qualified-nesting-"));
+  const sourcesJarPath = join(root, "nested-sources.jar");
+
+  await createJar(sourcesJarPath, {
+    "p/Outer.java": [
+      "package p;",
+      "public class Outer {",
+      "  public static class A {",
+      "    public static class Builder {}",
+      "  }",
+      "  public static class B {",
+      "    public static class Builder {}",
+      "  }",
+      ...Array.from({ length: 30 }, (_, index) => [
+        `  public static class Branch${index} {`,
+        "    public static class Builder {}",
+        "  }"
+      ]).flat(),
+      "}"
+    ].join("\n"),
+    "p/Other.java": [
+      "package p;",
+      "public class Other {",
+      "  public static class Outer {}",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: sourcesJarPath },
+    mapping: "obfuscated"
+  });
+
+  for (const { className, line } of [
+    { className: "p.Outer.A.Builder", line: 4 },
+    { className: "p.Outer.B.Builder", line: 7 },
+    { className: "p.Outer$A$Builder", line: 4 },
+    { className: "p.Outer$B$Builder", line: 7 }
+  ]) {
+    await t.test(`resolves only the declaration of ${className}`, () => {
+      const found = service.findClass({ artifactId: resolved.artifactId, className });
+
+      assert.equal(found.total, 1);
+      assert.deepEqual(found.matches, [{
+        qualifiedName: className,
+        filePath: "p/Outer.java",
+        line,
+        symbolKind: "class",
+        nested: true,
+        enclosingClass: "p.Outer"
+      }]);
+    });
+  }
+
+  await t.test("does not invent a missing enclosing type", () => {
+    const found = service.findClass({
+      artifactId: resolved.artifactId,
+      className: "p.Outer.Missing.Builder"
+    });
+
+    assert.equal(found.total, 0);
+    assert.deepEqual(found.matches, []);
+  });
+
+  await t.test("finds a later same-file declaration with limit 1", () => {
+    const found = service.findClass({
+      artifactId: resolved.artifactId,
+      className: "p.Outer.Branch29.Builder",
+      limit: 1
+    });
+
+    assert.equal(found.total, 1);
+    assert.equal(found.matches[0]?.qualifiedName, "p.Outer.Branch29.Builder");
+    assert.equal(found.matches[0]?.filePath, "p/Outer.java");
+    assert.equal(found.matches[0]?.line, 97);
+  });
+
+  await t.test("keeps a top-level match distinct from a same-named nested type", () => {
+    const found = service.findClass({
+      artifactId: resolved.artifactId,
+      className: "p.Outer"
+    });
+
+    assert.equal(found.total, 1);
+    assert.deepEqual(found.matches, [{
+      qualifiedName: "p.Outer",
+      filePath: "p/Outer.java",
+      line: 2,
+      symbolKind: "class"
+    }]);
+  });
 });
 
 test("SourceService findClass resolves a qualified inner-class name to its outer file", async () => {

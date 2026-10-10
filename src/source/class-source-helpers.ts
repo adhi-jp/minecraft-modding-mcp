@@ -90,7 +90,7 @@ export function extractDecompiledMembers(
  * preserved (one output entry per input line). Text blocks (""" … """) are not
  * special-cased; they are vanishingly rare in decompiled output.
  */
-function stripBraceNoise(lines: string[]): string[] {
+export function stripBraceNoise(lines: string[]): string[] {
   const out: string[] = new Array(lines.length);
   let inBlockComment = false;
   for (let i = 0; i < lines.length; i += 1) {

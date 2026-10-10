@@ -26,6 +26,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 
 - `get-class-members` reads a fresh signature when a JAR at the same path has a different modification time or size; matching path and stat values continue to reuse the cached signature.
+- `find-class` finds qualified classes even when unrelated same-named declarations exhaust the candidate window, and checks the complete enclosing-type chain instead of returning a same-named sibling.
 - `analyze-mod-jar` classifies `META-INF/mods.toml` with the shared `lowcodefml` loader value as Forge; NeoForge is identified by a NeoForge loader signal or `META-INF/neoforge.mods.toml`.
 - `search-class-source` with `intent: "symbol"` and an explicit `queryNamespace` finds fully qualified classes already in that namespace, including Mojang names on a proven Minecraft 26.1+ runtime. These identity searches could return no hits or warn about unavailable mappings; they do not need mapping data. An explicit package scope still takes precedence.
 - `resolve-artifact` honors `allowDecompile: false` for `mapping: "mojang"` on Minecraft 26.1+ version targets, Minecraft runtime coordinates such as `net.minecraft:client:26.1`, and directly named jars proven to be those runtimes. A binary-only target fails with `ERR_SOURCE_NOT_FOUND` before decompilation; available source jars remain usable.
