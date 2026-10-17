@@ -11,7 +11,8 @@ interface ExtractedSymbol {
 // wildcards (List<? extends Foo>), and FQNs (java.util.Map). It must not contain "=".
 const TYPE_TOKEN = "[\\w.$][\\w.$<>\\[\\],?\\s]*";
 const MODIFIER = "(?:public|private|protected|abstract|final|static|native|synchronized|default|strictfp|transient|volatile|sealed|non-sealed)";
-const MODIFIER_OR_ANNOTATION_RUN = `(?:(?:@[\\w.]+|${MODIFIER})\\s+)*`;
+// An annotation may carry one argument list without nested parentheses, e.g. @SuppressWarnings("unused").
+const MODIFIER_OR_ANNOTATION_RUN = `(?:(?:@[\\w.]+(?:\\([^()]*\\))?|${MODIFIER})\\s+)*`;
 const TYPE_PARAMS = "(?:<[^>]+>\\s*)?";
 const THROWS_CLAUSE = "(?:\\s+throws\\s+[\\w.$,\\s]+)?";
 

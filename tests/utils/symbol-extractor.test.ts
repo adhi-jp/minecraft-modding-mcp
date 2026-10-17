@@ -171,3 +171,25 @@ test("extractSymbolsFromSource indexes sealed and non-sealed types without phant
     [{ symbolKind: "interface", symbolName: "Baz" }]
   );
 });
+
+test("extractSymbolsFromSource recognizes declarations led by an annotation with arguments", () => {
+  const source = [
+    "package a.b;",
+    "@SuppressWarnings(\"unused\") public class Outer {",
+    "  public static class Inner {",
+    "    @SuppressWarnings(\"unchecked\") public void run() {}",
+    "  }",
+    "}"
+  ].join("\n");
+
+  const symbols = extractSymbolsFromSource("a/b/Outer.java", source);
+
+  assert.deepEqual(
+    symbols.map((s) => ({ symbolKind: s.symbolKind, symbolName: s.symbolName, line: s.line })),
+    [
+      { symbolKind: "class", symbolName: "Outer", line: 2 },
+      { symbolKind: "class", symbolName: "Inner", line: 3 },
+      { symbolKind: "method", symbolName: "run", line: 4 }
+    ]
+  );
+});

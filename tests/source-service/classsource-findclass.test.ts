@@ -510,6 +510,46 @@ test("SourceService findClass resolves a qualified inner-class name to its outer
   assert.equal(outer.matches[0]?.enclosingClass, undefined);
 });
 
+test("SourceService findClass resolves an outer class declared after an annotation with arguments", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-find-class-annotated-outer-"));
+  const binaryJarPath = join(root, "annotated.jar");
+  const sourcesJarPath = join(root, "annotated-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "a/b/Outer.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "a/b/Outer$Inner.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "a/b/Outer.java": [
+      "package a.b;",
+      "@SuppressWarnings(\"unused\") public class Outer {",
+      "  public static class Inner {",
+      "    void marker() {}",
+      "  }",
+      "}"
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "obfuscated"
+  });
+
+  const inner = service.findClass({ className: "a.b.Outer.Inner", artifactId: resolved.artifactId });
+  assert.equal(inner.total, 1, `inner-class lookup should resolve, got ${JSON.stringify(inner.matches)}`);
+  assert.equal(inner.matches[0]?.qualifiedName, "a.b.Outer.Inner");
+  assert.equal(inner.matches[0]?.nested, true);
+  assert.equal(inner.matches[0]?.enclosingClass, "a.b.Outer");
+
+  const outer = service.findClass({ className: "a.b.Outer", artifactId: resolved.artifactId });
+  assert.equal(outer.total, 1, `outer-class lookup should resolve, got ${JSON.stringify(outer.matches)}`);
+  assert.equal(outer.matches[0]?.qualifiedName, "a.b.Outer");
+  assert.equal(outer.matches[0]?.filePath, "a/b/Outer.java");
+  assert.equal(outer.matches[0]?.line, 2);
+});
+
 test("SourceService findClass warns when obfuscated mapping is queried with deobfuscated class names", async () => {
   const { SourceService } = await import("../../src/source-service.ts");
   const root = await mkdtemp(join(tmpdir(), "service-findclass-namespace-warning-"));
