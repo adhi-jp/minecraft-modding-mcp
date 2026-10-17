@@ -16,6 +16,7 @@ function createStubSourceService(overrides: Record<string, unknown> = {}): Recor
     findMapping: async () => ({}),
     getClassMembers: async () => ({ members: {} }),
     getArtifact: () => ({}),
+    reportedArtifactNamespace: (artifact: { mappingApplied?: string }) => artifact.mappingApplied,
     ...overrides
   };
 }
@@ -272,7 +273,11 @@ test("remaining resources delegate to the expected source-service methods", asyn
     },
     getArtifact(artifactId: string) {
       received.artifactId = artifactId;
-      return { artifactId, origin: "cache" };
+      return { artifactId, origin: "cache", mappingApplied: "obfuscated" };
+    },
+    reportedArtifactNamespace(artifact: Record<string, unknown>) {
+      received.reportedArtifact = artifact;
+      return "mojang";
     }
   });
 
@@ -328,9 +333,15 @@ test("remaining resources delegate to the expected source-service methods", asyn
   );
   const artifactMetadataPayload = parseJsonResource(artifactMetadataResult);
   assert.equal(received.artifactId, "artifact-1");
+  assert.deepEqual(received.reportedArtifact, {
+    artifactId: "artifact-1",
+    origin: "cache",
+    mappingApplied: "obfuscated"
+  });
   assert.deepEqual(artifactMetadataPayload.result, {
     artifactId: "artifact-1",
-    origin: "cache"
+    origin: "cache",
+    mappingApplied: "mojang"
   });
 });
 

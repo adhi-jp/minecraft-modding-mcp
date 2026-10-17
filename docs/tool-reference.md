@@ -703,6 +703,7 @@ On an unobfuscated runtime (`26.1+`), the runtime's names as shipped are Mojang 
 - `query.mapping` from `diff-class-signatures` when both versions are `26.1+`, `result.comparison.mapping` from `compare-minecraft task="class-diff"` when both versions are `26.1+` (the `comparison` block is returned at `detail: "standard"` or `"full"`, not at the default `summary`), and `query.mapping` from `trace-symbol-lifecycle` when every scanned version is `26.1+`. A comparison or scan that reaches a pre-26.1 version reports the requested mapping, as before.
 - `mapping` in the `tasks["minecraft.artifact.resolved"]` entry of `validate-project`.
 - `resolvedOwner.mapping` and `provenance.mappingNamespace` from `verify-mixin-target`, and `provenance.mappingApplied` from `validate-mixin`.
+- `mappingApplied` in the artifact metadata read through the `mc://artifact/{artifactId}` resource; its other fields are returned as stored.
 
 A runtime counts as 26.1+ for version targets, 26.1+ Minecraft runtime coordinates, and jar targets proven to be a 26.1+ Minecraft runtime jar (see [Lookup Rules](#lookup-rules)). Artifacts that an earlier release cached under the `obfuscated` label are reported the same way without a rebuild; the cache itself is not rewritten. Pre-26.1 versions keep `obfuscated`. A dependency artifact, Jar-in-Jar shell, or nested jar whose own version only looks like `26.x` is not a Minecraft runtime: it keeps `obfuscated`, together with the `dependency-mapping-unverified` quality flag where that applies.
 

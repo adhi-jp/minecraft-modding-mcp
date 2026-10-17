@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { registerResources } from "../../src/resources.ts";
 import { probeMinecraftArtifact, reportedResolveNamespace } from "../../src/source/artifact-resolver.ts";
 import type { SourceService as SourceServiceType } from "../../src/source-service.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
@@ -124,6 +125,36 @@ test("a warm pre-26.1 row keeps reporting obfuscated", async () => {
     files: ["obfuscated"],
     file: ["obfuscated", "obfuscated"]
   });
+});
+
+async function readArtifactMetadataResource(service: SourceServiceType, artifactId: string) {
+  let handler: ((uri: URL, params: Record<string, string>) => Promise<any>) | undefined;
+  const server = {
+    registerResource(name: string, _template: unknown, _metadata: unknown, registered: typeof handler) {
+      if (name === "artifact-metadata") handler = registered;
+    }
+  };
+  registerResources(server as never, service);
+  const result = await handler!(new URL(`mc://artifact/${artifactId}`), { artifactId });
+  return JSON.parse(result.contents[0].text).result as Record<string, unknown>;
+}
+
+test("the artifact-metadata resource reports the same namespace as the tools", async () => {
+  const { service, root } = await newService("reported-ns-resource-");
+  const modernId = seedMinecraftRow(service, root, "26.2", { withProvenance: true });
+  const legacyId = seedMinecraftRow(service, root, "1.21.10", { withProvenance: true });
+
+  const modern = await readArtifactMetadataResource(service, modernId);
+  assert.equal(modern.mappingApplied, "mojang");
+  assert.deepEqual(
+    { ...modern, mappingApplied: "obfuscated" },
+    JSON.parse(JSON.stringify(service.getArtifact(modernId))),
+    "only mappingApplied is relabelled"
+  );
+  assert.equal(service.getArtifact(modernId).mappingApplied, "obfuscated", "the stored label is never rewritten");
+
+  const legacy = await readArtifactMetadataResource(service, legacyId);
+  assert.equal(legacy.mappingApplied, "obfuscated");
 });
 
 test("a library row whose own version looks like 26.x keeps reporting obfuscated", async () => {

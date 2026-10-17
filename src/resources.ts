@@ -165,7 +165,10 @@ export function registerResources(
     { description: "Metadata for a previously resolved artifact (origin, coordinate, mapping, provenance).", mimeType: "application/json", cacheHint: RESOURCE_READ_CACHE_HINT },
     async (uri, params, ctx) => withResourceErrors(uri, ctx, async () => {
       const artifact = sourceService.getArtifact(params.artifactId as string);
-      return objectResource(uri.href, artifact as unknown as Record<string, unknown>);
+      return objectResource(uri.href, {
+        ...artifact,
+        mappingApplied: sourceService.reportedArtifactNamespace(artifact)
+      } as unknown as Record<string, unknown>);
     })
   );
 }
