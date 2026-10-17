@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `search-class-source` content hits (`matchedIn: "content"`), and the same hits from `inspect-minecraft` with `task: "search"`, include `line`, the line of the first match in the file, and `context`, that line with one line before and after it, as `search-mod-source` hits already do. A hit can be read without fetching and scanning the whole file. Symbol and path hits are unchanged.
+
 ### Changed
 
 - **Breaking — on Minecraft 26.1+ runtimes, responses report `mojang` instead of `obfuscated`.** These versions ship Mojang names, so `obfuscated` was misleading. A reported `obfuscated` now reads `mojang` (so does an `intermediary` or `yarn` request that falls back to the runtime names). That covers `mappingApplied` and `returnedNamespace` on the artifact, class, file, search, index and batch tools and in `inspect-minecraft`; `context.mappingNamespace` from `get-class-members`; `query.mapping` from `diff-class-signatures` and `trace-symbol-lifecycle`, and `result.comparison.mapping` from `compare-minecraft` with `task: "class-diff"` (that block is returned at `detail: "standard"` or `"full"`), when every compared version is 26.1+; the `validate-project` artifact task; the namespace fields of `verify-mixin-target`; `validate-mixin` provenance; and the `mc://artifact/{artifactId}` resource. Already cached artifacts are reported the same way without a rebuild. `requestedMapping` keeps its existing meaning, `mapping: "obfuscated"` is still accepted, and older versions and 26.x-numbered library jars keep `obfuscated`. `manage-cache` metadata and access widener/transformer provenance still show the stored label. Compare against `mojang` for these runtimes.

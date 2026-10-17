@@ -175,6 +175,10 @@ export type SearchSourceHit = {
   matchedIn: "symbol" | "path" | "content";
   reasonCodes: string[];
   symbol?: SearchResultSymbol;
+  /** Content hits only: 1-based line of the first match in the file. */
+  line?: number;
+  /** Content hits only: the matching line with one line before and after it. */
+  context?: string;
 };
 
 export type QueryMode = "auto" | "token" | "literal";

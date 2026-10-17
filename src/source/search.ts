@@ -590,26 +590,18 @@ function searchTextIntentIndexed(
   svc.metrics.recordSearchDbRoundtrip();
   svc.metrics.recordSearchRowsScanned(candidateContentRows.length);
 
-  const candidateRows: Array<{ filePath: string; contentIndex: number }> = [];
-
   for (const candidate of candidateContentRows) {
     const contentIndex = findContentMatchIndex(candidate.content, query, match);
     if (contentIndex < 0) {
       continue;
     }
 
-    candidateRows.push({
-      filePath: candidate.filePath,
-      contentIndex
-    });
-  }
-
-  for (const candidate of candidateRows) {
     onHit({
       filePath: candidate.filePath,
-      score: scoreTextMatch(match, candidate.contentIndex),
+      score: scoreTextMatch(match, contentIndex),
       matchedIn: "content",
-      reasonCodes: ["content_match", `text_${match}`, "indexed"]
+      reasonCodes: ["content_match", `text_${match}`, "indexed"],
+      ...contentMatchLocation(candidate.content, contentIndex)
     });
   }
   return isCandidateWindowFull(indexed);
@@ -676,6 +668,30 @@ function searchPathIntentIndexed(
   return isCandidateWindowFull(indexed);
 }
 
+/** Line number and surrounding lines of the match at `contentIndex`, as search-mod-source reports them. */
+export function contentMatchLocation(content: string, contentIndex: number): { line: number; context: string } {
+  let lineIndex = 0;
+  let lineStart = 0;
+  let previousLineStart = 0;
+  for (
+    let newline = content.indexOf("\n");
+    newline !== -1 && newline < contentIndex;
+    newline = content.indexOf("\n", newline + 1)
+  ) {
+    lineIndex += 1;
+    previousLineStart = lineStart;
+    lineStart = newline + 1;
+  }
+  // Slice the matching line and its neighbours in place instead of splitting the
+  // whole file; the result equals extractLineContext over content.split("\n").
+  const lineEnd = content.indexOf("\n", lineStart);
+  const nextLineEnd = lineEnd === -1 ? -1 : content.indexOf("\n", lineEnd + 1);
+  return {
+    line: lineIndex + 1,
+    context: content.slice(previousLineStart, nextLineEnd === -1 ? content.length : nextLineEnd)
+  };
+}
+
 /**
  * True when the index held more candidates than the window it returned: the
  * repository reports that with a continuation cursor, which the single-window
@@ -730,7 +746,8 @@ function searchTextIntent(
       filePath,
       score: scoreTextMatch(match, contentIndex),
       matchedIn: "content",
-      reasonCodes: ["content_match", `text_${match}`]
+      reasonCodes: ["content_match", `text_${match}`],
+      ...contentMatchLocation(content, contentIndex)
     });
   };
 

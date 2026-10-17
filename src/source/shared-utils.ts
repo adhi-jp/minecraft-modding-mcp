@@ -118,3 +118,12 @@ export function clampLimit(limit: number | undefined, fallback: number, max: num
 export function hasPartialNetMinecraftCoverage(qualityFlags: string[]): boolean {
   return qualityFlags.includes("partial-source-no-net-minecraft");
 }
+
+const CONTEXT_LINES = 1;
+
+/** The line at `lineIndex` (0-based) joined with up to one line before and after it. */
+export function extractLineContext(lines: string[], lineIndex: number): string {
+  const start = Math.max(0, lineIndex - CONTEXT_LINES);
+  const end = Math.min(lines.length - 1, lineIndex + CONTEXT_LINES);
+  return lines.slice(start, end + 1).join("\n");
+}
