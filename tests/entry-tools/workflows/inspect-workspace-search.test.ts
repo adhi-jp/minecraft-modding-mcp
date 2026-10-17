@@ -215,3 +215,50 @@ for (const subjectKind of ["workspace", "search"] as const) {
     });
   }
 }
+
+test("inspect-minecraft search returns the search's own warnings after the artifact warnings, each once", async () => {
+  const sharedWarning = "Source coverage is partial for this artifact.";
+  const windowWarning =
+    'indexed text search examined only its candidate window (the first 500 index candidates) and more matched the index, so results may be incomplete. Use queryMode="literal" for a full substring scan, or narrow the scope with packagePrefix or a fileGlob that starts with a literal directory.';
+  const artifactContents = {
+    sourceKind: "source-jar" as const,
+    indexedContentKinds: ["sources"],
+    resourcesIncluded: false,
+    sourceCoverage: "full" as const
+  };
+  const service = new InspectMinecraftService(buildInspectDeps({
+    resolveArtifact: async () => ({
+      artifactId: "artifact-warnings",
+      origin: "local-jar",
+      isDecompiled: false,
+      requestedMapping: "mojang",
+      mappingApplied: "mojang",
+      version: "1.21.10",
+      provenance: { requestedTarget: { kind: "workspace" } },
+      qualityFlags: [],
+      artifactContents,
+      warnings: [sharedWarning]
+    }),
+    searchClassSource: async (input) => ({
+      artifactId: input.artifactId,
+      query: input.query,
+      hits: [{ filePath: "net/minecraft/world/entity/Entity.java", score: 90, matchedIn: "content", reasonCodes: [] }],
+      mappingApplied: "mojang",
+      returnedNamespace: "mojang",
+      artifactContents,
+      warnings: [sharedWarning, windowWarning]
+    })
+  }));
+
+  const result = await service.execute({
+    task: "search",
+    subject: {
+      kind: "workspace",
+      projectPath: "/workspace/warning-mod",
+      mapping: "mojang",
+      focus: { kind: "search", query: "tick", intent: "text" }
+    }
+  });
+
+  assert.deepEqual(result.warnings, [sharedWarning, windowWarning]);
+});

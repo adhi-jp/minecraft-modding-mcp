@@ -164,7 +164,11 @@ deps: InspectMinecraftDeps,
       },
       alwaysBlocks: include.includes("samples") ? ["subject", "search"] : ["subject"]
     }),
-    warnings: [...artifact.warnings, ...(binaryBackedClassHit?.warnings ?? [])],
+    warnings: [
+      ...artifact.warnings,
+      ...(search.warnings ?? []).filter((warning) => !artifact.warnings.includes(warning)),
+      ...(binaryBackedClassHit?.warnings ?? [])
+    ],
     // Keep continuation visible even when summary omits search. The cursor
     // continues after the fetched page, not after its displayed samples.
     meta: {
