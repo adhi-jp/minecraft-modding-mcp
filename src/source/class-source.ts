@@ -1174,7 +1174,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     ]);
     activeSourceJarPath = redirectResolved.resolvedSourceJarPath;
     warnings.push(
-      `Class "${className}" lives in nested jar "${match.entryName}" bundled by the shell jar; the lookup was redirected there automatically.`
+      `Class "${className}" lives in nested jar "${match.entryName}" bundled by the shell jar; the lookup was redirected there automatically. The returned artifactId identifies only that nested jar, not the shell: searching it covers that jar's classes only. Use the shell artifact with find-class for the other bundled jars.`
     );
     return true;
   };

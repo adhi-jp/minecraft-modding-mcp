@@ -44,7 +44,16 @@ test("getClassSource redirects into the nested jar that contains the class", asy
 
   assert.match(result.sourceText, /nested-jar-marker/);
   assert.equal(result.provenance?.nestedJar?.entryName, "META-INF/jars/api.jar");
+  assert.ok(result.provenance?.nestedJar?.shellArtifactId);
+  assert.notEqual(result.artifactId, result.provenance?.nestedJar?.shellArtifactId);
   assert.ok(result.warnings.some((warning) => warning.includes("META-INF/jars/api.jar")));
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes("redirected there automatically")
+      && warning.includes("identifies only that nested jar, not the shell")
+      && warning.includes("find-class")
+    )
+  );
 
   // The redirected artifact identity is deterministic across repeated calls.
   const again = await service.getClassSource({
@@ -71,6 +80,7 @@ test("getClassMembers answers from the nested jar with redirect provenance", asy
 
   assert.ok(result.members.fields.some((field) => field.name === "MARKER"));
   assert.equal(result.provenance?.nestedJar?.entryName, "META-INF/jars/api.jar");
+  assert.equal(result.artifactId, result.provenance?.nestedJar?.shellArtifactId);
 });
 
 test("findClassIncludingNested resolves simple and qualified names from a shell jar", async () => {

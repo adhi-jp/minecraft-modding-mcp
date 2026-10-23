@@ -265,6 +265,8 @@ function scorePathMatch(match: SearchMatch, index: number): number {
   return matchBase + Math.max(0, 100 - Math.min(100, index));
 }
 
+const SHELL_WARNING_NAMED_JARS = 3;
+
 export async function searchClassSource(svc: SourceService, input: SearchClassSourceInput): Promise<SearchClassSourceOutput> {
   const startedAt = Date.now();
   try {
@@ -289,7 +291,20 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     const match = normalizeMatch(input.match);
 
     const artifactMapping = artifact.mappingApplied ?? "obfuscated";
+    const reportedNamespace = svc.reportedArtifactNamespace(artifact);
     const searchWarnings: string[] = [];
+    if (artifact.qualityFlags.includes("shell-jar")) {
+      const bundled = artifact.provenance?.nestedJars ?? [];
+      const named = bundled.slice(0, SHELL_WARNING_NAMED_JARS).map((entry) => `"${entry}"`).join(", ");
+      const bundledNote = bundled.length === 0
+        ? ""
+        : bundled.length > SHELL_WARNING_NAMED_JARS
+          ? ` It bundles ${bundled.length} jars, including ${named}.`
+          : ` It bundles ${named}.`;
+      searchWarnings.push(
+        `This artifact is a Jar-in-Jar shell: its own index holds none of the bundled classes, so this search cannot find them.${bundledNote} Use find-class on this artifact to search the bundled class inventories; get-class-source and get-class-members read a found class from its nested jar, and the artifactId that get-class-source then returns covers that one nested jar only.`
+      );
+    }
     let translatedInfo: SearchClassSourceOutput["translatedQuery"];
     let query = originalQuery;
     let translationPackagePrefix: string | undefined;
@@ -319,7 +334,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       && !identityQuery
     ) {
       searchWarnings.push(
-        `queryNamespace=${input.queryNamespace} could not be applied because the artifact has no version recorded; namespace translation requires a version. Running literal search in ${artifactMapping} instead.`
+        `queryNamespace=${input.queryNamespace} could not be applied because the artifact has no version recorded; namespace translation requires a version. Running literal search in ${reportedNamespace} instead.`
       );
     }
 
@@ -363,7 +378,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
             );
           } else if (translated.status === "not_found") {
             searchWarnings.push(
-              `queryNamespace=${input.queryNamespace}: no ${artifactMapping} mapping found for "${originalQuery}"; running literal search instead.`
+              `queryNamespace=${input.queryNamespace}: no ${reportedNamespace} mapping found for "${originalQuery}"; running literal search instead.`
             );
           } else if (translated.status === "mapping_unavailable") {
             searchWarnings.push(
@@ -371,7 +386,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
             );
           } else {
             searchWarnings.push(
-              `queryNamespace=${input.queryNamespace}: could not translate "${originalQuery}" to ${artifactMapping}; running literal search instead.`
+              `queryNamespace=${input.queryNamespace}: could not translate "${originalQuery}" to ${reportedNamespace}; running literal search instead.`
             );
           }
         } catch (caughtError) {
@@ -381,11 +396,11 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         }
       } else if (intent === "symbol") {
         searchWarnings.push(
-          `queryNamespace=${input.queryNamespace} requires a fully-qualified class name for translation; running literal search in ${artifactMapping} instead. Resolve "${originalQuery}" to an FQCN with find-class or find-mapping first.`
+          `queryNamespace=${input.queryNamespace} requires a fully-qualified class name for translation; running literal search in ${reportedNamespace} instead. Resolve "${originalQuery}" to an FQCN with find-class or find-mapping first.`
         );
       } else if (intent === "text" || intent === "path") {
         searchWarnings.push(
-          `queryNamespace=${input.queryNamespace} has no effect when intent="${intent}" — ${intent} search is a literal match against the artifact's ${artifactMapping} index. Use intent="symbol" for namespace translation.`
+          `queryNamespace=${input.queryNamespace} has no effect when intent="${intent}" — ${intent} search is a literal match against the artifact's ${reportedNamespace} index. Use intent="symbol" for namespace translation.`
         );
       }
     }

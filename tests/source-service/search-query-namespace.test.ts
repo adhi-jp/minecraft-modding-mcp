@@ -513,3 +513,69 @@ test("SourceService searchClassSource preserves caller-supplied packagePrefix du
     `entity path should be filtered out by caller's packagePrefix; got hits=${JSON.stringify(hitPaths)}`
   );
 });
+
+test("SourceService searchClassSource names the reported namespace in queryNamespace warnings", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  await withTempDir("search-warning-namespace-", async (root) => {
+    const service = new SourceService(buildTestConfig(root));
+    const filePath = "net/minecraft/world/level/Level.java";
+    seedIndexedArtifact(service, {
+      artifactId: "reported-mojang", origin: "local-jar", version: "26.2",
+      requestedMapping: "obfuscated", mappingApplied: "obfuscated", qualityFlags: [],
+      files: [{ filePath, content: "class Level {}" }],
+      symbols: [{ filePath, symbolKind: "class", symbolName: "Level", qualifiedName: "net.minecraft.world.level.Level", line: 1 }]
+    });
+    const text = await service.searchClassSource({
+      artifactId: "reported-mojang", query: "Level", intent: "text", queryNamespace: "intermediary"
+    });
+    assert.equal(text.mappingApplied, "mojang");
+    const textWarning = text.warnings?.find((warning) => /has no effect/.test(warning));
+    assert.ok(textWarning, "text intent with queryNamespace warns");
+    assert.match(textWarning, /against the artifact's mojang index/);
+    assert.doesNotMatch(textWarning, /obfuscated/);
+    const symbol = await service.searchClassSource({
+      artifactId: "reported-mojang", query: "Level", intent: "symbol", queryNamespace: "intermediary"
+    });
+    const symbolWarning = symbol.warnings?.find((warning) => /fully-qualified class name/.test(warning));
+    assert.ok(symbolWarning, "unqualified symbol query with queryNamespace warns");
+    assert.match(symbolWarning, /literal search in mojang instead/);
+  });
+});
+
+test("SourceService searchClassSource warns when the artifact is a Jar-in-Jar shell", async () => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  await withTempDir("search-shell-warning-", async (root) => {
+    const service = new SourceService(buildTestConfig(root));
+    const nestedJars = [1, 2, 3, 4, 5].map((n) => `META-INF/jars/module-${n}.jar`);
+    seedIndexedArtifact(service, {
+      artifactId: "shell-artifact", origin: "local-jar", requestedMapping: "obfuscated", mappingApplied: "obfuscated",
+      qualityFlags: ["shell-jar"], provenance: { nestedJars }, files: [], symbols: []
+    });
+    const shell = await service.searchClassSource({ artifactId: "shell-artifact", query: "Level", intent: "text" });
+    assert.deepEqual(shell.hits, []);
+    assert.equal(shell.warnings?.length, 1);
+    const [warning] = shell.warnings ?? [];
+    assert.match(warning, /Jar-in-Jar shell/);
+    assert.match(warning, /META-INF\/jars\/module-1\.jar/);
+    assert.match(warning, /META-INF\/jars\/module-3\.jar/);
+    assert.doesNotMatch(warning, /module-4\.jar/);
+    assert.match(warning, /bundles 5 jars/);
+    assert.match(warning, /find-class/);
+    assert.match(warning, /get-class-source/);
+
+    seedIndexedArtifact(service, {
+      artifactId: "small-shell", origin: "local-jar", requestedMapping: "obfuscated", mappingApplied: "obfuscated",
+      qualityFlags: ["shell-jar"], provenance: { nestedJars: nestedJars.slice(0, 1) }, files: [], symbols: []
+    });
+    const smallResult = await service.searchClassSource({ artifactId: "small-shell", query: "Level", intent: "text" });
+    assert.match(smallResult.warnings?.[0] ?? "", /bundles "META-INF\/jars\/module-1\.jar"/);
+
+    const filePath = "com/example/Level.java";
+    seedIndexedArtifact(service, {
+      artifactId: "plain-artifact", origin: "local-jar", requestedMapping: "obfuscated", mappingApplied: "obfuscated",
+      qualityFlags: [], files: [{ filePath, content: "class Level {}" }], symbols: []
+    });
+    const plain = await service.searchClassSource({ artifactId: "plain-artifact", query: "Level", intent: "text" });
+    assert.equal(plain.warnings, undefined);
+  });
+});

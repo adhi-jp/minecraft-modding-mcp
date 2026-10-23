@@ -7,6 +7,12 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- `search-class-source`, and `inspect-minecraft` `task: "search"` on the same artifact, now return a warning when the artifact is a Jar-in-Jar shell such as the Fabric API umbrella jar. A shell indexes none of the classes it bundles, so these searches always returned no hits without saying why. The warning names up to three bundled jars, with the total count when there are more, and points to `find-class` on the shell artifact, which searches the bundled class inventories.
+- The warning that `get-class-source` adds when it redirects a lookup into a nested jar now also says that the returned `artifactId` identifies only that nested jar, not the shell. Searching it covers that jar's classes only; use the shell artifact with `find-class` for the other bundled jars.
+- The `queryNamespace` warnings of `search-class-source` now name the namespace the response reports, such as `mojang` on Minecraft 26.1+ runtimes, instead of `obfuscated`.
+
 ## [8.0.0-rc.0] - 2026-10-17
 
 ### Added
