@@ -29,6 +29,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Documentation
 
 - The `search-class-source` description and `docs/tool-reference.md` now explain that decompiled text, such as Minecraft source, can differ from hand-written code: parameters may be `final`, annotations such as `@Nullable` can sit between modifiers and the type, and long declarations wrap. Search for a method by its name, or with `intent: "symbol"`, rather than by a full declaration.
+- `docs/tool-reference.md` now states that `include: ["timings"]` is accepted but that no tool currently returns a timings block.
 
 ## [8.0.0-rc.0] - 2026-10-17
 
