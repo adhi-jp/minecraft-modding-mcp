@@ -28,10 +28,17 @@ export type CraftedJarEntry = {
   declaredUncompressedSize?: number;
 };
 
+/** Archive-level fields of a crafted jar. */
+export type CraftedJarOptions = {
+  /** Archive comment written after the end-of-central-directory record. */
+  comment?: string;
+};
+
 /** Writes a zip whose per-entry compression and declared sizes the caller controls. */
 export async function createCraftedJar(
   outputPath: string,
-  entries: CraftedJarEntry[]
+  entries: CraftedJarEntry[],
+  options: CraftedJarOptions = {}
 ): Promise<void> {
   const localChunks: Buffer[] = [];
   const centralChunks: Buffer[] = [];
@@ -96,11 +103,12 @@ export async function createCraftedJar(
   endOfCentralDirectory.writeUInt16LE(centralChunks.length, 10);
   endOfCentralDirectory.writeUInt32LE(centralDirectory.length, 12);
   endOfCentralDirectory.writeUInt32LE(localOffset, 16);
-  endOfCentralDirectory.writeUInt16LE(0, 20);
+  const comment = Buffer.from(options.comment ?? "", "latin1");
+  endOfCentralDirectory.writeUInt16LE(comment.length, 20);
 
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(
     outputPath,
-    Buffer.concat([...localChunks, centralDirectory, endOfCentralDirectory])
+    Buffer.concat([...localChunks, centralDirectory, endOfCentralDirectory, comment])
   );
 }

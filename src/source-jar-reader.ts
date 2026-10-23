@@ -91,9 +91,109 @@ export function openZipFile(jarPath: string): Promise<ZipFile> {
           return;
         }
         zipOpenCount += 1;
-        resolve(zipFile as unknown as ZipFile);
+        void bufferCentralDirectory(zipFile).then(() => resolve(zipFile as unknown as ZipFile));
       }
     );
+  });
+}
+
+/** Largest central directory {@link bufferCentralDirectory} holds in memory; a larger one is walked from the file. */
+const MAX_BUFFERED_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024;
+
+type PositionalRead = (
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+  callback: (error: Error | null, bytesRead?: number, buffer?: Buffer) => void
+) => void;
+
+/**
+ * yauzl's lazy walk reads each central directory record with two small
+ * positional reads, one thread-pool round trip each: about 68k round trips and
+ * 4 s for a 34k-entry client jar. This reads the range from the central
+ * directory's start to the end of the file once, through the archive's own
+ * reader, and answers every later read that lies wholly inside that range from
+ * memory. Local headers and entry data, and any read outside the range, still
+ * go to the file through the same reader.
+ *
+ * yauzl has already located the central directory (EOCD scan, comment-length
+ * check and zip64 record included) by the time this runs, so the range start is
+ * its own walk cursor. The buffer is a copy of that file range read from the
+ * same descriptor, so a read it answers returns the bytes the file holds there;
+ * a wrong range could only cost speed. Whenever the range cannot be taken from
+ * the archive, exceeds the cap, or the bulk read fails or comes up short, the
+ * archive is left exactly as yauzl opened it. The reader keeps owning the
+ * descriptor, so `close()` and entry streams behave as before.
+ *
+ * The copy is held only while it can still serve the walk: when the walk ends,
+ * or when the archive closes before it does, the reader gets its own `read`
+ * back and the copy is dropped, even if the caller keeps the archive handle.
+ */
+function bufferCentralDirectory(zipFile: yauzl.ZipFile): Promise<void> {
+  const internals = zipFile as unknown as {
+    reader?: { read?: unknown };
+    readEntryCursor?: unknown;
+    fileSize?: unknown;
+  };
+  const reader = internals.reader;
+  const rangeStart = internals.readEntryCursor;
+  const fileSize = internals.fileSize;
+  if (
+    !reader ||
+    typeof reader.read !== "function" ||
+    typeof rangeStart !== "number" ||
+    typeof fileSize !== "number" ||
+    !Number.isSafeInteger(rangeStart) ||
+    !Number.isSafeInteger(fileSize) ||
+    rangeStart < 0 ||
+    rangeStart >= fileSize ||
+    fileSize - rangeStart > MAX_BUFFERED_CENTRAL_DIRECTORY_BYTES
+  ) {
+    return Promise.resolve();
+  }
+
+  const fileRead = reader.read as PositionalRead;
+  const rangeLength = fileSize - rangeStart;
+  return new Promise((resolve) => {
+    // The only reference to the copy; clearing it releases the memory.
+    let buffered: Buffer | undefined;
+    const bufferedRead: PositionalRead = function (this: unknown, buffer, offset, length, position, callback) {
+      const start = position - rangeStart;
+      if (buffered && start >= 0 && start + length <= buffered.length) {
+        buffered.copy(buffer, offset, start, start + length);
+        // Stay asynchronous, as the file read this replaces is.
+        process.nextTick(callback, null, length, buffer);
+        return;
+      }
+      fileRead.call(this, buffer, offset, length, position, callback);
+    };
+    const release = (): void => {
+      buffered = undefined;
+      if (reader.read === bufferedRead) {
+        reader.read = fileRead;
+      }
+    };
+    const onBulkRead = (error: Error | null, bytesRead?: number): void => {
+      if (error || bytesRead !== rangeLength) {
+        buffered = undefined;
+        resolve();
+        return;
+      }
+      reader.read = bufferedRead;
+      zipFile.once("end", release);
+      zipFile.once("close", release);
+      resolve();
+    };
+    // An allocation or argument failure only leaves the archive unbuffered; it must never fail or strand the open.
+    try {
+      // Zero-filled, so even a short read that slipped past the check could not expose stale memory.
+      buffered = Buffer.alloc(rangeLength);
+      fileRead.call(reader, buffered, 0, rangeLength, rangeStart, onBulkRead);
+    } catch {
+      buffered = undefined;
+      resolve();
+    }
   });
 }
 

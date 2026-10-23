@@ -13,6 +13,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - The warning that `get-class-source` adds when it redirects a lookup into a nested jar now also says that the returned `artifactId` identifies only that nested jar, not the shell. Searching it covers that jar's classes only; use the shell artifact with `find-class` for the other bundled jars.
 - The `queryNamespace` warnings of `search-class-source` now name the namespace the response reports, such as `mojang` on Minecraft 26.1+ runtimes, instead of `obfuscated`.
 
+### Performance
+
+- Walking a jar now reads the jar's directory in one pass instead of entry by entry. On the 41.5 MB Minecraft 26.3 client jar, which has about 34,000 entries: reading the members of a class that was not read before, as `get-class-members`, `diff-class-signatures`, `trace-symbol-lifecycle` and the member checks of `verify-mixin-target` and `validate-mixin` do, dropped from about 4.2 s to about 0.14 s per class, and four such reads at once from about 9.0 s to about 0.55 s; resolving a `version`, `jar` or `coordinate` target that scans the jar for sources dropped from about 4.0 s to about 0.1 s; reading one class file from the jar dropped from about 2.6 s to about 0.07 s. Other tools that list or read a jar's entries, such as `analyze-mod` and nested-jar lookups, take the same path. Results are unchanged.
+
 ### Fixed
 
 - Methods and constructors whose declaration wraps across lines, because of a long parameter list, a `throws` clause or a `{` on the next line, are found by `search-class-source` with `intent: "symbol"` (the default intent), listed in the `get-class-source` metadata outline, and listed in the `decompiledFallback` of `get-class-members`. So are methods whose return type carries a type annotation, such as `Outer.@Nullable Inner foo()`, and methods whose type parameters nest, such as `<T extends Comparable<T>> T max(`. Each is reported at the line where its declaration starts, and the outline prints a wrapped declaration as one line. On the Minecraft 26.3 sources, symbol search finds about 3,900 methods it missed before.
