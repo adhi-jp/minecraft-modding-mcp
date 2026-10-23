@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
+
+import { listIntegrityCheckRequestFiles } from "../../src/storage/db.ts";
+import RawDatabase, { isRawSqliteCorruptionError } from "../../src/storage/sqlite.ts";
 
 import { readSearchScanMetrics } from "../helpers/source-service-metrics.ts";
 import { createResolvedSearchFixture } from "../helpers/source-service-search-fixtures.ts";
@@ -201,4 +205,83 @@ test("fallback byte budget counts UTF-8 bytes, not UTF-16 code units", async () 
 
   assert.ok(result.warnings && result.warnings.some((w) => /scan budget/.test(w)));
   assert.equal(readSearchScanMetrics(service).scanTruncated, 1);
+});
+
+// A damaged full-text index makes the indexed query throw a raw SQLite
+// corruption error. Every page of the FTS5 data table is overwritten in the
+// database file, which is how a damaged index looks to the next query. Modes
+// that have a full-scan fallback must keep answering from the `files` table; a
+// token-only search has no fallback, so it must fail instead of returning an
+// empty page that looks like "no matches".
+async function createFixtureWithDamagedFullTextIndex(rootPrefix: string) {
+  const fixture = await createResolvedSearchFixture({
+    rootPrefix,
+    jarBaseName: "server-damaged-fts",
+    sourceEntries: {
+      "net/minecraft/a/Needle.java": "package net.minecraft.a;\npublic class Needle { String s = \"damagedindextoken\"; }"
+    }
+  });
+  const { sqlitePath } = (fixture.service as unknown as { config: { sqlitePath: string } }).config;
+
+  const inspector = new RawDatabase(sqlitePath);
+  let pageSize: number;
+  let pageNumbers: number[];
+  try {
+    pageSize = (inspector.pragma("page_size") as Array<{ page_size: number }>)[0]!.page_size;
+    pageNumbers = (
+      inspector.prepare("SELECT pageno FROM dbstat WHERE name = 'files_fts_data'").all() as Array<{ pageno: number }>
+    ).map((row) => row.pageno);
+    inspector.pragma("wal_checkpoint(TRUNCATE)");
+  } finally {
+    inspector.close();
+  }
+  assert.ok(pageNumbers.length > 0, "expected the FTS5 data table to own at least one page");
+
+  const bytes = Buffer.from(await readFile(sqlitePath));
+  for (const pageNumber of pageNumbers) {
+    bytes.fill(0xff, (pageNumber - 1) * pageSize, pageNumber * pageSize);
+  }
+  await writeFile(sqlitePath, bytes);
+  return { ...fixture, sqlitePath };
+}
+
+test("token-mode text search fails with a raw corruption error when the full-text index is damaged, instead of returning no hits", async () => {
+  const { service, resolved } = await createFixtureWithDamagedFullTextIndex("service-search-damaged-fts-token-");
+
+  await assert.rejects(
+    () =>
+      service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: "damagedindextoken",
+        intent: "text",
+        match: "contains",
+        queryMode: "token",
+        limit: 10
+      }),
+    (error) => {
+      assert.equal(isRawSqliteCorruptionError(error), true, `unexpected error: ${String(error)}`);
+      return true;
+    }
+  );
+});
+
+test("auto-mode text search still returns the full-scan hits when the full-text index is damaged", async () => {
+  const { service, resolved, sqlitePath } = await createFixtureWithDamagedFullTextIndex("service-search-damaged-fts-auto-");
+
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "damagedindextoken",
+    intent: "text",
+    match: "contains",
+    queryMode: "auto",
+    limit: 10
+  });
+
+  assert.deepEqual(
+    result.hits.map((hit) => hit.filePath),
+    ["net/minecraft/a/Needle.java"]
+  );
+  // The indexed query really did hit the damage (the runtime observer asked for
+  // a full check on the next start); the hits above came from the full scan.
+  assert.equal(listIntegrityCheckRequestFiles(sqlitePath).length, 1);
 });

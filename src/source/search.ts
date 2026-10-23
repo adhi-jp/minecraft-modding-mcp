@@ -1,5 +1,6 @@
 import { ERROR_CODES, createError } from "../errors.js";
 import { log } from "../logger.js";
+import { isRawSqliteCorruptionError } from "../storage/sqlite.js";
 import {
   createSearchHitAccumulator,
   decodeSearchCursor,
@@ -488,6 +489,12 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
           : searchTextIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit);
         svc.metrics.recordSearchIndexedHit();
       } catch (caughtError) {
+        // A token-only search has no full-scan fallback, so swallowing a damaged
+        // index here would return an empty page indistinguishable from "no
+        // matches". Surface it so the call fails and the cache is rechecked.
+        if (tokenOnlyTextIntent && isRawSqliteCorruptionError(caughtError)) {
+          throw caughtError;
+        }
         svc.metrics.recordSearchFallback();
         log("warn", "search.indexed_fallback", {
           artifactId: artifact.artifactId,
