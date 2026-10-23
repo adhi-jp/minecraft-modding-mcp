@@ -1051,7 +1051,7 @@ registerExpertTool(server, "get-class-members",
 registerToolSchema("get-class-members", getClassMembersSchema);
 
 registerExpertTool(server, "search-class-source",
-  "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output.",
+  "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output. Decompiled text can differ from hand-written code (`final` parameters, `@Nullable` between modifiers and type, wrapped declarations), so search for a method by its name or with intent `symbol`, not by its full declaration.",
   searchClassSourceShape,
   { readOnlyHint: true },
   async (args) => runTool("search-class-source", args, searchClassSourceSchema, async (input) => {

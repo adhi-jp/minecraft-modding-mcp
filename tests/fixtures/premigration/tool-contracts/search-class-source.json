@@ -10,7 +10,7 @@
     "annotations": {
       "readOnlyHint": true
     },
-    "description": "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
+    "description": "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output. Decompiled text can differ from hand-written code (`final` parameters, `@Nullable` between modifiers and type, wrapped declarations), so search for a method by its name or with intent `symbol`, not by its full declaration. Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.",
     "execution": {
       "taskSupport": "forbidden"
     },

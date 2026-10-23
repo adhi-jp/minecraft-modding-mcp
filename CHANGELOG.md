@@ -13,6 +13,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - The warning that `get-class-source` adds when it redirects a lookup into a nested jar now also says that the returned `artifactId` identifies only that nested jar, not the shell. Searching it covers that jar's classes only; use the shell artifact with `find-class` for the other bundled jars.
 - The `queryNamespace` warnings of `search-class-source` now name the namespace the response reports, such as `mojang` on Minecraft 26.1+ runtimes, instead of `obfuscated`.
 
+### Documentation
+
+- The `search-class-source` description and `docs/tool-reference.md` now explain that decompiled text, such as Minecraft source, can differ from hand-written code: parameters may be `final`, annotations such as `@Nullable` can sit between modifiers and the type, and long declarations wrap. Search for a method by its name, or with `intent: "symbol"`, rather than by a full declaration.
+
 ## [8.0.0-rc.0] - 2026-10-17
 
 ### Added
