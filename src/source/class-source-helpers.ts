@@ -1,3 +1,4 @@
+import { stripJavaNoise } from "../symbols/java-lexer.js";
 import { extractSymbolsFromSource } from "../symbols/symbol-extractor.js";
 
 export type DecompiledMember = {
@@ -21,20 +22,82 @@ export function extractClassMetadata(filePath: string, content: string): string 
     }
   }
 
-  // Add each symbol's declaration line
+  // Add each symbol's declaration line. Record components share the record's header line, so
+  // a line already printed for an earlier symbol is not printed again.
+  const printedLines = new Set<number>();
+  let code: string[] | undefined;
   for (const symbol of symbols) {
     const lineIndex = symbol.line - 1;
-    if (lineIndex >= 0 && lineIndex < lines.length) {
+    if (lineIndex >= 0 && lineIndex < lines.length && !printedLines.has(symbol.line)) {
+      printedLines.add(symbol.line);
       const prefix = symbol.symbolKind === "class" || symbol.symbolKind === "interface" ||
         symbol.symbolKind === "enum" || symbol.symbolKind === "record"
         ? `\n// [${symbol.symbolKind}] line ${symbol.line}`
         : `// [${symbol.symbolKind}] line ${symbol.line}`;
       outputParts.push(prefix);
-      outputParts.push(lines[lineIndex]!);
+      if (symbol.symbolKind === "method") {
+        code ??= stripJavaNoise(lines);
+        outputParts.push(methodHeadLine(lines, code, lineIndex));
+      } else {
+        outputParts.push(lines[lineIndex]!);
+      }
     }
   }
 
   return outputParts.join("\n");
+}
+
+// Matches the extractor's limit on how far a wrapped declaration head is followed.
+const MAX_JOINED_HEAD_LINES = 64;
+
+/**
+ * The declaration head of the method that starts at `startIndex`, as one line. A head that
+ * completes on its line, or whose end is not found, is the source line itself. A head that
+ * wraps (parameters, "throws" or the "{" on later lines) is joined, whitespace-normalized,
+ * through the "{" or ";" after its parameter list and keeps the first line's indentation.
+ * The joined head is built from `code`, the lexed lines, so a comment in it becomes a space
+ * and a string or char literal becomes "" — neither can end the head early or swallow the
+ * rest of the joined line.
+ */
+function methodHeadLine(lines: string[], code: string[], startIndex: number): string {
+  const first = lines[startIndex]!;
+  const pieces: string[] = [];
+  let parenDepth = 0;
+  let listClosed = false;
+  const endIndex = Math.min(code.length, startIndex + MAX_JOINED_HEAD_LINES);
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const line = code[index]!;
+    for (let at = 0; at < line.length; at += 1) {
+      const ch = line[at];
+      if (ch === "(") {
+        parenDepth += 1;
+      } else if (ch === ")") {
+        parenDepth -= 1;
+        listClosed ||= parenDepth === 0;
+      } else if (parenDepth === 0 && (ch === "{" || ch === ";" || ch === "}")) {
+        if (index === startIndex || !listClosed || ch === "}") {
+          return first;
+        }
+        pieces.push(line.slice(0, at + 1));
+        return first.match(/^\s*/)![0] + joinHeadPieces(pieces);
+      }
+    }
+    pieces.push(line);
+  }
+  return first;
+}
+
+function joinHeadPieces(pieces: string[]): string {
+  let joined = "";
+  for (const piece of pieces) {
+    const text = piece.replace(/\s+/g, " ").trim();
+    if (!text) {
+      continue;
+    }
+    // "foo(" + "int a," reads as "foo(int a,", and "int b" + ") {" as "int b) {".
+    joined += joined === "" || joined.endsWith("(") || text.startsWith(")") ? text : ` ${text}`;
+  }
+  return joined;
 }
 
 export function extractDecompiledMembers(
