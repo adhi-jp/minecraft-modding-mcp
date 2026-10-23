@@ -128,7 +128,7 @@ test("openDatabase keeps existing rows and schema version on a healthy reopen, w
     }
   }));
 
-test("openDatabase detects a corrupted data page, backs up the file, and rebuilds a fresh database", () =>
+test("openDatabase does not scan for a corrupted data page on a normal open; a requested full check finds it, backs up the file, and rebuilds a fresh database", () =>
   withTempDir("quick-check-corrupt-", async (root) => {
     const config = buildTestConfig(root);
 
@@ -143,9 +143,11 @@ test("openDatabase detects a corrupted data page, backs up the file, and rebuild
     // A large payload spread across many overflow pages, inserted AFTER migrations
     // already ran to completion. On the NEXT open, runMigrations only re-reads
     // cache_meta's schema_version (already current, so no statements execute) -
-    // it never visits this table's pages. Only the consistency check walks the
-    // full schema, including this table's overflow chain, so corrupting a page
-    // here isolates detection to the check itself rather than to migrations.
+    // it never visits this table's pages. Only a full consistency check walks
+    // the whole schema, including this table's overflow chain, so corrupting a
+    // page here isolates detection to the check itself rather than to
+    // migrations - and shows that a normal open, which runs no check, does not
+    // look at it.
     const largeContent = "x".repeat(2_000_000);
     initial.db
       .prepare(
@@ -171,20 +173,44 @@ test("openDatabase detects a corrupted data page, backs up the file, and rebuild
     // never page 1 (the schema/sqlite_master page) and never the small
     // cache_meta page written near the start of the file during migrations.
     // It is usually a `files_fts_data` page (FTS5, page sizes 512-32768), not
-    // an overflow page of `files.content` as an earlier version of this
-    // comment claimed: the INSERT INTO `files` above fires the `files_fts`
-    // triggers, and those trigger-driven index writes allocate pages after
-    // the row's own overflow chain, landing later in the file. Either way the
-    // corrupted page sits inside the schema the consistency check walks, so
-    // the assertion strategy - corrupt the last page, expect detection - holds
-    // regardless of which table actually owns it.
+    // an overflow page of `files.content`: the INSERT INTO `files` above
+    // fires the `files_fts` triggers, and those trigger-driven index writes
+    // allocate pages after the row's own overflow chain, landing later in the
+    // file. Either way the corrupted page sits inside the schema a full
+    // consistency check walks, so the assertion strategy - corrupt the last
+    // page, expect detection by the requested full check - holds regardless
+    // of which table actually owns it.
     const corrupted = Buffer.from(raw);
     const lastPageStart = corrupted.length - pageSize;
     corrupted.fill(0xff, lastPageStart, corrupted.length);
     await writeFile(dbPath, corrupted);
 
-    const { logger, warnCalls } = createCapturingLogger();
-    const reopened = openDatabase(config, logger);
+    // 1) A normal open (no request file) runs no consistency check: it does
+    // not notice the damaged page, keeps the file and its rows, and warns
+    // about nothing.
+    const normal = createCapturingLogger();
+    const normalOpen = openDatabase(config, normal.logger);
+    try {
+      assert.equal(normalOpen.schemaVersion, LATEST_SCHEMA_VERSION);
+      const row = normalOpen.db
+        .prepare("SELECT artifact_id FROM artifacts WHERE artifact_id = ?")
+        .get("artifact-large") as { artifact_id?: string } | undefined;
+      assert.equal(row?.artifact_id, "artifact-large", "expected the original file, not a rebuilt one");
+    } finally {
+      normalOpen.db.close();
+    }
+    assert.equal(normal.warnCalls.length, 0);
+    assert.equal(
+      (await readdir(join(root, "cache"))).some((entry) => entry.includes(".corrupted.")),
+      false,
+      "expected a normal open to leave the damaged file where it is"
+    );
+
+    // 2) Once a full check is requested, the next open finds the damage,
+    // backs the file up, and rebuilds a fresh database.
+    assert.equal(requestFullIntegrityCheck(config.sqlitePath), true);
+    const requested = createCapturingLogger();
+    const reopened = openDatabase(config, requested.logger);
     try {
       assert.equal(reopened.schemaVersion, LATEST_SCHEMA_VERSION);
       // The rebuilt database is fresh: the row inserted before corruption is gone.
@@ -199,8 +225,8 @@ test("openDatabase detects a corrupted data page, backs up the file, and rebuild
     const cacheEntries = await readdir(join(root, "cache"));
     assert.equal(cacheEntries.some((entry) => entry.includes(".corrupted.")), true);
 
-    assert.equal(warnCalls.length, 1);
-    const reason = warnCalls[0]?.details?.reason;
+    assert.equal(requested.warnCalls.length, 1);
+    const reason = requested.warnCalls[0]?.details?.reason;
     assert.equal(typeof reason, "string");
     // The reason must come from the consistency check itself, not from a migration failure.
     assert.match(reason as string, /integrity check failed/i);
@@ -342,7 +368,7 @@ test("openDatabase escalates to a full integrity_check when the marker is presen
     );
   }));
 
-test("openDatabase runs plain quick_check (not integrity_check) when no marker is present", () =>
+test("openDatabase runs neither quick_check nor integrity_check when no request file is present", () =>
   withTempDir("quick-check-no-marker-", async (root) => {
     const config = buildTestConfig(root);
     const first = openDatabase(config);
@@ -353,15 +379,12 @@ test("openDatabase runs plain quick_check (not integrity_check) when no marker i
     second.db.close();
 
     assert.equal(
-      infoCalls.some((entry) => entry.details?.check === "quick_check"),
-      true,
-      "expected the default open (no marker) to run quick_check"
-    );
-    assert.equal(
-      infoCalls.some((entry) => entry.details?.check === "integrity_check"),
+      infoCalls.some((entry) => entry.message === "SQLite consistency check completed"),
       false,
-      "expected no full integrity_check without a marker"
+      "expected the default open (no request file) to run no consistency check"
     );
+    assert.equal(infoCalls.some((entry) => entry.details?.check === "quick_check"), false);
+    assert.equal(infoCalls.some((entry) => entry.details?.check === "integrity_check"), false);
   }));
 
 test("isRawSqliteCorruptionError recognizes a node:sqlite-shaped corruption error by errcode, and rejects everything else", () => {
@@ -540,14 +563,12 @@ test("attachRuntimeCorruptionObserver - the wiring openDatabase itself uses - re
     const config = buildTestConfig(root);
     const target = await buildDatabaseWithCorruptedArtifactOverflow(config);
 
-    // openDatabase's OWN open-time check would already catch this exact
-    // corruption (as the "detects a corrupted data page" test above proves)
-    // and go straight to backup+rebuild before ever handing back a
-    // "successfully opened" live handle - so there is no way to make
-    // openDatabase itself return a handle over this corrupted file to query
-    // against. Attaching the SAME wiring helper openDatabase uses
-    // (attachRuntimeCorruptionObserver) to a handle opened directly exercises
-    // exactly the wiring under test without that catch-22.
+    // Open with the raw Database class and attach the SAME wiring helper
+    // openDatabase uses (attachRuntimeCorruptionObserver) to that handle,
+    // rather than going through openDatabase: this isolates the wiring under
+    // test from openDatabase's open sequence, and the fixture is only
+    // reachable by a live query, which is how a real runtime corruption shows
+    // up.
     const rawDb = new RawDatabase(config.sqlitePath);
     const { logger } = createCapturingLogger();
     attachRuntimeCorruptionObserver(rawDb, config.sqlitePath, logger);
@@ -567,6 +588,55 @@ test("attachRuntimeCorruptionObserver - the wiring openDatabase itself uses - re
     );
 
     rawDb.close();
+  }));
+
+test("a damaged page read through a handle from openDatabase requests a full check, and the next openDatabase backs up and rebuilds", () =>
+  withTempDir("open-database-runtime-corruption-", async (root) => {
+    const config = buildTestConfig(root);
+    const target = await buildDatabaseWithCorruptedArtifactOverflow(config);
+
+    // A normal open runs no consistency check, so it hands back a live handle
+    // over the damaged file.
+    const first = createCapturingLogger();
+    const opened = openDatabase(config, first.logger);
+    try {
+      assert.equal(opened.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.equal(first.warnCalls.length, 0);
+      assert.equal(listIntegrityCheckRequestFiles(config.sqlitePath).length, 0);
+
+      // Reading the damaged row raises a raw corruption error; the observer
+      // openDatabase attached turns that into a request for a full check.
+      assert.throws(
+        () => selectProvenance(opened.db, target),
+        (error) => isRawSqliteCorruptionError(error)
+      );
+      assert.equal(
+        listIntegrityCheckRequestFiles(config.sqlitePath).length,
+        1,
+        "expected the handle from openDatabase to request a full integrity check"
+      );
+    } finally {
+      opened.db.close();
+    }
+
+    const second = createCapturingLogger();
+    const rebuilt = openDatabase(config, second.logger);
+    try {
+      assert.equal(rebuilt.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.equal(selectProvenance(rebuilt.db, target), undefined, "expected a fresh database without the damaged row");
+    } finally {
+      rebuilt.db.close();
+    }
+
+    assert.equal((await readdir(join(root, "cache"))).some((entry) => entry.includes(".corrupted.")), true);
+    assert.equal(second.warnCalls.length, 1);
+    assert.match(second.warnCalls[0]?.details?.reason as string, /integrity check failed/i);
+    assert.equal(
+      second.infoCalls.some((entry) => entry.details?.check === "integrity_check"),
+      true,
+      "expected the requested full check to have run"
+    );
+    assert.equal(listIntegrityCheckRequestFiles(config.sqlitePath).length, 0);
   }));
 
 // The earlier single shared marker file could still race across processes:

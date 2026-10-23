@@ -849,8 +849,8 @@ test("cache registry delete does not open the artifact index when no artifact-in
   const jarPath = join(downloadsDir, "client.jar");
   await writeFile(jarPath, "jar");
 
-  // Not a SQLite database at all: opening it runs the consistency check, which
-  // fails and moves the file aside. Leaving these bytes untouched is the
+  // Not a SQLite database at all: opening it fails, which backs the file up and
+  // rebuilds it. Leaving these bytes untouched is the
   // observable proof that a downloads-only delete never opened the index.
   const sqlitePath = join(cacheDir, "source-cache.db");
   const sentinel = "this is not a sqlite database";

@@ -914,8 +914,8 @@ export function createCacheRegistry(config: CacheRegistryConfig): CacheRegistry 
           }
         }
 
-        // Opening the index runs a PRAGMA quick_check over the whole file, so
-        // only pay for it when a row of it is actually going to be deleted.
+        // Opening the index can back up and rebuild a file that does not open,
+        // so only open it when a row of it is actually going to be deleted.
         const db = entries.some((entry) => entry.cacheKind === "artifact-index")
           ? openDb(config)
           : undefined;

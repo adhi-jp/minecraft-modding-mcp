@@ -611,7 +611,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
   } catch (caughtError) {
     // A raw SQLite corruption error surfaced mid-call (as opposed to at DB
     // open, which is already a typed AppError by the time it gets here) means
-    // quick_check passed for this file but a live query still hit corruption.
+    // the file opened but a live query read a damaged page; a normal open runs
+    // no consistency check.
     // Escalate the next open to a full integrity_check and report a typed,
     // restart-guiding ERR_DB_FAILURE instead of leaking ERR_INTERNAL.
     const reportedError = convertRuntimeSqliteCorruption(caughtError, config.sqlitePath);

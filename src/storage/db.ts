@@ -32,12 +32,18 @@ type DatabaseConfig = Pick<Config, "sqlitePath"> &
 const DEFAULT_SQLITE_CACHE_KB = 8_000;
 const DEFAULT_SQLITE_MMAP_SIZE = 268_435_456;
 
-// Per-request escalation files created by the runtime-corruption recovery
-// path (see attachRuntimeCorruptionObserver / convertRuntimeSqliteCorruption
-// below): a SQLite error surfaced while serving a tool call - not at open
-// time - means quick_check already passed for this file, so the NEXT open
-// must pay for the full integrity_check instead of trusting quick_check
-// again.
+// Per-request files created by the runtime-corruption recovery path (see
+// attachRuntimeCorruptionObserver / convertRuntimeSqliteCorruption below).
+// A normal open runs no consistency check of the cache database: reading
+// every page is proportional to the file size and stalled the first tool call
+// of every process. Damage that keeps the file from opening at all (a
+// non-database header, a damaged schema page that migrations read) is still
+// caught while opening and rebuilt. Damage elsewhere is usually found when a
+// query reads the page and SQLite raises an error; that error requests that
+// the NEXT open run the full integrity_check and, if it fails, back up and
+// rebuild the database. Some damage raises no error when read (for example a
+// damaged overflow page of a large value comes back as altered bytes), so it
+// stays unnoticed until the database is rebuilt.
 //
 // Each request is its OWN immutable, uniquely-named file (exclusive-create,
 // never overwritten), rather than one shared marker whose content gets
@@ -67,7 +73,7 @@ function integrityCheckRequestFileNamePrefix(sqlitePath: string): string {
 
 /**
  * Best-effort request that the NEXT `openDatabase` for `sqlitePath` run the
- * full `PRAGMA integrity_check` instead of the default `quick_check`. Creates
+ * full `PRAGMA integrity_check` (a normal open runs no consistency check). Creates
  * a new, uniquely-named request file (see the block comment above) with
  * exclusive-create so it can never collide with or overwrite another
  * pending request. Never throws: a failure to write the file only means the
@@ -96,7 +102,7 @@ export function requestFullIntegrityCheck(sqlitePath: string, logger: Logger = b
  * Lists the full paths of every currently pending full-integrity-check
  * request file for `sqlitePath`. Best-effort: a missing or unreadable
  * directory is treated as "no requests pending" rather than as an error,
- * since the fallback (a quick_check) is always safe to run.
+ * since the fallback is a normal open, which runs no consistency check.
  */
 export function listIntegrityCheckRequestFiles(sqlitePath: string): string[] {
   const dir = dirname(sqlitePath);
@@ -220,10 +226,8 @@ function isCorruptionError(error: unknown): boolean {
  * matter what catches and wraps it further up the call stack, including a
  * tool-specific error wrapper that never reaches runTool's own catch block -
  * still schedules the next open's full integrity_check. Exported so a unit
- * test can attach the same wiring to a Database instance opened directly
- * (bypassing openDatabase's own open-time check, which would otherwise catch
- * a test's injected corruption before a "successfully opened" handle ever
- * existed to query against).
+ * test can attach the same wiring to a Database instance opened directly,
+ * without going through openDatabase's open sequence.
  */
 export function attachRuntimeCorruptionObserver(
   db: SqliteDatabase,
@@ -312,14 +316,18 @@ export function openDatabase(
     applyPragmas(db, config);
 
     const schemaVersion = runMigrations(db);
-    runIntegrityCheck(db, logger, pendingRequestFiles.length > 0 ? "full" : "quick");
+    // The full check runs only when a request file is pending; otherwise no
+    // consistency check runs at open (see the block comment on the request
+    // files above for why).
     if (pendingRequestFiles.length > 0) {
+      runIntegrityCheck(db, logger, "full");
       clearIntegrityCheckRequestFiles(pendingRequestFiles, logger);
     }
     // Only attach the runtime-corruption observer once the open itself
-    // (migrations + consistency check) has fully succeeded: open-time
-    // failures must keep going through the backup/rebuild path below, not
-    // silently re-request a check that is about to happen anyway.
+    // (migrations, plus the full check when one was requested) has fully
+    // succeeded: open-time failures must keep going through the
+    // backup/rebuild path below, not silently re-request a check that is
+    // about to happen anyway.
     attachRuntimeCorruptionObserver(db, config.sqlitePath, logger);
 
     return { db, schemaVersion };
