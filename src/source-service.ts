@@ -179,6 +179,17 @@ export type SearchSourceHit = {
   line?: number;
   /** Content hits only: the matching line with one line before and after it. */
   context?: string;
+  /**
+   * Content hits only: the innermost declaration whose line range contains `line`, from its
+   * own symbol line through the line of its closing brace or terminating semicolon. Absent
+   * when no declaration contains the line.
+   */
+  enclosingSymbol?: {
+    symbolKind: SymbolKind;
+    symbolName: string;
+    startLine: number;
+    endLine: number;
+  };
 };
 
 export type QueryMode = "auto" | "token" | "literal";

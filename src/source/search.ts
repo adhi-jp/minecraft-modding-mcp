@@ -17,6 +17,7 @@ import type {
 } from "../source-service.js";
 import { clampLimit, normalizePathStyle, rememberCachedRegex } from "./shared-utils.js";
 import { isProvenUnobfuscatedArtifact } from "./class-source.js";
+import { findEnclosingSymbol } from "./declaration-ranges.js";
 
 type SearchIntent = "symbol" | "text" | "path";
 type SearchMatch = "exact" | "prefix" | "contains" | "regex";
@@ -519,8 +520,14 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     }
     const intentStartedAt = Date.now();
 
-    const recordHit = (hit: SearchSourceHit): void => {
+    // The content that verified each content hit, held only while the accumulator holds
+    // the hit, so the returned page's enclosing declarations need no second read.
+    const hitContents = new WeakMap<SearchSourceHit, string>();
+    const recordHit = (hit: SearchSourceHit, content?: string): void => {
       accumulator.add(hit);
+      if (content !== undefined) {
+        hitContents.set(hit, content);
+      }
     };
     const recordWarning = (warning: string): void => {
       searchWarnings.push(warning);
@@ -585,7 +592,17 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     }
 
     const finalizedHits = accumulator.finalize();
-    const page = finalizedHits.page;
+    const page: SearchSourceHit[] = finalizedHits.page;
+    for (const hit of page) {
+      const content = hitContents.get(hit);
+      if (content === undefined) {
+        continue;
+      }
+      const enclosingSymbol = findEnclosingSymbol(hit.filePath, content, hit.line!);
+      if (enclosingSymbol) {
+        hit.enclosingSymbol = enclosingSymbol;
+      }
+    }
     if (indexedWindowFull && page.length < limit) {
       searchWarnings.push(indexedCandidateWindowWarning(intent, indexedCandidateLimitForMatch(svc, match)));
     }
@@ -652,7 +669,7 @@ function searchTextIntentIndexed(
   query: string,
   match: SearchMatch,
   scope: SearchScope | undefined,
-  onHit: (hit: SearchSourceHit) => void
+  onHit: (hit: SearchSourceHit, content: string) => void
 ): boolean {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
   const pathPrefix = indexedScopePathPrefix(scope);
@@ -694,7 +711,7 @@ function searchTextIntentIndexed(
       matchedIn: "content",
       reasonCodes: ["content_match", `text_${match}`, "indexed"],
       ...contentMatchLocation(candidate.content, contentIndex)
-    });
+    }, candidate.content);
   }
   return isCandidateWindowFull(indexed);
 }
@@ -833,7 +850,7 @@ function searchTextIntent(
   match: SearchMatch,
   scope: SearchScope | undefined,
   regexPattern: RegExp | undefined,
-  onHit: (hit: SearchSourceHit) => void,
+  onHit: (hit: SearchSourceHit, content: string) => void,
   onWarning?: (warning: string) => void
 ): void {
   const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
@@ -855,7 +872,7 @@ function searchTextIntent(
       matchedIn: "content",
       reasonCodes: ["content_match", `text_${match}`],
       ...contentMatchLocation(content, contentIndex)
-    });
+    }, content);
   };
 
   // FAST PATH: an ASCII, non-regex needle narrows candidates via a content LIKE
