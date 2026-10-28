@@ -7,6 +7,14 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Fixed
+
+- `inspect-minecraft` `task: "list-files"` now reports `meta.pagination` with `returnedCount`, `hasMore` and, when the listing returned a cursor, `nextCursor`, at every `detail`, as `task: "search"` already did. Every full page carries a cursor, so a last page of exactly `limit` paths is followed by an empty one. Before, a default `summary` call omitted the `files` block, so a caller could not tell that a further page existed or get its cursor. At `summary`, `returnedCount` counts the first zero to ten listed paths, which `result.files` returns only with `include: ["files"]`; at `standard` and `full` it counts the whole fetched page. `hasMore` and `nextCursor` continue after the fetched page, not after the sampled paths. Pass `nextCursor` as the next call's cursor, or use `detail: "standard"` to see the whole page.
+
+### Documentation
+
+- `docs/tool-reference.md` said that `meta.pagination.returnedCount` of `inspect-minecraft` `task: "search"` counts the displayed samples. At `detail: "summary"` it counts the samples, the first zero to five fetched hits, even when `include: ["samples"]` is absent and the `search` block is omitted; at `standard` and `full` it counts the whole fetched page. The same page now describes `meta.pagination` for `task: "list-files"`. Search behavior is unchanged.
+
 ## [8.0.0-rc.1] - 2026-10-23
 
 ### Changed

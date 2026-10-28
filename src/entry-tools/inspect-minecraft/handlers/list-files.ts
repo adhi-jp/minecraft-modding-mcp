@@ -74,6 +74,7 @@ deps: InspectMinecraftDeps,
         }
       : {})
   };
+  const returnedCount = (detail === "summary" ? sampled.items : files.items).length;
   return {
     ...buildEntryToolResult({
       task: "list-files",
@@ -102,6 +103,15 @@ deps: InspectMinecraftDeps,
       },
       alwaysBlocks: ["subject"]
     }),
-    warnings: [...artifact.warnings, ...files.warnings]
+    warnings: [...artifact.warnings, ...files.warnings],
+    // Keep continuation visible even when summary omits files. The cursor
+    // continues after the fetched page, not after its sampled paths.
+    meta: {
+      pagination: {
+        returnedCount,
+        hasMore: files.nextCursor != null,
+        ...(files.nextCursor != null ? { nextCursor: files.nextCursor } : {})
+      }
+    }
   };
 }
