@@ -61,7 +61,10 @@
   "publishConfig": {
     "access": "public"
   },
-  "repository": "github:adhi-jp/minecraft-modding-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adhi-jp/minecraft-modding-mcp.git"
+  },
   "bugs": "https://github.com/adhi-jp/minecraft-modding-mcp/issues",
   "homepage": "https://github.com/adhi-jp/minecraft-modding-mcp#readme",
   "engines": {
