@@ -146,6 +146,63 @@ function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefi
   return packagePath ?? globPath;
 }
 
+type PathScope = Pick<SearchScope, "packagePrefix" | "fileGlob">;
+
+const SCOPE_PROBE_PAGE_SIZE = 1000;
+
+/**
+ * The caller's path filters, or undefined when it sets neither. An empty or
+ * whitespace-only value counts as absent, as the indexed symbol query treats a
+ * packagePrefix.
+ */
+function callerPathScope(scope: SearchScope | undefined): PathScope | undefined {
+  const packagePrefix = scope?.packagePrefix?.trim() ? scope.packagePrefix : undefined;
+  const fileGlob = scope?.fileGlob?.trim() ? scope.fileGlob : undefined;
+  if (!packagePrefix && !fileGlob) {
+    return undefined;
+  }
+  return {
+    ...(packagePrefix ? { packagePrefix } : {}),
+    ...(fileGlob ? { fileGlob } : {})
+  };
+}
+
+/** Lower-cases A-Z only, the case folding of SQLite LIKE. */
+function asciiLowerCase(value: string): string {
+  return value.replace(/[A-Z]+/g, (run) => run.toLowerCase());
+}
+
+/**
+ * True when at least one indexed file path of the artifact passes `scope`. Every
+ * intent applies packagePrefix and fileGlob to file paths, so when no path passes
+ * no search can return a hit. packagePrefix is compared ignoring ASCII case: the
+ * indexed symbol query applies it only through SQLite LIKE, so a case-sensitive
+ * test would rule out paths that symbol search still returns. The LIKE prefix
+ * from indexedScopePathPrefix narrows the walk to a superset of both filters,
+ * and the walk stops at the first passing path.
+ */
+function anyIndexedPathInScope(svc: SourceService, artifactId: string, scope: PathScope): boolean {
+  const packagePath = scope.packagePrefix ? asciiLowerCase(packagePrefixPath(scope.packagePrefix)) : undefined;
+  const glob = scope.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const likePrefix = indexedScopePathPrefix(scope);
+  let cursor: string | undefined;
+  do {
+    const page = svc.filesRepo.listFiles(artifactId, {
+      limit: SCOPE_PROBE_PAGE_SIZE,
+      cursor,
+      ...(likePrefix ? { prefix: likePrefix } : {})
+    });
+    svc.metrics.recordSearchDbRoundtrip();
+    for (const filePath of page.items) {
+      if ((!packagePath || asciiLowerCase(filePath).startsWith(packagePath)) && (!glob || glob.test(filePath))) {
+        return true;
+      }
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  return false;
+}
+
 function buildSearchCursorContext(input: {
   artifactId: string;
   query: string;
@@ -294,7 +351,8 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     const artifactMapping = artifact.mappingApplied ?? "obfuscated";
     const reportedNamespace = svc.reportedArtifactNamespace(artifact);
     const searchWarnings: string[] = [];
-    if (artifact.qualityFlags.includes("shell-jar")) {
+    const isShellJar = artifact.qualityFlags.includes("shell-jar");
+    if (isShellJar) {
       const bundled = artifact.provenance?.nestedJars ?? [];
       const named = bundled.slice(0, SHELL_WARNING_NAMED_JARS).map((entry) => `"${entry}"`).join(", ");
       const bundledNote = bundled.length === 0
@@ -446,9 +504,17 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     // this query, is silently dropped and the scan restarts from page one. Flag
     // it so callers do not assume they are continuing a previous page.
     const cursorIgnored = input.cursor != null && cursor == null;
+    // Checked against the caller's scope, not one the namespace translation derived.
+    // When no indexed path passes it, no intent can return a hit, so no search runs.
+    const pathScope = callerPathScope(input.scope);
+    const scopeMatchesNoPath = pathScope !== undefined && !anyIndexedPathInScope(svc, artifact.artifactId, pathScope);
+    if (scopeMatchesNoPath && !isShellJar) {
+      // A shell's index is empty, and its own warning already says why.
+      searchWarnings.push(unmatchedScopeWarning(pathScope, Boolean(artifact.binaryJarPath)));
+    }
     const accumulator = createSearchHitAccumulator(limit, cursor);
     const indexedSearchEnabled = svc.config.indexedSearchEnabled !== false;
-    if (match === "regex") {
+    if (match === "regex" && !scopeMatchesNoPath) {
       svc.metrics.recordSearchRegexFallback();
     }
     const intentStartedAt = Date.now();
@@ -468,7 +534,9 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
       }
     };
-    if (intent === "symbol") {
+    if (scopeMatchesNoPath) {
+      // Skipped: the page stays empty and records no search-path metrics.
+    } else if (intent === "symbol") {
       searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
       svc.metrics.recordSearchFallback();
@@ -512,7 +580,9 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         runFullScan();
       }
     }
-    svc.metrics.recordSearchIntentDuration(intent, Date.now() - intentStartedAt);
+    if (!scopeMatchesNoPath) {
+      svc.metrics.recordSearchIntentDuration(intent, Date.now() - intentStartedAt);
+    }
 
     const finalizedHits = accumulator.finalize();
     const page = finalizedHits.page;
@@ -728,6 +798,21 @@ function indexedCandidateWindowWarning(intent: SearchIntent, candidateLimit: num
     ? 'queryMode="literal" for a full substring scan'
     : 'match="regex" for a full path scan';
   return `indexed ${intent} search examined only its candidate window (the first ${candidateLimit} index candidates) and more matched the index, so results may be incomplete. Use ${fullScan}, or narrow the scope with packagePrefix or a fileGlob that starts with a literal directory.`;
+}
+
+function unmatchedScopeWarning(scope: PathScope, hasBackingJar: boolean): string {
+  const subject = scope.packagePrefix && scope.fileGlob
+    ? `packagePrefix "${scope.packagePrefix}" with fileGlob "${scope.fileGlob}"`
+    : scope.packagePrefix
+      ? `packagePrefix "${scope.packagePrefix}"`
+      : `fileGlob "${scope.fileGlob}"`;
+  const backingJarNote = hasBackingJar
+    ? " Text entries of the backing jar, such as files under assets/ or data/, are served by exact path with get-artifact-file (read-through delivery)."
+    : "";
+  const wildcardNote = scope.fileGlob && /[*?]/.test(scope.fileGlob)
+    ? " In fileGlob, * and ? do not match /; ** does."
+    : "";
+  return `${subject} matches no indexed file path, so no file was searched. Indexed artifacts currently include Java source only; non-Java resources are not indexed.${backingJarNote}${wildcardNote}`;
 }
 
 const ASCII_RE = /^[\x00-\x7F]*$/;

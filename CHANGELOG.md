@@ -7,6 +7,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Changed
+
+- `search-class-source`, and `inspect-minecraft` `task: "search"`, search no file and return a warning when `packagePrefix` or `fileGlob` matches no indexed file path. Before, they returned no hits without saying why, for example with a resource glob such as `data/minecraft/recipe/*.json` or an unanchored glob such as `*ServerChunkCache*`. The warning names the filter and says that the index holds Java source only. When the artifact has a backing jar, it adds that `get-artifact-file` reads a text file such as a recipe by its exact path. When the glob contains `*` or `?`, it adds that these do not match `/` while `**` does: `*ServerChunkCache*` matches only a file at the top of the index, and `**/*ServerChunkCache*` matches it in any directory. A workspace `inspect-minecraft` search can still return its binary-backed class match, which ignores these filters.
+
 ### Fixed
 
 - `inspect-minecraft` `task: "list-files"` now reports `meta.pagination` with `returnedCount`, `hasMore` and, when the listing returned a cursor, `nextCursor`, at every `detail`, as `task: "search"` already did. Every full page carries a cursor, so a last page of exactly `limit` paths is followed by an empty one. Before, a default `summary` call omitted the `files` block, so a caller could not tell that a further page existed or get its cursor. At `summary`, `returnedCount` counts the first zero to ten listed paths, which `result.files` returns only with `include: ["files"]`; at `standard` and `full` it counts the whole fetched page. `hasMore` and `nextCursor` continue after the fetched page, not after the sampled paths. Pass `nextCursor` as the next call's cursor, or use `detail: "standard"` to see the whole page.

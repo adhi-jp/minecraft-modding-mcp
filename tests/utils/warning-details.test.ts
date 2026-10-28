@@ -34,6 +34,19 @@ test("classifyWarnings maps each high-value family to a code/category/severity",
   assert.equal(general!.category, "general");
 });
 
+test("classifyWarnings classifies a search scope that matches no indexed path as resource_not_indexed", () => {
+  const [detail] = classifyWarnings([
+    'fileGlob "data/minecraft/recipe/*.json" matches no indexed file path, so no file was searched. ' +
+      "Indexed artifacts currently include Java source only; non-Java resources are not indexed. " +
+      "Text entries of the backing jar, such as files under assets/ or data/, are served by exact path " +
+      "with get-artifact-file (read-through delivery). In fileGlob, * and ? do not match /; ** does."
+  ]);
+
+  assert.equal(detail!.code, "resource_not_indexed");
+  assert.equal(detail!.category, "coverage");
+  assert.equal(detail!.severity, "info");
+});
+
 test("classifyWarnings references each warning by index and omits the message text", () => {
   const warnings = ["Member list was truncated to 2 entries (from 9).", "plain note"];
   const details = classifyWarnings(warnings);
