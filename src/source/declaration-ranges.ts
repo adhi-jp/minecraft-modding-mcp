@@ -1,6 +1,6 @@
 import type { SymbolKind } from "../source-service.js";
 import { stripJavaNoise } from "../symbols/java-lexer.js";
-import { extractSymbolsFromSource } from "../symbols/symbol-extractor.js";
+import { extractSymbolsFromCode } from "../symbols/symbol-extractor.js";
 
 /** A declaration of a Java source file with the 1-based lines its range starts and ends on. */
 export type EnclosingSymbol = {
@@ -10,7 +10,7 @@ export type EnclosingSymbol = {
   endLine: number;
 };
 
-type ExtractedSymbol = ReturnType<typeof extractSymbolsFromSource>[number];
+type ExtractedSymbol = ReturnType<typeof extractSymbolsFromCode>[number];
 
 interface DeclarationScan {
   /** Index of the line the declaration's range ends on. */
@@ -94,7 +94,8 @@ function scanDeclaration(code: readonly string[], startIndex: number, kind: Symb
  * declaration contains the line, e.g. on the package line, an import or a header comment.
  */
 export function findEnclosingSymbol(filePath: string, content: string, line: number): EnclosingSymbol | undefined {
-  const symbols = extractSymbolsFromSource(filePath, content);
+  const code = stripJavaNoise(content.split(/\r?\n/));
+  const symbols = extractSymbolsFromCode(filePath, code);
   // Only a declaration starting at or above the line can contain it. Sorting by descending
   // start line (stable, so extractor order breaks ties) puts inner declarations first.
   const candidates = symbols.filter((symbol) => symbol.line <= line);
@@ -102,7 +103,6 @@ export function findEnclosingSymbol(filePath: string, content: string, line: num
     return undefined;
   }
   candidates.sort((left, right) => right.line - left.line);
-  const code = stripJavaNoise(content.split(/\r?\n/));
 
   // A record header runs from the record's line through the line of its body's "{"; the
   // extractor reports the record's components as fields on those lines.

@@ -230,6 +230,11 @@ export function extractSymbolsFromSource(filePath: string, content: string): Arr
   // Comments and literals are blanked first, so a brace, parenthesis or declaration inside
   // them can neither shift the scope below nor be emitted.
   const code = stripJavaNoise(lines);
+  return extractSymbolsFromCode(filePath, code);
+}
+
+/** Extract symbols from lines already processed by stripJavaNoise. */
+export function extractSymbolsFromCode(filePath: string, code: readonly string[]): Array<ExtractedSymbol> {
   const symbols: ExtractedSymbol[] = [];
   const qualifiedName = sourcePathToFqcn(filePath);
 
