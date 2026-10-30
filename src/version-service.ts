@@ -400,6 +400,7 @@ export class VersionService {
     const downloaded = await downloadToCache(opts.url, destinationPath, {
       retries: this.config.fetchRetries,
       timeoutMs: this.config.fetchTimeoutMs,
+      timeoutSetting: "MCP_FETCH_TIMEOUT_MS",
       fetchFn: this.fetchFn
     });
 

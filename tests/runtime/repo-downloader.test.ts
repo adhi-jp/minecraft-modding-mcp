@@ -357,10 +357,18 @@ test("downloadToCache reports its own timeout with the limit, whether the reques
       (error: unknown) => {
         assert.ok(isAppError(error), `a ${label} timeout must not escape untyped`);
         assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
-        assert.equal(error.message, `Download timed out for "${url}" after ${timeoutMs} ms.`);
+        assert.equal(
+          error.message,
+          `Download timed out for "${url}": no response or data for ${timeoutMs} ms.`
+        );
         assert.equal(error.details?.url, url);
         assert.equal(error.details?.timeoutMs, timeoutMs, `a ${label} timeout must report the limit it hit`);
         assert.equal(typeof error.details?.cause, "string");
+        assert.equal(
+          error.details?.nextAction,
+          undefined,
+          `a ${label} timeout names no setting when the caller passed none`
+        );
         return true;
       }
     );
@@ -383,6 +391,177 @@ test("downloadToCache reports its own timeout with the limit, whether the reques
   );
 
   assert.deepEqual(await readdir(root), [], "a timed-out transfer must leave no file behind");
+});
+
+/** Resolve after `ms` milliseconds on the real clock. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * A 200 whose response arrives after `headersDelayMs` and whose body then
+ * delivers `chunks.length` chunks, chunk `i` `chunks[i]` ms after the previous
+ * one is asked for. With `stall`, the body never ends after its last chunk.
+ * `state.lastDeliveredAt` is the `performance.now()` of the latest chunk.
+ */
+function fetchWithPacedBody(options: {
+  headersDelayMs?: number;
+  chunks: number[];
+  stall?: boolean;
+}): { fetchFn: typeof fetch; state: { delivered: number; lastDeliveredAt: number } } {
+  const state = { delivered: 0, lastDeliveredAt: 0 };
+  const fetchFn = (async () => {
+    await delay(options.headersDelayMs ?? 0);
+    let index = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          if (index >= options.chunks.length) {
+            if (!options.stall) {
+              controller.close();
+            }
+            return;
+          }
+          await delay(options.chunks[index]!);
+          index += 1;
+          state.delivered += 1;
+          state.lastDeliveredAt = performance.now();
+          controller.enqueue(new Uint8Array([index]));
+        }
+      },
+      { highWaterMark: 0 }
+    );
+    return new Response(body, { status: 200 });
+  }) as typeof fetch;
+  return { fetchFn, state };
+}
+
+// Real timers with wide margins: every gap stays at least 90 ms below the
+// limit and every transfer runs at least three limits in total, so WSL timer
+// jitter would have to exceed those margins to turn a live transfer into a
+// timeout or a stalled one into a success.
+const IDLE_TIMEOUT_MS = 200;
+
+const liveTransfers: Array<{ label: string; headersDelayMs?: number; chunks: number[] }> = [
+  // Sixteen chunks 40 ms apart: 640 ms in total, never 200 ms without data.
+  { label: "chunked body", chunks: Array.from({ length: 16 }, () => 40) },
+  // The response and the first chunk each arrive below the limit, but
+  // together above it, so the wait for the first chunk starts at the response.
+  {
+    label: "delayed headers then a delayed first chunk",
+    headersDelayMs: 110,
+    chunks: [110, ...Array.from({ length: 8 }, () => 50)]
+  }
+];
+
+for (const { label, headersDelayMs, chunks } of liveTransfers) {
+  test(`downloadToCache keeps a download that runs past its timeout alive while data keeps arriving: ${label}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "downloader-idle-"));
+    const { fetchFn, state } = fetchWithPacedBody({ headersDelayMs, chunks });
+    const startedAt = performance.now();
+    const result = await downloadToCache("https://repo.example.com/slow-but-live.jar", join(root, "a.jar"), {
+      retries: 0,
+      timeoutMs: IDLE_TIMEOUT_MS,
+      fetchFn
+    });
+    const elapsed = performance.now() - startedAt;
+
+    assert.equal(result.ok, true, "a download that never idles for the limit must succeed");
+    assert.equal(state.delivered, chunks.length, "every chunk must be read");
+    assert.equal(result.contentLength, chunks.length);
+    assert.ok(
+      elapsed >= 3 * IDLE_TIMEOUT_MS,
+      `the transfer must run well past the limit in total, took ${elapsed} ms`
+    );
+  });
+}
+
+test("downloadToCache times out a body that stalls after several chunks, measured from the last chunk", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-idle-stall-"));
+  const url = "https://repo.example.com/stalls.jar";
+  const chunks = Array.from({ length: 10 }, () => 40);
+  const { fetchFn, state } = fetchWithPacedBody({ chunks, stall: true });
+
+  const startedAt = performance.now();
+  await assert.rejects(
+    () =>
+      downloadToCache(url, join(root, "stalls.jar"), {
+        retries: 0,
+        timeoutMs: IDLE_TIMEOUT_MS,
+        fetchFn
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+      assert.equal(
+        error.message,
+        `Download timed out for "${url}": no response or data for ${IDLE_TIMEOUT_MS} ms.`
+      );
+      assert.equal(error.details?.timeoutMs, IDLE_TIMEOUT_MS);
+      return true;
+    }
+  );
+  const rejectedAt = performance.now();
+  const elapsed = rejectedAt - startedAt;
+
+  assert.equal(state.delivered, chunks.length, "the timeout must not fire while chunks still arrive");
+  assert.ok(
+    elapsed >= 400 + IDLE_TIMEOUT_MS - 20,
+    `the stall is measured from the last chunk (about 400 ms in), took ${elapsed} ms`
+  );
+  // Below two limits: the wait after the last chunk is one limit plus jitter,
+  // never a longer one.
+  const stalledFor = rejectedAt - state.lastDeliveredAt;
+  assert.ok(
+    stalledFor < 2 * IDLE_TIMEOUT_MS,
+    `the timeout must fire one limit after the last chunk, fired after ${stalledFor} ms`
+  );
+  assert.deepEqual(await readdir(root), [], "a timed-out transfer must leave no file behind");
+});
+
+test("downloadToCache names the governing setting in a timeout reply only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-timeout-setting-"));
+  const url = "https://repo.example.com/a.jar";
+  const timeoutMs = 50;
+
+  await assert.rejects(
+    () =>
+      downloadToCache(url, join(root, "timeout.jar"), {
+        retries: 0,
+        timeoutMs,
+        timeoutSetting: "MCP_FETCH_TIMEOUT_MS",
+        fetchFn: fetchThatWaitsForAbort()
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+      assert.equal(
+        error.details?.nextAction,
+        `Raise MCP_FETCH_TIMEOUT_MS above ${timeoutMs} if the repository is slow to respond.`
+      );
+      return true;
+    }
+  );
+
+  // A failure the timer did not cause gives the setting no say.
+  await assert.rejects(
+    () =>
+      downloadToCache(url, join(root, "network.jar"), {
+        retries: 0,
+        timeoutMs: 2_000,
+        timeoutSetting: "MCP_FETCH_TIMEOUT_MS",
+        fetchFn: (async () => {
+          throw new TypeError("fetch failed");
+        }) as typeof fetch
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+      assert.equal(error.message, `Download failed for "${url}".`);
+      assert.equal(error.details?.nextAction, undefined);
+      return true;
+    }
+  );
 });
 
 test("downloadToCache types transport failures but passes system and typed errors through unchanged", async () => {

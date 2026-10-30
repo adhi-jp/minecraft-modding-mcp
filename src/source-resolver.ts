@@ -711,18 +711,20 @@ export async function resolveSourceTarget(
    * RULE: the FIRST failure carrying a `nextAction` wins and is never
    * overwritten; with none, the MOST RECENT failure is kept.
    *
-   * Plain recency was wrong. A `nextAction` marks a configuration-driven
-   * refusal - the download size ceiling is the case in hand - which names the
-   * setting that fixes it. Every ordinary repository outcome (a 404, a 503, a
-   * body that is not an archive) carries none, so under recency a single later
-   * 404 on the binary leg erased the one failure with a repair in it and the
-   * terminal error went back to saying only "unstable". FIRST rather than last
-   * among the actionable ones because the earliest is the failure that was
-   * still on the artifact the caller actually asked for: the source leg here
-   * runs before the binary one, and the later stages are already consequences
-   * of the first refusal. Actionable failures do not compete in practice - one
-   * misconfigured ceiling trips every repository identically - so the tie-break
-   * only decides which of several identical hints is quoted.
+   * A `nextAction` carries a repair the user can make: a setting to raise (the
+   * download size ceiling, or a download timeout governed by
+   * `MCP_FETCH_TIMEOUT_MS`) or an unreadable cache path to remove, which
+   * `describeThrownRepoFailure` supplies. Every ordinary repository outcome (a
+   * 404, a 503, a body that is not an archive) carries none, so keeping only
+   * the most recent failure would let a later 404 on the binary leg replace the
+   * one failure with a repair in it, and the terminal error would say only
+   * "unstable". FIRST rather than last among the actionable ones because the
+   * earliest is the failure on the artifact the caller asked for: the source
+   * leg here runs before the binary one, and the later stages are consequences
+   * of the first refusal. Actionable failures seldom compete - one
+   * misconfigured ceiling trips every repository identically, and a timeout
+   * names the same setting and limit wherever it fires - and when a timeout on
+   * one repository and a size refusal on another do, the earlier one is quoted.
    */
   const recordRepoFailure = (failure: RepoAttemptFailure): void => {
     if (keptRepoFailure?.nextAction) {
@@ -998,7 +1000,8 @@ export async function resolveSourceTarget(
       const download = await resolveCachedDownload(sourceUrl, sourceDestinationPath, {
         freshness: downloadFreshness,
         retries: explicitConfig.fetchRetries,
-        timeoutMs: explicitConfig.fetchTimeoutMs
+        timeoutMs: explicitConfig.fetchTimeoutMs,
+        timeoutSetting: "MCP_FETCH_TIMEOUT_MS"
       });
 
       let sourceJarHasJavaSources: boolean;
@@ -1137,7 +1140,8 @@ export async function resolveSourceTarget(
       const downloaded = await resolveCachedDownload(binaryUrl, binaryDestinationPath, {
         freshness: downloadFreshness,
         retries: explicitConfig.fetchRetries,
-        timeoutMs: explicitConfig.fetchTimeoutMs
+        timeoutMs: explicitConfig.fetchTimeoutMs,
+        timeoutSetting: "MCP_FETCH_TIMEOUT_MS"
       });
 
       if (!downloaded.ok) {

@@ -46,7 +46,8 @@ export async function loadMojangPairs(
     const downloaded = await downloadToCache(clientMappingsUrl, mappingsPath, {
       fetchFn: deps.fetchFn,
       retries: deps.config.fetchRetries,
-      timeoutMs: deps.config.fetchTimeoutMs
+      timeoutMs: deps.config.fetchTimeoutMs,
+      timeoutSetting: "MCP_FETCH_TIMEOUT_MS"
     });
     if (!downloaded.ok || !downloaded.path) {
       warnings.push(

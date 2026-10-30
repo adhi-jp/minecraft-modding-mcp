@@ -57,7 +57,18 @@ export interface DownloadResult {
 }
 
 interface DownloadOptions {
+  /**
+   * Longest wait, in milliseconds, for the response and then for each next
+   * chunk of the body. A transfer that keeps delivering data has no overall
+   * time limit.
+   */
   timeoutMs?: number;
+  /**
+   * The environment setting that governs `timeoutMs` for this caller. A
+   * timeout reply names it in `details.nextAction`; a caller with a fixed
+   * timeout leaves it unset, so the reply names nothing a user cannot change.
+   */
+  timeoutSetting?: string;
   retries?: number;
   fetchFn?: typeof fetch;
   /**
@@ -625,7 +636,8 @@ function downloadFailure(
   error: unknown,
   url: string,
   timedOut: boolean,
-  timeoutMs: number
+  timeoutMs: number,
+  timeoutSetting: string | undefined
 ): Error {
   if (isAppError(error)) {
     return error;
@@ -644,8 +656,17 @@ function downloadFailure(
   if (timedOut) {
     return createError({
       code: ERROR_CODES.REPO_FETCH_FAILED,
-      message: `Download timed out for "${safeUrl}" after ${timeoutMs} ms.`,
-      details: { url: safeUrl, timeoutMs, cause }
+      message: `Download timed out for "${safeUrl}": no response or data for ${timeoutMs} ms.`,
+      details: {
+        url: safeUrl,
+        timeoutMs,
+        cause,
+        ...(timeoutSetting === undefined
+          ? {}
+          : {
+              nextAction: `Raise ${timeoutSetting} above ${timeoutMs} if the repository is slow to respond.`
+            })
+      }
     });
   }
   return createError({
@@ -1407,8 +1428,15 @@ export async function downloadToCache(
 
   let attempt = 0;
   while (true) {
+    // The timer bounds idle time, not the whole attempt: it is re-armed when
+    // the response arrives and on every body chunk, so a slow but live
+    // transfer runs to completion while a stalled request or body aborts.
     const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    let timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const rearmTimeout = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => timeout.abort(), timeoutMs);
+    };
 
     try {
       const request: RequestInit = { signal: timeout.signal };
@@ -1416,6 +1444,7 @@ export async function downloadToCache(
         request.headers = opts.requestHeaders;
       }
       const response = await fetchFn(url, request);
+      rearmTimeout();
 
       const status = response.status;
       if (status === 404) {
@@ -1498,6 +1527,7 @@ export async function downloadToCache(
           ): AsyncGenerator<Buffer> {
             let received = 0;
             for await (const chunk of source) {
+              rearmTimeout();
               received += chunk.length;
               if (received > maxBytes) {
                 limitExceeded("stream", url, received, maxBytes);
@@ -1557,7 +1587,13 @@ export async function downloadToCache(
       // at the same byte. Retrying it would triple the bandwidth the ceiling
       // exists to save, so it leaves the loop immediately.
       if (isDownloadLimitError(caughtError) || attempt >= maxRetries) {
-        throw downloadFailure(caughtError, url, timeout.signal.aborted, timeoutMs);
+        throw downloadFailure(
+          caughtError,
+          url,
+          timeout.signal.aborted,
+          timeoutMs,
+          opts.timeoutSetting
+        );
       }
 
       await sleep(retryDelay(200, attempt));

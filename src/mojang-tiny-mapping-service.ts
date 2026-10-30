@@ -371,7 +371,8 @@ async function ensureMappingsFile(
     const downloaded = await downloadToCache(url, destination, {
       fetchFn,
       retries: config.fetchRetries,
-      timeoutMs: config.fetchTimeoutMs
+      timeoutMs: config.fetchTimeoutMs,
+      timeoutSetting: "MCP_FETCH_TIMEOUT_MS"
     });
     if (!downloaded.ok || !downloaded.path) {
       return {
