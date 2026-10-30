@@ -11,6 +11,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 - `search-class-source` content hits (`matchedIn: "content"`), and the same hits from `inspect-minecraft` `task: "search"`, include `enclosingSymbol`: the kind, name, start line and end line of the innermost class, interface, enum, record, method, constructor or field that contains the match. `startLine` is the declaration's own line, so annotation lines above it are outside the range, and a constructor is reported as a `method` named after its class. Pass `startLine` and `endLine` to `get-class-source` with `mode: "snippet"` to read exactly that declaration instead of guessing a range around the hit. The field is absent when no declaration contains the match, such as a match in the package line, an import or a header comment. Symbol and path hits are unchanged. Finding the enclosing declarations adds processing time that grows with the number of content hits returned and the size of their source files.
 
+### Fixed
+
+- When a tool fails because a download timed out or failed at the network level — DNS, a refused or dropped connection, a TLS handshake — it now reports `ERR_REPO_FETCH_FAILED`, `retryClass: "transient"`. Before, the same failure was reported as `ERR_INTERNAL` ("Unexpected server error", `retryClass: "server"`), so a network fault read as a server bug, or as `ERR_ARTIFACT_RESOLUTION_FAILED` while resolving an artifact. This covers downloads of a Minecraft jar, Mojang mappings, Vineflower and tiny-remapper, and the Fabric intermediary or yarn mappings that `remap-mod-jar` fetches. Mapping lookups, which continue without an intermediary or yarn file they could not download, are unchanged. The message names the URL without its credentials, query or fragment, and for a timeout the limit in milliseconds. When no repository can serve a Maven artifact and the final `ERR_REPO_FETCH_FAILED` reports such a failure, its `context.repoFailureCode` is now `"ERR_REPO_FETCH_FAILED"`; before, it was absent.
+
 ## [8.0.0] - 2026-10-28
 
 ### Changed

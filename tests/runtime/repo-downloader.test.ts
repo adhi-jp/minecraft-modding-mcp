@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { isAppError } from "../../src/errors.ts";
+import { createError, ERROR_CODES, isAppError } from "../../src/errors.ts";
 import {
   defaultDownloadPath,
   discardCachedDownload,
@@ -268,7 +268,7 @@ test("downloadToCache caps an unreasonable retry-after instead of honoring it wh
   assert.equal(result.ok, true);
 });
 
-test("downloadToCache rethrows a network error once retries are exhausted", async () => {
+test("downloadToCache types a network error as a repository fetch failure once retries are exhausted", async () => {
   const root = await mkdtemp(join(tmpdir(), "downloader-neterr-"));
   const destination = join(root, "file.jar");
   let calls = 0;
@@ -281,13 +281,255 @@ test("downloadToCache rethrows a network error once retries are exhausted", asyn
   await assert.rejects(
     () =>
       downloadToCache("https://repo.example.com/a.jar", destination, {
-        retries: 0,
+        retries: 1,
         timeoutMs: 2_000,
         fetchFn
       }),
-    /network down/
+    (error: unknown) => {
+      // Raw, this reached the tool boundary as ERR_INTERNAL: a server bug,
+      // when what failed was the network.
+      assert.ok(isAppError(error), "a transport failure must not escape untyped");
+      assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+      assert.equal(error.message, 'Download failed for "https://repo.example.com/a.jar".');
+      assert.equal(error.details?.url, "https://repo.example.com/a.jar");
+      assert.equal(error.details?.cause, "network down");
+      assert.equal(error.details?.timeoutMs, undefined);
+      assert.equal(error.details?.nextAction, undefined);
+      return true;
+    }
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 2, "the failure is typed only after every retry has run");
+});
+
+/**
+ * A fetch that answers only once its signal aborts, the way a request stalled
+ * on a dead connection does. It rejects with the signal's reason, or with
+ * `abortError` when given.
+ */
+function fetchThatWaitsForAbort(abortError?: unknown): typeof fetch {
+  return ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      assert.ok(signal, "the download must pass its timeout signal to fetch");
+      signal.addEventListener("abort", () => reject(abortError ?? signal.reason), { once: true });
+    })) as typeof fetch;
+}
+
+/** A 200 whose body sends one chunk and then never ends. */
+function fetchWithEndlessBody(): typeof fetch {
+  return (async () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        }
+      }),
+      { status: 200 }
+    )) as typeof fetch;
+}
+
+test("downloadToCache reports its own timeout with the limit, whether the request or the body stalls", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-timeout-"));
+  const url = "https://repo.example.com/slow.jar";
+  const timeoutMs = 50;
+
+  const stalls: Array<{ label: string; fetchFn: typeof fetch }> = [
+    { label: "request", fetchFn: fetchThatWaitsForAbort() },
+    { label: "body", fetchFn: fetchWithEndlessBody() },
+    // The timer fired, so this is a timeout even though the error that ended
+    // the request carries a syscall.
+    {
+      label: "system-error",
+      fetchFn: fetchThatWaitsForAbort(
+        Object.assign(new Error("write EPIPE"), { code: "EPIPE", syscall: "write" })
+      )
+    }
+  ];
+
+  for (const { label, fetchFn } of stalls) {
+    await assert.rejects(
+      () =>
+        downloadToCache(url, join(root, `${label}.jar`), {
+          retries: 0,
+          timeoutMs,
+          fetchFn
+        }),
+      (error: unknown) => {
+        assert.ok(isAppError(error), `a ${label} timeout must not escape untyped`);
+        assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+        assert.equal(error.message, `Download timed out for "${url}" after ${timeoutMs} ms.`);
+        assert.equal(error.details?.url, url);
+        assert.equal(error.details?.timeoutMs, timeoutMs, `a ${label} timeout must report the limit it hit`);
+        assert.equal(typeof error.details?.cause, "string");
+        return true;
+      }
+    );
+  }
+
+  // An already-typed error says more than the timeout does, even when the
+  // timer fired first.
+  const typedError = createError({ code: ERROR_CODES.REPO_FETCH_FAILED, message: "already typed" });
+  await assert.rejects(
+    () =>
+      downloadToCache(url, join(root, "typed.jar"), {
+        retries: 0,
+        timeoutMs,
+        fetchFn: fetchThatWaitsForAbort(typedError)
+      }),
+    (error: unknown) => {
+      assert.equal(error, typedError, "an already-typed error must not be rewritten as a timeout");
+      return true;
+    }
+  );
+
+  assert.deepEqual(await readdir(root), [], "a timed-out transfer must leave no file behind");
+});
+
+test("downloadToCache types transport failures but passes system and typed errors through unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-classify-"));
+  const url = "https://repo.example.com/a.jar";
+
+  const transportErrorWithCode = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+    code: "ECONNREFUSED"
+  });
+  const readError = Object.assign(new Error("EIO: i/o error, read"), {
+    code: "EIO",
+    errno: -5,
+    syscall: "read"
+  });
+  const typedError = createError({ code: ERROR_CODES.INVALID_INPUT, message: "already typed" });
+
+  /** A 200 whose body fails after one chunk with `error`. */
+  const failingBody = (error: Error): typeof fetch =>
+    (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.error(error);
+          }
+        }),
+        { status: 200 }
+      )) as typeof fetch;
+  const throwing = (error: unknown): typeof fetch =>
+    (async () => {
+      throw error;
+    }) as typeof fetch;
+
+  // A directory with an entry in it sits where the file should land, so the
+  // body arrives in full and only the final rename fails.
+  const blockedDestination = join(root, "blocked.jar");
+  await mkdir(join(blockedDestination, "occupied"), { recursive: true });
+
+  const expectTransport = (expectedCause: string) => (error: unknown) => {
+    assert.ok(isAppError(error));
+    assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+    assert.equal(error.message, `Download failed for "${url}".`);
+    assert.equal(error.details?.cause, expectedCause);
+    assert.equal(error.details?.timeoutMs, undefined, "only this call's own timer is a timeout");
+  };
+
+  const rows: Array<{
+    label: string;
+    fetchFn: typeof fetch;
+    destination?: string;
+    check: (error: unknown) => void;
+  }> = [
+    {
+      label: "a body-stream error without a syscall",
+      fetchFn: failingBody(new Error("terminated")),
+      check: expectTransport("terminated")
+    },
+    {
+      label: "a fetch error that carries a code but no syscall",
+      fetchFn: throwing(transportErrorWithCode),
+      check: expectTransport("connect ECONNREFUSED 127.0.0.1:443")
+    },
+    {
+      label: "an AbortError thrown before the timer fires",
+      fetchFn: throwing(new DOMException("This operation was aborted", "AbortError")),
+      check: expectTransport("This operation was aborted")
+    },
+    {
+      label: "a body-stream error that carries a syscall",
+      fetchFn: failingBody(readError),
+      check: (error) => {
+        assert.ok(!isAppError(error), "a system error must stay raw");
+        const errno = error as NodeJS.ErrnoException;
+        assert.equal(errno.code, "EIO");
+        assert.equal(errno.syscall, "read");
+        assert.equal(errno.message, readError.message);
+      }
+    },
+    {
+      label: "a final rename onto a non-empty directory",
+      fetchFn: (async () => new Response(Buffer.from("jar-bytes"), { status: 200 })) as typeof fetch,
+      destination: blockedDestination,
+      check: (error) => {
+        assert.ok(!isAppError(error), "a file-system error must stay raw");
+        const errno = error as NodeJS.ErrnoException;
+        assert.equal(errno.syscall, "rename");
+        assert.equal(typeof errno.code, "string");
+      }
+    },
+    {
+      label: "a typed error thrown by fetch",
+      fetchFn: throwing(typedError),
+      check: (error) => {
+        assert.equal(error, typedError, "an already-typed error must not be rewritten");
+      }
+    }
+  ];
+
+  // Every row runs before anything is reported, so one wrong arm does not hide
+  // the state of the others.
+  const failures: string[] = [];
+  for (const { label, fetchFn, destination, check } of rows) {
+    try {
+      await assert.rejects(
+        () =>
+          downloadToCache(url, destination ?? join(root, "file.jar"), {
+            retries: 0,
+            timeoutMs: 2_000,
+            fetchFn
+          }),
+        (error: unknown) => {
+          check(error);
+          return true;
+        }
+      );
+    } catch (assertion) {
+      failures.push(`${label}: ${(assertion as Error).message}`);
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+test("downloadToCache keeps credentials, query and fragment out of a failed download's error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "downloader-safe-url-"));
+
+  // The real fetch, which refuses a URL with credentials before it connects
+  // and quotes the whole URL, secrets included, in its own message.
+  await assert.rejects(
+    () =>
+      downloadToCache("https://user:secret@repo.example.com/a.jar?token=abc#frag", join(root, "a.jar"), {
+        retries: 0,
+        timeoutMs: 2_000
+      }),
+    (error: unknown) => {
+      assert.ok(isAppError(error));
+      assert.equal(error.code, "ERR_REPO_FETCH_FAILED");
+      const published = JSON.stringify({ message: error.message, details: error.details });
+      for (const secret of ["user:secret", "secret@", "token=abc", "#frag"]) {
+        assert.ok(!published.includes(secret), `"${secret}" must not appear in ${published}`);
+      }
+      assert.ok(
+        error.message.includes("repo.example.com/a.jar"),
+        `the message must still name the host and path: ${error.message}`
+      );
+      return true;
+    }
+  );
 });
 
 test("resolveCachedDownload(immutable) adopts an already-cached jar that has no sidecar without touching the network", async () => {
@@ -618,7 +860,12 @@ test("resolveCachedDownload(revalidate) surfaces the original error instead of a
   const url = "https://repo.example.com/snapshot.jar";
   await seedCachedDownload(destination, url, "snapshot-bytes-v1", { etag: "etag-v1" });
 
-  const originalError = new Error("getaddrinfo ENOTFOUND repo.example.com");
+  // Typed, so the transfer passes it through unchanged and its identity proves
+  // which failure was rethrown.
+  const originalError = createError({
+    code: ERROR_CODES.REPO_FETCH_FAILED,
+    message: "getaddrinfo ENOTFOUND repo.example.com"
+  });
   const fetchFn: typeof fetch = (async () => {
     // Simulates a concurrent eviction (e.g. discardCachedDownload) removing
     // the file this call's sidecar was read against.
@@ -760,8 +1007,13 @@ test("resolveCachedDownload surfaces the original network error when the stale f
         timeoutMs: 2_000,
         fetchFn
       }),
-    /network down/,
-    "a second failure inside the fallback must not replace the reason the call failed"
+    (error: unknown) => {
+      assert.ok(
+        isAppError(error) && error.details?.cause === "network down",
+        "a second failure inside the fallback must not replace the reason the call failed"
+      );
+      return true;
+    }
   );
 });
 

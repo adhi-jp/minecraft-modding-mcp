@@ -591,6 +591,70 @@ function isDownloadLimitError(error: unknown): boolean {
   return isAppError(error) && error.code === ERROR_CODES.LIMIT_EXCEEDED;
 }
 
+/**
+ * `url` without userinfo, query or fragment: the form a failed download may
+ * name in its error. The message reaches clients and logs; the details do
+ * not, but are kept to the same form. A repository URL can carry credentials
+ * or a token, and the server must not repeat them.
+ */
+function safeDownloadUrl(url: string): string {
+  const parsed = new URL(url);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.href;
+}
+
+/**
+ * The error a download throws once its last attempt has failed.
+ *
+ * An `AppError` (a size refusal, a typed error from `fetchFn`) already says
+ * more than anything built here. A Node system error - it carries a string
+ * `syscall` - such as a failed final rename or disk read stays raw, so callers
+ * can still read its errno. Everything else failed on the way
+ * to or from the repository: this call's own timer firing, or a transport
+ * failure, which `fetch` reports as a bare `TypeError` with no `syscall`.
+ * Escaping raw, those reached the tool boundary as an internal server error.
+ *
+ * The underlying message travels in `details.cause`, never in the message,
+ * because `fetch` quotes the whole URL in some of its messages, credentials
+ * included; it is kept with every copy of the URL replaced by the safe form.
+ */
+function downloadFailure(
+  error: unknown,
+  url: string,
+  timedOut: boolean,
+  timeoutMs: number
+): Error {
+  if (isAppError(error)) {
+    return error;
+  }
+  if (!timedOut && typeof (error as NodeJS.ErrnoException | undefined)?.syscall === "string") {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  const safeUrl = safeDownloadUrl(url);
+  const rawUrls = [...new Set([url, new URL(url).href])].sort((a, b) => b.length - a.length);
+  let cause = error instanceof Error ? error.message : String(error);
+  for (const rawUrl of rawUrls) {
+    cause = cause.split(rawUrl).join(safeUrl);
+  }
+
+  if (timedOut) {
+    return createError({
+      code: ERROR_CODES.REPO_FETCH_FAILED,
+      message: `Download timed out for "${safeUrl}" after ${timeoutMs} ms.`,
+      details: { url: safeUrl, timeoutMs, cause }
+    });
+  }
+  return createError({
+    code: ERROR_CODES.REPO_FETCH_FAILED,
+    message: `Download failed for "${safeUrl}".`,
+    details: { url: safeUrl, cause }
+  });
+}
+
 /** Stream the file through sha256 so a multi-hundred-megabyte jar never lands in memory. */
 export async function digestFile(filePath: string): Promise<{ contentSha256: string; contentLength: number }> {
   const hash = createHash("sha256");
@@ -1493,7 +1557,7 @@ export async function downloadToCache(
       // at the same byte. Retrying it would triple the bandwidth the ceiling
       // exists to save, so it leaves the loop immediately.
       if (isDownloadLimitError(caughtError) || attempt >= maxRetries) {
-        throw caughtError instanceof Error ? caughtError : new Error(String(caughtError));
+        throw downloadFailure(caughtError, url, timeout.signal.aborted, timeoutMs);
       }
 
       await sleep(retryDelay(200, attempt));

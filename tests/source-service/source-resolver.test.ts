@@ -1769,6 +1769,49 @@ test("resolveSourceTarget keeps the most recent failure when none of them is act
   assert.equal(problem.context?.repoFailureCode, undefined);
 });
 
+test("resolveSourceTarget names a transport failure on the last repository as its cause code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "resolver-download-transport-"));
+  const gradleUserHome = join(root, "gradle-home");
+  await mkdir(gradleUserHome, { recursive: true });
+
+  const binaryUrl = "https://repo.example.test/com/example/offline/1.0/offline-1.0.jar";
+  const fetchStub: typeof fetch = (async () => {
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+
+  const config = buildTestConfig(root, { sourceRepos: ["https://repo.example.test"] });
+
+  const caught = await withGradleUserHome(gradleUserHome, () =>
+    withGlobalFetch(fetchStub, async () => {
+      try {
+        await resolveSourceTarget(
+          { kind: "coordinate", value: "com.example:offline:1.0" },
+          { allowDecompile: true },
+          config
+        );
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    })
+  );
+
+  assert.ok(caught);
+  assert.ok(isAppError(caught));
+  assert.equal(caught.code, ERROR_CODES.REPO_FETCH_FAILED);
+
+  // A thrown network fault carries a cause code, so a caller can tell it apart
+  // from a repository that answered with an error status.
+  const problem = mapErrorToProblem(caught, "req-download-transport");
+  assert.equal(problem.context?.repoFailureCode, ERROR_CODES.REPO_FETCH_FAILED);
+
+  const lastRepoFailure = (caught.details as Record<string, unknown> | undefined)
+    ?.lastRepoFailure as Record<string, unknown> | undefined;
+  assert.ok(lastRepoFailure);
+  assert.equal(lastRepoFailure.repoUrl, binaryUrl, "the last leg tried is the one reported");
+  assert.equal(lastRepoFailure.reason, `Download failed for "${binaryUrl}".`);
+});
+
 test("localM2CoordinateCandidatePaths keeps every candidate under the local repository root", () => {
   // Driven with a hand-built coordinate, deliberately BYPASSING parseCoordinate:
   // the point is that the path builder is safe on its own, not that the input

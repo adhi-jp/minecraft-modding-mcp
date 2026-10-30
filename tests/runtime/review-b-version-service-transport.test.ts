@@ -79,3 +79,37 @@ test("resolveVersionMappings keeps a typed detail-fetch error rather than rewrit
     }
   );
 });
+
+test("resolveVersionJar types a transport-level jar download failure as a repository fetch error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "review-b-vs-jar-transport-"));
+  const detailUrl = "https://example.invalid/1.21.4.json";
+  const jarUrl = "https://example.invalid/client.jar";
+  const fetchFn = (async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === DEFAULT_MANIFEST_URL) {
+      return Response.json({
+        latest: { release: "1.21.4" },
+        versions: [{ id: "1.21.4", type: "release", url: detailUrl }]
+      });
+    }
+    if (url === detailUrl) {
+      return Response.json({ downloads: { client: { url: jarUrl } } });
+    }
+    throw new TypeError("fetch failed");
+  }) as typeof fetch;
+  const svc = new VersionService(buildTestConfig(root, { fetchTimeoutMs: 2_000 }), fetchFn);
+
+  await assert.rejects(
+    () => svc.resolveVersionJar("1.21.4"),
+    (error: unknown) => {
+      // The manifest and detail fetches were already typed; the jar transfer
+      // itself escaped raw and reached the tool boundary as ERR_INTERNAL.
+      assert.ok(isAppError(error), "a failed jar transfer must not escape untyped");
+      assert.equal(error.code, ERROR_CODES.REPO_FETCH_FAILED);
+      assert.equal(error.message, `Download failed for "${jarUrl}".`);
+      assert.equal(error.details?.url, jarUrl);
+      assert.equal(error.details?.cause, "fetch failed");
+      return true;
+    }
+  );
+});
