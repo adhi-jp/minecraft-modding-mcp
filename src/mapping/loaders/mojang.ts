@@ -2,7 +2,9 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { downloadToCache } from "../../repo-downloader.js";
+import { retryClassForErrorCode } from "../../error-mapping.js";
+import { isAppError } from "../../errors.js";
+import { downloadToCache, isDefinitiveRejection } from "../../repo-downloader.js";
 import type { ResolvedVersionMappings } from "../../version-service.js";
 import { parseClientMappings } from "../parsers/proguard.js";
 import type { MappingLoaderDeps, MappingLoaderResult } from "./types.js";
@@ -23,7 +25,8 @@ export async function loadMojangPairs(
           caughtError instanceof Error ? caughtError.message : String(caughtError)
         }`
       ],
-      mappingArtifact: `version:${version}`
+      mappingArtifact: `version:${version}`,
+      transient: !isAppError(caughtError) || retryClassForErrorCode(caughtError.code) === "transient"
     };
   }
 
@@ -52,7 +55,8 @@ export async function loadMojangPairs(
       return {
         pairs: new Map(),
         warnings,
-        mappingArtifact: clientMappingsUrl
+        mappingArtifact: clientMappingsUrl,
+        transient: !isDefinitiveRejection(downloaded.statusCode)
       };
     }
   }

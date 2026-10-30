@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { createError, ERROR_CODES } from "../../src/errors.ts";
 import type { SourceMapping } from "../../src/types.ts";
 import {
   installGradleUserHomeIsolation,
@@ -375,3 +376,185 @@ test("MappingService returns identity candidate when source/target mapping are e
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const CLIENT_MAPPINGS_URL = "https://example.test/mappings/client.txt";
+
+function graphCacheKeysFor(service: unknown, version: string): string[] {
+  const graphCache = (service as { graphCache: Map<string, unknown> }).graphCache;
+  return [...graphCache.keys()].filter((key) => key.startsWith(`${version}|`));
+}
+
+function clientMappingsFetchStub(statuses: number[]): { fetchFn: typeof fetch; calls: () => number } {
+  let calls = 0;
+  const fetchFn = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url !== CLIENT_MAPPINGS_URL) {
+      return new Response("not found", { status: 404 });
+    }
+    const status = statuses[Math.min(calls, statuses.length - 1)] ?? 200;
+    calls += 1;
+    return status === 200
+      ? new Response(TEST_MOJANG_CLIENT_MAPPINGS, { status: 200 })
+      : new Response("unavailable", { status });
+  }) as typeof fetch;
+  return { fetchFn, calls: () => calls };
+}
+
+function ensureObfuscatedToMojang(service: { ensureMappingAvailable: (input: never) => Promise<unknown> }) {
+  return service.ensureMappingAvailable({
+    version: "1.21.10",
+    sourceMapping: "obfuscated",
+    targetMapping: "mojang"
+  } as never);
+}
+
+for (const status of [503, 429]) {
+  test(`MappingService loads Mojang mappings again on the next call after a ${status} client-mappings download`, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), `mapping-service-mojang-transient-${status}-`));
+    try {
+      const { fetchFn, calls } = clientMappingsFetchStub([status, 200]);
+      const service = new MappingService(
+        buildTestConfig(root),
+        createVersionServiceStub(CLIENT_MAPPINGS_URL),
+        fetchFn
+      );
+
+      await assert.rejects(ensureObfuscatedToMojang(service), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "ERR_MAPPING_UNAVAILABLE");
+        return true;
+      });
+      assert.deepEqual(graphCacheKeysFor(service, "1.21.10"), []);
+
+      const recovered = (await ensureObfuscatedToMojang(service)) as { transformChain: string[] };
+      assert.ok(recovered.transformChain.includes("mapping:obfuscated->mojang"));
+      assert.equal(calls(), 2);
+      assert.equal(graphCacheKeysFor(service, "1.21.10").length, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const failure of [
+  {
+    label: "ERR_REPO_FETCH_FAILED",
+    build: () =>
+      createError({
+        code: ERROR_CODES.REPO_FETCH_FAILED,
+        message: "Download failed for \"https://example.test/version_manifest_v2.json\"."
+      })
+  },
+  { label: "an untyped error", build: () => new Error("socket hang up") }
+]) {
+  test(`MappingService loads Mojang mappings again on the next call after version metadata fails with ${failure.label}`, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-transient-metadata-"));
+    try {
+      const { fetchFn } = clientMappingsFetchStub([200]);
+      const stub = createVersionServiceStub(CLIENT_MAPPINGS_URL);
+      let metadataCalls = 0;
+      const versionService = {
+        async resolveVersionMappings(version: string) {
+          metadataCalls += 1;
+          if (metadataCalls === 1) {
+            throw failure.build();
+          }
+          return stub.resolveVersionMappings(version);
+        }
+      };
+      const service = new MappingService(buildTestConfig(root), versionService, fetchFn);
+
+      await assert.rejects(ensureObfuscatedToMojang(service), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "ERR_MAPPING_UNAVAILABLE");
+        return true;
+      });
+      assert.deepEqual(graphCacheKeysFor(service, "1.21.10"), []);
+
+      const recovered = (await ensureObfuscatedToMojang(service)) as { transformChain: string[] };
+      assert.ok(recovered.transformChain.includes("mapping:obfuscated->mojang"));
+      assert.equal(metadataCalls, 2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const outcome of [
+  {
+    label: "the client-mappings download succeeds",
+    clientMappingsUrl: CLIENT_MAPPINGS_URL,
+    statuses: [200],
+    metadataError: undefined,
+    resolves: true
+  },
+  {
+    label: "the client-mappings download returns 404",
+    clientMappingsUrl: CLIENT_MAPPINGS_URL,
+    statuses: [404],
+    metadataError: undefined,
+    resolves: false
+  },
+  {
+    label: "the client-mappings download returns 403",
+    clientMappingsUrl: CLIENT_MAPPINGS_URL,
+    statuses: [403],
+    metadataError: undefined,
+    resolves: false
+  },
+  {
+    label: "the client-mappings download returns 410",
+    clientMappingsUrl: CLIENT_MAPPINGS_URL,
+    statuses: [410],
+    metadataError: undefined,
+    resolves: false
+  },
+  {
+    label: "the version has no client-mappings URL",
+    clientMappingsUrl: undefined,
+    statuses: [200],
+    metadataError: undefined,
+    resolves: false
+  },
+  {
+    label: "version metadata fails with ERR_VERSION_NOT_FOUND",
+    clientMappingsUrl: CLIENT_MAPPINGS_URL,
+    statuses: [200],
+    metadataError: () =>
+      createError({
+        code: ERROR_CODES.VERSION_NOT_FOUND,
+        message: "Minecraft version \"1.21.10\" was not found."
+      }),
+    resolves: false
+  }
+]) {
+  test(`MappingService caches the Mojang graph when ${outcome.label}`, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-mojang-cached-outcome-"));
+    try {
+      const { fetchFn } = clientMappingsFetchStub(outcome.statuses);
+      const stub = createVersionServiceStub(outcome.clientMappingsUrl);
+      const versionService = {
+        async resolveVersionMappings(version: string) {
+          if (outcome.metadataError) {
+            throw outcome.metadataError();
+          }
+          return stub.resolveVersionMappings(version);
+        }
+      };
+      const service = new MappingService(buildTestConfig(root), versionService, fetchFn);
+
+      if (outcome.resolves) {
+        await ensureObfuscatedToMojang(service);
+      } else {
+        await assert.rejects(ensureObfuscatedToMojang(service), (error: unknown) => {
+          assert.equal((error as { code?: string }).code, "ERR_MAPPING_UNAVAILABLE");
+          return true;
+        });
+      }
+      assert.equal(graphCacheKeysFor(service, "1.21.10").length, 1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

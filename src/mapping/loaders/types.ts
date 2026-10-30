@@ -14,4 +14,9 @@ export type MappingLoaderResult = {
   pairs: Map<PairKey, DirectionIndex>;
   warnings: string[];
   mappingArtifact: string;
+  /**
+   * True when the source failed in a way a later attempt may not repeat (a
+   * network fault, a 5xx or 429 answer), so the result must not be cached.
+   */
+  transient?: boolean;
 };

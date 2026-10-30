@@ -168,7 +168,7 @@ const DOWNLOAD_SIDECAR_SUFFIX = ".cache.json";
  */
 const DEFINITIVE_REJECTION_STATUS_CODES: ReadonlySet<number> = new Set([403, 404, 410]);
 
-function isDefinitiveRejection(statusCode: number | undefined): boolean {
+export function isDefinitiveRejection(statusCode: number | undefined): boolean {
   return statusCode !== undefined && DEFINITIVE_REJECTION_STATUS_CODES.has(statusCode);
 }
 

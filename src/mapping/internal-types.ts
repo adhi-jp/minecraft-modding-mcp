@@ -94,4 +94,10 @@ export type LoadedGraph = {
    */
   classProjectionCache: Map<string, string | null>;
   warnings: string[];
+  /**
+   * True when a mapping source failed transiently while this graph was built.
+   * The graph is still returned to its callers but is not cached, so the next
+   * lookup builds it again.
+   */
+  transient?: boolean;
 };

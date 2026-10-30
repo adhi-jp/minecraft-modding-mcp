@@ -1566,8 +1566,12 @@ export class MappingService {
     this.buildLocks.set(cacheKey, buildPromise);
     try {
       const built = await buildPromise;
-      this.graphCache.set(cacheKey, built);
-      this.trimGraphCache();
+      // A graph built around a transient source failure serves this call and
+      // its joined callers only; the next lookup builds it again.
+      if (!built.transient) {
+        this.graphCache.set(cacheKey, built);
+        this.trimGraphCache();
+      }
       return built;
     } finally {
       this.buildLocks.delete(cacheKey);
@@ -1612,6 +1616,9 @@ export class MappingService {
 
     const mojangLoad = await this.loadMojangPairs(version);
     graph.warnings.push(...mojangLoad.warnings);
+    if (mojangLoad.transient) {
+      graph.transient = true;
+    }
     this.mergePairs(graph.pairs, mojangLoad.pairs, "mojang-client-mappings", mojangLoad.mappingArtifact);
 
     if (mode === "full") {
