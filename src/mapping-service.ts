@@ -1623,6 +1623,10 @@ export class MappingService {
 
     if (mode === "full") {
       let tinyLoaded = false;
+      // The graph is marked transient by the source that supplies pairs, or by
+      // any attempted source when none does; a transient source that a later
+      // source answers for leaves the graph cacheable.
+      let attemptedTinyTransient = false;
       const deferredTinyWarnings: string[] = [];
       for (const source of mappingSourceOrder(priority)) {
         const tinyLoad =
@@ -1631,10 +1635,16 @@ export class MappingService {
             : await this.loadTinyPairsFromMaven(version);
         if (tinyLoad.pairs.size === 0) {
           deferredTinyWarnings.push(...tinyLoad.warnings);
+          if (tinyLoad.transient) {
+            attemptedTinyTransient = true;
+          }
           continue;
         }
 
         tinyLoaded = true;
+        if (tinyLoad.transient) {
+          graph.transient = true;
+        }
         this.mergePairs(graph.pairs, tinyLoad.pairs, source, tinyLoad.mappingArtifact);
         graph.warnings.push(...tinyLoad.warnings);
         if (deferredTinyWarnings.length > 0) {
@@ -1648,6 +1658,9 @@ export class MappingService {
       if (!tinyLoaded) {
         graph.warnings.push(...deferredTinyWarnings);
         graph.warnings.push("No intermediary/yarn tiny mappings were found for this version.");
+        if (attemptedTinyTransient) {
+          graph.transient = true;
+        }
       }
     }
 
@@ -1918,7 +1931,7 @@ export async function resolveTinyMappingFile(
     }
   }
 
-  const yarnCoordinates = await fetchYarnCoordinates(effectiveFetch, FABRIC_MAVEN, version, []);
+  const yarnCoordinates = await fetchYarnCoordinates(effectiveFetch, FABRIC_MAVEN, version, [], 30_000);
 
   // Network fallback: the metadata fetch failed/empty (fetchYarnCoordinates
   // swallows errors and returns the empty fallback). Serve the last-known-good

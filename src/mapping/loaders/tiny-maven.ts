@@ -1,4 +1,11 @@
-import { defaultDownloadPath, downloadToCache } from "../../repo-downloader.js";
+import { retryClassForErrorCode } from "../../error-mapping.js";
+import { isAppError } from "../../errors.js";
+import {
+  defaultDownloadPath,
+  downloadToCache,
+  isDefinitiveRejection,
+  type DownloadResult
+} from "../../repo-downloader.js";
 import { loadMaxNestedJarEntryBytes } from "../../source/nested-jars.js";
 import { collectMatchedJarEntriesAsUtf8 } from "../../source-jar-reader.js";
 import type { DirectionIndex, PairKey } from "../internal-types.js";
@@ -6,17 +13,27 @@ import { mergeDirectionIndexes } from "../parsers/symbol-records.js";
 import { parseTinyMappingsInto } from "../parsers/tiny.js";
 import type { MappingLoaderDeps, MappingLoaderResult } from "./types.js";
 
-export async function fetchYarnCoordinates(
+type YarnCoordinatesOutcome = {
+  coordinates: string[];
+  /** True when the build list could not be read for a reason a later attempt may not repeat. */
+  transient: boolean;
+};
+
+async function fetchYarnCoordinatesOutcome(
   fetchFn: typeof fetch,
   repoBase: string,
   version: string,
-  fallback: string[]
-): Promise<string[]> {
+  fallback: string[],
+  timeoutMs: number
+): Promise<YarnCoordinatesOutcome> {
   const metadataUrl = `${repoBase}/net/fabricmc/yarn/maven-metadata.xml`;
+  // One signal bounds both the response and reading its body.
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
   try {
-    const response = await fetchFn(metadataUrl);
+    const response = await fetchFn(metadataUrl, { signal: timeout.signal });
     if (!response.ok) {
-      return [];
+      return { coordinates: [], transient: !isDefinitiveRejection(response.status) };
     }
     const xml = await response.text();
     const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
@@ -30,12 +47,24 @@ export async function fetchYarnCoordinates(
     });
 
     if (sorted.length > 0) {
-      return sorted.slice(0, 3);
+      return { coordinates: sorted.slice(0, 3), transient: false };
     }
-    return fallback;
+    return { coordinates: fallback, transient: false };
   } catch {
-    return fallback;
+    return { coordinates: fallback, transient: true };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+export async function fetchYarnCoordinates(
+  fetchFn: typeof fetch,
+  repoBase: string,
+  version: string,
+  fallback: string[],
+  timeoutMs: number
+): Promise<string[]> {
+  return (await fetchYarnCoordinatesOutcome(fetchFn, repoBase, version, fallback, timeoutMs)).coordinates;
 }
 
 /**
@@ -85,22 +114,45 @@ export async function loadTinyPairsFromMaven(
   const yarnCoordinatesByRepo = await Promise.all(
     repoBases.map(async (base) => ({
       base,
-      yarnCoordinates: await fetchYarnCoordinates(deps.fetchFn, base, version, [version])
+      outcome: await fetchYarnCoordinatesOutcome(
+        deps.fetchFn,
+        base,
+        version,
+        [version],
+        deps.config.fetchTimeoutMs
+      )
     }))
   );
 
-  const tryUrls = async (urls: string[]): Promise<Map<PairKey, DirectionIndex> | undefined> => {
+  // Only a download can fail transiently: a jar that downloaded but yields no
+  // pairs gives the same result on every attempt.
+  const transientArtifacts = new Set<"intermediary" | "yarn">();
+  const tryUrls = async (
+    artifact: "intermediary" | "yarn",
+    urls: string[]
+  ): Promise<Map<PairKey, DirectionIndex> | undefined> => {
     for (const url of urls) {
       attemptedUrls.push(url);
+      let downloaded: DownloadResult;
       try {
-        const downloaded = await downloadToCache(url, defaultDownloadPath(deps.config.cacheDir, url), {
+        downloaded = await downloadToCache(url, defaultDownloadPath(deps.config.cacheDir, url), {
           fetchFn: deps.fetchFn,
           retries: deps.config.fetchRetries,
           timeoutMs: deps.config.fetchTimeoutMs
         });
-        if (!downloaded.ok || !downloaded.path) {
-          continue;
+      } catch (caughtError) {
+        if (!isAppError(caughtError) || retryClassForErrorCode(caughtError.code) === "transient") {
+          transientArtifacts.add(artifact);
         }
+        continue;
+      }
+      if (!downloaded.ok || !downloaded.path) {
+        if (!isDefinitiveRejection(downloaded.statusCode)) {
+          transientArtifacts.add(artifact);
+        }
+        continue;
+      }
+      try {
         const parsed = await parseTinyFromJar(downloaded.path);
         if (parsed.size > 0) {
           return parsed;
@@ -114,19 +166,19 @@ export async function loadTinyPairsFromMaven(
 
   let intermediaryParsed: Map<PairKey, DirectionIndex> | undefined;
   let yarnParsed: Map<PairKey, DirectionIndex> | undefined;
-  for (const { base, yarnCoordinates } of yarnCoordinatesByRepo) {
+  for (const { base, outcome } of yarnCoordinatesByRepo) {
     if (!intermediaryParsed) {
-      intermediaryParsed = await tryUrls([
+      intermediaryParsed = await tryUrls("intermediary", [
         `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}-v2.jar`,
         `${base}/net/fabricmc/intermediary/${version}/intermediary-${version}.jar`
       ]);
     }
 
-    for (const coordinate of yarnCoordinates) {
+    for (const coordinate of outcome.coordinates) {
       if (yarnParsed) {
         break;
       }
-      yarnParsed = await tryUrls([
+      yarnParsed = await tryUrls("yarn", [
         `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}-v2.jar`,
         `${base}/net/fabricmc/yarn/${coordinate}/yarn-${coordinate}.jar`
       ]);
@@ -155,9 +207,13 @@ export async function loadTinyPairsFromMaven(
     warnings.push(`No Maven tiny mappings could be loaded for "${version}".`);
   }
 
+  const yarnMetadataTransient = yarnCoordinatesByRepo.some(({ outcome }) => outcome.transient);
   return {
     pairs: merged,
     warnings,
-    mappingArtifact: attemptedUrls[0] ?? "maven:none"
+    mappingArtifact: attemptedUrls[0] ?? "maven:none",
+    transient:
+      (!intermediaryParsed && transientArtifacts.has("intermediary")) ||
+      (!yarnParsed && (transientArtifacts.has("yarn") || yarnMetadataTransient))
   };
 }

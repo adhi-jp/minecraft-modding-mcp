@@ -723,3 +723,416 @@ test("resolveTinyMappingFile yarn forceRefresh bypasses the metadata TTL", async
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const MAVEN_VERSION = "1.21.10";
+const YARN_BUILD = `${MAVEN_VERSION}+build.1`;
+const REPO_A = "https://repo-a.test";
+const REPO_B = "https://repo-b.test";
+const REPO_C = "https://repo-c.test";
+const CLIENT_MAPPINGS_URL = "https://example.test/mappings/client.txt";
+
+// Intermediary and yarn jars carry different namespace pairs, so a lookup from
+// obfuscated names shows which of the two jars the graph actually loaded. The
+// second class lets a later lookup miss the per-query resolution cache and read
+// the graph cache.
+const MAVEN_INTERMEDIARY_TINY = [
+  "tiny\t2\t0\tobfuscated\tintermediary",
+  "c\ta/b/C\tintermediary/pkg/InterClass",
+  "c\ta/b/D\tintermediary/pkg/OtherInterClass"
+].join("\n");
+const MAVEN_YARN_TINY = [
+  "tiny\t2\t0\tintermediary\tnamed",
+  "c\tintermediary/pkg/InterClass\tyarn/pkg/NamedClass",
+  "c\tintermediary/pkg/OtherInterClass\tyarn/pkg/OtherNamedClass"
+].join("\n");
+
+function mavenUrls(base: string) {
+  return {
+    metadata: `${base}/net/fabricmc/yarn/maven-metadata.xml`,
+    intermediary: `${base}/net/fabricmc/intermediary/${MAVEN_VERSION}/intermediary-${MAVEN_VERSION}-v2.jar`,
+    yarn: `${base}/net/fabricmc/yarn/${YARN_BUILD}/yarn-${YARN_BUILD}-v2.jar`
+  };
+}
+
+function yarnMetadataResponse(): Response {
+  return new Response(
+    `<metadata><versioning><versions><version>${YARN_BUILD}</version></versions></versioning></metadata>`,
+    { status: 200 }
+  );
+}
+
+type MavenJars = { intermediary: Buffer; yarn: Buffer; noTiny: Buffer };
+
+async function buildMavenJars(root: string): Promise<MavenJars> {
+  const intermediaryPath = join(root, "maven-intermediary.jar");
+  const yarnPath = join(root, "maven-yarn.jar");
+  const noTinyPath = join(root, "maven-no-tiny.jar");
+  await createJar(intermediaryPath, { "mappings/mappings.tiny": `${MAVEN_INTERMEDIARY_TINY}\n` });
+  await createJar(yarnPath, { "mappings/mappings.tiny": `${MAVEN_YARN_TINY}\n` });
+  await createJar(noTinyPath, { "README.txt": "no mappings here\n" });
+  return {
+    intermediary: await readFile(intermediaryPath),
+    yarn: await readFile(yarnPath),
+    noTiny: await readFile(noTinyPath)
+  };
+}
+
+type MavenRoute = (url: string, init: RequestInit | undefined) => Response | Promise<Response> | undefined;
+
+/** Answers each URL through `route`, and 404 for every URL it leaves unanswered. */
+function routedFetch(route: MavenRoute): { fetchFn: typeof fetch; calls: string[] } {
+  const calls: string[] = [];
+  const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    calls.push(url);
+    return (await route(url, init)) ?? new Response("not found", { status: 404 });
+  }) as typeof fetch;
+  return { fetchFn, calls };
+}
+
+function servedJar(bytes: Buffer): Response {
+  return new Response(bytes, { status: 200 });
+}
+
+function failedAnswer(status: number): Response {
+  return new Response("unavailable", { status });
+}
+
+function waitForAbort(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });
+  });
+}
+
+function stallingBody(signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal?.addEventListener("abort", () => controller.error(signal.reason ?? new Error("aborted")), {
+        once: true
+      });
+    }
+  });
+}
+
+function graphCacheKeysFor(service: unknown, version: string): string[] {
+  const graphCache = (service as { graphCache: Map<string, unknown> }).graphCache;
+  return [...graphCache.keys()].filter((key) => key.startsWith(`${version}|`));
+}
+
+function findFromObfuscated(
+  service: { findMapping: (input: never) => Promise<unknown> },
+  root: string,
+  targetMapping: "intermediary" | "yarn",
+  symbol = "a.b.C"
+) {
+  return withCwd(root, () =>
+    service.findMapping({
+      version: MAVEN_VERSION,
+      ...queryFromSymbol(symbol),
+      sourceMapping: "obfuscated",
+      targetMapping
+    } as never)
+  ) as Promise<{
+    candidates: Array<{ symbol?: string }>;
+    provenance?: { source?: string; mappingArtifact?: string };
+  }>;
+}
+
+test("MappingService loads the Maven intermediary jar again after a 503 and caches the recovered graph", async () => {
+  const { MappingService } = await import("../../src/mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-intermediary-503-"));
+  try {
+    const jars = await buildMavenJars(root);
+    const urls = mavenUrls(REPO_A);
+    let intermediaryAvailable = false;
+    const { fetchFn, calls } = routedFetch((url) => {
+      if (url === urls.metadata) {
+        return yarnMetadataResponse();
+      }
+      if (url === urls.intermediary) {
+        return intermediaryAvailable ? servedJar(jars.intermediary) : failedAnswer(503);
+      }
+      if (url === urls.yarn) {
+        return servedJar(jars.yarn);
+      }
+      return undefined;
+    });
+    const service = new MappingService(
+      buildTestConfig(root, { sourceRepos: [REPO_A] }),
+      createVersionServiceStub(),
+      fetchFn
+    );
+
+    const failed = await findFromObfuscated(service, root, "intermediary");
+    assert.equal(failed.candidates.length, 0);
+    assert.deepEqual(graphCacheKeysFor(service, MAVEN_VERSION), []);
+
+    intermediaryAvailable = true;
+    const recovered = await findFromObfuscated(service, root, "intermediary");
+    assert.equal(recovered.candidates[0]?.symbol, "intermediary.pkg.InterClass");
+    assert.equal(recovered.provenance?.source, "maven");
+    assert.equal(recovered.provenance?.mappingArtifact, urls.intermediary);
+    assert.equal(graphCacheKeysFor(service, MAVEN_VERSION).length, 1);
+
+    const callsAfterRecovery = calls.length;
+    const cached = await findFromObfuscated(service, root, "intermediary", "a.b.D");
+    assert.equal(cached.candidates[0]?.symbol, "intermediary.pkg.OtherInterClass");
+    assert.equal(calls.length, callsAfterRecovery, "a cached graph must not fetch again");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const metadataFailure of [
+  { label: "answers 503", answer: () => failedAnswer(503) },
+  { label: "never answers", answer: (init: RequestInit | undefined) => waitForAbort(init?.signal) },
+  {
+    label: "stalls its body",
+    answer: (init: RequestInit | undefined) => new Response(stallingBody(init?.signal), { status: 200 })
+  }
+]) {
+  test(`MappingService loads yarn again after the yarn build list ${metadataFailure.label}, and caches the recovered graph`, { timeout: 10_000 }, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-yarn-metadata-"));
+    try {
+      const jars = await buildMavenJars(root);
+      const urls = mavenUrls(REPO_A);
+      let metadataAvailable = false;
+      const { fetchFn, calls } = routedFetch((url, init) => {
+        if (url === urls.metadata) {
+          return metadataAvailable ? yarnMetadataResponse() : metadataFailure.answer(init);
+        }
+        if (url === urls.intermediary) {
+          return servedJar(jars.intermediary);
+        }
+        if (url === urls.yarn) {
+          return servedJar(jars.yarn);
+        }
+        return undefined;
+      });
+      const service = new MappingService(
+        buildTestConfig(root, { sourceRepos: [REPO_A], fetchTimeoutMs: 100 }),
+        createVersionServiceStub(),
+        fetchFn
+      );
+
+      const failed = await findFromObfuscated(service, root, "yarn");
+      assert.equal(failed.candidates.length, 0);
+      assert.deepEqual(graphCacheKeysFor(service, MAVEN_VERSION), []);
+
+      metadataAvailable = true;
+      const recovered = await findFromObfuscated(service, root, "yarn");
+      assert.equal(recovered.candidates[0]?.symbol, "yarn.pkg.NamedClass");
+      assert.equal(graphCacheKeysFor(service, MAVEN_VERSION).length, 1);
+
+      const callsAfterRecovery = calls.length;
+      const cached = await findFromObfuscated(service, root, "yarn", "a.b.D");
+      assert.equal(cached.candidates[0]?.symbol, "yarn.pkg.OtherNamedClass");
+      assert.equal(calls.length, callsAfterRecovery, "a cached graph must not fetch again");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+type MavenCacheRow = {
+  label: string;
+  cached: boolean;
+  sourceRepos: string[];
+  mappingSourcePriority?: "maven-first";
+  loomTiny?: string;
+  clientMappingsStatus?: number;
+  route: (jars: MavenJars) => MavenRoute;
+};
+
+/** Every repository in `bases` serves the yarn build list, and `base`'s jars where `serve` says so. */
+function serveFrom(
+  jars: MavenJars,
+  serve: { intermediary?: string; yarn?: string },
+  bases: string[]
+): MavenRoute {
+  return (url) => {
+    for (const base of bases) {
+      const urls = mavenUrls(base);
+      if (url === urls.metadata) {
+        return yarnMetadataResponse();
+      }
+      if (serve.intermediary === base && url === urls.intermediary) {
+        return servedJar(jars.intermediary);
+      }
+      if (serve.yarn === base && url === urls.yarn) {
+        return servedJar(jars.yarn);
+      }
+    }
+    return undefined;
+  };
+}
+
+function withOverrides(overrides: Record<string, () => Response>, fallback: MavenRoute): MavenRoute {
+  return (url, init) => overrides[url]?.() ?? fallback(url, init);
+}
+
+const mavenCacheRows: MavenCacheRow[] = [
+  {
+    label: "one repository answers 503 for the intermediary jar while another serves it",
+    cached: true,
+    sourceRepos: [REPO_A, REPO_B],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => failedAnswer(503) },
+        serveFrom(jars, { intermediary: REPO_B, yarn: REPO_A }, [REPO_A, REPO_B])
+      )
+  },
+  {
+    label: "every repository answers 404",
+    cached: true,
+    sourceRepos: [REPO_A, REPO_B],
+    route: () => () => undefined
+  },
+  {
+    label: "a 503 and then a 404 for the intermediary jar while a third repository serves it",
+    cached: true,
+    sourceRepos: [REPO_A, REPO_B, REPO_C],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => failedAnswer(503) },
+        serveFrom(jars, { intermediary: REPO_C, yarn: REPO_A }, [REPO_A, REPO_C])
+      )
+  },
+  {
+    label: "one repository answers 503 for the yarn build list while another serves yarn",
+    cached: true,
+    sourceRepos: [REPO_A, REPO_B],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).metadata]: () => failedAnswer(503) },
+        serveFrom(jars, { intermediary: REPO_A, yarn: REPO_B }, [REPO_A, REPO_B])
+      )
+  },
+  {
+    label: "the served intermediary jar has no tiny entry",
+    cached: true,
+    sourceRepos: [REPO_A],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => servedJar(jars.noTiny) },
+        serveFrom(jars, { yarn: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "the served intermediary jar cannot be read",
+    cached: true,
+    sourceRepos: [REPO_A],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => servedJar(Buffer.from("not a jar")) },
+        serveFrom(jars, { yarn: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "under maven-first, Maven fails with a 503 and the Loom cache answers",
+    cached: true,
+    sourceRepos: [REPO_A],
+    mappingSourcePriority: "maven-first",
+    loomTiny: TEST_TINY,
+    route: () =>
+      withOverrides(
+        {
+          [mavenUrls(REPO_A).metadata]: () => failedAnswer(503),
+          [mavenUrls(REPO_A).intermediary]: () => failedAnswer(503)
+        },
+        () => undefined
+      )
+  },
+  {
+    label: "the yarn jar answers 503 and no repository serves yarn",
+    cached: false,
+    sourceRepos: [REPO_A],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).yarn]: () => failedAnswer(503) },
+        serveFrom(jars, { intermediary: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "one repository answers 503 and the other 404 for an intermediary jar no one serves",
+    cached: false,
+    sourceRepos: [REPO_A, REPO_B],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => failedAnswer(503) },
+        serveFrom(jars, { yarn: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "the intermediary jar answers 503 and no repository serves any tiny jar",
+    cached: false,
+    sourceRepos: [REPO_A],
+    route: () =>
+      withOverrides({ [mavenUrls(REPO_A).intermediary]: () => failedAnswer(503) }, () => undefined)
+  },
+  {
+    label: "the intermediary jar answers 429",
+    cached: false,
+    sourceRepos: [REPO_A],
+    route: (jars) =>
+      withOverrides(
+        { [mavenUrls(REPO_A).intermediary]: () => failedAnswer(429) },
+        serveFrom(jars, { yarn: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "the yarn jar request throws a network error",
+    cached: false,
+    sourceRepos: [REPO_A],
+    route: (jars) =>
+      withOverrides(
+        {
+          [mavenUrls(REPO_A).yarn]: () => {
+            throw new TypeError("fetch failed");
+          }
+        },
+        serveFrom(jars, { intermediary: REPO_A }, [REPO_A])
+      )
+  },
+  {
+    label: "the Mojang client mappings answer 503 while Maven serves both tiny jars",
+    cached: false,
+    sourceRepos: [REPO_A],
+    clientMappingsStatus: 503,
+    route: (jars) => serveFrom(jars, { intermediary: REPO_A, yarn: REPO_A }, [REPO_A])
+  }
+];
+
+for (const row of mavenCacheRows) {
+  test(`MappingService ${row.cached ? "caches" : "does not cache"} the full graph when ${row.label}`, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-cache-row-"));
+    try {
+      const jars = await buildMavenJars(root);
+      if (row.loomTiny) {
+        await writeLoomTinyCache(root, row.loomTiny);
+      }
+      const mavenRoute = row.route(jars);
+      const { fetchFn } = routedFetch((url, init) =>
+        url === CLIENT_MAPPINGS_URL && row.clientMappingsStatus !== undefined
+          ? failedAnswer(row.clientMappingsStatus)
+          : mavenRoute(url, init)
+      );
+      const service = new MappingService(
+        buildTestConfig(root, {
+          sourceRepos: row.sourceRepos,
+          ...(row.mappingSourcePriority ? { mappingSourcePriority: row.mappingSourcePriority } : {})
+        }),
+        createVersionServiceStub(row.clientMappingsStatus !== undefined ? CLIENT_MAPPINGS_URL : undefined),
+        fetchFn
+      );
+
+      await findFromObfuscated(service, root, "intermediary");
+
+      assert.equal(graphCacheKeysFor(service, MAVEN_VERSION).length, row.cached ? 1 : 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
