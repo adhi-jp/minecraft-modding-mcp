@@ -597,7 +597,7 @@ function isDownloadLimitError(error: unknown): boolean {
  * not, but are kept to the same form. A repository URL can carry credentials
  * or a token, and the server must not repeat them.
  */
-function safeDownloadUrl(url: string): string {
+export function safeDownloadUrl(url: string): string {
   const parsed = new URL(url);
   parsed.username = "";
   parsed.password = "";

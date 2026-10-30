@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
 import { log } from "./logger.js";
-import { downloadToCache } from "./repo-downloader.js";
+import { downloadToCache, isDefinitiveRejection, safeDownloadUrl } from "./repo-downloader.js";
 import type { Config } from "./types.js";
 import type { VersionMappingsResolver } from "./mapping/loaders/types.js";
 import { type ResolvedVersionMappings, VersionService } from "./version-service.js";
@@ -360,7 +360,7 @@ async function ensureMappingsFile(
   url: string | undefined,
   config: Config,
   fetchFn: typeof fetch
-): Promise<{ path?: string; warning?: string }> {
+): Promise<{ path?: string; warning?: string; transient?: boolean; statusCode?: number }> {
   if (!url) {
     return { warning: `${label} mappings URL is not available for ${version}.` };
   }
@@ -377,7 +377,9 @@ async function ensureMappingsFile(
       return {
         warning:
           `Failed to download ${label} mappings for ${version} from "${url}" ` +
-          `(status: ${downloaded.statusCode ?? "unknown"}).`
+          `(status: ${downloaded.statusCode ?? "unknown"}).`,
+        transient: !isDefinitiveRejection(downloaded.statusCode),
+        statusCode: downloaded.statusCode
       };
     }
   }
@@ -439,6 +441,31 @@ export async function resolveMojangTinyFile(
       code: ERROR_CODES.MAPPING_UNAVAILABLE,
       message: `Failed to retrieve Mojang mappings for "${version}".`,
       details: { version, clientUrl, serverUrl }
+    });
+  }
+
+  // The merged file is cached by version alone and read as complete from then
+  // on, so a side that failed temporarily stops the merge instead of being
+  // left out. A missing URL or a 403/404/410 answer leaves only that side out.
+  const sides = [
+    { label: "client", url: clientUrl, result: clientResult },
+    { label: "server", url: serverUrl, result: serverResult }
+  ] as const;
+  for (const { label, url, result } of sides) {
+    if (!result.transient || !url) {
+      continue;
+    }
+    const { statusCode } = result;
+    const answer =
+      statusCode !== undefined && statusCode >= 200 && statusCode < 300
+        ? "an empty response"
+        : `status ${statusCode ?? "unknown"}`;
+    throw createError({
+      code: ERROR_CODES.REPO_FETCH_FAILED,
+      message:
+        `Failed to download the ${label} Mojang mappings for "${version}" from ` +
+        `"${safeDownloadUrl(url)}" (${answer}), so the merged mappings were not written.`,
+      details: { version, label, statusCode }
     });
   }
 

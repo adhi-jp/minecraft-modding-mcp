@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -273,6 +274,76 @@ test("resolveMojangTinyFile throws MAPPING_UNAVAILABLE when every download fails
     }
   );
 });
+
+for (const failedSide of ["client", "server"] as const) {
+  for (const failure of [
+    { name: "500", status: 500, body: "server error", attempts: 3, answer: "status 500" },
+    { name: "429", status: 429, body: "slow down", attempts: 3, answer: "status 429" },
+    { name: "an empty 200", status: 200, body: "", attempts: 1, answer: "an empty response" }
+  ]) {
+    test(`resolveMojangTinyFile writes no merged file when the ${failedSide} mappings answer ${failure.name}, and merges both sides once they recover`, async () => {
+      const root = await mkdtemp(join(tmpdir(), `mojang-tiny-${failedSide}-transient-`));
+      const config = makeConfig(root);
+      // The failed side's URL carries credentials, a query and a fragment, none
+      // of which the error may repeat.
+      const credentialedUrl = `https://user:secret@example.test/${failedSide}.txt?token=abc#frag`;
+      const clientUrl = failedSide === "client" ? credentialedUrl : "https://example.test/client.txt";
+      const serverUrl = failedSide === "server" ? credentialedUrl : "https://example.test/server.txt";
+      const failedUrl = credentialedUrl;
+      const recoveredBody = failedSide === "client" ? CLIENT_MAPPINGS : SERVER_MAPPINGS;
+
+      const table: FetchTable = {
+        [clientUrl]: { body: CLIENT_MAPPINGS, status: 200 },
+        [serverUrl]: { body: SERVER_MAPPINGS, status: 200 }
+      };
+      table[failedUrl] = { body: failure.body, status: failure.status };
+      const stub = makeFetchStub(table);
+      let failedUrlCalls = 0;
+      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input) === failedUrl) {
+          failedUrlCalls += 1;
+        }
+        return stub(input, init);
+      }) as typeof fetch;
+      const deps = {
+        fetchFn,
+        versionService: makeVersionStub({ clientMappingsUrl: clientUrl, serverMappingsUrl: serverUrl })
+      };
+
+      await assert.rejects(
+        () => resolveMojangTinyFile("1.21.10", config, deps),
+        (err: any) => {
+          assert.equal(err.code, ERROR_CODES.REPO_FETCH_FAILED);
+          assert.equal(
+            err.message,
+            `Failed to download the ${failedSide} Mojang mappings for "1.21.10" from ` +
+              `"https://example.test/${failedSide}.txt" (${failure.answer}), ` +
+              "so the merged mappings were not written."
+          );
+          assert.deepEqual(err.details, {
+            version: "1.21.10",
+            label: failedSide,
+            statusCode: failure.status
+          });
+          const reported = JSON.stringify({ message: err.message, details: err.details });
+          for (const secret of ["secret", "token=abc", "#frag"]) {
+            assert.ok(!reported.includes(secret), `error repeats "${secret}": ${reported}`);
+          }
+          return true;
+        }
+      );
+      assert.equal(failedUrlCalls, failure.attempts);
+      assert.equal(existsSync(join(root, "mappings", "1.21.10-mojang-merged.tiny")), false);
+
+      table[failedUrl] = { body: recoveredBody, status: 200 };
+      const result = await resolveMojangTinyFile("1.21.10", config, deps);
+
+      const tiny = await readFile(result.path, "utf8");
+      assert.match(tiny, /^c\ta\/b\/C\tcom\/example\/ClientClass$/m);
+      assert.match(tiny, /^c\tx\/y\/Z\tcom\/example\/ServerClass$/m);
+    });
+  }
+}
 
 test("resolveMojangTinyFile preserves versionDetailUrl in details when no URLs are exposed", async () => {
   const root = await mkdtemp(join(tmpdir(), "mojang-tiny-no-urls-details-"));
