@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import fastGlob from "fast-glob";
 
-import { withGradleUserHome } from "../helpers/env.ts";
+import { withEnv, withGradleUserHome } from "../helpers/env.ts";
 import { createJar } from "../helpers/zip.ts";
 import {
   installGradleUserHomeIsolation,
@@ -970,6 +970,46 @@ function serveFrom(
 
 function withOverrides(overrides: Record<string, () => Response>, fallback: MavenRoute): MavenRoute {
   return (url, init) => overrides[url]?.() ?? fallback(url, init);
+}
+
+for (const stage of ["content-length", "stream"]) {
+  test(`MappingService does not repeat Maven downloads refused by the ${stage} size limit`, async () => {
+    const { MappingService } = await import("../../src/mapping-service.ts");
+    const root = await mkdtemp(join(tmpdir(), "mapping-service-maven-size-limit-"));
+    try {
+      await withEnv({ MCP_MAX_DOWNLOAD_BYTES: String(1024 * 1024) }, async () => {
+        const jars = await buildMavenJars(root);
+        const urls = mavenUrls(REPO_A);
+        const { fetchFn, calls } = routedFetch((url) => {
+          if (url === urls.intermediary) {
+            return stage === "content-length"
+              ? new Response("unread", { headers: { "content-length": "2097152" } })
+              : new Response(Buffer.alloc(1024 * 1024 + 1));
+          }
+          return serveFrom(jars, { yarn: REPO_A }, [REPO_A])(url, undefined);
+        });
+        const service = new MappingService(
+          buildTestConfig(root, { sourceRepos: [REPO_A] }),
+          createVersionServiceStub(),
+          fetchFn
+        );
+
+        const first = await findFromObfuscated(service, root, "intermediary");
+        const second = await findFromObfuscated(service, root, "intermediary");
+
+        assert.equal(first.candidates.length, 0);
+        assert.equal(second.candidates.length, 0);
+        assert.equal(
+          calls.filter((url) => url === urls.intermediary).length,
+          1,
+          "an identical lookup must not download the same over-limit jar again"
+        );
+        assert.equal(graphCacheKeysFor(service, MAVEN_VERSION).length, 1);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 }
 
 const mavenCacheRows: MavenCacheRow[] = [

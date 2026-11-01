@@ -75,6 +75,61 @@ test("parseTinyFromJar bounds a .tiny entry that decompresses far past the confi
 const YARN_REPO = "https://repo-a.test";
 const YARN_FALLBACK = ["1.21.10"];
 
+test("fetchYarnCoordinates releases rejected metadata bodies before returning", async () => {
+  for (const status of [403, 404, 429, 503]) {
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      }
+    }), { status });
+    const fetchFn = (async () => response) as typeof fetch;
+
+    assert.deepEqual(
+      await fetchYarnCoordinates(fetchFn, YARN_REPO, "1.21.10", YARN_FALLBACK, 100),
+      []
+    );
+    assert.equal(cancelled, true, `the unread ${status} response must release its connection`);
+  }
+});
+
+function metadataFetch(xml: string): typeof fetch {
+  return (async () => new Response(xml, { status: 200 })) as typeof fetch;
+}
+
+test("fetchYarnCoordinates returns the three newest trimmed builds of the exact version", async () => {
+  const xml = [
+    "<metadata><versioning><versions>",
+    "<version>1.21.1+build.7</version>",
+    "<version>  1.21.10+build.9  </version>",
+    "<version>1.21.10+build.2</version>",
+    "<version>\n1.21.10+build.100\n</version>",
+    "<version>1.21.10+build.11</version>",
+    "<version>1.21.100+build.500</version>",
+    "<version>1.21.10-pre+build.800</version>",
+    "<version>1.21.10+build.10</version>",
+    "</versions></versioning></metadata>"
+  ].join("\n");
+
+  assert.deepEqual(
+    await fetchYarnCoordinates(metadataFetch(xml), YARN_REPO, "1.21.10", YARN_FALLBACK, 1_000),
+    ["1.21.10+build.100", "1.21.10+build.11", "1.21.10+build.10"]
+  );
+  assert.deepEqual(
+    await fetchYarnCoordinates(metadataFetch(xml), YARN_REPO, "1.21.1", YARN_FALLBACK, 1_000),
+    ["1.21.1+build.7"]
+  );
+});
+
+test("fetchYarnCoordinates returns the fallback when metadata lists no matching version", async () => {
+  const xml = "<metadata><versions><version>1.20.4+build.3</version><version>1.21.100+build.1</version></versions></metadata>";
+
+  assert.deepEqual(
+    await fetchYarnCoordinates(metadataFetch(xml), YARN_REPO, "1.21.10", YARN_FALLBACK, 1_000),
+    YARN_FALLBACK
+  );
+});
+
 function waitForAbort(signal: AbortSignal | null | undefined): Promise<Response> {
   return new Promise<Response>((_resolve, reject) => {
     signal?.addEventListener("abort", () => reject(signal.reason ?? new Error("aborted")), { once: true });

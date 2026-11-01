@@ -1,5 +1,5 @@
 import { retryClassForErrorCode } from "../../error-mapping.js";
-import { isAppError } from "../../errors.js";
+import { ERROR_CODES, isAppError } from "../../errors.js";
 import {
   defaultDownloadPath,
   downloadToCache,
@@ -33,12 +33,20 @@ async function fetchYarnCoordinatesOutcome(
   try {
     const response = await fetchFn(metadataUrl, { signal: timeout.signal });
     if (!response.ok) {
+      void response.body?.cancel().catch(() => {
+        // Best-effort release of a body that will not be read.
+      });
       return { coordinates: [], transient: !isDefinitiveRejection(response.status) };
     }
     const xml = await response.text();
-    const versions = [...xml.matchAll(/<version>([^<]+)<\/version>/g)]
-      .map((match) => match[1]?.trim() ?? "")
-      .filter((value) => value.startsWith(`${version}+build.`));
+    const prefix = `${version}+build.`;
+    const versions: string[] = [];
+    for (const match of xml.matchAll(/<version>([^<]+)<\/version>/g)) {
+      const value = match[1]?.trim() ?? "";
+      if (value.startsWith(prefix)) {
+        versions.push(value);
+      }
+    }
 
     const sorted = versions.sort((left, right) => {
       const leftBuild = Number.parseInt(left.split("+build.")[1] ?? "0", 10);
@@ -141,7 +149,11 @@ export async function loadTinyPairsFromMaven(
           timeoutMs: deps.config.fetchTimeoutMs
         });
       } catch (caughtError) {
-        if (!isAppError(caughtError) || retryClassForErrorCode(caughtError.code) === "transient") {
+        // A byte ceiling cannot recover without a configuration or input change.
+        if (!isAppError(caughtError) || (
+          caughtError.code !== ERROR_CODES.LIMIT_EXCEEDED &&
+          retryClassForErrorCode(caughtError.code) === "transient"
+        )) {
           transientArtifacts.add(artifact);
         }
         continue;
