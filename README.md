@@ -446,6 +446,10 @@ Run these when relevant:
 
 Ordinary `.test.ts` files live in domain directories under `tests/` (for example `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, and `utils/`). Keep helper-only modules in `tests/helpers`; manual smoke, performance, and resource files remain in their existing special directories.
 
+## Acknowledgements
+
+- The `enclosingSymbol` field on content search hits was inspired by the design of [zvec-grep](https://github.com/zvec-ai/zvec-grep). This project shares no code with zvec-grep and does not depend on it.
+
 ## License
 
 [MIT](LICENSE)
