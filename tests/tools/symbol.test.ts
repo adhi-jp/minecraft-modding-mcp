@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
 
+import { createError, ERROR_CODES } from "../../src/errors.ts";
 import { heavyToolExecutionGate } from "../../src/tool-execution-gate.ts";
 import { ALIAS_TOOL_INVENTORY } from "../../src/tools/inventory.ts";
 import { CATALOG_TOOL_SPECS } from "../../src/tools/catalog.ts";
@@ -37,6 +38,7 @@ import type { CatalogRuntime, CatalogServices } from "../../src/tools/types.ts";
 import { buildClassFile } from "../helpers/classfile.ts";
 import { withEnv } from "../helpers/env.ts";
 import { TEST_MOJANG_CLIENT_MAPPINGS, TEST_TINY } from "../helpers/mapping-service-fixtures.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 import { startCatalogSession, type CatalogSession, type SessionFrame } from "./catalog-session.ts";
 
@@ -433,6 +435,140 @@ test("symbol-map with a workspace target maps to the project's compile names lik
     memberName: "namedMethod",
     descriptor: "(I)V"
   });
+});
+
+test("symbol-map shares workspace preparation across mixed items and reads fresh mappings on later calls", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const projectPath = mkdtempSync(join(tmpdir(), "symbol-map-batch-"));
+  writeFileSync(join(projectPath, "gradle.properties"), `minecraft_version=${VERSION}\n`);
+  const buildScript = join(projectPath, "build.gradle");
+  writeFileSync(buildScript, "dependencies { mappings loom.officialMojangMappings() }\n");
+  const service = new SourceService(buildTestConfig(join(projectPath, "state")));
+  t.after(() => service.db.close());
+  const detect = service.workspaceMappingService.detectCompileMapping.bind(service.workspaceMappingService);
+  let detections = 0;
+  t.mock.method(service.workspaceMappingService, "detectCompileMapping", async (input) => {
+    detections++;
+    return detect(input);
+  });
+  const readable = t.mock.method(service.workspaceMappingService, "hasReadableBuildScript");
+  const matrix = service.mappingService.getClassApiMatrix.bind(service.mappingService);
+  t.mock.method(service.mappingService, "getClassApiMatrix", async (input) => {
+    if (input.className === "sample.Failed") throw new Error("one class lookup failed");
+    return matrix(input);
+  });
+  const symbols = [
+    { kind: "class", className: "a.b.C" },
+    { kind: "field", className: "a.b.C", memberName: "d" },
+    { kind: "method", className: "a.b.C", memberName: "e", descriptor: "(J)V" },
+    { kind: "class", className: "sample.Failed" },
+    { kind: "method", className: "a.b.C", memberName: "e", descriptor: "(I)V" }
+  ];
+  const request = { target: { kind: "workspace", projectPath }, mapping: "obfuscated", symbols };
+  const run = async (input = request) =>
+    (await runCatalogTool(specOf("symbol-map"), input, injectedRuntime(service))).structuredContent as Envelope;
+  const first = await run();
+  assert.equal(first.error, undefined, "one graph failure stays inside its item");
+  assert.deepEqual(first.result!.items!.map((item) => item.symbol), symbols, "concurrent lookups retain input order");
+  assert.deepEqual(first.result!.items!.map((item) => item.status), ["ok", "ok", "not_found", "error", "ok"]);
+  assert.deepEqual(first.result!.counts, { total: 5, ok: 3, failed: 1 });
+  assert.deepEqual(first.result!.items![0]!.match, { kind: "class", className: "com.mojang.NamedClass" });
+  assert.equal(first.result!.items![1]!.match.memberName, "namedField");
+  assert.equal(first.result!.items![4]!.match.memberName, "namedMethod");
+  assert.equal(detections, 1, "all item kinds share the workspace scan");
+  assert.equal(readable.mock.callCount(), 0, "a resolved mapping never probes build readability");
+
+  writeFileSync(buildScript, 'dependencies { mappings "net.fabricmc:yarn:1.21.10+build.1:v2" }\n');
+  const later = await run({ ...request, symbols: [symbols[0]!] });
+  assert.equal(detections, 2, "a later request scans again");
+  assert.equal(later.result!.toMapping, "yarn");
+  assert.deepEqual(later.result!.items![0]!.match, { kind: "class", className: "yarn.pkg.NamedClass" });
+  for (let index = 0; index < 2; index++) {
+    const legacy = await service.resolveWorkspaceSymbol({ projectPath, version: VERSION, sourceMapping: "obfuscated", kind: "class", name: "a.b.C" });
+    assert.equal(legacy.resolvedSymbol?.name, "yarn.pkg.NamedClass");
+  }
+  assert.equal(detections, 4, "single-argument service calls keep independent detection");
+  const explicit = await runCatalogTool(specOf("symbol-map"), { ...request, toMapping: "mojang", symbols: [symbols[0]!] }, injectedRuntime(service));
+  assert.equal(detections, 4, "an explicit destination bypasses workspace detection");
+  assert.deepEqual((explicit.structuredContent as Envelope).result!.items![0]!.match, { kind: "class", className: "com.mojang.NamedClass" });
+});
+
+test("symbol-map reports one failed workspace detection on every item and retries on the next request", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const projectPath = mkdtempSync(join(tmpdir(), "symbol-map-detection-retry-"));
+  writeFileSync(join(projectPath, "gradle.properties"), `minecraft_version=${VERSION}\n`);
+  writeFileSync(join(projectPath, "build.gradle"), "dependencies { mappings loom.officialMojangMappings() }\n");
+  const service = new SourceService(buildTestConfig(join(projectPath, "state")));
+  t.after(() => service.db.close());
+  const detect = service.workspaceMappingService.detectCompileMapping.bind(service.workspaceMappingService);
+  let detections = 0;
+  let fail = true;
+  t.mock.method(service.workspaceMappingService, "detectCompileMapping", async (input) => {
+    detections++;
+    if (fail) throw new Error("workspace scan failed");
+    return detect(input);
+  });
+  const symbols = Array.from({ length: 7 }, (_,index) => ({ kind: "class", className: `sample.Class${index}` }));
+  t.mock.method(service.mappingService, "getClassApiMatrix", async (input) => ({ classIdentity: { mojang: input.className }, warnings: [] }));
+  const request = { target: { kind: "workspace", projectPath }, mapping: "obfuscated", symbols };
+  const run = async () => (await runCatalogTool(specOf("symbol-map"), request, injectedRuntime(service))).structuredContent as Envelope;
+  const failed = await run();
+  assert.equal(failed.error, undefined);
+  assert.deepEqual(failed.result!.items!.map((item) => item.symbol), symbols);
+  assert.deepEqual(failed.result!.items!.map((item) => [item.status, item.error.code]), symbols.map(() => ["error", "ERR_INTERNAL"]));
+  assert.deepEqual(failed.result!.counts, { total: 7, ok: 0, failed: 7 });
+  assert.equal(detections, 1, "the rejected preparation is shared by queued items too");
+  fail = false;
+  const retried = await run();
+  assert.equal(detections, 2, "the next request retries rejected preparation");
+  assert.deepEqual(retried.result!.items!.map((item) => item.match.className), symbols.map((symbol) => symbol.className));
+  assert.deepEqual(retried.result!.counts, { total: 7, ok: 7, failed: 0 });
+});
+
+test("symbol-map shares lazy unobfuscated build readability and retries a failed probe on later requests", async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const projectPath = mkdtempSync(join(tmpdir(), "symbol-map-unobfuscated-batch-"));
+  writeFileSync(join(projectPath, "gradle.properties"), "minecraft_version=26.1\n");
+  writeFileSync(join(projectPath, "build.gradle"), 'plugins { id "fabric-loom" }\n');
+  const service = new SourceService(buildTestConfig(join(projectPath, "state")));
+  t.after(() => service.db.close());
+  const detect = service.workspaceMappingService.detectCompileMapping.bind(service.workspaceMappingService);
+  const readable = service.workspaceMappingService.hasReadableBuildScript.bind(service.workspaceMappingService);
+  let detections = 0;
+  let probes = 0;
+  let fail = false;
+  t.mock.method(service.workspaceMappingService, "detectCompileMapping", async (input) => { detections++; return detect(input); });
+  t.mock.method(service.workspaceMappingService, "hasReadableBuildScript", async (path) => {
+    probes++;
+    if (fail) throw new Error("readability probe failed");
+    return readable(path);
+  });
+  t.mock.method(service.versionService, "resolveVersionJar", async () => ({ version: "26.1", jarPath: join(projectPath, "client.jar"), source: "downloaded", clientJarUrl: "https://fixture.test/client.jar" }));
+  t.mock.method(service.explorerService, "getSignature", async (input) => {
+    if (input.fqn === "sample.Missing") throw createError({ code: ERROR_CODES.CLASS_NOT_FOUND, message: "Class missing." });
+    return { constructors: [], fields: [], methods: [], warnings: [], context: { minecraftVersion: "26.1", mappingType: "mojang", mappingNamespace: "mojang", jarSignature: "fixture", generatedAt: "2026-11-04T00:00:00Z" } };
+  });
+  const symbols = ["sample.First", "sample.Missing", "sample.Last"].map((className) => ({ kind: "class", className }));
+  const request = { target: { kind: "workspace", projectPath }, mapping: "mojang", symbols };
+  const run = async () => (await runCatalogTool(specOf("symbol-map"), request, injectedRuntime(service))).structuredContent as Envelope;
+  const first = await run();
+  assert.deepEqual(first.result!.items!.map((item) => [item.symbol.className, item.status]), [["sample.First", "ok"], ["sample.Missing", "not_found"], ["sample.Last", "ok"]]);
+  assert.deepEqual(first.result!.counts, { total: 3, ok: 2, failed: 0 });
+  assert.equal(first.result!.items![0]!.unobfuscatedRuntime, true);
+  assert.equal(first.result!.items![0]!.runtimeValidated, true);
+  assert.equal(detections, 1);
+  assert.equal(probes, 1);
+  fail = true;
+  const failed = await run();
+  assert.equal(failed.error, undefined);
+  assert.deepEqual(failed.result!.items!.map((item) => item.status), ["error", "error", "error"]);
+  assert.deepEqual(failed.result!.counts, { total: 3, ok: 0, failed: 3 });
+  assert.equal(detections, 2);
+  assert.equal(probes, 2, "a failed readability promise is shared within the request");
+  fail = false;
+  assert.deepEqual((await run()).result!.items!.map((item) => item.status), ["ok", "not_found", "ok"]);
+  assert.equal(detections, 3);
+  assert.equal(probes, 3, "a later request retries the readability probe");
 });
 
 test("symbol tools read a workspace given as a Windows drive or \\\\wsl.localhost path on a WSL host", { skip: process.platform === "linux" ? false : "UNC/WSL spellings only resolve on a Linux host" }, async () => {

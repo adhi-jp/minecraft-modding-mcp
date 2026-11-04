@@ -5,8 +5,20 @@ import type {
   ResolveWorkspaceSymbolOutput
 } from "../source-service.js";
 import { isUnobfuscatedVersion } from "../version-service.js";
-import type { WorkspaceCompileMappingOutput } from "../workspace-mapping-service.js";
+import type { WorkspaceCompileMappingOutput, WorkspaceMappingService } from "../workspace-mapping-service.js";
 import { runUnobfuscatedRuntimeCheck } from "./lifecycle/runtime-check.js";
+
+/** Lazy workspace preparation shared only by the symbols in one catalog request. */
+export function createWorkspaceSymbolContext(projectPath: string, service: WorkspaceMappingService) {
+  let detection: Promise<WorkspaceCompileMappingOutput> | undefined;
+  let readableBuild: Promise<boolean> | undefined;
+  return {
+    detectCompileMapping: () => detection ??= Promise.resolve().then(() => service.detectCompileMapping({ projectPath })),
+    hasReadableBuildScript: () => readableBuild ??= Promise.resolve().then(() => service.hasReadableBuildScript(projectPath))
+  };
+}
+
+export type WorkspaceSymbolContext = ReturnType<typeof createWorkspaceSymbolContext>;
 
 /**
  * Minecraft 26.1+ ships its runtime in Mojang names, so a Loom project for it has no
@@ -100,7 +112,11 @@ async function resolveUnobfuscatedWorkspaceSymbol(
   return { ...runtime.result, workspaceDetection };
 }
 
-export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveWorkspaceSymbolInput): Promise<ResolveWorkspaceSymbolOutput> {
+export async function resolveWorkspaceSymbol(
+  svc: SourceService,
+  input: ResolveWorkspaceSymbolInput,
+  context?: WorkspaceSymbolContext
+): Promise<ResolveWorkspaceSymbolOutput> {
   const projectPath = input.projectPath?.trim();
   const version = input.version?.trim();
   const kind = input.kind;
@@ -178,9 +194,8 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
         };
   const sourcePriorityApplied = input.sourcePriority ?? svc.config.mappingSourcePriority;
 
-  const workspaceDetection = await svc.workspaceMappingService.detectCompileMapping({
-    projectPath
-  });
+  const workspace = context ?? createWorkspaceSymbolContext(projectPath, svc.workspaceMappingService);
+  const workspaceDetection = await workspace.detectCompileMapping();
   // No evidence also means no build script was found at all (a missing, mistyped or
   // empty projectPath). Only a build that was read and declares no mappings is a
   // 26.1+ Loom project compiling against the runtime names.
@@ -188,7 +203,7 @@ export async function resolveWorkspaceSymbol(svc: SourceService, input: ResolveW
     !workspaceDetection.resolved &&
     workspaceDetection.evidence.length === 0 &&
     isUnobfuscatedVersion(version) &&
-    (await svc.workspaceMappingService.hasReadableBuildScript(projectPath))
+    (await workspace.hasReadableBuildScript())
   ) {
     return resolveUnobfuscatedWorkspaceSymbol(svc, input, { version, querySymbol, sourcePriorityApplied });
   }

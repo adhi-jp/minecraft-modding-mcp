@@ -5,6 +5,7 @@ import { createError, ERROR_CODES, isAppError } from "../../errors.js";
 import { normalizeOptionalProjectPath } from "../../gradle-paths.js";
 import type { SymbolReference, SymbolResolutionOutput } from "../../mapping/types.js";
 import type { ResolveWorkspaceSymbolOutput } from "../../source-service.js";
+import { createWorkspaceSymbolContext } from "../../source/symbol-resolver.js";
 import type { SourceMapping } from "../../types.js";
 import { defined, failedItem, FollowUps, itemCounts, type FailedItem } from "../items.js";
 import {
@@ -554,6 +555,9 @@ export const symbolMapSpec: CatalogToolSpec<SymbolMapInput> = {
     // Without toMapping, a workspace target maps to the project's compile names; that lookup
     // already matches methods strictly by owner, name and descriptor, with or without exact.
     const toWorkspaceNames = target.kind === "workspace" && input.toMapping === undefined;
+    const workspaceContext = toWorkspaceNames
+      ? createWorkspaceSymbolContext(projectPath!, call.services.workspaceMappingService)
+      : undefined;
 
     const outcomes = await lookUpEach(
       input.symbols,
@@ -568,7 +572,7 @@ export const symbolMapSpec: CatalogToolSpec<SymbolMapInput> = {
             ...query,
             sourceMapping: input.mapping,
             maxCandidates: input.maxCandidates
-          });
+          }, workspaceContext);
         }
         if (input.exact) {
           return call.services.resolveMethodMappingExact({

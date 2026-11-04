@@ -1007,8 +1007,11 @@ export class SourceService {
     return runtimeFallback ?? result;
   }
 
-  async resolveWorkspaceSymbol(input: ResolveWorkspaceSymbolInput): Promise<ResolveWorkspaceSymbolOutput> {
-    return symbolResolver.resolveWorkspaceSymbol(this, input);
+  async resolveWorkspaceSymbol(
+    input: ResolveWorkspaceSymbolInput,
+    context?: symbolResolver.WorkspaceSymbolContext
+  ): Promise<ResolveWorkspaceSymbolOutput> {
+    return symbolResolver.resolveWorkspaceSymbol(this, input, context);
   }
 
   private async checkSymbolExistsInUnobfuscatedRuntime(

@@ -65,6 +65,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Performance
 
+- `symbol-map` requests that use a workspace's compile names share build-script discovery across their symbols, avoiding repeated workspace scans within the batch. Each later request reads the build again, so mapping changes are still observed.
 - Deprecated 8.x tool replies serialize their result once while keeping the same response and deprecation metadata, reducing response-building work for large replies.
 - `project-validate` reuses its workspace discovery within a call when no mapping or mixin config is found, avoiding a second directory scan for access wideners and transformers. Later calls still discover newly added files.
 
