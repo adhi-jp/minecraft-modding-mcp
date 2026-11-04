@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,8 @@ import { ERROR_CODES } from "../../../src/errors.ts";
 import { buildValidateProjectSuggestedParams } from "../../../src/tool-guidance.ts";
 import {
   discoverWorkspaceAccessTransformers,
+  discoverWorkspaceAccessWideners,
+  discoverWorkspaceMixins,
   ValidateProjectService,
   validateProjectSchema
 } from "../../../src/entry-tools/validate-project-service.ts";
@@ -1106,4 +1108,42 @@ test("validate-project recovery suggestions keep an explicit preferProjectVersio
   });
 
   assert.equal(params.preferProjectVersion, false);
+});
+
+test("workspace discovery does not follow symbolic links back into the project", { timeout: 8000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "discover-workspace-symlinks-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "src"), { recursive: true });
+  const mixinConfig = join(root, "src", "a.mixins.json");
+  await writeFile(mixinConfig, "{}", "utf8");
+  await writeFile(join(root, "fabric.mod.json"), JSON.stringify({ accessWidener: "a.accesswidener" }), "utf8");
+  await writeFile(join(root, "a.accesswidener"), "accessWidener v2 named\n", "utf8");
+  await writeFile(join(root, "accesstransformer.cfg"), "public a.b.C\n", "utf8");
+  await symlink(root, join(root, "l1"));
+  await symlink(root, join(root, "l2"));
+
+  assert.deepEqual(await discoverWorkspaceMixins(root), [mixinConfig]);
+  assert.deepEqual(await discoverWorkspaceAccessWideners(root), [join(root, "a.accesswidener")]);
+  assert.deepEqual(await discoverWorkspaceAccessTransformers(root), [join(root, "accesstransformer.cfg")]);
+});
+
+test("workspace discovery skips a directory it cannot read instead of failing", { timeout: 8000, skip: process.getuid?.() === 0 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "discover-workspace-unreadable-"));
+  const locked = join(root, "locked");
+  t.after(async () => {
+    await chmod(locked, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+  await mkdir(join(root, "src"), { recursive: true });
+  await mkdir(locked, { recursive: true });
+  const mixinConfig = join(root, "src", "a.mixins.json");
+  await writeFile(mixinConfig, "{}", "utf8");
+  await writeFile(join(root, "fabric.mod.json"), JSON.stringify({ accessWidener: "a.accesswidener" }), "utf8");
+  await writeFile(join(root, "a.accesswidener"), "accessWidener v2 named\n", "utf8");
+  await writeFile(join(root, "accesstransformer.cfg"), "public a.b.C\n", "utf8");
+  await chmod(locked, 0o000);
+
+  assert.deepEqual(await discoverWorkspaceMixins(root), [mixinConfig]);
+  assert.deepEqual(await discoverWorkspaceAccessWideners(root), [join(root, "a.accesswidener")]);
+  assert.deepEqual(await discoverWorkspaceAccessTransformers(root), [join(root, "accesstransformer.cfg")]);
 });

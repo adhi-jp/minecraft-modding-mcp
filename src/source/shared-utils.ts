@@ -4,6 +4,13 @@ import { buildSuggestedCall } from "../build-suggested-call.js";
 import { ERROR_CODES, createError } from "../errors.js";
 import type { SourceMapping } from "../types.js";
 
+/**
+ * fast-glob options for every walk rooted at a user-supplied project or workspace directory:
+ * never follow symbolic links (a link back into the tree makes the walk loop or repeat files)
+ * and skip directories that cannot be read instead of throwing.
+ */
+export const PROJECT_TREE_GLOB_OPTIONS = { followSymbolicLinks: false, suppressErrors: true } as const;
+
 /** Converts a `.java` source path (pkg/Outer.java) to its dotted class name (pkg.Outer). */
 export function sourcePathToFqcn(filePath: string): string {
   return filePath.replace(/\.java$/, "").replaceAll("/", ".");

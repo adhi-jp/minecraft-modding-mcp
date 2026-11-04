@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { expectAppErrorCode } from "../helpers/expect-app-error.ts";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -144,4 +144,40 @@ test("detectCompileMapping resolves intermediary mapping from net.fabricmc:inter
   const result = await service.detectCompileMapping({ projectPath: root });
   assert.equal(result.resolved, true);
   assert.equal(result.mappingApplied, "intermediary");
+});
+
+test("WorkspaceMappingService build-script discovery does not follow symbolic links back into the project", { timeout: 8000 }, async (t) => {
+  const { WorkspaceMappingService } = await import("../../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "workspace-mapping-symlinks-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "build.gradle"), "plugins {\n  id 'fabric-loom'\n}\ndependencies {\n  mappings loom.officialMojangMappings()\n}\n", "utf8");
+  await symlink(root, join(root, "l1"));
+  await symlink(root, join(root, "l2"));
+
+  const service = new WorkspaceMappingService();
+  const compile = await service.detectCompileMapping({ projectPath: root });
+  assert.equal(compile.mappingApplied, "mojang");
+  assert.equal(compile.evidence.length, 1);
+  const loader = await service.detectProjectLoader(root);
+  assert.ok(loader.evidence.length > 0);
+  assert.ok(loader.evidence.every((entry) => !entry.filePath.includes("/l1/") && !entry.filePath.includes("/l2/")));
+});
+
+test("WorkspaceMappingService build-script discovery skips a directory it cannot read", { timeout: 8000, skip: process.getuid?.() === 0 }, async (t) => {
+  const { WorkspaceMappingService } = await import("../../src/workspace-mapping-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "workspace-mapping-unreadable-"));
+  const locked = join(root, "locked");
+  t.after(async () => {
+    await chmod(locked, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+  await writeFile(join(root, "build.gradle"), "plugins {\n  id 'fabric-loom'\n}\ndependencies {\n  mappings loom.officialMojangMappings()\n}\n", "utf8");
+  await mkdir(locked);
+  await chmod(locked, 0o000);
+
+  const service = new WorkspaceMappingService();
+  const compile = await service.detectCompileMapping({ projectPath: root });
+  assert.equal(compile.mappingApplied, "mojang");
+  const loader = await service.detectProjectLoader(root);
+  assert.equal(loader.resolved, true);
 });

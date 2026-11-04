@@ -8,6 +8,7 @@ import { mapWithConcurrencyLimit } from "./concurrency.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { resolveGradleUserHomePath } from "./gradle-paths.js";
 import { isSafeMavenSegment, isSafeMavenVersionToken } from "./maven-token.js";
+import { PROJECT_TREE_GLOB_OPTIONS } from "./source/shared-utils.js";
 import type { SourceMapping } from "./types.js";
 
 const WORKSPACE_FILE_READ_CONCURRENCY = 4;
@@ -477,6 +478,7 @@ const GRADLE_PROJECT_GLOB_IGNORE = ["**/.git/**", "**/.gradle/**", "**/build/**"
 /** The build.gradle(.kts) files scanned under `root` for compile-mapping and loader detection, sorted. */
 async function listCompileMappingBuildScripts(root: string): Promise<string[]> {
   return (await fastGlob.glob(["build.gradle", "build.gradle.kts", "**/build.gradle", "**/build.gradle.kts"], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: root,
     absolute: true,
     onlyFiles: true,
@@ -737,6 +739,7 @@ export class WorkspaceMappingService {
       "**/META-INF/mods.toml",
       "**/META-INF/neoforge.mods.toml"
     ], {
+      ...PROJECT_TREE_GLOB_OPTIONS,
       cwd: root,
       absolute: true,
       onlyFiles: true,

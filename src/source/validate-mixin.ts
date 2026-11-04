@@ -40,7 +40,7 @@ import { runResolveStage } from "./validate-mixin/pipeline/resolve.js";
 import { runMappingHealthStage } from "./validate-mixin/pipeline/mapping-health.js";
 import { runParseStage } from "./validate-mixin/pipeline/parse.js";
 import { runTargetLookupStage } from "./validate-mixin/pipeline/target-lookup.js";
-import { normalizePathStyle, pathExists } from "./shared-utils.js";
+import { PROJECT_TREE_GLOB_OPTIONS, normalizePathStyle, pathExists } from "./shared-utils.js";
 /* remapSignatureMembers reached via svc.remapSignatureMembers so tests can monkey-patch */
 
 export type ValidateMixinSingleInput = Omit<ValidateMixinInput, "input" | "version"> & {
@@ -340,6 +340,7 @@ async function createProjectValidateMixinConfigInput(
 
   const resolvedProjectPath = resolveMixinInputPath(input.input.path, "path");
   const configPaths = (await fastGlob.glob(["**/*.mixins.json"], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: resolvedProjectPath,
     absolute: true,
     onlyFiles: true,

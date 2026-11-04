@@ -25,7 +25,7 @@
  *    stubbed validation service through `runCatalogTool`.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdir, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdir, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
@@ -936,6 +936,24 @@ test("catalogServiceText rewrites only the known service sentences", () => {
 // ---------------------------------------------------------------------------
 // project-validate
 // ---------------------------------------------------------------------------
+
+test("project-validate skips a directory it cannot read instead of failing with ERR_INTERNAL", { skip: process.getuid?.() === 0 }, async () => {
+  const project = writeProject("unreadable-subdirectory", { version: OBF_VERSION, mixins: ["GoodMixin"] });
+  const locked = join(project, "locked");
+  mkdirSync(locked);
+  chmodSync(locked, 0o000);
+  try {
+    const { envelope, isError } = await catalog("project-validate", { projectPath: project, mapping: "obfuscated", scope: "vanilla" });
+    assert.equal(isError, false, JSON.stringify(envelope.error));
+    assert.notEqual(envelope.error?.code, "ERR_INTERNAL");
+    assert.deepEqual(
+      envelope.result!.project.items.map((item: Record<string, any>) => [item.path, item.kind]),
+      [[configOf(project), "mixin-config"]]
+    );
+  } finally {
+    chmodSync(locked, 0o755);
+  }
+});
 
 test("project-validate matches validate-project project-summary and names each discovered file", async () => {
   const request = { projectPath: OBF, mapping: "obfuscated", scope: "vanilla" };

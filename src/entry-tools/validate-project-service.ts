@@ -5,6 +5,7 @@ import fastGlob from "fast-glob";
 import { z } from "zod";
 
 import { mapWithConcurrencyLimit } from "../concurrency.js";
+import { PROJECT_TREE_GLOB_OPTIONS } from "../source/shared-utils.js";
 import type { StageEmitter } from "../stage-emitter.js";
 import { buildIncludeSchema, detailSchema } from "./entry-tool-schema.js";
 import { resolveDetail, resolveInclude } from "./request-normalizers.js";
@@ -135,6 +136,7 @@ export async function discoverWorkspaceMixins(projectPath: string, configPaths?:
     return [...configPaths];
   }
   return (await fastGlob.glob(["**/*.mixins.json"], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,
@@ -144,6 +146,7 @@ export async function discoverWorkspaceMixins(projectPath: string, configPaths?:
 
 export async function discoverWorkspaceAccessWideners(projectPath: string): Promise<string[]> {
   const descriptorFiles = (await fastGlob.glob(["fabric.mod.json", "quilt.mod.json", "**/fabric.mod.json", "**/quilt.mod.json"], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,
@@ -264,6 +267,7 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
     "**/META-INF/mods.toml",
     "**/META-INF/neoforge.mods.toml"
   ], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,
@@ -312,6 +316,7 @@ export async function discoverWorkspaceAccessTransformers(projectPath: string): 
     "**/*_at.cfg",
     "**/accesstransformer*.cfg"
   ], {
+    ...PROJECT_TREE_GLOB_OPTIONS,
     cwd: projectPath,
     absolute: true,
     onlyFiles: true,

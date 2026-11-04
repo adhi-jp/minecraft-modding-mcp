@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -614,4 +614,49 @@ test("SourceService validateMixin toolHealth.overallHealthy is false for request
   const single = await runMappingHealthGateCase(root, jarPath, "mojang");
   assert.ok(single?.toolHealth);
   assert.equal(single!.toolHealth!.overallHealthy, false);
+});
+
+test("SourceService validateMixin project mode does not follow symbolic links back into the project", { timeout: 15000 }, async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-project-symlinks-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "src", "a.mixins.json"), JSON.stringify({ package: "x.y", mixins: [] }), "utf8");
+  await symlink(root, join(root, "l1"));
+  await symlink(root, join(root, "l2"));
+
+  const service = new SourceService(buildTestConfig(root));
+  const output = await service.validateMixin({
+    input: { mode: "project", path: root },
+    version: "1.21",
+    mapping: "obfuscated"
+  });
+
+  const configWarnings = output.warnings.filter((warning: string) => warning.includes("a.mixins.json"));
+  assert.equal(configWarnings.length, 1, `one config is found once: ${JSON.stringify(output.warnings)}`);
+  assert.ok(configWarnings[0]!.includes(join(root, "src", "a.mixins.json")));
+});
+
+test("SourceService validateMixin project mode skips a directory it cannot read", { timeout: 15000, skip: process.getuid?.() === 0 }, async (t) => {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "validate-mixin-project-unreadable-"));
+  const locked = join(root, "locked");
+  t.after(async () => {
+    await chmod(locked, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(join(root, "src", "a.mixins.json"), JSON.stringify({ package: "x.y", mixins: [] }), "utf8");
+  await mkdir(locked);
+  await chmod(locked, 0o000);
+
+  const service = new SourceService(buildTestConfig(root));
+  const output = await service.validateMixin({
+    input: { mode: "project", path: root },
+    version: "1.21",
+    mapping: "obfuscated"
+  });
+
+  const configWarnings = output.warnings.filter((warning: string) => warning.includes("a.mixins.json"));
+  assert.equal(configWarnings.length, 1, JSON.stringify(output.warnings));
 });
