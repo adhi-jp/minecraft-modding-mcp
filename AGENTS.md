@@ -11,7 +11,7 @@
 ## Public MCP Contract (MUST)
 - Treat the public contract as compatibility-bound: tool names, input parameter names/types/requiredness, and response envelope shape.
 - Public MCP tool responses MUST use the standard envelope: `{ result?, error?, meta }`.
-- Input validation failures MUST map to `ERR_INVALID_INPUT` and MUST NOT be reported as `ERR_INTERNAL`.
+- Input validation failures MUST map to `ERR_INVALID_INPUT` and MUST NOT be reported as `ERR_INTERNAL`. This covers checks of the request itself; it does not call for filesystem or network preflight probes that turn a later operating-system failure into `ERR_INVALID_INPUT`.
 - Do not add compatibility aliases for renamed public tools or parameters unless explicitly requested by the user and documented with a removal plan.
 
 ## Change Coupling Rules (MUST)
