@@ -1,9 +1,9 @@
 /**
- * Shared MCP wire harness for the mcp-tools integration test slices.
- * Factored out of tests/mcp-tools.integration.test.ts when that file was split
- * into per-feature slices. The module-level MCP_CACHE_DIR assignment MUST run
- * before ../../src/index.ts is first imported, so it lives at the top of this
- * shared module and every split file inherits it transitively via import.
+ * Shared MCP wire harness for the per-feature MCP-surface tests of the
+ * deprecated 8.x tools in tests/aliases/mcp-tools/. The module-level
+ * MCP_CACHE_DIR assignment MUST run before ../../src/index.ts is first
+ * imported, so it lives at the top of this shared module and every split file
+ * inherits it transitively via import.
  *
  * The harness drives the REAL production factory through the public
  * in-process transport (tests/stdio/inprocess-era-serve.ts): one lazily

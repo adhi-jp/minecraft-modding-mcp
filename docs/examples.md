@@ -1,10 +1,602 @@
 # Example Requests
 
-Start with these top-level workflow tools when possible. They cover the common workflows and are the best default starting points for MCP clients and agents.
+The requests under [Catalog Tools](#catalog-tools) come first. The requests for the deprecated 8.x tools follow under [Deprecated 8.x Tools](#deprecated-8x-tools); those tools still accept them until their removal in 10.0.0 at the earliest, and [tool-reference.md → Migration from 8.x](tool-reference.md#migration-from-8x) names the catalog tools that replace each one.
 
-## Workflow Starting Points
+## Catalog Tools
 
-### Inspect Minecraft source from a version
+The catalog tools share one `target` object and reject unknown keys; see [tool-reference.md → Tool catalog](tool-reference.md#tool-catalog). Resolve once with `artifact-resolve`, then pass `result.artifact.artifactId` to the other tools as `target: { "kind": "artifact", "artifactId": ... }`.
+
+### List versions
+
+```json
+{
+  "tool": "version-list",
+  "arguments": {
+    "includeSnapshots": true,
+    "limit": 5
+  }
+}
+```
+
+### Resolve an artifact from a version
+
+```json
+{
+  "tool": "artifact-resolve",
+  "arguments": {
+    "target": {
+      "kind": "version",
+      "version": "1.21.10"
+    },
+    "mapping": "mojang"
+  }
+}
+```
+
+### Rebuild an artifact's index
+
+```json
+{
+  "tool": "artifact-index",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "force": true
+  }
+}
+```
+
+### List files under a prefix
+
+```json
+{
+  "tool": "file-list",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "prefix": "net/minecraft/world/level/",
+    "limit": 50
+  }
+}
+```
+
+Pass `meta.pagination.nextCursor` as `cursor` for the next page, or send the `file-list` call in `meta.nextActions`.
+
+### Read one file
+
+```json
+{
+  "tool": "file-read",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "filePath": "net/minecraft/world/level/block/Blocks.java",
+    "maxBytes": 65536
+  }
+}
+```
+
+### Find a class by simple name in a dependency
+
+```json
+{
+  "tool": "class-find",
+  "arguments": {
+    "target": {
+      "kind": "dependency",
+      "group": "net.fabricmc.fabric-api",
+      "name": "fabric-api",
+      "projectPath": "/path/to/mod"
+    },
+    "className": "ItemGroupEvents"
+  }
+}
+```
+
+### Read the source of several classes
+
+```json
+{
+  "tool": "source-read",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "classes": [
+      "net.minecraft.world.item.Item",
+      "net.minecraft.world.level.block.Block"
+    ],
+    "mode": "snippet",
+    "maxLines": 80
+  }
+}
+```
+
+Each class is one entry of `result.items` with its own `status`; a missing class fails only its own item. When lines remain, `meta.nextActions` holds the `source-read` call that reads on from the next line.
+
+### Read a class from a mod jar
+
+```json
+{
+  "tool": "source-read",
+  "arguments": {
+    "target": {
+      "kind": "jar",
+      "jarPath": "/path/to/mods/example-mod.jar"
+    },
+    "classes": ["com.example.mod.ExampleMod"],
+    "mode": "full"
+  }
+}
+```
+
+### Export class sources to files
+
+```json
+{
+  "tool": "source-export",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "classes": [
+      "net.minecraft.world.item.Item",
+      "net.minecraft.world.item.ItemStack"
+    ],
+    "outputDir": "/tmp/minecraft-sources"
+  }
+}
+```
+
+This writes `/tmp/minecraft-sources/net/minecraft/world/item/Item.java` and `ItemStack.java`, overwriting existing files; `result.items[].path` names each file.
+
+### List the members of a class, page by page
+
+```json
+{
+  "tool": "member-list",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "classes": ["net.minecraft.world.entity.LivingEntity"],
+    "access": "all",
+    "memberPattern": "tick|hurt",
+    "limit": 50
+  }
+}
+```
+
+With one class, `meta.pagination.nextCursor` and the `member-list` call in `meta.nextActions` read the next page. `detail: "summary"` lists only names and Java signatures.
+
+### Search an artifact's source, page by page
+
+```json
+{
+  "tool": "source-search",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "query": "hurt",
+    "symbolKind": "method",
+    "packagePrefix": "net.minecraft.world.entity",
+    "limit": 50
+  }
+}
+```
+
+The default `intent: "symbol"` matches declaration names; `result.status` is `ok` or `not_found`. While `meta.pagination.hasMore` is `true`, the `source-search` call in `meta.nextActions` reads the next page. `detail: "summary"` drops each content hit's `context`; `detail: "full"` adds `score` and `reasonCodes`.
+
+### Search file text, then scan it literally
+
+```json
+{
+  "tool": "source-search",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<artifact-id>"
+    },
+    "query": "BlockPos.ZERO",
+    "intent": "text"
+  }
+}
+```
+
+Each content hit carries its `line` and `context`. The index splits text at `.`, `_` and `$`, so when such a query finds nothing, `meta.nextActions` offers the same search with `queryMode: "literal"`, which checks every file for the query as a substring (ignoring case with the default `match`).
+
+### Search with a class name from another namespace
+
+```json
+{
+  "tool": "source-search",
+  "arguments": {
+    "target": {
+      "kind": "artifact",
+      "artifactId": "<obfuscated-artifact-id>"
+    },
+    "query": "net.minecraft.world.entity.player.Player",
+    "mapping": "mojang"
+  }
+}
+```
+
+`result.translatedQuery` shows the name that was searched, and the hits are in the artifact's namespace (`result.artifact.mappingApplied`). `status: "unavailable"` means the name could not be translated and nothing matched it as given; `meta.warnings` says why.
+
+### Check that symbols exist
+
+```json
+{
+  "tool": "symbol-check",
+  "arguments": {
+    "target": {
+      "kind": "version",
+      "version": "1.21.10"
+    },
+    "mapping": "mojang",
+    "symbols": [
+      { "kind": "class", "className": "net.minecraft.world.item.Item" },
+      { "kind": "method", "className": "net.minecraft.world.item.Item", "memberName": "getName" },
+      { "kind": "field", "className": "net.minecraft.world.entity.EntityType", "memberName": "ITEM" }
+    ]
+  }
+}
+```
+
+`mapping` is required: it names the namespace the names are written in. Each symbol is one entry of `result.items` with its own `status` (`ok`, `not_found`, `ambiguous`, `unavailable`).
+
+### Map symbols to another namespace
+
+```json
+{
+  "tool": "symbol-map",
+  "arguments": {
+    "target": {
+      "kind": "version",
+      "version": "1.21.10"
+    },
+    "mapping": "mojang",
+    "toMapping": "intermediary",
+    "symbols": [
+      { "kind": "class", "className": "net.minecraft.server.MinecraftServer" },
+      { "kind": "method", "className": "net.minecraft.server.MinecraftServer", "memberName": "tickServer" }
+    ]
+  }
+}
+```
+
+`result.items[].match` holds the mapped name in the same `{ kind, className, memberName?, descriptor? }` form.
+
+### Map a method strictly by its descriptor
+
+```json
+{
+  "tool": "symbol-map",
+  "arguments": {
+    "target": {
+      "kind": "version",
+      "version": "1.21.10"
+    },
+    "mapping": "intermediary",
+    "toMapping": "yarn",
+    "exact": true,
+    "symbols": [
+      {
+        "kind": "method",
+        "className": "net.minecraft.class_1937",
+        "memberName": "method_8320",
+        "descriptor": "(Lnet/minecraft/class_2338;)Lnet/minecraft/class_2680;"
+      }
+    ]
+  }
+}
+```
+
+### Map symbols to a workspace's compile names
+
+```json
+{
+  "tool": "symbol-map",
+  "arguments": {
+    "target": {
+      "kind": "workspace",
+      "projectPath": "/path/to/mod"
+    },
+    "mapping": "mojang",
+    "symbols": [
+      { "kind": "class", "className": "net.minecraft.world.item.Item" }
+    ]
+  }
+}
+```
+
+Without `toMapping`, the names are mapped to the namespace the project's Gradle build declares (`result.toMapping`), for the Minecraft version in its `gradle.properties`. Methods need a `descriptor` here.
+
+### List a class across all four namespaces
+
+```json
+{
+  "tool": "class-mappings",
+  "arguments": {
+    "version": "1.21.10",
+    "className": "net.minecraft.world.item.Item",
+    "mapping": "mojang",
+    "kinds": ["method"],
+    "limit": 50
+  }
+}
+```
+
+When rows remain, `meta.pagination.nextCursor` and the `class-mappings` call in `meta.nextActions` read the next page.
+
+### Trace a method across versions
+
+```json
+{
+  "tool": "symbol-trace",
+  "arguments": {
+    "symbol": {
+      "kind": "method",
+      "className": "net.minecraft.server.MinecraftServer",
+      "memberName": "tickServer"
+    },
+    "mapping": "mojang",
+    "fromVersion": "1.21.1",
+    "toVersion": "1.21.10",
+    "withTimeline": true
+  }
+}
+```
+
+### Compare two versions
+
+```json
+{
+  "tool": "version-compare",
+  "arguments": {
+    "fromVersion": "1.21.1",
+    "toVersion": "1.21.10",
+    "packageFilter": "net.minecraft.world.item",
+    "withLibraries": true
+  }
+}
+```
+
+The reply holds counts: classes added and removed under the package, registry entries added and removed per registry, and libraries added and removed. `meta.nextActions` holds the same call with `detail: "standard"`, which lists the class and library names; `detail: "full"` also lists the registry entries. To compare one registry, pass `"category": "registry", "registry": "block"` in place of `packageFilter`, which applies to classes only.
+
+### Diff one class between versions
+
+```json
+{
+  "tool": "class-diff",
+  "arguments": {
+    "className": "net.minecraft.world.item.Item",
+    "fromVersion": "1.21.1",
+    "toVersion": "1.21.10",
+    "mapping": "mojang"
+  }
+}
+```
+
+`mapping` is required. The default `detail: "full"` returns each modified member before and after; `"standard"` keeps only what changed, and `"summary"` only the counts.
+
+### Read a registry
+
+```json
+{
+  "tool": "registry-read",
+  "arguments": {
+    "version": "1.21.10",
+    "registry": "block",
+    "withData": true,
+    "limit": 50
+  }
+}
+```
+
+Without `withData`, the reply lists only registry names and entry counts. A cut at `limit` is reported in `meta.truncation`.
+
+### Read a mod jar's metadata and class names
+
+```json
+{
+  "tool": "mod-inspect",
+  "arguments": {
+    "jarPath": "/path/to/mod.jar",
+    "withClasses": true
+  }
+}
+```
+
+The reply holds the loader, id, version, entrypoints, mixin configs, dependencies and nested jars, and with `withClasses` the path of every `.class` entry with `/` as `.`, inner classes included. For an ordinary class that is its class name: read it with `source-read` or `member-list` and `"target": { "kind": "jar", "jarPath": "/path/to/mod.jar" }`. `module-info`, `package-info` and `META-INF.versions.<n>.…` entries are not classes to read that way.
+
+### Search a mod jar's source
+
+```json
+{
+  "tool": "mod-search",
+  "arguments": {
+    "jarPath": "/path/to/mod.jar",
+    "query": "Registry\\.register",
+    "searchType": "content",
+    "limit": 20
+  }
+}
+```
+
+A binary jar is decompiled once before the first search; a sources jar is searched directly. A search that stopped at `limit` is reported in `meta.truncation`.
+
+### Remap a mod jar, preview first
+
+```json
+{
+  "tool": "mod-remap",
+  "arguments": {
+    "jarPath": "/path/to/mod.jar",
+    "toMapping": "mojang"
+  }
+}
+```
+
+The preview writes nothing: it reports the `outputJar` the remap would write and `outputExists`. `meta.nextActions` holds the same call with `"apply": true`, which writes `outputJar` and replaces a file already there; `result.remap.fromCache` is `true` when the remap cache already held the result (`"force": true` rebuilds it). An `outputJar` that is the input jar, under any spelling, or a directory is rejected.
+
+### Validate a workspace's mixins and access wideners
+
+```json
+{
+  "tool": "project-validate",
+  "arguments": {
+    "projectPath": "/path/to/project"
+  }
+}
+```
+
+The version comes from `gradle.properties` and the mapping from the build scripts unless you pass `version` or `mapping`. `result.project.items` names every mixin config and access widener found, each with its `status` and `errors`; when one is not `ok`, `meta.nextActions` holds the same call with `"detail": "standard"`, which adds each file's issues. When a needed version or mapping cannot be read, `status` is `"blocked"` and the next action is a template with `"<minecraft-version>"` or `"<mapping>"` to fill in. Add `"discover": ["mixins", "access-wideners", "access-transformers"]` to include access transformers. The call has the server's long-running deadline and runs alone.
+
+### Validate mixin configs
+
+```json
+{
+  "tool": "mixin-validate",
+  "arguments": {
+    "configPaths": ["/path/to/project/src/main/resources/example.mixins.json"],
+    "projectPath": "/path/to/project",
+    "detail": "standard"
+  }
+}
+```
+
+Pass exactly one of `source`, `paths`, `configPaths` or `"discover": true` (every `*.mixins.json` under `projectPath`). `result.validation.items` has one entry per mixin class with its `status` and `issues`; `standard` explains each issue and offers the `symbol-check` and `source-read` calls that check it in `meta.nextActions`. Without `projectPath`, pass `version` and `mapping`, for example `{ "source": "…", "version": "1.21.10", "mapping": "mojang" }`.
+
+### Check an access widener file
+
+```json
+{
+  "tool": "access-validate",
+  "arguments": {
+    "format": "access-widener",
+    "path": "/path/to/project/src/main/resources/example.accesswidener",
+    "version": "1.21.10",
+    "mapping": "intermediary"
+  }
+}
+```
+
+`mapping` is the namespace the file's names are written in and is always required, since a header's `named` or missing namespace can mislead. `result.validation.entries` has every entry with `valid`; an invalid file lists why in `errors`. An entry not found after its class name could not be mapped (a misspelled class, one absent from that version, or mapping data that could not be loaded) is marked `"confidence": "uncertain"`; when such entries are the only failures, the file is `partial`. Pass `"content"` instead of `"path"` to check text, `"format": "access-transformer"` with `"mapping": "srg"`, `"mojang"` or `"obfuscated"` for a transformer, and `"projectPath"` to check against the workspace's runtime jar.
+
+### Check a mixin target member
+
+```json
+{
+  "tool": "mixin-verify-target",
+  "arguments": {
+    "target": { "kind": "version", "version": "1.21.10" },
+    "className": "net.minecraft.world.entity.Entity",
+    "kind": "field",
+    "memberName": "level",
+    "mapping": "mojang",
+    "mixinMemberName": "getLevel"
+  }
+}
+```
+
+`result.verdict.status` is `ok` for one match, with `advice` saying whether `@Shadow`, `@Accessor` or `@Invoker` fits; `ambiguous` when several overloads match the name, with a template in `meta.nextActions` that asks for the `descriptor`; or `not_found`, with similar members in `candidates`. Names in another namespace than the jar's are translated first (`autoRemap`, default `true`).
+
+### Decode NBT, patch it, and encode it again
+
+```json
+{
+  "tool": "nbt-decode",
+  "arguments": {
+    "nbtBase64": "<base64-nbt>"
+  }
+}
+```
+
+`compression` defaults to `auto`, which gunzips bytes that start with the gzip header. `result.typedJson` is the document; edit it with `nbt-patch`:
+
+```json
+{
+  "tool": "nbt-patch",
+  "arguments": {
+    "typedJson": {
+      "rootName": "Level",
+      "root": { "type": "compound", "value": { "health": { "type": "float", "value": 20 } } }
+    },
+    "patch": [
+      { "op": "test", "path": "/root/value/health/value", "value": 20 },
+      { "op": "replace", "path": "/root/value/health/value", "value": 10 },
+      { "op": "add", "path": "/root/value/name", "value": { "type": "string", "value": "Alex" } }
+    ]
+  }
+}
+```
+
+A failed `test` or an operation that would leave invalid typed NBT fails the whole call with `ERR_JSON_PATCH_CONFLICT`; `"path": ""` replaces the whole document. Then write the patched document, the `result.typedJson` of `nbt-patch`, back as bytes:
+
+```json
+{
+  "tool": "nbt-encode",
+  "arguments": {
+    "typedJson": {
+      "rootName": "Level",
+      "root": {
+        "type": "compound",
+        "value": {
+          "health": { "type": "float", "value": 10 },
+          "name": { "type": "string", "value": "Alex" }
+        }
+      }
+    },
+    "compression": "gzip"
+  }
+}
+```
+
+### Clean up cached downloads, preview first
+
+```json
+{
+  "tool": "cache-manage",
+  "arguments": {
+    "action": "delete",
+    "cacheKinds": ["downloads"],
+    "selector": { "version": "1.21.1" }
+  }
+}
+```
+
+The preview deletes nothing: `result.cache.deletedEntries` and `deletedBytes` count what would go, and when there is something, `meta.nextActions` holds the same call with `"apply": true`. `delete` needs a `selector` with at least one field. To see the entries first, use `"action": "list"` with the same `cacheKinds` and `selector`; `"action": "summary"` totals each kind and `"action": "verify"` checks their health.
+
+### Read the server's counters
+
+```json
+{
+  "tool": "server-metrics",
+  "arguments": {}
+}
+```
+
+`result.metrics.tool_call_counts` counts the calls of each tool under the name it was called by.
+
+## Deprecated 8.x Tools
+
+These requests are for the deprecated 8.x tools, which accept them until their removal in 10.0.0 at the earliest. [tool-reference.md → Migration from 8.x](tool-reference.md#migration-from-8x) names the catalog tools that replace each one, and the catalog requests above show the same work.
+
+### 8.x Workflow Tools
+
+#### Inspect Minecraft source from a version
 
 ```json
 {
@@ -26,7 +618,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Map or check a symbol
+#### Map or check a symbol
 
 ```json
 {
@@ -46,7 +638,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Summarize a mod JAR
+#### Summarize a mod JAR
 
 ```json
 {
@@ -61,7 +653,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Validate a workspace
+#### Validate a workspace
 
 ```json
 {
@@ -79,9 +671,9 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-## Source Exploration
+### Source Exploration
 
-### Resolve from a Minecraft version
+#### Resolve from a Minecraft version
 
 ```json
 {
@@ -98,7 +690,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Get class source with a line window
+#### Get class source with a line window
 
 ```json
 {
@@ -116,7 +708,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Search by method symbol
+#### Search by method symbol
 
 ```json
 {
@@ -130,7 +722,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Get class member list
+#### Get class member list
 
 ```json
 {
@@ -149,7 +741,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### List artifact files with a prefix filter
+#### List artifact files with a prefix filter
 
 ```json
 {
@@ -162,9 +754,9 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-## Version Comparison and Symbol Tracking
+### Version Comparison and Symbol Tracking
 
-### Trace `Class.method` lifecycle
+#### Trace `Class.method` lifecycle
 
 ```json
 {
@@ -179,7 +771,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Diff one class across two versions
+#### Diff one class across two versions
 
 ```json
 {
@@ -194,9 +786,9 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-## Mapping and Symbols
+### Mapping and Symbols
 
-### Lookup mapping candidates
+#### Lookup mapping candidates
 
 ```json
 {
@@ -216,7 +808,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Resolve exact method mapping
+#### Resolve exact method mapping
 
 ```json
 {
@@ -232,7 +824,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Show class API mapping matrix
+#### Show class API mapping matrix
 
 ```json
 {
@@ -247,7 +839,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Resolve workspace compile-visible symbol
+#### Resolve workspace compile-visible symbol
 
 ```json
 {
@@ -264,7 +856,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Check symbol existence
+#### Check symbol existence
 
 ```json
 {
@@ -280,9 +872,9 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-## NBT Utilities
+### NBT Utilities
 
-### Decode Java NBT base64 to typed JSON
+#### Decode Java NBT base64 to typed JSON
 
 ```json
 {
@@ -294,7 +886,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Patch typed NBT JSON
+#### Patch typed NBT JSON
 
 ```json
 {
@@ -311,7 +903,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Encode typed JSON back to NBT base64
+#### Encode typed JSON back to NBT base64
 
 ```json
 {
@@ -326,9 +918,9 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-## Mod Analysis
+### Mod Analysis
 
-### Analyze mod metadata
+#### Analyze mod metadata
 
 ```json
 {
@@ -340,7 +932,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Decompile the mod JAR
+#### Decompile the mod JAR
 
 ```json
 {
@@ -353,7 +945,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Read a specific class from decompiled source
+#### Read a specific class from decompiled source
 
 ```json
 {
@@ -366,7 +958,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Search across decompiled mod source
+#### Search across decompiled mod source
 
 ```json
 {
@@ -380,7 +972,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 }
 ```
 
-### Remap a mod JAR to readable names
+#### Remap a mod JAR to readable names
 
 ```json
 {
@@ -395,7 +987,7 @@ Start with these top-level workflow tools when possible. They cover the common w
 
 If the input JAR was already built with Mojang mappings, use `targetMapping: "mojang"` to get a copied output JAR and a `fromMapping: "mojang"` result.
 
-### Bridge a mod hit to a Minecraft-side check
+#### Bridge a mod hit to a Minecraft-side check
 
 When `search-mod-source` or `get-mod-class-source` surfaces a class or member that
 looks like a Minecraft target (for example a Mixin `@Shadow`/`@Inject` target, or a
@@ -417,11 +1009,11 @@ obfuscated, set `autoRemap: true` to translate them automatically in one call:
 }
 ```
 
-For a plain "does this symbol exist in this version?" question, use `analyze-symbol task="exists"` instead.
+For a plain "does this symbol exist in this version?" question, use `symbol-check` instead (with the 8.x tools, `analyze-symbol task="exists"`).
 
-## Validation
+### Validation
 
-### Validate Mixin source
+#### Validate Mixin source
 
 ```json
 {
@@ -440,7 +1032,7 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 }
 ```
 
-### Validate Access Widener content
+#### Validate Access Widener content
 
 ```json
 {
@@ -453,7 +1045,7 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 }
 ```
 
-### Validate Access Widener content against a Loom runtime jar
+#### Validate Access Widener content against a Loom runtime jar
 
 ```json
 {
@@ -468,7 +1060,7 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 }
 ```
 
-### Validate Access Transformer content against a Forge or NeoForge runtime jar
+#### Validate Access Transformer content against a Forge or NeoForge runtime jar
 
 ```json
 {
@@ -483,9 +1075,9 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 }
 ```
 
-## Registry and Diagnostics
+### Registry and Diagnostics
 
-### Get all registries for a version
+#### Get all registries for a version
 
 ```json
 {
@@ -497,7 +1089,7 @@ For a plain "does this symbol exist in this version?" question, use `analyze-sym
 }
 ```
 
-### Inspect runtime metrics
+#### Inspect runtime metrics
 
 ```json
 {

@@ -277,6 +277,47 @@ test("queue deadline returns phase queue without worker recovery", (t) => {
   assert.equal(supervisor.childReady, true);
 });
 
+for (const tool of ["validate-project", "project-validate", "mixin-validate"] as const) {
+  test(`a running ${tool} call holds the barrier, keeps later calls queued and times out under its own name`, (t) => {
+    const { supervisor, outbound, workerWrites } = createHarness();
+    let recoveries = 0;
+    supervisor.recoverTimedOutWorker = () => { recoveries += 1; };
+    t.after(() => clearHarnessTimers(supervisor));
+
+    supervisor.handleClientMessage(modernCall(90, tool));
+    const pending = supervisor.pendingRequests.get("number:90") as { deadlineTimer?: NodeJS.Timeout } | undefined;
+    assert.ok(pending?.deadlineTimer, `${tool} gets a deadline`);
+    assert.equal(supervisor.runningValidateKey, "number:90");
+    const writesAfterDispatch = workerWrites.length;
+    supervisor.handleClientMessage(modernCall(91, "list-versions"));
+    assert.equal(supervisor.queuedRequests.length, 1, `a later call waits behind ${tool}`);
+    assert.equal(workerWrites.length, writesAfterDispatch, "nothing else reaches the worker meanwhile");
+
+    supervisor.handleValidateProjectDeadline("number:90");
+    const reply = outbound.find((message) => "id" in message && message.id === 90) as
+      | { result?: { structuredContent?: { error?: { code?: string; detail?: string }; meta?: { timeout?: { tool?: string; phase?: string } } } } }
+      | undefined;
+    assert.equal(reply?.result?.structuredContent?.error?.code, "ERR_TOOL_TIMEOUT");
+    assert.equal(reply?.result?.structuredContent?.error?.detail, `${tool} exceeded its 10000 ms deadline.`);
+    assert.equal(reply?.result?.structuredContent?.meta?.timeout?.tool, tool);
+    assert.equal(reply?.result?.structuredContent?.meta?.timeout?.phase, "running");
+    assert.equal(recoveries, 1, "a running timeout replaces the worker");
+    assert.equal(supervisor.runningValidateKey, undefined);
+  });
+}
+
+test("a catalog tool outside the long-running set gets no deadline and no barrier", (t) => {
+  const { supervisor, workerWrites } = createHarness();
+  t.after(() => clearHarnessTimers(supervisor));
+  supervisor.handleClientMessage(modernCall(95, "mod-inspect"));
+  supervisor.handleClientMessage(modernCall(96, "list-versions"));
+  const pending = supervisor.pendingRequests.get("number:95") as { deadlineTimer?: NodeJS.Timeout } | undefined;
+  assert.equal(pending?.deadlineTimer, undefined);
+  assert.equal(supervisor.runningValidateKey, undefined);
+  assert.equal(supervisor.queuedRequests.length, 0, "the next call is dispatched at once");
+  assert.equal(workerWrites.length, 2);
+});
+
 test("cap-blocked degraded admission fails requests immediately and drops notifications", () => {
   const outbound: JSONRPCMessage[] = [];
   const events: Array<{ level: string; event: string; details?: Record<string, unknown> }> = [];
@@ -401,6 +442,11 @@ test("unavailable worker queue enforces the same two-request overflow bound", ()
 
   assert.equal(supervisor.queuedRequests.length, 2);
   assert.equal((outbound[0] as { result?: { structuredContent?: { error?: { code?: string } } } }).result?.structuredContent?.error?.code, "ERR_LIMIT_EXCEEDED");
+  assert.deepEqual(
+    (outbound[0] as { result?: { structuredContent?: { meta?: { deprecated?: unknown } } } }).result?.structuredContent?.meta?.deprecated,
+    { replacedBy: ["version-list"], removeIn: "10.0.0" },
+    "the overflowing call is identified, so its alias reply names the replacement"
+  );
 });
 
 test("worker exit and deadline races each produce one terminal response", (t) => {

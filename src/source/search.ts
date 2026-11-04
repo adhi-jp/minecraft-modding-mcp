@@ -544,7 +544,7 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     if (scopeMatchesNoPath) {
       // Skipped: the page stays empty and records no search-path metrics.
     } else if (intent === "symbol") {
-      searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+      indexedWindowFull = searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
       svc.metrics.recordSearchFallback();
       searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
@@ -603,8 +603,14 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
         hit.enclosingSymbol = enclosingSymbol;
       }
     }
-    if (indexedWindowFull && page.length < limit) {
-      searchWarnings.push(indexedCandidateWindowWarning(intent, indexedCandidateLimitForMatch(svc, match)));
+    // The cut is reported on the window's last page: the one without a next
+    // cursor, whether or not the window's hits filled it.
+    if (indexedWindowFull && !finalizedHits.nextCursorHit) {
+      searchWarnings.push(
+        intent === "symbol"
+          ? indexedSymbolWindowWarning(indexedCandidateLimit(svc))
+          : indexedCandidateWindowWarning(intent, indexedCandidateLimitForMatch(svc, match))
+      );
     }
     svc.metrics.recordSearchRowsReturned(page.length);
     const nextCursor = finalizedHits.nextCursorHit
@@ -636,6 +642,11 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
   }
 }
 
+/**
+ * Runs a symbol search. Returns true when the indexed lookup read only its
+ * candidate window while more symbols matched in the index, so the hits may
+ * be incomplete.
+ */
 function searchSymbolIntent(
   svc: SourceService,
   artifactId: string,
@@ -644,8 +655,8 @@ function searchSymbolIntent(
   scope: SearchScope | undefined,
   regexPattern: RegExp | undefined,
   onHit: (hit: SearchSourceHit) => void
-): void {
-  const matchedSymbols = findSymbolHits(svc, artifactId, query, match, scope, regexPattern);
+): boolean {
+  const { hits: matchedSymbols, windowFull } = findSymbolHits(svc, artifactId, query, match, scope, regexPattern);
 
   for (const item of matchedSymbols) {
     onHit({
@@ -661,6 +672,7 @@ function searchSymbolIntent(
       }
     });
   }
+  return windowFull;
 }
 
 function searchTextIntentIndexed(
@@ -830,6 +842,10 @@ function unmatchedScopeWarning(scope: PathScope, hasBackingJar: boolean): string
     ? " In fileGlob, * and ? do not match /; ** does."
     : "";
   return `${subject} matches no indexed file path, so no file was searched. Indexed artifacts currently include Java source only; non-Java resources are not indexed.${backingJarNote}${wildcardNote}`;
+}
+
+function indexedSymbolWindowWarning(candidateLimit: number): string {
+  return `indexed symbol search examined only its candidate window (the first ${candidateLimit} matching symbols by name) and more matched the index, so results may be incomplete. Use a longer query, narrow the scope with packagePrefix, symbolKind or fileGlob, or use match="regex" for a full symbol scan.`;
 }
 
 const ASCII_RE = /^[\x00-\x7F]*$/;
@@ -1006,12 +1022,14 @@ function findSymbolHits(
   match: SearchMatch,
   scope: SearchScope | undefined,
   regexPattern: RegExp | undefined
-): IndexedSymbolHit[] {
+): { hits: IndexedSymbolHit[]; windowFull: boolean } {
   if (match !== "regex") {
     const filePathLike =
       scope?.fileGlob && !scope.fileGlob.includes("**")
         ? globToSqlLike(normalizePathStyle(scope.fileGlob))
         : undefined;
+    const candidateLimit = indexedCandidateLimit(svc);
+    // One row past the window tells a full window from an exhausted index.
     const scoped = svc.symbolsRepo.findScopedSymbols({
       artifactId,
       query,
@@ -1019,14 +1037,16 @@ function findSymbolHits(
       symbolKind: scope?.symbolKind,
       packagePrefix: scope?.packagePrefix,
       filePathLike,
-      limit: indexedCandidateLimit(svc)
+      limit: candidateLimit + 1
     });
+    const windowFull = scoped.items.length > candidateLimit;
+    const candidates = windowFull ? scoped.items.slice(0, candidateLimit) : scoped.items;
     svc.metrics.recordSearchDbRoundtrip();
-    svc.metrics.recordSearchRowsScanned(scoped.items.length);
+    svc.metrics.recordSearchRowsScanned(candidates.length);
 
     const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
     const result: IndexedSymbolHit[] = [];
-    for (const symbol of scoped.items) {
+    for (const symbol of candidates) {
       if (globFilter && !globFilter.test(symbol.filePath)) {
         continue;
       }
@@ -1043,7 +1063,7 @@ function findSymbolHits(
         matchIndex: index
       });
     }
-    return result;
+    return { hits: result, windowFull };
   }
 
   // Stream rows instead of materializing every symbol: regex scans on large
@@ -1081,7 +1101,7 @@ function findSymbolHits(
   }
   svc.metrics.recordSearchRowsScanned(rowsScanned);
 
-  return result;
+  return { hits: result, windowFull: false };
 }
 
 function indexedCandidateLimit(svc: SourceService): number {

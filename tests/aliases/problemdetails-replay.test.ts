@@ -6,12 +6,12 @@ import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createPremigrationNormalizer, firstDifference } from "../helpers/premigration-compare.ts";
-import { legacyHandshake, startInProcessSession, type InProcessSession } from "./inprocess-era-serve.ts";
+import { legacyHandshake, startInProcessSession, type InProcessSession } from "../stdio/inprocess-era-serve.ts";
+import { assertDeprecationCarried, stripDeprecation, type RemovedDeprecation } from "./deprecation.ts";
 
 /**
- * ProblemDetails envelope goldens vs the pre-migration captures,
- * promoted from the gate script into the automated suite over the public
- * in-process transport:
+ * Alias fidelity: the ProblemDetails envelope goldens replayed through the
+ * deprecated aliases over the public in-process transport.
  *
  *  - tests/fixtures/premigration/problemdetails/*.json (13 fixtures) each
  *    freeze one recorded wire request (the authoritative replay input) and
@@ -21,7 +21,12 @@ import { legacyHandshake, startInProcessSession, type InProcessSession } from ".
  *    order and a fresh cache directory are part of the contract.
  *  - Live replies are passed through the SAME normalizer the capture used
  *    (scripts/premigration/lib.mjs normalizeCaptured) with this session's
- *    own path replacements, then compared per the approved outcome classes:
+ *    own path replacements, plus one rule for aliases: `meta.deprecated` is
+ *    removed from the structured reply and from its JSON text, after every
+ *    reply is checked to carry it in both representations, naming the
+ *    catalog tools that replace the alias (the task's tool for a multiplexed
+ *    alias) and the removal release. The replies are then compared per the
+ *    approved outcome classes:
  *      1. the ten ordinary Zod-failure goldens and
  *         omitted-arguments-no-input-shape deep-equal their fixture replies;
  *      2. omitted-arguments-all-optional (json-to-nbt): under the refined
@@ -42,7 +47,7 @@ import { legacyHandshake, startInProcessSession, type InProcessSession } from ".
 // MCP_CACHE_DIR/MCP_SQLITE_PATH/pid file; no feature flags, no manifest
 // override).
 delete process.env.MCP_VERSION_MANIFEST_URL;
-const root = mkdtempSync(join(tmpdir(), "problemdetails-goldens-"));
+const root = mkdtempSync(join(tmpdir(), "alias-problemdetails-replay-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");
 
@@ -79,7 +84,19 @@ const replayOrder = [...goldens].sort((left, right) => left.request.id - right.r
 // Normalization (same lib the capture used, with THIS session's paths)
 // ---------------------------------------------------------------------------
 
-let normalizeLiveMessage: (message: unknown) => unknown;
+let normalizePremigration: (message: unknown) => unknown;
+/** The `meta.deprecated` blocks the alias rule removed, per fixture file. */
+const removedDeprecations = new Map<string, RemovedDeprecation>();
+
+/**
+ * The capture normalization plus the alias rule: `meta.deprecated` is
+ * recorded for its own assertions and removed before the golden comparison.
+ */
+function normalizeAliasReply(file: string, reply: unknown): unknown {
+  const { message, removed } = stripDeprecation(normalizePremigration(reply));
+  removedDeprecations.set(file, removed);
+  return message;
+}
 
 /** Compare a golden's recorded reply message to a normalized live message. */
 function compareGolden(golden: Golden, normalizedLive: unknown): string | null {
@@ -96,7 +113,7 @@ const liveReplies = new Map<string, unknown>(); // fixture file -> raw reply fra
 const normalizedReplies = new Map<string, unknown>(); // fixture file -> normalized message
 
 before(async () => {
-  normalizeLiveMessage = await createPremigrationNormalizer(root);
+  normalizePremigration = await createPremigrationNormalizer(root);
   session = await startInProcessSession();
   await legacyHandshake(session, "2025-06-18", "problemdetails-init");
   for (const golden of replayOrder) {
@@ -105,7 +122,7 @@ before(async () => {
     // replaying the recorded object verbatim preserves that omission.
     const reply = await session.request(golden.request);
     liveReplies.set(golden.file, reply);
-    normalizedReplies.set(golden.file, normalizeLiveMessage(reply));
+    normalizedReplies.set(golden.file, normalizeAliasReply(golden.file, reply));
   }
 });
 
@@ -145,6 +162,16 @@ test("the ten ordinary Zod-failure goldens reconcile deep-equal after normalizat
     "exactly ten ordinary Zod-failure goldens"
   );
   assert.deepEqual(mismatches, [], `problemdetails golden mismatches:\n${mismatches.join("\n")}`);
+});
+
+test("every replayed alias reply carries meta.deprecated naming its catalog replacements in both representations", () => {
+  assert.equal(removedDeprecations.size, EXPECTED_FIXTURE_COUNT, "every golden was replayed");
+  for (const golden of goldens) {
+    const removed = removedDeprecations.get(golden.file);
+    assert.ok(removed, `${golden.file}: replayed`);
+    assert.equal(golden.request.params.name, golden.tool, `${golden.file}: recorded tool name`);
+    assertDeprecationCarried(removed, golden.tool, golden.request.params.arguments, golden.file);
+  }
 });
 
 test("omitted-arguments-no-input-shape (get-runtime-metrics) reconciles deep-equal, cross-call counters included", () => {

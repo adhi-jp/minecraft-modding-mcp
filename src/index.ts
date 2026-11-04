@@ -10,10 +10,7 @@ import { makeStageEmitter, type StageEmitterExtra } from "./stage-emitter.js";
 import { ZodError, z } from "zod";
 import { RESOURCE_LISTS_CACHE_HINT } from "./cache-policy.js";
 import { CompatStdioServerTransport } from "./compat-stdio-transport.js";
-import {
-  registerAppTool as registerAppToolDirect,
-  registerExpertTool as registerExpertToolDirect
-} from "./registration-adapter.js";
+import { registerAliasTool as registerAliasToolDirect } from "./registration-adapter.js";
 
 import { objectResult } from "./mcp-helpers.js";
 import { prepareToolInput } from "./tool-input.js";
@@ -40,7 +37,7 @@ import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
 import { SourceService } from "./source-service.js";
 import { reportedResolveNamespace } from "./source/artifact-resolver.js";
-import { ToolExecutionGate } from "./tool-execution-gate.js";
+import { heavyToolExecutionGate } from "./tool-execution-gate.js";
 import { SERVER_IDENTITY, SERVER_VERSION } from "./server-identity.js";
 import { STDIO_WORKER_MODE_ENV } from "./stdio-supervisor.js";
 import { capWarningDetailsForSummary, classifyWarnings } from "./warning-details.js";
@@ -48,36 +45,30 @@ import type { ArtifactScope } from "./types.js";
 import { WorkspaceMappingService } from "./workspace-mapping-service.js";
 import {
   InspectMinecraftService,
-  inspectMinecraftSchema,
-  inspectMinecraftShape
+  inspectMinecraftSchema
 } from "./entry-tools/inspect-minecraft-service.js";
 import {
   AnalyzeSymbolService,
-  analyzeSymbolSchema,
-  analyzeSymbolShape
+  analyzeSymbolSchema
 } from "./entry-tools/analyze-symbol-service.js";
 import {
   CompareMinecraftService,
-  compareMinecraftSchema,
-  compareMinecraftShape
+  compareMinecraftSchema
 } from "./entry-tools/compare-minecraft-service.js";
 import {
   AnalyzeModService,
-  analyzeModSchema,
-  analyzeModShape
+  analyzeModSchema
 } from "./entry-tools/analyze-mod-service.js";
 import {
   ValidateProjectService,
   validateProjectSchema,
-  validateProjectShape,
   discoverWorkspaceAccessTransformers,
   discoverWorkspaceAccessWideners,
   discoverWorkspaceMixins
 } from "./entry-tools/validate-project-service.js";
 import {
   ManageCacheService,
-  manageCacheSchema,
-  manageCacheShape
+  manageCacheSchema
 } from "./entry-tools/manage-cache-service.js";
 import { VerifyMixinTargetService } from "./entry-tools/verify-mixin-target-service.js";
 import { BatchClassSourceService } from "./entry-tools/batch-class-source-service.js";
@@ -104,77 +95,55 @@ import {
   type SearchMatch,
   type SearchSymbolKind,
   analyzeModJarSchema,
-  analyzeModJarShape,
   batchClassMembersSchema,
-  batchClassMembersShape,
   batchClassSourceSchema,
-  batchClassSourceShape,
   batchMappingsSchema,
-  batchMappingsShape,
   batchSymbolExistsSchema,
-  batchSymbolExistsShape,
   checkSymbolExistsSchema,
-  checkSymbolExistsShape,
   compareVersionsSchema,
-  compareVersionsShape,
   decompileModJarSchema,
-  decompileModJarShape,
   diffClassSignaturesSchema,
-  diffClassSignaturesShape,
   emptySchema,
   findMappingSchema,
-  findMappingShape,
   getArtifactFileSchema,
-  getArtifactFileShape,
   getClassApiMatrixSchema,
-  getClassApiMatrixShape,
   getClassMembersSchema,
-  getClassMembersShape,
   getClassSourceSchema,
-  getClassSourceShape,
   getModClassSourceSchema,
-  getModClassSourceShape,
   getRegistryDataSchema,
-  getRegistryDataShape,
   indexArtifactSchema,
-  indexArtifactShape,
   jsonToNbtSchema,
-  jsonToNbtShape,
   listArtifactFilesSchema,
-  listArtifactFilesShape,
   listVersionsSchema,
-  listVersionsShape,
   nbtApplyJsonPatchSchema,
-  nbtApplyJsonPatchShape,
   nbtToJsonSchema,
-  nbtToJsonShape,
   remapModJarSchema,
-  remapModJarShape,
   resolveArtifactSchema,
-  resolveArtifactShape,
   resolveMethodMappingExactSchema,
-  resolveMethodMappingExactShape,
   resolveWorkspaceSymbolSchema,
-  resolveWorkspaceSymbolShape,
   searchClassSourceSchema,
-  searchClassSourceShape,
   searchModSourceSchema,
-  searchModSourceShape,
   traceSymbolLifecycleSchema,
-  traceSymbolLifecycleShape,
   validateAccessTransformerSchema,
-  validateAccessTransformerShape,
   validateAccessWidenerSchema,
-  validateAccessWidenerShape,
   validateMixinSchema,
-  validateMixinShape,
   verifyMixinTargetSchema,
-  verifyMixinTargetShape,
-  findClassShape,
   findClassSchema
 } from "./tool-schemas.js";
+import {
+  aliasDeprecation,
+  ALIAS_BATCH_TOOL_NAMES,
+  ALIAS_ENTRY_TOOL_NAMES,
+  ALIAS_HEAVY_TOOL_NAMES,
+  CATALOG_HEAVY_TOOL_NAMES,
+  isAliasToolName,
+  type AliasDeprecation
+} from "./tools/inventory.js";
+import { CATALOG_TOOL_SPECS } from "./tools/catalog.js";
+import { registerCatalogTool } from "./tools/registration.js";
+import type { CatalogRuntime, CatalogToolSpec } from "./tools/types.js";
 
-type ToolMeta = ToolGuidanceToolMeta;
+type ToolMeta = ToolGuidanceToolMeta & { deprecated?: AliasDeprecation };
 
 export { mapErrorToProblem, applyErrorMetaExtensions };
 
@@ -182,31 +151,10 @@ if (!process.env.NODE_ENV) {
   process.env.NODE_ENV = "production";
 }
 
-const HEAVY_TOOL_NAMES = new Set([
-  "trace-symbol-lifecycle",
-  "diff-class-signatures",
-  "compare-versions",
-  "find-mapping",
-  "resolve-method-mapping-exact",
-  "get-class-api-matrix",
-  "get-registry-data"
-]);
-const ENTRY_TOOL_NAMES = new Set([
-  "inspect-minecraft",
-  "analyze-symbol",
-  "compare-minecraft",
-  "analyze-mod",
-  "validate-project",
-  "manage-cache"
-]);
+const HEAVY_TOOL_NAMES = new Set([...ALIAS_HEAVY_TOOL_NAMES]);
+const ENTRY_TOOL_NAMES = new Set([...ALIAS_ENTRY_TOOL_NAMES]);
 // Batch tools self-project per entry but report the applied detail at the top level.
-const BATCH_DETAIL_TOOL_NAMES = new Set([
-  "batch-class-source",
-  "batch-class-members",
-  "batch-symbol-exists",
-  "batch-mappings"
-]);
-const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });
+const BATCH_DETAIL_TOOL_NAMES = new Set([...ALIAS_BATCH_TOOL_NAMES]);
 
 
 // Server identity ({name, version}) comes from the canonical module shared
@@ -218,11 +166,11 @@ const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueu
 // The McpServer instance is constructed per serveStdio factory call inside
 // buildServer() below; module scope keeps only the shared services/config.
 
-// Tool registration goes through src/registration-adapter.ts: a
-// validation-bypassing Standard Schema adapter keeps runTool() the single
-// source of truth for validation and error envelopes, and serves the frozen
-// pre-migration inputSchema bytes (src/v1-parity-schemas.ts) in tools/list.
-// registerExpertTool() appends the expert-tool note to the description.
+// The 8.x tools register as deprecated aliases through
+// src/registration-adapter.ts: a validation-bypassing Standard Schema adapter
+// keeps runTool() the single source of truth for validation and error
+// envelopes, tools/list shows a minimal deprecation entry, and every reply
+// gains meta.deprecated. MCP_DEPRECATED_TOOLS=off leaves them unregistered.
 
 const config = loadConfig();
 const nbtLimits = {
@@ -256,6 +204,18 @@ function recordToolCallBestEffort(tool: string, durationMs: number): void {
     });
   }
 }
+
+// Catalog calls share the 8.x tools' heavy-tool gate (one queue protects one
+// machine) and record per-tool call metrics through the same path.
+const catalogRuntime: CatalogRuntime = {
+  heavyGate: heavyToolExecutionGate,
+  isHeavy: (tool) => CATALOG_HEAVY_TOOL_NAMES.has(tool),
+  recordToolCall: recordToolCallBestEffort,
+  sqlitePath: config.sqlitePath,
+  services: sourceService,
+  config,
+  stageEmitterFor: (ctx) => makeStageEmitter(ctx !== undefined ? stageEmitterExtraFromCtx(ctx) : undefined)
+};
 
 const workspaceMappingService = new WorkspaceMappingService();
 const inspectMinecraftService = new InspectMinecraftService({
@@ -605,7 +565,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
         tool,
         durationMs,
         ...(warnings.length > 0 ? { warnings } : {}),
-        ...(warningDetails.length > 0 ? { warningDetails } : {})
+        ...(warningDetails.length > 0 ? { warningDetails } : {}),
+        deprecated: aliasDeprecation(tool, rawInput)
       } satisfies ToolMeta
     });
   } catch (caughtError) {
@@ -673,11 +634,38 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
       durationMs: errorDurationMs
     };
     applyErrorMetaExtensions(errorMeta, reportedError);
+    errorMeta.deprecated = aliasDeprecation(tool, rawInput);
     return objectResult({
       error: problem,
       meta: errorMeta
     }, { isError: true });
   }
+}
+
+/**
+ * The `instructions` primer for AI agents: the shared vocabulary of the
+ * catalog tools in a few sentences. The SDK sends it in the legacy
+ * `initialize` result and in the modern `server/discover` result. Tool
+ * descriptions stay self-sufficient for clients that do not show it.
+ */
+const CATALOG_PRIMER = [
+  "The catalog tools are listed first.",
+  "Each answers one kind of question and rejects an unknown argument key with `ERR_INVALID_INPUT` naming the key.",
+  "`target` says where to look.",
+  "`mapping` names the namespace of the names in a call; tools that would otherwise have to assume one require it.",
+  "Catalog replies are `{ result, meta }`, or `{ error, meta }` on failure.",
+  "`meta.nextActions` holds follow-up calls ready to send; one with `template: true` has `<placeholder>` values to fill in first.",
+  "`meta.warnings` says what you should know."
+].join(" ");
+
+/** The primer's last sentence, sent only while the 8.x aliases are served. */
+const ALIAS_PRIMER =
+  "The 8.x tools listed after them are deprecated aliases, removed in 10.0.0; " +
+  "their replies name the catalog tools to use in `meta.deprecated.replacedBy`.";
+
+/** The primer text for a server that serves the 8.x aliases or leaves them out. */
+function serverInstructions(deprecatedToolsEnabled: boolean): string {
+  return deprecatedToolsEnabled ? `${CATALOG_PRIMER} ${ALIAS_PRIMER}` : CATALOG_PRIMER;
 }
 
 /**
@@ -701,7 +689,8 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
  * documented era-parameterized factory seam; the v2 SDK itself emits
  * registration order and never sorts). Each instance serves exactly one era,
  * so the two orders can never mix on one connection. (Adopted ordering
- * policy.)
+ * policy.) Catalog tools (`catalogSpecs`) register as their own group ahead of
+ * the 8.x tools, ordered by the same era rule within the group.
  *
  * Cache hints (adopted policy, src/cache-policy.ts): the constructor options
  * configure the non-zero resources/list + resources/templates/list rows;
@@ -712,7 +701,10 @@ async function runTool<TInput, TResult extends Record<string, unknown>>(
  * indentation of the registration block to preserve a reviewable minimal diff.
  */
 // eslint-disable-next-line func-style
-function buildServer(ctx?: McpRequestContext): McpServer {
+function buildServer(
+  ctx?: McpRequestContext,
+  catalogSpecs: readonly CatalogToolSpec[] = CATALOG_TOOL_SPECS
+): McpServer {
 const server = new McpServer({
   name: SERVER_IDENTITY.name,
   version: SERVER_IDENTITY.version
@@ -740,44 +732,51 @@ const server = new McpServer({
   cacheHints: {
     "resources/list": RESOURCE_LISTS_CACHE_HINT,
     "resources/templates/list": RESOURCE_LISTS_CACHE_HINT
-  }
+  },
+  instructions: serverInstructions(config.deprecatedToolsEnabled)
 });
 
 registerResources(server, sourceService);
 
-// Deferred tool-registration capture: the adapter imports are RENAMED to
-// registerAppToolDirect/registerExpertToolDirect, and these local wrapper
-// functions take the original names, so every call site below records
-// {name, thunk} in call-site order; the executor at the bottom of this
-// function replays them in the era-appropriate order.
-const pendingToolRegistrations: Array<{ name: string; register: () => void }> = [];
-const registerAppTool: typeof registerAppToolDirect = (srv, name, description, shape, annotations, handler) => {
+// Deferred tool-registration capture: the adapter import is RENAMED to
+// registerAliasToolDirect, and this local wrapper function takes the original
+// name, so every call site below records {name, thunk} in call-site order;
+// the executor at the bottom of this function replays them in the
+// era-appropriate order. With MCP_DEPRECATED_TOOLS=off the aliases record
+// nothing, so they are neither listed nor callable.
+const pendingToolRegistrations: Array<{ name: string; register: () => void; catalog?: true }> = [];
+const registerAliasTool: typeof registerAliasToolDirect = (srv, name, annotations, handler) => {
+  if (!config.deprecatedToolsEnabled) return;
   pendingToolRegistrations.push({
     name,
-    register: () => registerAppToolDirect(srv, name, description, shape, annotations, handler)
-  });
-};
-const registerExpertTool: typeof registerExpertToolDirect = (srv, name, description, shape, annotations, handler) => {
-  pendingToolRegistrations.push({
-    name,
-    register: () => registerExpertToolDirect(srv, name, description, shape, annotations, handler)
+    register: () => registerAliasToolDirect(srv, name, annotations, handler)
   });
 };
 
 // The app-level schema registry (tool-schema-registry) is register-once and
 // module-scoped: the eager `buildServer()` call at the bottom of this module
 // populates it at load time; re-builds (one per serveStdio instance) skip
-// re-registration so the registry never sees a duplicate.
+// re-registration so the registry never sees a duplicate. With the aliases
+// switched off their names stay out of the registry, so the supervisor
+// answers a legacy-era call to one as an unknown tool.
 const registerToolSchema = (
   name: string,
   schema: Parameters<typeof registerToolSchemaInRegistry>[1]
 ): void => {
+  if (!config.deprecatedToolsEnabled && isAliasToolName(name)) return;
   if (getToolSchema(name) === undefined) registerToolSchemaInRegistry(name, schema);
 };
 
-registerExpertTool(server, "list-versions",
-  "List available Minecraft versions from Mojang manifest and locally cached version jars.",
-  listVersionsShape,
+for (const spec of catalogSpecs) {
+  pendingToolRegistrations.push({
+    name: spec.name,
+    catalog: true,
+    register: () => registerCatalogTool(server, spec, catalogRuntime)
+  });
+  registerToolSchema(spec.name, spec.inputSchema);
+}
+
+registerAliasTool(server, "list-versions",
   { readOnlyHint: true },
   async (args) => runTool("list-versions", args, listVersionsSchema, async (input) =>
     sourceService.listVersions({
@@ -788,9 +787,7 @@ registerExpertTool(server, "list-versions",
 );
 registerToolSchema("list-versions", listVersionsSchema);
 
-registerAppTool(server, "inspect-minecraft",
-  "Top-level workflow tool for version discovery, artifact resolution, class inspection, source search, file reads, and file listings. Workspace subject.focus is a structured class/file/search object, never a string; task=auto dispatches from subject.kind and focus.kind.",
-  inspectMinecraftShape,
+registerAliasTool(server, "inspect-minecraft",
   { readOnlyHint: true },
   async (args) => runTool("inspect-minecraft", args, inspectMinecraftSchema, async (input) =>
     inspectMinecraftService.execute(input as z.infer<typeof inspectMinecraftSchema>) as Promise<Record<string, unknown>>
@@ -798,9 +795,7 @@ registerAppTool(server, "inspect-minecraft",
 );
 registerToolSchema("inspect-minecraft", inspectMinecraftSchema);
 
-registerAppTool(server, "analyze-symbol",
-  "Top-level workflow tool for symbol existence, mapping, lifecycle, workspace analysis, and API overview. subject.kind='symbol' auto-detects class/field/method from the selector.",
-  analyzeSymbolShape,
+registerAliasTool(server, "analyze-symbol",
   { readOnlyHint: true },
   async (args) => runTool("analyze-symbol", args, analyzeSymbolSchema, async (input) =>
     analyzeSymbolService.execute(input as z.infer<typeof analyzeSymbolSchema>) as Promise<Record<string, unknown>>
@@ -808,9 +803,7 @@ registerAppTool(server, "analyze-symbol",
 );
 registerToolSchema("analyze-symbol", analyzeSymbolSchema);
 
-registerAppTool(server, "compare-minecraft",
-  "Top-level workflow tool for version comparisons, class diffs, registry diffs, and migration overviews.",
-  compareMinecraftShape,
+registerAliasTool(server, "compare-minecraft",
   { readOnlyHint: true },
   async (args) => runTool("compare-minecraft", args, compareMinecraftSchema, async (input) =>
     compareMinecraftService.execute(input as z.infer<typeof compareMinecraftSchema>) as Promise<Record<string, unknown>>
@@ -818,9 +811,7 @@ registerAppTool(server, "compare-minecraft",
 );
 registerToolSchema("compare-minecraft", compareMinecraftSchema);
 
-registerAppTool(server, "analyze-mod",
-  "Top-level workflow tool for mod metadata inspection, decompile/search flows, class source, bytecode-only class member reads, and safe remap previews/applies.",
-  analyzeModShape,
+registerAliasTool(server, "analyze-mod",
   { readOnlyHint: false },
   async (args) => runTool("analyze-mod", args, analyzeModSchema, async (input) =>
     analyzeModService.execute(input as z.infer<typeof analyzeModSchema>) as Promise<Record<string, unknown>>
@@ -828,9 +819,7 @@ registerAppTool(server, "analyze-mod",
 );
 registerToolSchema("analyze-mod", analyzeModSchema);
 
-registerAppTool(server, "validate-project",
-  "Top-level workflow tool for project summary, direct mixin validation, and access widener/access transformer validation.",
-  validateProjectShape,
+registerAliasTool(server, "validate-project",
   { readOnlyHint: true },
   async (args, ctx) => runTool("validate-project", args, validateProjectSchema, async (input) =>
     validateProjectService.execute(input as z.infer<typeof validateProjectSchema>, {
@@ -840,9 +829,7 @@ registerAppTool(server, "validate-project",
 );
 registerToolSchema("validate-project", validateProjectSchema);
 
-registerAppTool(server, "manage-cache",
-  "Top-level workflow tool for cache summaries, listing, verification, previewed mutation, and explicit apply operations.",
-  manageCacheShape,
+registerAliasTool(server, "manage-cache",
   { readOnlyHint: false },
   async (args) => runTool("manage-cache", args, manageCacheSchema, async (input) =>
     manageCacheService.execute(input as z.infer<typeof manageCacheSchema>) as Promise<Record<string, unknown>>
@@ -850,9 +837,7 @@ registerAppTool(server, "manage-cache",
 );
 registerToolSchema("manage-cache", manageCacheSchema);
 
-registerAppTool(server, "verify-mixin-target",
-  "Single-call probe: does this target owner / member exist and which @Shadow / @Accessor / @Invoker should the mixin use? Reuses target.kind workspace/version/coordinate/dependency/jar.",
-  verifyMixinTargetShape,
+registerAliasTool(server, "verify-mixin-target",
   { readOnlyHint: true },
   async (args) => runTool("verify-mixin-target", args, verifyMixinTargetSchema, async (input) =>
     verifyMixinTargetService.execute({
@@ -873,9 +858,7 @@ registerAppTool(server, "verify-mixin-target",
 );
 registerToolSchema("verify-mixin-target", verifyMixinTargetSchema);
 
-registerAppTool(server, "batch-class-source",
-  "Batch get-class-source for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary. Not read-only: per-entry outputFile writes to disk.",
-  batchClassSourceShape,
+registerAliasTool(server, "batch-class-source",
   { readOnlyHint: false },
   async (args) => runTool("batch-class-source", args, batchClassSourceSchema, async (input) =>
     batchClassSourceService.execute(input as z.infer<typeof batchClassSourceSchema>) as unknown as Promise<Record<string, unknown>>
@@ -883,9 +866,7 @@ registerAppTool(server, "batch-class-source",
 );
 registerToolSchema("batch-class-source", batchClassSourceSchema);
 
-registerAppTool(server, "batch-class-members",
-  "Batch get-class-members for many classes sharing one resolved artifact; returns per-entry status plus aggregate summary.",
-  batchClassMembersShape,
+registerAliasTool(server, "batch-class-members",
   { readOnlyHint: true },
   async (args) => runTool("batch-class-members", args, batchClassMembersSchema, async (input) =>
     batchClassMembersService.execute(input as z.infer<typeof batchClassMembersSchema>) as unknown as Promise<Record<string, unknown>>
@@ -893,9 +874,7 @@ registerAppTool(server, "batch-class-members",
 );
 registerToolSchema("batch-class-members", batchClassMembersSchema);
 
-registerAppTool(server, "batch-symbol-exists",
-  "Batch check-symbol-exists for many symbols against one shared Minecraft version (target.kind=version or workspace only).",
-  batchSymbolExistsShape,
+registerAliasTool(server, "batch-symbol-exists",
   { readOnlyHint: true },
   async (args) => runTool("batch-symbol-exists", args, batchSymbolExistsSchema, async (input) =>
     batchSymbolExistsService.execute(input as z.infer<typeof batchSymbolExistsSchema>) as unknown as Promise<Record<string, unknown>>
@@ -903,9 +882,7 @@ registerAppTool(server, "batch-symbol-exists",
 );
 registerToolSchema("batch-symbol-exists", batchSymbolExistsSchema);
 
-registerAppTool(server, "batch-mappings",
-  "Batch find-mapping: resolve many symbols across mapping namespaces with one shared Minecraft version.",
-  batchMappingsShape,
+registerAliasTool(server, "batch-mappings",
   { readOnlyHint: true },
   async (args) => runTool("batch-mappings", args, batchMappingsSchema, async (input) =>
     batchMappingsService.execute(input as z.infer<typeof batchMappingsSchema>) as unknown as Promise<Record<string, unknown>>
@@ -913,9 +890,7 @@ registerAppTool(server, "batch-mappings",
 );
 registerToolSchema("batch-mappings", batchMappingsSchema);
 
-registerExpertTool(server, "resolve-artifact",
-  "Resolve a source artifact and return artifact metadata. For target.kind=jar, only <basename>-sources.jar is auto-adopted.",
-  resolveArtifactShape,
+registerAliasTool(server, "resolve-artifact",
   { readOnlyHint: true },
   async (args) => runTool("resolve-artifact", args, resolveArtifactSchema, async (input) => {
     const output = await sourceService.resolveArtifact({
@@ -968,9 +943,7 @@ async function resolveFlatArtifactId(input: {
   return resolved.artifactId;
 }
 
-registerExpertTool(server, "find-class",
-  "Resolve a simple or qualified class name to fully-qualified class names within an artifact. Use this before get-class-source when you only have a simple name.",
-  findClassShape,
+registerAliasTool(server, "find-class",
   { readOnlyHint: true },
   async (args) => runTool("find-class", args, findClassSchema, async (input) =>
     sourceService.findClassIncludingNested({
@@ -982,9 +955,7 @@ registerExpertTool(server, "find-class",
 );
 registerToolSchema("find-class", findClassSchema);
 
-registerExpertTool(server, "get-class-source",
-  "Get Java source for a class. Default mode=metadata returns a symbol outline only; pass mode=snippet or mode=full to read source text. Not read-only: outputFile writes to disk.",
-  getClassSourceShape,
+registerAliasTool(server, "get-class-source",
   { readOnlyHint: false },
   async (args) => runTool("get-class-source", args, getClassSourceSchema, async (input) => {
     const normalizedTarget = normalizeSourceLookupTarget(input.target as SourceLookupTargetInput);
@@ -1013,9 +984,7 @@ registerExpertTool(server, "get-class-source",
 );
 registerToolSchema("get-class-source", getClassSourceSchema);
 
-registerExpertTool(server, "get-class-members",
-  "Get fields/methods/constructors for one class from binary bytecode.",
-  getClassMembersShape,
+registerAliasTool(server, "get-class-members",
   { readOnlyHint: true },
   async (args) => runTool("get-class-members", args, getClassMembersSchema, async (input) => {
     const normalizedTarget = normalizeSourceLookupTarget(input.target as SourceLookupTargetInput);
@@ -1051,9 +1020,7 @@ registerExpertTool(server, "get-class-members",
 );
 registerToolSchema("get-class-members", getClassMembersSchema);
 
-registerExpertTool(server, "search-class-source",
-  "Search indexed class source files for one artifact with symbol/text/path intent and compact hit output. Decompiled text can differ from hand-written code (`final` parameters, `@Nullable` between modifiers and type, wrapped declarations), so search for a method by its name or with intent `symbol`, not by its full declaration.",
-  searchClassSourceShape,
+registerAliasTool(server, "search-class-source",
   { readOnlyHint: true },
   async (args) => runTool("search-class-source", args, searchClassSourceSchema, async (input) => {
       const scope =
@@ -1088,9 +1055,7 @@ registerExpertTool(server, "search-class-source",
 );
 registerToolSchema("search-class-source", searchClassSourceSchema);
 
-registerExpertTool(server, "get-artifact-file",
-  "Get full source file content by artifactId and file path.",
-  getArtifactFileShape,
+registerAliasTool(server, "get-artifact-file",
   { readOnlyHint: true },
   async (args) => runTool("get-artifact-file", args, getArtifactFileSchema, async (input) =>
     sourceService.getArtifactFile({
@@ -1102,9 +1067,7 @@ registerExpertTool(server, "get-artifact-file",
 );
 registerToolSchema("get-artifact-file", getArtifactFileSchema);
 
-registerExpertTool(server, "list-artifact-files",
-  "List source file paths in an artifact with optional prefix filter and cursor-based pagination.",
-  listArtifactFilesShape,
+registerAliasTool(server, "list-artifact-files",
   { readOnlyHint: true },
   async (args) => runTool("list-artifact-files", args, listArtifactFilesSchema, async (input) =>
     sourceService.listArtifactFiles({
@@ -1117,9 +1080,7 @@ registerExpertTool(server, "list-artifact-files",
 );
 registerToolSchema("list-artifact-files", listArtifactFilesSchema);
 
-registerExpertTool(server, "trace-symbol-lifecycle",
-  "Trace which Minecraft versions contain a specific class method and report first/last seen versions.",
-  traceSymbolLifecycleShape,
+registerAliasTool(server, "trace-symbol-lifecycle",
   { readOnlyHint: true },
   async (args) => runTool("trace-symbol-lifecycle", args, traceSymbolLifecycleSchema, async (input) =>
     sourceService.traceSymbolLifecycle({
@@ -1138,9 +1099,7 @@ registerExpertTool(server, "trace-symbol-lifecycle",
 );
 registerToolSchema("trace-symbol-lifecycle", traceSymbolLifecycleSchema);
 
-registerExpertTool(server, "diff-class-signatures",
-  "Compare one class signature between two Minecraft versions and report added/removed/modified constructors, methods, and fields.",
-  diffClassSignaturesShape,
+registerAliasTool(server, "diff-class-signatures",
   { readOnlyHint: true },
   async (args) => runTool("diff-class-signatures", args, diffClassSignaturesSchema, async (input) =>
     sourceService.diffClassSignatures({
@@ -1156,9 +1115,7 @@ registerExpertTool(server, "diff-class-signatures",
 );
 registerToolSchema("diff-class-signatures", diffClassSignaturesSchema);
 
-registerExpertTool(server, "find-mapping",
-  "Find symbol mapping candidates between namespaces using structured symbol inputs for a specific Minecraft version.",
-  findMappingShape,
+registerAliasTool(server, "find-mapping",
   { readOnlyHint: true },
   async (args) => runTool("find-mapping", args, findMappingSchema, async (input) =>
     sourceService.findMapping({
@@ -1180,9 +1137,7 @@ registerExpertTool(server, "find-mapping",
 );
 registerToolSchema("find-mapping", findMappingSchema);
 
-registerExpertTool(server, "resolve-method-mapping-exact",
-  "Strict variant of find-mapping(kind=method, signatureMode=exact): requires a COMPLETE descriptor projection and returns mapping_unavailable when any descriptor class reference cannot be projected. Prefer find-mapping unless you need that guarantee.",
-  resolveMethodMappingExactShape,
+registerAliasTool(server, "resolve-method-mapping-exact",
   { readOnlyHint: true },
   async (args) => runTool("resolve-method-mapping-exact", args, resolveMethodMappingExactSchema, async (input) =>
     sourceService.resolveMethodMappingExact({
@@ -1200,9 +1155,7 @@ registerExpertTool(server, "resolve-method-mapping-exact",
 );
 registerToolSchema("resolve-method-mapping-exact", resolveMethodMappingExactSchema);
 
-registerExpertTool(server, "get-class-api-matrix",
-  "List class/member API rows across obfuscated/mojang/intermediary/yarn mappings for one class and Minecraft version.",
-  getClassApiMatrixShape,
+registerAliasTool(server, "get-class-api-matrix",
   { readOnlyHint: true },
   async (args) => runTool("get-class-api-matrix", args, getClassApiMatrixSchema, async (input) =>
     sourceService.getClassApiMatrix({
@@ -1219,9 +1172,7 @@ registerExpertTool(server, "get-class-api-matrix",
 );
 registerToolSchema("get-class-api-matrix", getClassApiMatrixSchema);
 
-registerExpertTool(server, "resolve-workspace-symbol",
-  "Resolve class/field/method names as seen at compile time for a workspace by reading Gradle Loom mapping settings.",
-  resolveWorkspaceSymbolShape,
+registerAliasTool(server, "resolve-workspace-symbol",
   { readOnlyHint: true },
   async (args) => runTool("resolve-workspace-symbol", args, resolveWorkspaceSymbolSchema, async (input) =>
     sourceService.resolveWorkspaceSymbol({
@@ -1240,9 +1191,7 @@ registerExpertTool(server, "resolve-workspace-symbol",
 );
 registerToolSchema("resolve-workspace-symbol", resolveWorkspaceSymbolSchema);
 
-registerExpertTool(server, "check-symbol-exists",
-  "Check whether a class/field/method symbol exists in a specific mapping namespace for one Minecraft version.",
-  checkSymbolExistsShape,
+registerAliasTool(server, "check-symbol-exists",
   { readOnlyHint: true },
   async (args) => runTool("check-symbol-exists", args, checkSymbolExistsSchema, async (input) =>
     sourceService.checkSymbolExists({
@@ -1262,9 +1211,7 @@ registerExpertTool(server, "check-symbol-exists",
 );
 registerToolSchema("check-symbol-exists", checkSymbolExistsSchema);
 
-registerAppTool(server, "nbt-to-json",
-  "Decode Java Edition NBT binary payload (base64) into typed JSON.",
-  nbtToJsonShape,
+registerAliasTool(server, "nbt-to-json",
   { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("nbt-to-json", args, nbtToJsonSchema, async (input) =>
     Promise.resolve(
@@ -1277,9 +1224,7 @@ registerAppTool(server, "nbt-to-json",
 );
 registerToolSchema("nbt-to-json", nbtToJsonSchema);
 
-registerAppTool(server, "nbt-apply-json-patch",
-  "Apply RFC6902 add/remove/replace/test operations to typed NBT JSON.",
-  nbtApplyJsonPatchShape,
+registerAliasTool(server, "nbt-apply-json-patch",
   { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("nbt-apply-json-patch", args, nbtApplyJsonPatchSchema, async (input) =>
     Promise.resolve(
@@ -1292,9 +1237,7 @@ registerAppTool(server, "nbt-apply-json-patch",
 );
 registerToolSchema("nbt-apply-json-patch", nbtApplyJsonPatchSchema);
 
-registerAppTool(server, "json-to-nbt",
-  "Encode typed NBT JSON to Java Edition NBT binary payload (base64).",
-  jsonToNbtShape,
+registerAliasTool(server, "json-to-nbt",
   { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("json-to-nbt", args, jsonToNbtSchema, async (input) =>
     Promise.resolve(
@@ -1307,9 +1250,7 @@ registerAppTool(server, "json-to-nbt",
 );
 registerToolSchema("json-to-nbt", jsonToNbtSchema);
 
-registerExpertTool(server, "index-artifact",
-  "Rebuild indexed files/symbols metadata for an artifact addressed by artifactId or target. A new target is resolved and ingested first; force rebuilds an existing index.",
-  indexArtifactShape,
+registerAliasTool(server, "index-artifact",
   { readOnlyHint: false, idempotentHint: true },
   async (args) => runTool("index-artifact", args, indexArtifactSchema, async (input) =>
     sourceService.indexArtifact({
@@ -1320,9 +1261,7 @@ registerExpertTool(server, "index-artifact",
 );
 registerToolSchema("index-artifact", indexArtifactSchema);
 
-registerAppTool(server, "get-runtime-metrics",
-  "Get runtime service counters and latency snapshots for cache/search/index diagnostics.",
-  {},
+registerAliasTool(server, "get-runtime-metrics",
   { readOnlyHint: true, openWorldHint: false },
   async (args) => runTool("get-runtime-metrics", args, emptySchema, async () =>
     Promise.resolve(sourceService.getRuntimeMetrics() as unknown as Record<string, unknown>)
@@ -1330,9 +1269,7 @@ registerAppTool(server, "get-runtime-metrics",
 );
 registerToolSchema("get-runtime-metrics", emptySchema);
 
-registerExpertTool(server, "validate-mixin",
-  "Validate Mixin source against Minecraft bytecode signatures for a given version.",
-  validateMixinShape,
+registerAliasTool(server, "validate-mixin",
   { readOnlyHint: true },
   async (args, ctx) => runTool("validate-mixin", args, validateMixinSchema, async (input) =>
     sourceService.validateMixin({
@@ -1361,9 +1298,7 @@ registerExpertTool(server, "validate-mixin",
 );
 registerToolSchema("validate-mixin", validateMixinSchema);
 
-registerExpertTool(server, "validate-access-widener",
-  "Validate Access Widener file entries against Minecraft bytecode signatures for a given version.",
-  validateAccessWidenerShape,
+registerAliasTool(server, "validate-access-widener",
   { readOnlyHint: true },
   async (args) => runTool("validate-access-widener", args, validateAccessWidenerSchema, async (input) =>
     sourceService.validateAccessWidener({
@@ -1380,9 +1315,7 @@ registerExpertTool(server, "validate-access-widener",
 );
 registerToolSchema("validate-access-widener", validateAccessWidenerSchema);
 
-registerExpertTool(server, "validate-access-transformer",
-  "Validate Access Transformer file entries against Minecraft bytecode signatures for a given version.",
-  validateAccessTransformerShape,
+registerAliasTool(server, "validate-access-transformer",
   { readOnlyHint: true },
   async (args) => runTool("validate-access-transformer", args, validateAccessTransformerSchema, async (input) =>
     sourceService.validateAccessTransformer({
@@ -1399,9 +1332,7 @@ registerExpertTool(server, "validate-access-transformer",
 );
 registerToolSchema("validate-access-transformer", validateAccessTransformerSchema);
 
-registerExpertTool(server, "analyze-mod-jar",
-  "Analyze a Minecraft mod JAR to extract loader type, metadata, entrypoints, mixins, and dependencies.",
-  analyzeModJarShape,
+registerAliasTool(server, "analyze-mod-jar",
   { readOnlyHint: true },
   async (args) => runTool("analyze-mod-jar", args, analyzeModJarSchema, async (input) => {
     const result = await analyzeModJar(input.jarPath, {
@@ -1412,9 +1343,7 @@ registerExpertTool(server, "analyze-mod-jar",
 );
 registerToolSchema("analyze-mod-jar", analyzeModJarSchema);
 
-registerAppTool(server, "get-registry-data",
-  "Get Minecraft registry data (blocks, items, biomes, etc.) for a specific version by running the server data generator.",
-  getRegistryDataShape,
+registerAliasTool(server, "get-registry-data",
   { readOnlyHint: true },
   async (args) => runTool("get-registry-data", args, getRegistryDataSchema, async (input) =>
     sourceService.getRegistryData({
@@ -1427,9 +1356,7 @@ registerAppTool(server, "get-registry-data",
 );
 registerToolSchema("get-registry-data", getRegistryDataSchema);
 
-registerExpertTool(server, "compare-versions",
-  "Compare two Minecraft versions to find added/removed classes and registry entry changes.",
-  compareVersionsShape,
+registerAliasTool(server, "compare-versions",
   { readOnlyHint: true },
   async (args) => runTool("compare-versions", args, compareVersionsSchema, async (input) =>
     sourceService.compareVersions({
@@ -1443,9 +1370,7 @@ registerExpertTool(server, "compare-versions",
 );
 registerToolSchema("compare-versions", compareVersionsSchema);
 
-registerExpertTool(server, "decompile-mod-jar",
-  "Decompile a Minecraft mod JAR using Vineflower and list available classes, or view a specific class source. Builds on analyze-mod-jar.",
-  decompileModJarShape,
+registerAliasTool(server, "decompile-mod-jar",
   { readOnlyHint: true },
   async (args) => runTool("decompile-mod-jar", args, decompileModJarSchema, async (input) =>
     sourceService.decompileModJar({
@@ -1458,9 +1383,7 @@ registerExpertTool(server, "decompile-mod-jar",
 );
 registerToolSchema("decompile-mod-jar", decompileModJarSchema);
 
-registerExpertTool(server, "get-mod-class-source",
-  "Get decompiled source code for a specific class in a mod JAR. The mod JAR will be decompiled if not already cached. Not read-only: outputFile writes the source to disk.",
-  getModClassSourceShape,
+registerAliasTool(server, "get-mod-class-source",
   { readOnlyHint: false },
   async (args) => runTool("get-mod-class-source", args, getModClassSourceSchema, async (input) =>
     sourceService.getModClassSource({
@@ -1474,9 +1397,7 @@ registerExpertTool(server, "get-mod-class-source",
 );
 registerToolSchema("get-mod-class-source", getModClassSourceSchema);
 
-registerExpertTool(server, "search-mod-source",
-  "Search through decompiled mod JAR source code by class name, method, field, or content pattern. The mod JAR will be decompiled automatically if not already cached.",
-  searchModSourceShape,
+registerAliasTool(server, "search-mod-source",
   { readOnlyHint: true },
   async (args) => runTool("search-mod-source", args, searchModSourceSchema, async (input) =>
     sourceService.searchModSource({
@@ -1489,9 +1410,7 @@ registerExpertTool(server, "search-mod-source",
 );
 registerToolSchema("search-mod-source", searchModSourceSchema);
 
-registerExpertTool(server, "remap-mod-jar",
-  "Remap a Fabric mod JAR from intermediary to yarn/mojang names. Requires Java to be installed.",
-  remapModJarShape,
+registerAliasTool(server, "remap-mod-jar",
   { readOnlyHint: false },
   async (args) => runTool("remap-mod-jar", args, remapModJarSchema, async (input) => {
     const result = await remapModJar(
@@ -1509,16 +1428,21 @@ registerExpertTool(server, "remap-mod-jar",
 );
 registerToolSchema("remap-mod-jar", remapModJarSchema);
 
-// Deferred-registration executor: legacy (and the ctx-less module singleton)
-// keeps the frozen call-site order; a modern-era instance registers in raw
+// Deferred-registration executor: catalog tools first, then the 8.x tools.
+// Within each group, legacy (and the ctx-less module singleton) keeps the
+// frozen call-site order; a modern-era instance registers in raw
 // tool-name-ascending order (plain code-unit comparison — tool names are
 // ASCII, so this is byte order). The advertised tools/list order follows
 // registration order in the SDK, which is exactly what the two golden/pinned
 // contracts observe.
-const toolRegistrationOrder =
+const inEraOrder = (group: typeof pendingToolRegistrations): typeof pendingToolRegistrations =>
   ctx?.era === "modern"
-    ? [...pendingToolRegistrations].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    : pendingToolRegistrations;
+    ? [...group].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    : group;
+const toolRegistrationOrder = [
+  ...inEraOrder(pendingToolRegistrations.filter((pending) => pending.catalog === true)),
+  ...inEraOrder(pendingToolRegistrations.filter((pending) => pending.catalog !== true))
+];
 for (const pending of toolRegistrationOrder) pending.register();
 
 return server;
@@ -1600,4 +1524,4 @@ export async function startServer(): Promise<void> {
   serverStarted = true;
 }
 
-export { server, sourceService, config, SERVER_VERSION, buildServer };
+export { server, sourceService, config, SERVER_VERSION, buildServer, serverInstructions };

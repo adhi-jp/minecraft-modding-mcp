@@ -7,7 +7,7 @@ import test, { after, before } from "node:test";
 import { SERVER_INFO_META_KEY } from "@modelcontextprotocol/server";
 
 import { SERVER_IDENTITY } from "../../src/server-identity.ts";
-import { MODERN_META, startInProcessSession, type InProcessSession } from "./inprocess-era-serve.ts";
+import { MODERN_META, legacyHandshake, startInProcessSession, type InProcessSession } from "./inprocess-era-serve.ts";
 
 /**
  * Full server/discover contents (approved policy). The committed drift test
@@ -29,25 +29,36 @@ import { MODERN_META, startInProcessSession, type InProcessSession } from "./inp
  *    to the same value in
  *    tests/stdio/stdio-dependency-method-inventory.test.ts;
  *  - identity in result._meta[SERVER_INFO_META_KEY], never a body field;
+ *  - `instructions`: the primer for AI agents, the same text the legacy
+ *    `initialize` result carries; with the 8.x aliases served (the default)
+ *    it ends with the sentence naming them as deprecated aliases (the
+ *    switched-off text is pinned in tests/aliases/alias-toggle-off.test.ts);
  *  - resultType "complete";
  *  - adopted cache row: ttlMs 0, cacheScope "private".
  */
+
+/** The primer's last sentence while the 8.x aliases are served. */
+const ALIAS_SENTENCE =
+  /The 8\.x tools listed after them are deprecated aliases, removed in 10\.0\.0; their replies name the catalog tools to use in `meta\.deprecated\.replacedBy`\.$/;
 
 const root = mkdtempSync(join(tmpdir(), "p3-discover-"));
 process.env.MCP_CACHE_DIR = join(root, "cache");
 process.env.MCP_SQLITE_PATH = join(root, "cache", "source-cache.db");
 
 let modern: InProcessSession;
+let legacy: InProcessSession;
 
 before(async () => {
   modern = await startInProcessSession();
+  legacy = await startInProcessSession();
 });
 
 after(async () => {
   await modern?.close();
+  await legacy?.close();
 });
 
-test("server/discover advertises the complete approved contents (versions, capabilities, identity, resultType, cache row)", async () => {
+test("server/discover advertises the complete approved contents (versions, capabilities, instructions, identity, resultType, cache row)", async () => {
   const frame = await modern.request({
     jsonrpc: "2.0",
     id: "discover-contents",
@@ -79,13 +90,31 @@ test("server/discover advertises the complete approved contents (versions, capab
   );
   assert.equal("serverInfo" in result, false, "identity lives in _meta, never in a result body field");
 
+  const { serverInstructions } = await import("../../src/index.ts");
+  assert.equal(result.instructions, serverInstructions(true), "discover carries the primer for a server that serves the 8.x aliases");
+  assert.match(String(result.instructions), ALIAS_SENTENCE, "the primer ends with the deprecated-alias sentence");
+  assert.ok(String(result.instructions).length <= 700, "the primer stays short");
+
   assert.equal(result.resultType, "complete");
   assert.equal(result.ttlMs, 0, "adopted cache row: server/discover ttlMs 0");
   assert.equal(result.cacheScope, "private", "adopted cache row: server/discover cacheScope private");
 
   assert.deepEqual(
     Object.keys(result).sort(),
-    ["_meta", "cacheScope", "capabilities", "resultType", "supportedVersions", "ttlMs"],
+    ["_meta", "cacheScope", "capabilities", "instructions", "resultType", "supportedVersions", "ttlMs"],
     "the discover result top-level key set is closed"
+  );
+});
+
+test("the legacy initialize result carries the same instructions primer as server/discover", async () => {
+  const init = await legacyHandshake(legacy, "2025-06-18", "discover-contents-legacy-init");
+  assert.equal(init.error, undefined, "the legacy initialize must be served");
+  const { serverInstructions } = await import("../../src/index.ts");
+  assert.equal(init.result?.instructions, serverInstructions(true));
+  assert.match(String(init.result?.instructions), ALIAS_SENTENCE);
+  assert.deepEqual(
+    Object.keys(init.result ?? {}),
+    ["protocolVersion", "capabilities", "serverInfo", "instructions"],
+    "the initialize result adds instructions after serverInfo"
   );
 });

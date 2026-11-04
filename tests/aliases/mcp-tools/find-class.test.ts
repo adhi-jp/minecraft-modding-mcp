@@ -16,17 +16,6 @@ async function harness() {
   return import("../../helpers/mcp-tools-harness.ts");
 }
 
-test("find-class tools/list exposes workspace context for dependency targets", async () => {
-  const { listTools } = await harness();
-  const tool = (await listTools()).find((entry) => entry.name === "find-class");
-  const schema = tool?.inputSchema as {
-    properties?: { projectPath?: { description?: string } };
-  } | undefined;
-
-  assert.ok(tool);
-  assert.match(schema?.properties?.projectPath?.description ?? "", /workspace root/i);
-});
-
 test("find-class forwards projectPath while resolving a dependency version from a workspace", async () => {
   const project = join(integrationRoot, "workspace");
   await mkdir(project, { recursive: true });

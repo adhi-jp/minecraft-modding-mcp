@@ -15,27 +15,9 @@ import {
 } from "../helpers/manual-stdio-bridge.ts";
 import { longestDeclaredTestTimeoutMs, runWithIdleWatchdog } from "../helpers/suite-watchdog.ts";
 import type { ListVersionsOutput } from "../../src/version-service.ts";
+import { ALIAS_TOOL_NAMES, aliasInventoryEntry, CATALOG_TOOL_NAMES } from "../../src/tools/inventory.ts";
 
-const EXPECTED_TOOLS = [
-  "list-versions",
-  "resolve-artifact",
-  "get-class-source",
-  "search-class-source",
-  "get-artifact-file",
-  "trace-symbol-lifecycle",
-  "diff-class-signatures",
-  "find-mapping",
-  "resolve-method-mapping-exact",
-  "get-class-api-matrix",
-  "resolve-workspace-symbol",
-  "check-symbol-exists",
-  "index-artifact",
-  "verify-mixin-target",
-  "batch-class-source",
-  "batch-class-members",
-  "batch-symbol-exists",
-  "batch-mappings"
-] as const;
+const EXPECTED_TOOLS = [...CATALOG_TOOL_NAMES, ...ALIAS_TOOL_NAMES];
 
 type ErrorPayload = {
   type: string;
@@ -643,6 +625,35 @@ async function main(): Promise<boolean> {
     const resolved = requireToolOk<Record<string, unknown>>("resolve-artifact", resolveResult as never);
     const artifactId = asString(resolved.artifactId, "artifactId");
     assert.equal(asString(resolved.mappingApplied, "mappingApplied"), "obfuscated");
+    // Every 8.x alias reply names its catalog replacement and the release that removes it.
+    assert.deepEqual(
+      parseEnvelope("resolve-artifact", resolveResult as never).meta.deprecated,
+      { replacedBy: [...aliasInventoryEntry("resolve-artifact")!.replacedBy], removeIn: "10.0.0" },
+      "resolve-artifact reply carries meta.deprecated"
+    );
+
+    // One catalog tool on the same artifact: the catalog envelope, with the
+    // tool's own name in meta and no deprecation notice.
+    const sourceReadResult = await client.callTool({
+      name: "source-read",
+      arguments: {
+        target: { kind: "artifact", artifactId },
+        classes: ["net.minecraft.server.Main"],
+        mode: "full"
+      }
+    });
+    const sourceReadEnvelope = parseEnvelope("source-read", sourceReadResult as never);
+    if (!sourceReadEnvelope.ok) {
+      throw new Error(`source-read failed: ${sourceReadEnvelope.error.code} ${sourceReadEnvelope.error.detail}`);
+    }
+    assert.equal(sourceReadEnvelope.meta.tool, "source-read");
+    assert.equal("deprecated" in sourceReadEnvelope.meta, false, "a catalog reply carries no meta.deprecated");
+    assert.equal((sourceReadEnvelope.result.artifact as { artifactId?: unknown } | undefined)?.artifactId, artifactId);
+    const sourceReadItems = sourceReadEnvelope.result.items as Array<{ className?: unknown; status?: unknown; sourceText?: unknown }>;
+    assert.equal(sourceReadItems.length, 1, "source-read answers its one class");
+    assert.equal(sourceReadItems[0]?.className, "net.minecraft.server.Main");
+    assert.equal(sourceReadItems[0]?.status, "ok");
+    assert.match(asString(sourceReadItems[0]?.sourceText, "items[0].sourceText"), /tickServer/);
 
     const classSourceResult = await client.callTool({
       name: "get-class-source",

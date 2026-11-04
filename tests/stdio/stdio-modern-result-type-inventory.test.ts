@@ -11,7 +11,7 @@ import {
   type Frame,
   type InProcessSession
 } from "./inprocess-era-serve.ts";
-import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
+import { ALIAS_TOOL_NAMES, CATALOG_TOOL_NAMES } from "../../src/tools/inventory.ts";
 import { seedIndexedArtifact, stubExplorer } from "../helpers/seed-artifact.ts";
 
 /**
@@ -36,19 +36,21 @@ const ARTIFACT_ID = "p3-rt-artifact";
 const CLASS_FQN = "com.example.Probe";
 
 /**
- * Cheap tools/call arguments for tools whose advertised inputSchema has no
- * required fields ({} would VALIDATE and run the real tool). A wrong-typed
+ * Cheap tools/call arguments for tools whose registered validating schema
+ * accepts {} ({} would VALIDATE and run the real tool). A wrong-typed
  * known property fails validation deterministically before any heavy work;
- * get-runtime-metrics and json-to-nbt are cheap with {} (success and
- * custom-refine ProblemDetails respectively).
+ * get-runtime-metrics, server-metrics and json-to-nbt are cheap with {}
+ * (success, success and custom-refine ProblemDetails respectively).
  */
 const NO_REQUIRED_OVERRIDES: Record<string, Record<string, unknown>> = {
   "get-runtime-metrics": {},
+  "server-metrics": {},
   "json-to-nbt": {},
   "index-artifact": { artifactId: false },
   "inspect-minecraft": { task: false },
   "list-artifact-files": { limit: false },
-  "list-versions": { limit: false }
+  "list-versions": { limit: false },
+  "version-list": { limit: false }
 };
 
 /** Concrete cheap read URI per registered resource template. */
@@ -130,16 +132,22 @@ test("fixed representative set: discover, tools/list, resources/list, templates/
 
 test("registry-driven: every advertised tool answers a cheap tools/call with resultType complete", async () => {
   const list = await modern.request({ jsonrpc: "2.0", id: id(), method: "tools/list", params: { _meta: MODERN_META } });
-  const tools = list.result?.tools as Array<{ name: string; inputSchema?: { required?: string[] } }> | undefined;
+  const tools = list.result?.tools as Array<{ name: string }> | undefined;
   assert.ok(Array.isArray(tools), "tools/list must carry a tools array");
-  assert.equal(tools.length, EXPECTED_TOOLS.length, "the default flag config advertises every expected tool");
+  assert.deepEqual(
+    tools.map((tool) => tool.name).sort(),
+    [...CATALOG_TOOL_NAMES, ...ALIAS_TOOL_NAMES].sort(),
+    "the default flag config advertises every inventory tool"
+  );
 
+  // {} is cheap exactly when the registered validating schema rejects it (the
+  // call ends in ProblemDetails before any work); otherwise a curated input is needed.
+  const { validateToolParams } = await import("../../src/tool-schema-registry.ts");
   for (const tool of tools) {
-    const required = tool.inputSchema?.required ?? [];
-    const args = required.length > 0 ? {} : NO_REQUIRED_OVERRIDES[tool.name];
+    const args = validateToolParams(tool.name, {}).valid ? NO_REQUIRED_OVERRIDES[tool.name] : {};
     assert.ok(
       args !== undefined,
-      `tool ${tool.name} has no required fields and no curated cheap input — add it to NO_REQUIRED_OVERRIDES`
+      `tool ${tool.name} accepts {} and has no curated cheap input — add it to NO_REQUIRED_OVERRIDES`
     );
     const frame = await modern.request({
       jsonrpc: "2.0",

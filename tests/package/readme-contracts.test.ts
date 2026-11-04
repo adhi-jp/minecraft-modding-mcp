@@ -2,28 +2,76 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("README keeps Start Here section with summary-first guidance before the tool table", async () => {
+import { CATALOG_TOOL_SPECS } from "../../src/tools/catalog.ts";
+import { ALIAS_TOOL_INVENTORY, CATALOG_TOOL_NAMES } from "../../src/tools/inventory.ts";
+
+/** The lines of a `## ` section of a Markdown document, heading included. */
+function section(document: string, heading: string): string {
+  const start = document.indexOf(`\n${heading}\n`);
+  assert.ok(start >= 0, `the document has the section ${heading}`);
+  const end = document.indexOf("\n## ", start + 1);
+  return document.slice(start + 1, end < 0 ? undefined : end);
+}
+
+/** The tool names in the first column of the table that starts with the given header row. */
+function tableTools(text: string, header: string): string[] {
+  const lines = text.split("\n");
+  const start = lines.indexOf(header);
+  assert.ok(start >= 0, `the table ${header} exists`);
+  const tools: string[] = [];
+  for (const line of lines.slice(start + 2)) {
+    if (!line.startsWith("|")) break;
+    const name = /^\| `([a-z0-9-]+)` \|/.exec(line)?.[1];
+    assert.ok(name, `row ${line} names one tool`);
+    tools.push(name);
+  }
+  return tools;
+}
+
+/** Every fenced JSON request `{ "tool", "arguments" }` in the text. */
+function jsonRequests(text: string): Array<{ tool: string; arguments: Record<string, unknown> }> {
+  return [...text.matchAll(/```json\n([\s\S]*?)\n```/g)]
+    .map((match) => JSON.parse(match[1]!) as { tool?: unknown; arguments?: unknown })
+    .filter((request): request is { tool: string; arguments: Record<string, unknown> } => typeof request.tool === "string");
+}
+
+function assertCatalogStartHere(path: string, startHere: string, tableHeader: string): void {
+  const nextActionsIndex = startHere.indexOf("`meta.nextActions`");
+  const tableIndex = startHere.indexOf(tableHeader);
+  assert.ok(
+    nextActionsIndex !== -1 && tableIndex !== -1 && nextActionsIndex < tableIndex,
+    `${path}: the next-action guidance must appear before the tool table`
+  );
+  const tools = tableTools(startHere, tableHeader);
+  assert.ok(tools.length > 0, `${path}: the Start Here table names tools`);
+  for (const tool of tools) {
+    assert.ok(CATALOG_TOOL_NAMES.has(tool), `${path}: the Start Here table names the catalog tool ${tool}`);
+  }
+  const requests = jsonRequests(startHere);
+  // The common workflows keep an example: reading source and validating a workspace.
+  for (const tool of ["source-read", "project-validate"]) {
+    assert.ok(requests.some((request) => request.tool === tool), `${path}: Start Here shows a ${tool} request`);
+  }
+  for (const request of requests) {
+    const spec = CATALOG_TOOL_SPECS.find((entry) => entry.name === request.tool);
+    assert.ok(spec, `${path}: the example request calls the catalog tool ${request.tool}`);
+    const parsed = spec.inputSchema.safeParse(request.arguments);
+    assert.ok(parsed.success, `${path}: the ${request.tool} example validates: ${JSON.stringify(parsed.error?.issues)}`);
+  }
+}
+
+test("README Start Here leads with the catalog tools, next-action guidance and valid catalog requests", async () => {
   const readme = await readFile("README.md", "utf8");
-  const startHereSummaryIndex = readme.indexOf("result.summary");
-  const startHereTableIndex = readme.indexOf("| Tool | Start here for |");
 
   assert.match(readme, /MCP server for AI-assisted Minecraft modding workflows/);
   assert.match(readme, /Use it when an agent needs to inspect Minecraft source/);
-  assert.match(readme, /## Start Here/);
-  assert.match(readme, /`summary\.nextActions`/);
-  assert.ok(
-    startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex,
-    "summary guidance must appear before the tool table"
-  );
+  assertCatalogStartHere("README.md", section(readme, "## Start Here"), "| Tool | Start here for |");
   // Guard against reintroducing removed sections
   assert.doesNotMatch(readme, /Choosing a Starting Tool/);
   assert.doesNotMatch(readme, /- Start with `inspect-minecraft`/);
   // Quick reference to deeper docs must exist
   assert.match(readme, /docs\/examples\.md/);
   assert.match(readme, /docs\/tool-reference\.md/);
-  // Common workflow tools must be referenced
-  assert.match(readme, /"tool": "inspect-minecraft"/);
-  assert.match(readme, /"tool": "validate-project"/);
 });
 
 test("Tool reference owns exact contract, migration, and environment details", async () => {
@@ -58,19 +106,12 @@ test("Tool reference owns exact contract, migration, and environment details", a
   assert.match(toolReference, /`MCP_TINY_REMAPPER_JAR_PATH`/);
 });
 
-test("Japanese README stays overview-first with summary-first guidance and natural Japanese", async () => {
+test("Japanese README stays overview-first, leads with the catalog tools and uses natural Japanese", async () => {
   const readme = await readFile("docs/README-ja.md", "utf8");
-  const startHereSummaryIndex = readme.indexOf("result.summary");
-  const startHereTableIndex = readme.indexOf("| ツール | 主な用途 |");
 
   assert.match(readme, /AI 支援の Minecraft Modding ワークフロー向け MCP サーバー/);
   assert.match(readme, /エージェントが Minecraft ソースを調査/);
-  assert.match(readme, /## まずここから/);
-  assert.match(readme, /`summary\.nextActions`/);
-  assert.ok(
-    startHereSummaryIndex !== -1 && startHereTableIndex !== -1 && startHereSummaryIndex < startHereTableIndex,
-    "summary guidance must appear before the tool table"
-  );
+  assertCatalogStartHere("docs/README-ja.md", section(readme, "## まずここから"), "| ツール | 主な用途 |");
   // Guard against reintroducing removed sections and unnatural Japanese
   assert.doesNotMatch(readme, /開始ツールの選び方/);
   assert.doesNotMatch(readme, /plain な/);
@@ -89,9 +130,6 @@ test("Japanese README stays overview-first with summary-first guidance and natur
   // Links to English detailed docs must exist
   assert.match(readme, /examples\.md/);
   assert.match(readme, /tool-reference\.md/);
-  // Common workflow tools must be referenced
-  assert.match(readme, /"tool": "inspect-minecraft"/);
-  assert.match(readme, /"tool": "validate-project"/);
 });
 
 test("README documents MCP client quick start commands", async () => {
@@ -110,13 +148,6 @@ test("README documents MCP client quick start commands", async () => {
   assert.match(readme, /#### Gemini CLI/);
   assert.match(readme, /~\/\.gemini\/settings\.json/);
   assert.match(readme, /\/mcp list/);
-});
-
-test("README tells inspect-minecraft callers to use structured workspace focus", async () => {
-  const readme = await readFile("README.md", "utf8");
-
-  assert.match(readme, /subject\.focus.*object, not a string/i);
-  assert.match(readme, /task="auto".*subject\.kind.*focus\.kind.*not a natural-language planner/is);
 });
 
 test("Example docs use the current get-class-members target schema", async () => {
@@ -148,40 +179,12 @@ test("ArtifactContentsSummary sourceCoverage contract only allows full or partia
   assert.doesNotMatch(sourceService, /sourceCoverage: "full" \| "partial" \| "unknown";/);
 });
 
-test("README, tool-reference, and CHANGELOG all reference the 5 top-level workflow tools (triangle parity)", async () => {
-  const [readme, toolRef, changelog] = await Promise.all([
-    readFile("README.md", "utf8"),
-    readFile("docs/tool-reference.md", "utf8"),
-    readFile("CHANGELOG.md", "utf8")
-  ]);
-  for (const tool of [
-    "inspect-minecraft",
-    "analyze-symbol",
-    "compare-minecraft",
-    "analyze-mod",
-    "validate-project"
-  ]) {
-    assert.ok(readme.includes(tool), `README.md must mention "${tool}"`);
-    assert.ok(toolRef.includes(tool), `docs/tool-reference.md must mention "${tool}"`);
-    assert.ok(changelog.includes(tool), `CHANGELOG.md must mention "${tool}" somewhere in release history`);
-  }
-});
-
-test("README, tool-reference, and CHANGELOG all reference the 4 batch tools (triangle parity)", async () => {
-  const [readme, toolRef, changelog] = await Promise.all([
-    readFile("README.md", "utf8"),
-    readFile("docs/tool-reference.md", "utf8"),
-    readFile("CHANGELOG.md", "utf8")
-  ]);
-  for (const tool of [
-    "batch-class-source",
-    "batch-class-members",
-    "batch-symbol-exists",
-    "batch-mappings"
-  ]) {
-    assert.ok(readme.includes(tool), `README.md must mention batch tool "${tool}"`);
-    assert.ok(toolRef.includes(tool), `docs/tool-reference.md must mention batch tool "${tool}"`);
-    assert.ok(changelog.includes(tool), `CHANGELOG.md must mention batch tool "${tool}"`);
+test("CHANGELOG names every deprecated 8.x tool somewhere in its release history", async () => {
+  // README and docs/tool-reference.md coverage of the same tools is checked
+  // against the generated tables in tests/contracts/tool-docs.test.ts.
+  const changelog = await readFile("CHANGELOG.md", "utf8");
+  for (const { name } of ALIAS_TOOL_INVENTORY) {
+    assert.ok(changelog.includes(`\`${name}\``), `CHANGELOG.md must mention "${name}"`);
   }
 });
 

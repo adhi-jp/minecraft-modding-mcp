@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type {
   CallToolResult,
   McpServer,
@@ -7,7 +6,12 @@ import type {
   ToolAnnotations
 } from "@modelcontextprotocol/server";
 
-import { V1_PARITY_SCHEMAS } from "./v1-parity-schemas.js";
+import {
+  aliasDeprecation,
+  aliasInventoryEntry,
+  ALIAS_REMOVAL_VERSION,
+  type AliasToolInventoryEntry
+} from "./tools/inventory.js";
 
 /**
  * Validation-bypassing Standard Schema adapter for MCP SDK v2 tool
@@ -16,79 +20,71 @@ import { V1_PARITY_SCHEMAS } from "./v1-parity-schemas.js";
  * The v2 SDK validates tool arguments through `schema["~standard"].validate`
  * before invoking the handler and returns generic InvalidParams text on
  * failure. This adapter's identity `validate` passes ALL object args through
- * raw so runTool() remains the single source of truth for validation and
- * error envelopes (matching pre-migration behavior, where the equivalent v1
- * layer was bypassed).
- *
- * `jsonSchema` is a Converter object whose `input()` serves the pinned
- * pre-migration wire schema for the tool (V1_PARITY_SCHEMAS), advertised
- * VERBATIM in tools/list. The zod fallback only applies to tools without a
- * frozen fixture (none today).
+ * raw so runTool() stays the single source of truth for validation and the
+ * error envelope, and `jsonSchema.input()` advertises the permissive alias
+ * schema `{ "type": "object" }` in tools/list.
  */
-function appValidated<S extends z.ZodObject>(
-  name: string,
-  schema: S
-): StandardSchemaWithJSON<unknown, z.output<S>> {
-  return {
-    "~standard": {
-      version: 1,
-      vendor: "app",
-      validate: (value: unknown) => ({ value: value as z.output<S> }),
-      jsonSchema: {
-        input: () => V1_PARITY_SCHEMAS[name] ?? z.toJSONSchema(schema, { io: "input" })
-      }
+const aliasInputSchema = {
+  "~standard": {
+    version: 1,
+    vendor: "app",
+    validate: (value: unknown) => ({ value }),
+    jsonSchema: {
+      input: () => ({ type: "object" })
     }
-  } as never;
-}
+  }
+} as unknown as StandardSchemaWithJSON<unknown, unknown>;
 
 /**
- * Tool handler shape used by all app registrations: raw (unvalidated) args
- * plus the v2 ServerContext. Handlers delegate validation to runTool().
+ * Tool handler shape of the 8.x registrations: raw (unvalidated) args plus
+ * the v2 ServerContext. Handlers delegate validation to runTool().
  */
 type AppToolHandler = (
   args: unknown,
   ctx: ServerContext
 ) => Promise<CallToolResult>;
 
+/** `a`, `a or b`, `a, b or c`. */
+function joinAlternatives(names: readonly string[]): string {
+  return names.length <= 1
+    ? names.join("")
+    : `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
 /**
- * Registers a tool through the v2 `registerTool` API with the
- * validation-bypassing adapter, preserving the v1 registration surface
- * (name, description, zod raw shape, annotations, handler).
+ * The listed description of an alias: deprecated, the release that removes
+ * it, and the catalog tools that replace it.
  */
-export function registerAppTool(
+function aliasDescription(entry: AliasToolInventoryEntry): string {
+  const perTask = entry.tasks !== undefined ? " (one per task)" : "";
+  return `Deprecated 8.x tool, removed in ${ALIAS_REMOVAL_VERSION}; use ${joinAlternatives(entry.replacedBy)}${perTask}.`;
+}
+
+/**
+ * Registers an 8.x tool as a deprecated alias. Its listing is a minimal
+ * entry: the deprecation description, the permissive input schema, the
+ * tool's annotations, and `_meta.deprecated` naming the catalog tools that
+ * replace it. The handler validates the input itself and adds
+ * `meta.deprecated` before serializing the reply.
+ */
+export function registerAliasTool(
   server: McpServer,
   name: string,
-  description: string,
-  shape: z.ZodRawShape,
   annotations: ToolAnnotations,
   handler: AppToolHandler
 ): void {
+  const entry = aliasInventoryEntry(name);
+  if (entry === undefined) {
+    throw new Error(`${name} is not an alias in the tool inventory`);
+  }
   server.registerTool(
     name,
     {
-      description,
-      inputSchema: appValidated(name, z.object(shape)),
-      annotations
+      description: aliasDescription(entry),
+      inputSchema: aliasInputSchema,
+      annotations,
+      _meta: { deprecated: aliasDeprecation(name) }
     },
     handler
   );
-}
-
-// Low-level/expert tools duplicate capability that the six entry tools expose
-// in a single resolve+fetch call. registerExpertTool() registers them exactly
-// like registerAppTool() but appends a note steering agents to the entry tools
-// first. Entry tools, batch tools, and the NBT/runtime utilities (which have no
-// entry equivalent) keep their plain descriptions via registerAppTool().
-const EXPERT_TOOL_NOTE =
-  " Expert tool: prefer the entry tools (inspect-minecraft, analyze-symbol, compare-minecraft, analyze-mod, validate-project) first.";
-
-export function registerExpertTool(
-  server: McpServer,
-  name: string,
-  description: string,
-  shape: z.ZodRawShape,
-  annotations: ToolAnnotations,
-  handler: AppToolHandler
-): void {
-  registerAppTool(server, name, description + EXPERT_TOOL_NOTE, shape, annotations, handler);
 }

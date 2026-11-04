@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,11 +11,6 @@ import { createDirectWorkerBridgeTransport, selectManualStdioMode } from "../hel
 import { hasRuntimeCapability } from "../helpers/runtime-capabilities.ts";
 import { createJar } from "../helpers/zip.ts";
 
-type Schema = {
-  properties?: Record<string, Schema>;
-  anyOf?: Schema[];
-  const?: string;
-};
 type SearchResult = {
   task: string;
   summary: { counts: { hits: number }; status: string };
@@ -67,16 +62,6 @@ test("stdio inspect-minecraft summary samples expose bounded local-JAR hits with
 
   try {
     await client.connect(transport);
-    const { tools } = await client.listTools();
-    const inspect = tools.find((tool) => tool.name === "inspect-minecraft");
-    assert.ok(inspect);
-    const artifactUnion = (schema: Schema) => schema.properties?.subject?.anyOf
-      ?.find((branch) => branch.properties?.kind?.const === "artifact")?.properties?.artifact?.anyOf;
-    const liveUnion = artifactUnion(inspect.inputSchema as Schema);
-    assert.ok(liveUnion, "artifact references must be advertised as a structured union");
-    assert.deepEqual(liveUnion.map((branch) => branch.properties?.type?.const), ["resolved-id", "resolve-target"]);
-    const fixture = JSON.parse(await readFile(new URL("../fixtures/premigration/tool-contracts/inspect-minecraft.json", import.meta.url), "utf8"));
-    assert.deepEqual(liveUnion, artifactUnion(fixture.advertised.inputSchema));
 
     const resolved = await call("resolve-artifact", {
       target: { kind: "jar", value: jarPath },

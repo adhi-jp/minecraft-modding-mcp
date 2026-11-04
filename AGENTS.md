@@ -13,6 +13,13 @@
 - Public MCP tool responses MUST use the standard envelope: `{ result?, error?, meta }`.
 - Input validation failures MUST map to `ERR_INVALID_INPUT` and MUST NOT be reported as `ERR_INTERNAL`. This covers checks of the request itself; it does not call for filesystem or network preflight probes that turn a later operating-system failure into `ERR_INVALID_INPUT`.
 - Do not add compatibility aliases for renamed public tools or parameters unless explicitly requested by the user and documented with a removal plan.
+- Catalog tools (`src/tools/`) validate strictly: every control object (the top-level input, `target`, work items, `selector`) rejects unknown and misplaced keys with `ERR_INVALID_INPUT` and `fieldErrors` naming the key. Never ignore or auto-correct a key on a catalog tool. Only data documents that follow their own format (typed NBT JSON, JSON Patch operations) are validated by that format instead.
+- The 41 8.x tool names are deprecated aliases, kept at the user's request: their 8.x handlers stay unchanged and take bug fixes only, `tools/list` shows them with minimal entries, every reply carries `meta.deprecated`, and `MCP_DEPRECATED_TOOLS=off` removes them. New capabilities go to catalog tools only.
+- Alias removal plan: in 10.0.0 at the earliest, remove the aliases, the `MCP_DEPRECATED_TOOLS` switch, the alias half of `src/tools/inventory.ts` and `tests/aliases/` together, with a `**Breaking**` CHANGELOG entry.
+
+## Tool Inventory and Test Layout (MUST)
+- `src/tools/inventory.ts` is the only hand-written list of tool names: the catalog tools and the 8.x aliases, with their flags. Registration, the heavy-tool gate, the supervisor's long-running set and the tests read it. A test may keep a small oracle list for one property (such as the set of writer tools), never a second inventory.
+- Catalog tests live in `tests/tools/`. Tests that exercise 8.x tool names through the MCP surface belong in `tests/aliases/`, so they leave together with the aliases. Both directories are part of the test-layout contract (`tests/contracts/test-layout.test.ts`).
 
 ## Change Coupling Rules (MUST)
 - Any user-visible or public API change MUST update `CHANGELOG.md` and the relevant tests in the same change set.

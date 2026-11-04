@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
+import { ALIAS_ENTRY_TOOL_NAMES } from "../../src/tools/inventory.ts";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const docPath = join(here, "..", "..", "docs", "tool-reference.md");
 
@@ -84,24 +86,68 @@ test("tool-reference.md documents the operational env toggles", async () => {
     "MIXIN_STAGE_PROGRESS_OFF",
     "WORKSPACE_TARGET_OFF",
     "DEPENDENCY_TARGET_OFF",
-    "WORKSPACE_FALLBACK_LEGACY"
+    "WORKSPACE_FALLBACK_LEGACY",
+    "MCP_DEPRECATED_TOOLS"
   ]) {
     assert.ok(doc.includes(toggle), `tool-reference.md must mention env toggle "${toggle}"`);
   }
 });
 
-test("tool-reference.md documents the batch lookup contract and 4 batch tools", async () => {
+/** One `## ` section of the document, heading included. */
+function topSection(doc: string, heading: string): string {
+  const start = doc.indexOf(`\n${heading}\n`);
+  assert.ok(start >= 0, `tool-reference.md has the section ${heading}`);
+  const end = doc.indexOf("\n## ", start + 1);
+  return doc.slice(start + 1, end < 0 ? undefined : end);
+}
+
+test("tool-reference.md lists the tool catalog first and the deprecated 8.x tools under their own heading", async () => {
   const doc = await loadDoc();
-  for (const token of [
-    "Batch lookup contract",
-    "## batch-class-source",
-    "## batch-class-members",
-    "## batch-symbol-exists",
-    "## batch-mappings",
-    "ERR_BATCH_ABORTED",
-    "failFast",
-    "sharedArtifactId"
+  const topHeadings = doc.split("\n").filter((line) => line.startsWith("## "));
+  assert.equal(topHeadings[0], "## Tool catalog", "the tool catalog is the first section");
+  assert.equal(topHeadings[1], "## Deprecated 8.x tools", "the deprecated 8.x tools follow the tool catalog");
+
+  const catalog = topSection(doc, "## Tool catalog");
+  const catalogSubsections = catalog.split("\n").filter((line) => line.startsWith("### "));
+  assert.equal(catalogSubsections.at(-1), "### Migration from 8.x", "the tool catalog ends with the migration table");
+
+  const deprecated = topSection(doc, "## Deprecated 8.x tools");
+  assert.match(deprecated, /deprecated aliases, removed in 10\.0\.0 at the earliest/);
+  assert.match(deprecated, /still accepts its 8\.x inputs/);
+  assert.match(deprecated, /`MCP_DEPRECATED_TOOLS=off`/);
+  for (const heading of [
+    "### Which Tool for Which Question",
+    "### Essential Conventions",
+    "### Inspection response controls",
+    "### inspect-minecraft workspace focus",
+    "### Workspace and dependency target shapes",
+    "### Common Pitfalls",
+    "### verify-mixin-target",
+    "### Batch lookup contract",
+    "### Migration Notes"
   ]) {
+    assert.ok(deprecated.split("\n").includes(heading), `"${heading}" is a section of the deprecated 8.x tools`);
+  }
+  // The deprecated 8.x tools are never recommended as the starting point.
+  assert.doesNotMatch(doc, /Start with the top-level workflow tools/);
+  for (const name of ALIAS_ENTRY_TOOL_NAMES) {
+    assert.ok(!doc.includes(`Start with \`${name}\``), `tool-reference.md must not recommend starting with ${name}`);
+  }
+});
+
+test("tool-reference.md documents the batch lookup contract of the deprecated batch tools", async () => {
+  const doc = await loadDoc();
+  const deprecated = topSection(doc, "## Deprecated 8.x tools").split("\n");
+  for (const heading of [
+    "### Batch lookup contract",
+    "#### batch-class-source",
+    "#### batch-class-members",
+    "#### batch-symbol-exists",
+    "#### batch-mappings"
+  ]) {
+    assert.ok(deprecated.includes(heading), `the deprecated 8.x tools section has "${heading}"`);
+  }
+  for (const token of ["ERR_BATCH_ABORTED", "failFast", "sharedArtifactId"]) {
     assert.ok(doc.includes(token), `tool-reference.md must mention batch-contract token "${token}"`);
   }
 });

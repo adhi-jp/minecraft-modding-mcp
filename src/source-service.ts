@@ -337,10 +337,17 @@ export type GetClassSourceInput = {
   outputFile?: string;
 };
 
+/** Internal read metadata requested by source exporters; never a public MCP input. */
+export type GetClassSourceOptions = {
+  includeSourceFilePath?: boolean;
+};
+
 export type GetClassSourceOutput = {
   className: string;
   mode: SourceMode;
   sourceText: string;
+  /** Final indexed source path, present only when includeSourceFilePath was requested internally. */
+  sourceFilePath?: string;
   totalLines: number;
   /** Source lines returned for snippet/full; absent in metadata mode, whose outline is not a line slice. */
   returnedRange?: {
@@ -1027,8 +1034,8 @@ export class SourceService {
     return classSource.findClassIncludingNested(this, input);
   }
 
-  async getClassSource(input: GetClassSourceInput): Promise<GetClassSourceOutput> {
-    return classSource.getClassSource(this, input);
+  async getClassSource(input: GetClassSourceInput, options: GetClassSourceOptions = {}): Promise<GetClassSourceOutput> {
+    return classSource.getClassSource(this, input, options);
   }
 
   async getClassMembers(input: GetClassMembersInput): Promise<GetClassMembersOutput> {

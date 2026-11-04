@@ -182,7 +182,16 @@ function buildArtifactsDirectory(cacheDir: string): string {
   return normalizePath(input, "MCP_SQLITE_PATH");
 }
 
-export function loadConfig(): Config {
+/** The service configuration plus the server's own tool-surface switch. */
+export type ServerConfig = Config & {
+  /**
+   * Registers the deprecated aliases of the 8.x tools (default `true`);
+   * `MCP_DEPRECATED_TOOLS=off` leaves them unlisted and uncallable.
+   */
+  deprecatedToolsEnabled: boolean;
+};
+
+export function loadConfig(): ServerConfig {
   const cacheDir = parseRequiredPath(process.env.MCP_CACHE_DIR, DEFAULTS.cacheDir, "MCP_CACHE_DIR");
   const localM2Path = parseRequiredPath(process.env.MCP_LOCAL_M2, DEFAULTS.localM2Path, "MCP_LOCAL_M2");
 
@@ -320,7 +329,8 @@ export function loadConfig(): Config {
       DEFAULTS.decompileMaxMemoryMb,
       64,
       Number.MAX_SAFE_INTEGER
-    )
+    ),
+    deprecatedToolsEnabled: parseBoolean(process.env.MCP_DEPRECATED_TOOLS, true)
   };
 }
 

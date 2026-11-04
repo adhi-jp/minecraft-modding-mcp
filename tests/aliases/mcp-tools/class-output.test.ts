@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { createJar } from "../../helpers/zip.ts";
 import { buildClassFile } from "../../helpers/classfile.ts";
-import { callTool, listTools } from "../../helpers/mcp-tools-harness.ts";
+import { callTool } from "../../helpers/mcp-tools-harness.ts";
 
 test("get-class-members surfaces meta.warningDetails for the truncation family", async () => {
   const root = await mkdtemp(join(tmpdir(), "warning-details-members-"));
@@ -252,54 +252,6 @@ test("manage-cache rejects the removed rebuild action with ERR_INVALID_INPUT", a
   );
 });
 
-test("expert and batch tools expose detail/include and no longer expose compact", async () => {
-  const toolMap = new Map((await listTools()).map((entry) => [entry.name, entry.inputSchema]));
-  const detailTools = [
-    "resolve-artifact",
-    "find-mapping",
-    "resolve-method-mapping-exact",
-    "resolve-workspace-symbol",
-    "check-symbol-exists",
-    "get-class-source",
-    "get-class-members",
-    "search-class-source",
-    "list-artifact-files",
-    "batch-class-source",
-    "batch-class-members",
-    "batch-symbol-exists",
-    "batch-mappings"
-  ];
-  for (const name of detailTools) {
-    const schema = toolMap.get(name) as { properties?: Record<string, { enum?: string[]; default?: string }> };
-    assert.ok(schema?.properties, `${name} must have an input schema`);
-    assert.equal("compact" in (schema.properties ?? {}), false, `${name} must not expose compact`);
-    const detail = schema.properties?.detail;
-    assert.ok(detail, `${name} must expose detail`);
-    assert.deepEqual(detail.enum, ["summary", "standard", "full"], `${name} detail enum`);
-    assert.ok("include" in (schema.properties ?? {}), `${name} must expose include`);
-  }
-  // resolution/mapping + batch default summary; source/file default standard.
-  const expectDefault: Record<string, string> = {
-    "resolve-artifact": "summary",
-    "find-mapping": "summary",
-    "resolve-method-mapping-exact": "summary",
-    "resolve-workspace-symbol": "summary",
-    "check-symbol-exists": "summary",
-    "batch-class-source": "summary",
-    "batch-class-members": "summary",
-    "batch-symbol-exists": "summary",
-    "batch-mappings": "summary",
-    "get-class-source": "standard",
-    "get-class-members": "standard",
-    "search-class-source": "standard",
-    "list-artifact-files": "standard"
-  };
-  for (const [name, want] of Object.entries(expectDefault)) {
-    const schema = toolMap.get(name) as { properties?: { detail?: { default?: string } } };
-    assert.equal(schema.properties?.detail?.default, want, `${name} default detail`);
-  }
-});
-
 test("find-mapping detail=summary does not corrupt identity-branch result and preserves meta.warnings", async () => {
   type ToolResult = {
     isError?: boolean;
@@ -337,8 +289,8 @@ test("find-mapping detail=summary does not corrupt identity-branch result and pr
   }
 
   // Keys that compact is allowed to drop:
-  // - empty/null/undefined values (P1 compactResponse)
-  // - "candidates" when provably redundant (P4 compactMappingResponse)
+  // - empty/null/undefined values
+  // - "candidates" when an exact, unique resolution makes them redundant
   const ALLOWED_COMPACT_DROPS = new Set(["candidates", "candidatesTruncated"]);
   const droppedKeys: string[] = [];
   for (const key of Object.keys(normalResult)) {
@@ -358,7 +310,7 @@ test("find-mapping detail=summary does not corrupt identity-branch result and pr
 
   // At least one key must have been dropped to prove compact is active
   assert.ok(droppedKeys.length > 0, `compact must drop at least one key, but none were dropped`);
-  // candidates must be dropped (P4: identity branch resolved + exact + count=1)
+  // candidates must be dropped: the identity lookup resolved exactly one exact match
   assert.ok(droppedKeys.includes("candidates"), "candidates should be dropped for resolved exact identity branch");
 
   // meta.warnings is omitted when empty; detail must not change what meta carries

@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const ORDINARY_TEST_DIRECTORIES = new Set([
+  "aliases",
   "contracts",
   "entry-tools",
-  "integration",
   "mapping",
   "mixin",
   "mod",
@@ -17,6 +17,7 @@ const ORDINARY_TEST_DIRECTORIES = new Set([
   "source-service",
   "stdio",
   "storage",
+  "tools",
   "utils"
 ]);
 

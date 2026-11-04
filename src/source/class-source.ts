@@ -15,6 +15,7 @@ import type {
   GetClassMembersOutput,
   GetClassMembersStatus,
   GetClassSourceInput,
+  GetClassSourceOptions,
   GetClassSourceOutput,
   SourceMode
 } from "../source-service.js";
@@ -1022,7 +1023,11 @@ export async function findClassIncludingNested(
   };
 }
 
-export async function getClassSource(svc: SourceService, input: GetClassSourceInput): Promise<GetClassSourceOutput> {
+export async function getClassSource(
+  svc: SourceService,
+  input: GetClassSourceInput,
+  options: GetClassSourceOptions = {}
+): Promise<GetClassSourceOutput> {
   const className = input.className.trim();
   if (!className) {
     throw createError({
@@ -1373,6 +1378,7 @@ export async function getClassSource(svc: SourceService, input: GetClassSourceIn
     className,
     mode,
     sourceText,
+    ...(options.includeSourceFilePath ? { sourceFilePath: filePath } : {}),
     totalLines,
     ...(mode !== "metadata" ? { returnedRange: { start: returnedStart, end: returnedEnd } } : {}),
     truncated,

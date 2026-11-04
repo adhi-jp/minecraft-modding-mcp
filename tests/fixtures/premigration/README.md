@@ -4,10 +4,22 @@ Golden fixtures captured against the **untouched SDK v1 build** (before any
 MCP 2026-07-28 migration edit). The one-off capture harnesses that produced
 them were removed from the tree after the migration; the procedure is the one
 recorded at commit `7964871` (`git show 7964871`), and the fixtures can no
-longer be re-captured against a current build. The fixtures are regenerated
-only in the derived sense: `src/v1-parity-schemas.ts` is rebuilt from the
-`tool-contracts/*.json` files with
-`node scripts/premigration/generate-v1-parity-schemas.mjs`.
+longer be re-captured against a current build. Nothing is generated from them.
+
+The advertised halves are historical: the server lists the 8.x tools as
+deprecated aliases with minimal entries, so the `advertised` entry of each
+`tool-contracts/*.json` file and `tools-list-order.default.json` record what
+the SDK v1 build listed, not what the server lists. Tests read three parts
+of the `advertised` entries: `tests/aliases/envelope-replay.test.ts` takes
+each `advertised.name` to match a fixture to its tool;
+`tests/aliases/alias-listing.test.ts` takes each `advertised.annotations` as
+the 8.x annotations the aliases keep; and `advertised.inputSchema` stays the
+8.x input contract — `tests/aliases/input-schema-parity.test.ts` compares its
+property paths, `required` lists and defaults with each alias's validating
+schema, and `tests/aliases/problemdetails-replay.test.ts` takes the
+`required` list of `analyze-mod`. No test reads
+`tools-list-order.default.json`. The envelope samples, ProblemDetails goldens
+and synthetic shapes stay the alias fidelity baseline.
 
 - Capture date: **2026-08-08**
 - Commit: **2a17b66d2975e37835061dd87ea34f9a449ba61f** (branch `feature/mcp-spec-2026-07-28`, clean tracked tree)
@@ -48,16 +60,23 @@ comparison tests import; its header comment is the authoritative copy. Summary:
 
 Comparing live output: the capture procedure is the one recorded at commit
 `7964871` and cannot be re-run against the current tree. The comparison tests
-(`tests/stdio/stdio-problemdetails-envelope-goldens.test.ts`,
-`tests/stdio/stdio-tool-contract-snapshots.test.ts`) instead normalize live
-output with `normalizeCaptured` and compare it with the frozen fixtures — the
-normalization is deterministic, so byte equality of normalized output is the
-comparison contract (for `inputSchema`, byte equality of the verbatim subtree).
+(`tests/aliases/problemdetails-replay.test.ts`,
+`tests/aliases/envelope-replay.test.ts`,
+`tests/stdio/stdio-supervisor-synthetic-inventory.test.ts`) instead normalize
+live output with `normalizeCaptured` (or the same N3/N4 rules) and compare it
+with the frozen fixtures — the normalization is deterministic, so byte
+equality of normalized output is the comparison contract. One rule is added
+for the deprecated aliases: `meta.deprecated` is checked on its own (it must
+name the replacing catalog tools and `removeIn: "10.0.0"`, identically in
+`structuredContent` and in the JSON text) and removed before the comparison.
 
 ## Post-capture edits
 
 These fixtures are otherwise verbatim captures; there is one deliberate
-exception. Four `tool-contracts/*.json` files — `search-class-source.json`,
+exception. The edits below were made while the server advertised the
+`advertised` halves verbatim, through a module generated from these files
+that has since been removed; they record why those halves differ from a
+fresh SDK v1 capture. Four `tool-contracts/*.json` files — `search-class-source.json`,
 `get-artifact-file.json`, `list-artifact-files.json` and
 `index-artifact.json` — carry a top-level `projectPath` property added AFTER
 capture, by commit `6e45c3b` ("fix(tools): accept projectPath on the
@@ -65,10 +84,10 @@ flat-artifactId tools"), mirroring the shape `find-class` already had at
 capture time. For that one property those four files are no longer a record
 of what the SDK v1 build advertised.
 
-`src/v1-parity-schemas.ts` was regenerated from the edited files (see its
-header), so the advertised `inputSchema` bytes and the parity baseline still
-agree with each other — but a byte comparison of those four against a fresh
-capture from the untouched v1 build would not match on `projectPath`.
+The advertised `inputSchema` bytes were regenerated from the edited files,
+so they and the parity baseline agreed with each other — but a byte
+comparison of those four against a fresh capture from the untouched v1 build
+would not match on `projectPath`.
 
 Two more `tool-contracts/*.json` files — `batch-class-source.json` and
 `batch-class-members.json` — carry a `{"kind":"artifact","artifactId":...}`
@@ -76,14 +95,14 @@ variant added to their `target` property's `anyOf`, added AFTER capture by the
 change that let the batch tools reuse an already-resolved `artifactId`,
 mirroring the shape `get-class-source.json` /
 `get-class-members.json` already had at capture time for the same reuse-an-
-already-resolved-artifact case. `src/v1-parity-schemas.ts` was regenerated
-from the edited files afterward, so the advertised `inputSchema` bytes and the
-parity baseline still agree — but a byte comparison of those two against a
-fresh capture from the untouched v1 build would not match on that variant.
+already-resolved-artifact case. The advertised `inputSchema` bytes were
+regenerated from the edited files afterward, so they and the parity baseline
+agreed — but a byte comparison of those two against a fresh capture from the
+untouched v1 build would not match on that variant.
 
 `tool-contracts/manage-cache.json` had the `rebuild` value removed from its
 advertised `action` enum for this major release, which removed that action;
-`src/v1-parity-schemas.ts` was regenerated from the edited file, and a byte
+the advertised bytes were regenerated from the edited file, and a byte
 comparison against a fresh capture from the untouched v1 build would not match
 on that enum.
 
@@ -91,7 +110,7 @@ on that enum.
 changed from `default obfuscated` to `Defaults to the mapping the target
 artifact was resolved with; obfuscated when the target has none.` for this
 major release, because the tool inherits the target artifact's resolved mapping
-when `mapping` is omitted. `src/v1-parity-schemas.ts` was regenerated from the
+when `mapping` is omitted. The advertised bytes were regenerated from the
 edited file, and a byte comparison against a fresh capture from the untouched
 v1 build would not match on that description. `get-class-source.json` and
 `batch-class-members.json` advertise no `mapping` description, and
@@ -102,16 +121,19 @@ v1 build would not match on that description. `get-class-source.json` and
 properties changed from `{"$ref":"#/properties/limit"}` to an inline
 `{"type":"integer","exclusiveMinimum":0}` for this major release. The `$ref`
 also carried `limit`'s `default: 50`, which the runtime schema does not apply to
-those three optional caps. `limit` itself is unchanged. `src/v1-parity-schemas.ts`
-was regenerated from the edited file, and a byte comparison against a fresh
+those three optional caps. `limit` itself is unchanged. The advertised bytes
+were regenerated from the edited file, and a byte comparison against a fresh
 capture from the untouched v1 build would not match on those three properties.
 
 ## Fixture families
 
 ### `tools-list-order.<flag-config>.json`
 
-RAW legacy `tools/list` name order (registration order — legacy golden),
-one file per flag configuration. Only the `default` configuration (no flags)
+RAW legacy `tools/list` name order (registration order) as the SDK v1 build
+listed it, one file per flag configuration. Historical: the live listing
+places the catalog tools first, and `tests/aliases/alias-listing.test.ts`
+checks the order of the 8.x aliases against `src/tools/inventory.ts`; no test
+reads this file. Only the `default` configuration (no flags)
 remains; the other captured configurations existed only for toggles that have
 since been removed, and their files were deleted with them.
 
@@ -121,9 +143,8 @@ since been removed, and their files were deleted with them.
 
 Harness validation at capture time (raw report not committed): two consecutive
 fresh-process runs produced identical raw order per config, and the sorted
-form equals the sorted `EXPECTED_TOOLS` pinned by
-`tests/helpers/expected-tools.ts` /
-`tests/integration/mcp-tools/contracts.test.ts`.
+form equaled the sorted list of the 41 tools the test suite expected at the
+time.
 
 ### `synthetic-shapes/*.json`
 
@@ -189,7 +210,7 @@ Env: default flag config, scratch cache redirect (N5).
 
 Per registered tool (41 files, default flag config): the
 advertised `tools/list` entry with **verbatim** `inputSchema` bytes (N1
-exception), plus one envelope sample — a **successful** call envelope for
+exception; historical, see above), plus one envelope sample — a **successful** call envelope for
 `get-runtime-metrics` (cheap, local, no arguments; captured first in the
 session so runtime-metrics counters are in the deterministic fresh state), an
 offline-proven **invalid-input** ProblemDetails envelope for every other tool.

@@ -10,6 +10,7 @@ import { validateProjectSchema } from "../../src/entry-tools/validate-project-se
 import { StdioSupervisor } from "../../src/stdio-supervisor.ts";
 import { getToolSchema, registerToolSchema } from "../../src/tool-schema-registry.ts";
 import { emptySchema } from "../../src/tool-schemas.ts";
+import { assertDeprecationCarried, stripDeprecation } from "../aliases/deprecation.ts";
 
 /**
  * Era × failure-type synthetic-inventory suite.
@@ -17,7 +18,10 @@ import { emptySchema } from "../../src/tool-schemas.ts";
  * Covers the seven premigration terminal synthesis paths in-process:
  *  - Legacy rows must stay byte-identical (after the capture harness's
  *    normalization rules N3/N4) to tests/fixtures/premigration/synthetic-shapes
- *    (legacy replies must never gain modern-only fields).
+ *    (legacy replies must never gain modern-only fields). The calls are to
+ *    deprecated aliases, so each structured reply also carries
+ *    `meta.deprecated` in both representations; it is checked and removed
+ *    before the comparison, as the alias replay suites do.
  *  - Modern rows: structured synthetic RESULTS carry `resultType: "complete"`
  *    and the canonical server identity under
  *    `_meta["io.modelcontextprotocol/serverInfo"]`; raw JSON-RPC error
@@ -93,6 +97,21 @@ function normalizeReply(value: unknown, keyName?: string): unknown {
     return out;
   }
   return value;
+}
+
+/**
+ * `normalizeReply` plus the alias rule for a structured reply to an alias
+ * call: `meta.deprecated` must be present in both representations, naming
+ * the alias's catalog replacements, and is removed before the comparison.
+ */
+function normalizeAliasReply(
+  reply: unknown,
+  tool: string,
+  args: Record<string, unknown> = {}
+): unknown {
+  const { message, removed } = stripDeprecation(normalizeReply(reply));
+  assertDeprecationCarried(removed, tool, args, `${tool} synthetic reply`);
+  return message;
 }
 
 type FakeChild = {
@@ -426,7 +445,7 @@ test("legacy overflow replies stay byte-identical to the premigration overflow f
 
   const overflowReplies = repliesFor(harness.outbound, 5);
   assert.equal(overflowReplies.length, 1);
-  assert.deepEqual(normalizeReply(overflowReplies[0]), overflowFixture.reply);
+  assert.deepEqual(normalizeAliasReply(overflowReplies[0], "get-runtime-metrics"), overflowFixture.reply);
 
   const otherReplies = repliesFor(harness.outbound, 6);
   assert.equal(otherReplies.length, 1);
@@ -438,7 +457,7 @@ test("legacy restart tools/call structured reply stays byte-identical to the pre
   const fixture = readFixture("restart-toolscall-structured.json");
   const replies = repliesFor(harness.outbound, 2);
   assert.equal(replies.length, 1);
-  assert.deepEqual(normalizeReply(replies[0]), fixture.reply);
+  assert.deepEqual(normalizeAliasReply(replies[0], "get-runtime-metrics"), fixture.reply);
 });
 
 test("legacy restart non-tools/call raw -32603 reply stays byte-identical to the premigration fixture", () => {
@@ -457,7 +476,10 @@ test("legacy validate-project timeout reply stays byte-identical to the premigra
   const fixture = readFixture("timeout-validate-project.json");
   const replies = repliesFor(harness.outbound, 2);
   assert.equal(replies.length, 1);
-  assert.deepEqual(normalizeReply(replies[0]), fixture.reply);
+  assert.deepEqual(
+    normalizeAliasReply(replies[0], "validate-project", { projectPath: "/workspace/example-mod" }),
+    fixture.reply
+  );
 });
 
 test("legacy startup-failure terminalization replies stay byte-identical to the premigration fixture and occur under the legacy era", () => {
@@ -476,7 +498,7 @@ test("legacy startup-failure terminalization replies stay byte-identical to the 
 
   const callReplies = repliesFor(harness.outbound, 2);
   assert.equal(callReplies.length, 1);
-  assert.deepEqual(normalizeReply(callReplies[0]), fixtureReplies.toolsCall);
+  assert.deepEqual(normalizeAliasReply(callReplies[0], "get-runtime-metrics"), fixtureReplies.toolsCall);
 
   const otherReplies = repliesFor(harness.outbound, 3);
   assert.equal(otherReplies.length, 1);
@@ -497,7 +519,7 @@ test("modern-era structured restart synthesis carries resultType complete and th
   // per-request DISTINCT context sentinels, so any echoed context value —
   // under ANY field name — breaks this deepEqual.
   assert.deepEqual(
-    normalizeReply(replies[0]),
+    normalizeAliasReply(replies[0], "get-runtime-metrics"),
     expectedModernReply(fixture.reply as Record<string, unknown>)
   );
 });
@@ -508,7 +530,7 @@ test("modern-era validate-project timeout synthesis carries resultType complete 
   const replies = repliesFor(harness.outbound, 2);
   assert.equal(replies.length, 1);
   assert.deepEqual(
-    normalizeReply(replies[0]),
+    normalizeAliasReply(replies[0], "validate-project", { projectPath: "/workspace/example-mod" }),
     expectedModernReply(fixture.reply as Record<string, unknown>)
   );
 });
@@ -519,7 +541,7 @@ test("modern-era queue-limit synthesis carries resultType complete and the canon
   const replies = repliesFor(harness.outbound, 5);
   assert.equal(replies.length, 1);
   assert.deepEqual(
-    normalizeReply(replies[0]),
+    normalizeAliasReply(replies[0], "get-runtime-metrics"),
     expectedModernReply(fixture.reply as Record<string, unknown>)
   );
 });

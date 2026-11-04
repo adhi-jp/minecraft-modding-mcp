@@ -55,7 +55,7 @@ interface RemapModJarDeps {
 // build no longer serves the stale jar; the bump invalidates v2 outputs once.
 const REMAP_PIPELINE_VERSION = "v3";
 
-function extractMinecraftVersion(
+export function extractMinecraftVersion(
   dependencies: Array<{ modId: string; versionRange?: string }> | undefined
 ): string | undefined {
   if (!dependencies) {
@@ -86,7 +86,7 @@ async function detectInputNamespaceForLoader(
   });
 }
 
-function resolveOutputJarPath(
+export function resolveOutputJarPath(
   input: ModRemapInput,
   normalizedInput: string,
   modId: string | undefined,

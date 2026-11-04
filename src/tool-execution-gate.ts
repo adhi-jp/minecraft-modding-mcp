@@ -90,3 +90,9 @@ export class ToolExecutionGate {
     }
   }
 }
+
+/**
+ * The process-wide heavy-tool gate: the 8.x heavy tools and the heavy catalog
+ * tools queue on this one instance, so one queue protects one machine.
+ */
+export const heavyToolExecutionGate = new ToolExecutionGate({ maxConcurrent: 1, maxQueue: 2 });

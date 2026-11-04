@@ -32,6 +32,13 @@ import {
   type EraSignal
 } from "./era-classifier.js";
 import { decorateSyntheticReply } from "./synthetic-decorator.js";
+import {
+  aliasDeprecation,
+  isCatalogToolName,
+  isLongRunningToolName,
+  type AliasDeprecation
+} from "./tools/inventory.js";
+import { finalizeNextActions } from "./tools/next-actions.js";
 
 const DEFAULT_CLIENT_MODE: ConcreteFramingMode = "line";
 const WORKER_MODE_ENV = "MCP_STDIO_WORKER_MODE";
@@ -553,7 +560,49 @@ function buildSyntheticToolResult(
   } as unknown as JSONRPCResponse;
 }
 
-export function buildSupervisorQueueLimitReply(id: RequestId, method: string): JSONRPCResponse {
+/**
+ * Whether the server serves a tool of this name. The tool schema registry is
+ * authoritative: src/cli.ts loads the server module before the supervisor
+ * starts, under the same environment as the worker, so a deprecated alias
+ * switched off with MCP_DEPRECATED_TOOLS=off is absent from it, exactly like
+ * an unknown name. An empty registry (a supervisor constructed without the
+ * server module) treats every name as served — the same population gate as
+ * the legacy unknown-tool intercept.
+ */
+function isServedToolName(name: string | undefined): boolean {
+  return name !== undefined && (registeredToolCount() === 0 || getToolSchema(name) !== undefined);
+}
+
+/** A served tool that gets the long-running deadline and exclusive dispatch. */
+function isServedLongRunningToolName(name: string | undefined): boolean {
+  return isLongRunningToolName(name) && isServedToolName(name);
+}
+
+/**
+ * The `meta.deprecated` entry of a synthetic reply to a served alias call
+ * (the alias's replacements, narrowed to the task's tool when the arguments
+ * name one); nothing for a catalog tool or for a name the server does not
+ * serve.
+ */
+function aliasDeprecationMeta(
+  toolName: string | undefined,
+  toolArgs: unknown
+): { deprecated?: AliasDeprecation } {
+  const deprecated = isServedToolName(toolName) ? aliasDeprecation(toolName, toolArgs) : undefined;
+  return deprecated !== undefined ? { deprecated } : {};
+}
+
+/**
+ * Queue-overflow reply. For `tools/call`, `toolName` and `toolArgs` (the
+ * redacted arguments) identify the call when known, so an alias call's reply
+ * carries `meta.deprecated`.
+ */
+export function buildSupervisorQueueLimitReply(
+  id: RequestId,
+  method: string,
+  toolName?: string,
+  toolArgs?: Record<string, unknown>
+): JSONRPCResponse {
   if (method !== "tools/call") {
     return {
       jsonrpc: "2.0",
@@ -584,7 +633,8 @@ export function buildSupervisorQueueLimitReply(id: RequestId, method: string): J
         reason: "supervisor-request-queue",
         maxQueued: MAX_SUPERVISOR_QUEUE,
         queuedCount: MAX_SUPERVISOR_QUEUE
-      }
+      },
+      ...aliasDeprecationMeta(toolName, toolArgs)
     }
   });
 }
@@ -601,6 +651,10 @@ export function buildValidateProjectTimeoutReply(
   input: BuildValidateProjectTimeoutReplyInput
 ): JSONRPCResponse {
   const { request, phase, deadlineMs, now, workerRestartInitiated } = input;
+  // A catalog tool names itself and offers the retry as validated
+  // meta.nextActions; the 8.x reply keeps its frozen shape.
+  const catalogTool = isCatalogToolName(request.toolName) ? request.toolName : undefined;
+  const timedOutTool = catalogTool ?? "validate-project";
   const retryRecommendation = decideRetryRecommendation(
     {
       lastStage: request.lastStage,
@@ -612,7 +666,7 @@ export function buildValidateProjectTimeoutReply(
   const error: Record<string, unknown> = {
     type: "about:blank/mcp/tool-timeout",
     title: "MCP tool timed out",
-    detail: `validate-project exceeded its ${deadlineMs} ms deadline.`,
+    detail: `${timedOutTool} exceeded its ${deadlineMs} ms deadline.`,
     status: 408,
     code: "ERR_TOOL_TIMEOUT",
     instance: `urn:mcp:request:${String(request.id)}`,
@@ -620,20 +674,26 @@ export function buildValidateProjectTimeoutReply(
     issueOrigin: "tool_issue",
     hints: ["Retry the request or narrow the validation scope."]
   };
+  const toolName = request.toolName;
   if (
-    request.toolName === "validate-project" &&
+    catalogTool === undefined &&
+    toolName !== undefined &&
+    isServedLongRunningToolName(toolName) &&
     request.toolArgsRedacted !== undefined &&
     !request.toolArgsRedactedModified &&
-    getToolSchema("validate-project") !== undefined
+    getToolSchema(toolName) !== undefined
   ) {
     const gated = buildSuggestedCall({
-      tool: "validate-project",
+      tool: toolName,
       params: request.toolArgsRedacted
     });
     if (gated.suggestedCall) {
       error.suggestedCall = gated.suggestedCall;
     }
   }
+  const nextActions = catalogTool !== undefined
+    ? catalogRetryNextActions(catalogTool, request.toolArgsRedacted, request.toolArgsRedactedModified)
+    : [];
 
   return buildSyntheticToolResult(request.id, {
     error,
@@ -641,7 +701,7 @@ export function buildValidateProjectTimeoutReply(
       synthetic: true,
       syntheticSource: "supervisor",
       timeout: {
-        tool: "validate-project",
+        tool: timedOutTool,
         phase,
         durationMs: Math.max(0, now - request.startedAt),
         deadlineMs,
@@ -655,9 +715,27 @@ export function buildValidateProjectTimeoutReply(
         redactedToolArgsModified: request.toolArgsRedactedModified ?? false,
         retryRecommendation,
         workerRestartInitiated
-      }
+      },
+      ...(nextActions.length > 0 ? { nextActions } : {}),
+      ...aliasDeprecationMeta(request.toolName, request.toolArgsRedacted)
     }
   });
+}
+
+/**
+ * Recovery for a catalog tool's synthetic reply: the same call again, as a
+ * validated `meta.nextActions` entry. Redaction-modified arguments carry
+ * placeholders that are not safe to replay, so they yield none.
+ */
+function catalogRetryNextActions(
+  tool: string,
+  redactedArgs: Record<string, unknown> | undefined,
+  redactedArgsModified: boolean | undefined
+): ReturnType<typeof finalizeNextActions> {
+  if (redactedArgs === undefined || redactedArgsModified) {
+    return [];
+  }
+  return finalizeNextActions([{ tool, params: redactedArgs }]);
 }
 
 export function decideRetryRecommendation(
@@ -688,6 +766,7 @@ export function buildSyntheticCallToolResult(
   ctx: RestartContext
 ): JSONRPCResponse {
   const tool = ctx.toolName ?? "unknown";
+  const catalogTool = isCatalogToolName(ctx.toolName) ? ctx.toolName : undefined;
   const hints: string[] = [];
   if (ctx.lastStage) {
     const indexNote = (() => {
@@ -706,6 +785,13 @@ export function buildSyntheticCallToolResult(
     const recommendation = (() => {
       switch (ctx.retryRecommendation) {
         case "narrow-query":
+          // mixinConfigPath is an 8.x input; a catalog call narrows its own way.
+          if (catalogTool === "project-validate") {
+            return "validate its mixin configs one at a time with mixin-validate configPaths and retry";
+          }
+          if (catalogTool !== undefined) {
+            return "validate fewer mixin classes per call and retry";
+          }
           return "narrow mixinConfigPath to one file and retry";
         case "clear-cache":
           return "clear cache and retry";
@@ -735,7 +821,7 @@ export function buildSyntheticCallToolResult(
   // Mutated args carry sentinel placeholders (`<truncated:…>`, `<redacted>`)
   // that are not safe to retry. Surface them on `meta.restart.redactedToolArgs`
   // for diagnostics instead.
-  if (ctx.toolArgsRedacted !== undefined && !ctx.toolArgsRedactedModified) {
+  if (catalogTool === undefined && ctx.toolArgsRedacted !== undefined && !ctx.toolArgsRedactedModified) {
     // Only emit `suggestedCall` when the resolved tool name is a
     // currently-registered public tool. The "unknown" fallback above and
     // unregistered names (typo, disabled tool, version-skewed) cannot
@@ -783,6 +869,19 @@ export function buildSyntheticCallToolResult(
     syntheticSource: "supervisor",
     restart
   };
+  if (catalogTool !== undefined) {
+    // A catalog tool offers the retry as validated meta.nextActions instead
+    // of error.suggestedCall.
+    const nextActions = catalogRetryNextActions(
+      catalogTool,
+      ctx.toolArgsRedacted,
+      ctx.toolArgsRedactedModified
+    );
+    if (nextActions.length > 0) {
+      meta.nextActions = nextActions;
+    }
+  }
+  Object.assign(meta, aliasDeprecationMeta(ctx.toolName, ctx.toolArgsRedacted));
 
   return buildSyntheticToolResult(id, { error, meta });
 }
@@ -1591,12 +1690,17 @@ export class StdioSupervisor {
       this.writeSyntheticReply(pending, reply);
       return;
     }
-    const isValidate = pending.toolName === "validate-project";
+    const isValidate = isServedLongRunningToolName(pending.toolName);
     const dispatchImmediately = this.canDispatchImmediately(pending);
     if (!dispatchImmediately && this.queuedRequests.length >= MAX_SUPERVISOR_QUEUE) {
       this.writeSyntheticReply(
         pending,
-        buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
+        buildSupervisorQueueLimitReply(
+          pending.id,
+          pending.method ?? message.method,
+          pending.toolName,
+          pending.toolArgsRedacted
+        )
       );
       this.drainQueue();
       return;
@@ -1902,7 +2006,7 @@ export class StdioSupervisor {
 
   private canDispatchImmediately(pending: PendingRequest): boolean {
     if (!this.childReady || !this.child || this.child.stdin.destroyed) return false;
-    if (pending.toolName === "validate-project") {
+    if (isServedLongRunningToolName(pending.toolName)) {
       return (
         this.pendingRequests.size === 0 &&
         this.runningValidateKey === undefined &&
@@ -1935,7 +2039,12 @@ export class StdioSupervisor {
         }
         this.writeSyntheticReply(
           pending,
-          buildSupervisorQueueLimitReply(pending.id, pending.method ?? message.method)
+          buildSupervisorQueueLimitReply(
+            pending.id,
+            pending.method ?? message.method,
+            pending.toolName,
+            pending.toolArgsRedacted
+          )
         );
       }
       this.scheduleRestart();
@@ -1947,7 +2056,7 @@ export class StdioSupervisor {
     // legally retry with the same id after a synthetic terminal reply).
     this.syntheticTombstones.delete(requestKey(pending.id));
     this.pendingRequests.set(requestKey(pending.id), pending);
-    if (pending.toolName === "validate-project") {
+    if (isServedLongRunningToolName(pending.toolName)) {
       pending.timeoutPhase = "running";
       this.runningValidateKey = requestKey(pending.id);
       this.validateBarrierKey = requestKey(pending.id);
@@ -2147,7 +2256,7 @@ export class StdioSupervisor {
     }
 
     const pending = this.pendingRequests.get(key);
-    if (!pending || pending.toolName !== "validate-project") return;
+    if (!pending || !isServedLongRunningToolName(pending.toolName)) return;
     // The live entry at this key may be a LATER request that reused the id
     // after this timer's request was already settled; only the captured
     // instance may be timed out here.
@@ -2176,7 +2285,7 @@ export class StdioSupervisor {
       if (this.runningValidateKey) return;
       const next = this.queuedRequests[0];
       const nextKey = requestKey(next.pending.id);
-      if (next.pending.toolName === "validate-project") {
+      if (isServedLongRunningToolName(next.pending.toolName)) {
         this.validateBarrierKey = nextKey;
         if (
           this.pendingRequests.size > 0 ||
@@ -2918,7 +3027,7 @@ export class StdioSupervisor {
         // on a writeToClient/drainQueue fault) never touches these two fields,
         // so leaving them ordered after a throwing call would strand the
         // barrier and every validate-project admitted behind it, permanently.
-        if (pending?.toolName === "validate-project") {
+        if (isServedLongRunningToolName(pending?.toolName)) {
           this.runningValidateKey = undefined;
           if (this.validateBarrierKey === key) this.validateBarrierKey = undefined;
         }

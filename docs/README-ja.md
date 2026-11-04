@@ -15,7 +15,7 @@
 
 stdio で動作し、Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini CLI などの MCP 対応クライアントから利用できます。
 
-**41 ツール**（6 エントリー + 35 エキスパート） | **9 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
+**29 カタログツール** + **41 非推奨の 8.x ツール** | **9 リソース** | **4 マッピング名前空間** | **SQLite ベースのキャッシュ**
 
 ## 特長
 
@@ -34,7 +34,7 @@ stdio で動作し、Claude Desktop、Claude Code、VS Code、Codex CLI、Gemini
 要件:
 
 - Node.js 22.13.0+
-- デコンパイル / リマップ処理には、`PATH` 上の Java 17+ が必要です（Loom のソース jar がないバージョンの Minecraft ソースの読み取り、Mod JAR のデコンパイル、`remap-mod-jar`）。既定の Vineflower は Java 17 を必要としますが、サーバーは `java` が起動できるかだけを確認し、バージョンは確認しません。`get-registry-data` と、`compare-versions` / `compare-minecraft` のレジストリ差分は Minecraft サーバーのデータジェネレーターを実行するため、その Minecraft リリースが必要とする Java バージョン（1.21.x では Java 21）が必要です。
+- デコンパイル / リマップ処理には、`PATH` 上の Java 17+ が必要です（Loom のソース jar がないバージョンの Minecraft ソースの読み取り、Mod JAR のデコンパイル、`mod-remap`（8.x では `remap-mod-jar`））。既定の Vineflower は Java 17 を必要としますが、サーバーは `java` が起動できるかだけを確認し、バージョンは確認しません。`registry-read` と `version-compare` のレジストリ比較（8.x ツールでは `get-registry-data` と、`compare-versions` / `compare-minecraft` のレジストリ差分）は Minecraft サーバーのデータジェネレーターを実行するため、その Minecraft リリースが必要とする Java バージョン（1.21.x では Java 21）が必要です。
 
 ローカルでサーバーを起動:
 
@@ -64,7 +64,7 @@ codex mcp add minecraft-modding -- npx -y @adhisang/minecraft-modding-mcp
 
 stdio トランスポートは、改行区切り形式と `Content-Length` フレーミングの両方を自動判別します。そのため、Codex と標準的な MCP クライアントで同じサーバー起動コマンドを利用できます。
 
-サーバーは MCP プロトコルリビジョン `2026-07-28`(`server/discover` とリクエスト単位 `_meta` によるステートレス動作)と、従来の `initialize` ベースのレガシープロトコル(`2025-11-25`〜`2024-10-07`)の両方を同一バイナリでサポートします。1 プロセスはクライアントの最初のシグナルで選択された era を提供します。ワイヤレベルの詳細は [docs/tool-reference.md → MCP Protocol Support](tool-reference.md#mcp-protocol-support) を参照してください。
+サーバーは MCP プロトコルリビジョン `2026-07-28`(`server/discover` とリクエスト単位 `_meta` によるステートレス動作)と、従来の `initialize` ベースのレガシープロトコル(`2025-11-25`〜`2024-10-07`)の両方を同一バイナリでサポートします。1 プロセスはクライアントの最初のシグナルで選択された era を提供します。どちらの era でも、`initialize` と `server/discover` の結果に AI エージェント向けの短い入門文を MCP の `instructions` として含めます(カタログツール、`target`、`mapping`、`{ result, meta }` 形式の応答の説明と、8.x ツールを提供している間はそれらが非推奨エイリアスであること。詳細は [docs/tool-reference.md → Tool catalog](tool-reference.md#tool-catalog))。ワイヤレベルの詳細は [docs/tool-reference.md → MCP Protocol Support](tool-reference.md#mcp-protocol-support) を参照してください。
 
 #### Claude Desktop
 
@@ -136,79 +136,60 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 }
 ```
 
-ビルドが既定以外の Gradle User Home を使っている場合は、キャッシュを使うソース / マッピング / 検証 / ワークフローの呼び出しで `gradleUserHome` を指定してください。呼び出し単位の Gradle User Home として扱われ、MCP プロセスの Gradle User Home の代わりに `<gradleUserHome>/loom-cache` と `<gradleUserHome>/caches/fabric-loom` を検索します。`projectPath` 配下のプロジェクトローカルなキャッシュは引き続き検索対象です。
+ビルドが既定以外の Gradle User Home を使っている場合は、`artifact-resolve` に `gradleUserHome` を指定し、返された `artifactId` を再利用してください（非推奨の 8.x ツールは、キャッシュを使う呼び出しごとに受け取ります）。呼び出し単位の Gradle User Home として扱われ、MCP プロセスの Gradle User Home の代わりに `<gradleUserHome>/loom-cache` と `<gradleUserHome>/caches/fabric-loom` を検索します。`projectPath` 配下のプロジェクトローカルなキャッシュは引き続き検索対象です。
 
 ## まずここから
 
-以下の 6 つのトップレベルワークフローツールは、よく使う作業をカバーし、要約優先の結果を返します。エージェントや MCP クライアントの既定の入口として使ってください。
-
-すべて `result.summary` を先に返し、次の一手が明確な場合は `summary.nextActions` も含めます。表でツールを選び、下の例と英語リファレンスで正確なペイロードを確認してください。
+まずカタログツールを使ってください。各ツールは 1 種類の問いに答え、すべてが同じリクエスト語彙（`target`、`mapping`、`detail`）を共有します。応答は `{ result, meta }` または `{ error, meta }` で、次の一手は `meta.nextActions`、警告は `meta.warnings` に入ります。表でツールを選び、下の例と英語リファレンスで正確なペイロードを確認してください。
 
 | ツール | 主な用途 |
 | --- | --- |
-| `inspect-minecraft` | バージョン、アーティファクト、クラス、ファイル、ソース検索 |
-| `analyze-symbol` | シンボル存在確認、マッピング変換、ライフサイクル追跡、ワークスペースシンボル解決 |
-| `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要 |
-| `analyze-mod` | Mod メタデータ、デコンパイル / 検索フロー、クラスソース、安全なリマップのプレビュー / 実行 |
-| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証 |
-| `manage-cache` | キャッシュ一覧、検証、プレビュー / 実行によるクリーンアップワークフロー |
+| `artifact-resolve` | バージョン、JAR、座標、ワークスペース、依存関係を一度解決し、その `artifactId` を再利用する |
+| `source-read` | Minecraft・依存関係・Mod の JAR から最大 50 クラスのソースを読む |
+| `member-list` | バイトコードからコンストラクタ、フィールド、メソッドを一覧する |
+| `source-search` | アーティファクトのソースから宣言、テキスト、ファイルパスを検索する |
+| `symbol-check` | クラス、フィールド、メソッドが Minecraft バージョンに存在するかを確認する |
+| `symbol-map` | クラス、フィールド、メソッドの名前を別の名前空間に変換する |
+| `version-compare` | 2 つのバージョン間で変わったクラス、レジストリエントリ、ライブラリを調べる |
+| `mod-inspect` | Mod の JAR のローダー、メタデータ、エントリポイント、Mixin 設定を読む |
+| `project-validate` | ワークスペースの Mixin 設定と Access Widener をファイルごとに検証する |
+| `cache-manage` | キャッシュの一覧、検証、プレビュー / 実行によるクリーンアップ |
 
 ### ワークフローノート
 
 ここでは、オンボーディング中によく迷う判断だけを扱います。完全な注意点一覧、正確な契約、移行メモ、環境変数は [tool-reference.md](tool-reference.md) を参照してください。
 
-- `search-class-source` は既定で `queryMode="auto"` を使い、`foo.bar`、`foo_bar`、`foo$bar` のような区切り文字付きクエリもインデックス経路のまま扱います。明示的な全文部分文字列スキャンが必要な場合は `queryMode="literal"` を使ってください。
-- アーティファクトが不明な場合は、`inspect-minecraft` で `subject.kind="workspace"` を使う方が安全です。`subject.focus` は文字列ではなくオブジェクトで、`{ "kind": "class", "className": "..." }`、`{ "kind": "search", "query": "..." }`、`{ "kind": "file", "filePath": "..." }` のいずれかの形で指定します。`task="auto"` は `subject.kind` と `focus.kind` だけで処理を振り分けるもので、自然言語から判断するプランナーではありません。アーティファクト文脈だけが不足しているときは、再試行しやすい `suggestedCall` が元の `task` を維持したまま返ります。
-- `inspect-minecraft task="search"` では、`detail: "summary", include: ["samples"]` で先頭 5 件までのヒットを `result.search` に返します（該当なしなら `hits: []`）。取得したページ全体を見るには `detail: "standard"` または `"full"` を使います。カーソルはサンプルの直後ではなく、そのページの後へ進みます。
-- `detail` の効果はタスクによって異なります。`inspect-minecraft task="class-source", detail="full"` でもソースはスニペットです。ファイル全体は `get-class-source mode="full"`、後続の範囲は `mode="snippet"` と行範囲を指定して取得します。メンバーのシグネチャには `task="class-members"` を使います。対応する `include` とソース検索の文脈は [inspection response controls](tool-reference.md#inspection-response-controls) を参照してください。
-- `trace-symbol-lifecycle` の `symbol` には `Class.method` を指定します。厳密なオーバーロード指定は別フィールドの `descriptor` を使ってください。
-- ワークスペースのソースカバレッジが部分的な場合でも、バニラクラスを確認できます。`inspect-minecraft task="list-files"` は、その場合に部分的な結果とフォローアップガイダンスを返します。
-- `analyze-mod` と `validate-project` は、オブジェクト形式の `subject` と正規の `include` グループを要求します。古い文字列形式の `subject` やドメイン名形式の `include` には `ERR_INVALID_INPUT` と、再試行しやすい `suggestedCall` を返します。
-- `validate-mixin` と `validate-project` は、`obfuscated` / `mojang` 検証では `mapping-health` を軽量に保ちます。`intermediary` / `yarn` 名前空間を要求しない限り、完全な Tiny マッピンググラフは読み込みません。
-- `validate-project task="project-summary"` は `version` を省略すると `gradle.properties` から Minecraft バージョンを推定し、推定したバージョンを `warnings` に示します。推定を止めるには `preferProjectVersion: false` を指定します。その場合、`version` のない呼び出しは `status: "blocked"` を返します。解決したバージョン（明示指定または推定）は、検出したすべての Mixin / Access Widener / Access Transformer の検証に渡されます。ファイルを検出したのにバージョンを推定できない場合は、推測せずに、明示的な `version` を求める再試行案付きで `status: "blocked"` を返します。
-- `validate-project task="project-summary"` が検証対象のファイルを 1 つも検出しなかった場合、`status` は `"ok"` のままですが、headline が `Nothing to validate: ...` となり、`warnings` にも何も検証していないことが示されます。`"ok"` だけでは、いずれかのファイルが検証に通ったことを意味しません。
-- `validate-project task="project-summary"` の `tasks["minecraft.artifact.resolved"]` は軽量なアーティファクト probe です。probe 状態を返すためだけに Minecraft のデコンパイルやソースインデックス再構築は行いません。
-- アーティファクトのダウンロードは 1 件あたり 512 MiB（`MCP_MAX_DOWNLOAD_BYTES`）、ネストした JAR のエントリは展開後 1 件あたり 64 MiB（`MCP_MAX_NESTED_JAR_ENTRY_BYTES`）が上限です。上限を超えるダウンロードは失敗し、すべてのリポジトリで上限を超えた場合は `ERR_REPO_FETCH_FAILED` が返り、その `context.repoFailureCode` は `ERR_LIMIT_EXCEEDED` です。上限を超えるネストした JAR はエラーも警告もなくスキップされ、ほかのネストした JAR は引き続き解決されます。`validate-project` にはキュー待ちを含めて 120 秒の期限があり（`MCP_VALIDATE_PROJECT_TIMEOUT_MS` で 10000〜600000 ミリ秒の範囲で変更可能）、超えると `ERR_TOOL_TIMEOUT` で失敗します。詳細は [tool-reference.md](tool-reference.md) を参照してください。
+- `artifact-resolve` で一度解決し、`result.artifact.artifactId` を `target: { kind: "artifact", artifactId }` としてほかのツールに渡してください。解決オプション（`sourcePriority`、`gradleUserHome`、`preferProjectVersion`、`strictVersion`）を受け取るのは `artifact-resolve` だけです。`allowDecompile` は `source-read` と `source-export` も受け取ります（既定値 `true`）。解決時やフォールバック時のソースのデコンパイルを拒否するには、`artifactId` を再利用するときも呼び出しごとに `false` を指定してください。オプションは呼び出し単位で、アーティファクトには保存されません。
+- シンボルのツール、`class-diff`、`access-validate`、`mixin-verify-target` では、名前がどの名前空間で書かれているかを示す `mapping` が必須です。名前空間が推測されることはありません。
+- `template: true` のない `meta.nextActions` の項目はそのまま送れます。`template: true` の項目は、`<placeholder>` の値を埋めてから送ってください。
+- アーティファクトのダウンロードは 1 件あたり 512 MiB（`MCP_MAX_DOWNLOAD_BYTES`）、ネストした JAR のエントリは展開後 1 件あたり 64 MiB（`MCP_MAX_NESTED_JAR_ENTRY_BYTES`）が上限です。上限を超えるダウンロードは失敗し、すべてのリポジトリで上限を超えた場合は `ERR_REPO_FETCH_FAILED` が返り、その `context.repoFailureCode` は `ERR_LIMIT_EXCEEDED` です。上限を超えるネストした JAR はエラーも警告もなくスキップされ、ほかのネストした JAR は引き続き解決されます。`validate-project`、`project-validate`、`mixin-validate` にはキュー待ちを含めて 120 秒の期限があり（`MCP_VALIDATE_PROJECT_TIMEOUT_MS` で 10000〜600000 ミリ秒の範囲で変更可能）、超えると `ERR_TOOL_TIMEOUT` で失敗します。これらの呼び出しは 1 件ずつ単独で実行され、後続の呼び出しは完了を待ちます。詳細は [tool-reference.md](tool-reference.md) を参照してください。
 
-### あるバージョンの Minecraft ソースを確認する
+### あるバージョンの Minecraft ソースを読む
 
 ```json
 {
-  "tool": "inspect-minecraft",
+  "tool": "source-read",
   "arguments": {
-    "task": "class-source",
-    "subject": {
-      "kind": "class",
-      "className": "net.minecraft.server.Main",
-      "artifact": {
-        "type": "resolve-target",
-        "target": {
-          "kind": "version",
-          "value": "1.21.10"
-        }
-      }
-    }
+    "target": { "kind": "version", "version": "1.21.10" },
+    "classes": ["net.minecraft.server.Main"],
+    "mode": "snippet"
   }
 }
 ```
 
-### シンボルのマッピングまたは存在確認を行う
+### シンボルを別の名前空間に変換する
 
 ```json
 {
-  "tool": "analyze-symbol",
+  "tool": "symbol-map",
   "arguments": {
-    "task": "map",
-    "subject": {
-      "kind": "method",
-      "owner": "net.minecraft.server.MinecraftServer",
-      "name": "tickServer"
-    },
-    "version": "1.21.10",
-    "sourceMapping": "mojang",
-    "targetMapping": "intermediary",
-    "signatureMode": "name-only",
-    "detail": "standard"
+    "target": { "kind": "version", "version": "1.21.10" },
+    "mapping": "mojang",
+    "toMapping": "intermediary",
+    "symbols": [
+      { "kind": "method", "className": "net.minecraft.server.MinecraftServer", "memberName": "tickServer" }
+    ],
+    "signatureMode": "name-only"
   }
 }
 ```
@@ -217,13 +198,9 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 ```json
 {
-  "tool": "analyze-mod",
+  "tool": "mod-inspect",
   "arguments": {
-    "task": "summary",
-    "subject": {
-      "kind": "jar",
-      "jarPath": "/path/to/mymod-1.0.0.jar"
-    }
+    "jarPath": "/path/to/mymod-1.0.0.jar"
   }
 }
 ```
@@ -232,159 +209,117 @@ stdio トランスポートは、改行区切り形式と `Content-Length` フ�
 
 ```json
 {
-  "tool": "validate-project",
+  "tool": "project-validate",
   "arguments": {
-    "task": "project-summary",
-    "subject": {
-      "kind": "workspace",
-      "projectPath": "/workspace/modid",
-      "discover": ["mixins", "access-wideners", "access-transformers"]
-    },
-    "preferProjectVersion": true,
-    "preferProjectMapping": true
+    "projectPath": "/workspace/modid",
+    "discover": ["mixins", "access-wideners", "access-transformers"]
   }
 }
 ```
 
-ワークスペース要約は既定では mixin と access widener を検出します。Access Transformer も含めたい場合は `subject.discover` に `"access-transformers"` を追加してください。
+`project-validate` は既定では Mixin 設定と Access Widener を検出します。Access Transformer も検証したい場合は `discover` に `"access-transformers"` を追加してください。
 
 ## ドキュメント
 
 この日本語版はオンボーディング向けの概要です。詳細な例と完全なリファレンスは現時点では英語ドキュメントを参照してください。
 
 - [詳細なリクエスト例（英語）](examples.md)
-- [ツール / 設定リファレンス（英語）](tool-reference.md)。どのツールを呼ぶべきか迷ったときは、まず [Which Tool for Which Question](tool-reference.md#which-tool-for-which-question) の判断表を確認してください。
+- [ツール / 設定リファレンス（英語）](tool-reference.md)。どのツールを呼ぶべきか迷ったときは、まず [Tool catalog](tool-reference.md#tool-catalog) を確認してください。8.x ツールごとの置き換え先は [Migration from 8.x](tool-reference.md#migration-from-8x) にあります。
 - [英語版 README](../README.md)
 
 ## ツール一覧
 
-明確に狙っている専用操作がない限り、まずは以下のトップレベルワークフローツールから始めてください。より低レベルなツールも、絞り込んだ追加調査や自動化向けに引き続き利用できます。
+### カタログツール
 
-### トップレベルワークフローツール
+カタログは、8.x ツールより前に一覧されるフラットな専用ツール群です。各カタログツールは 1 種類の問いに答え、すべてが同じリクエスト語彙を共有します。`target` オブジェクトで参照先（`artifact`、`version`、`jar`、`coordinate`、`workspace`、`dependency`）を指定し、`mapping` で名前空間を、`detail` で応答の詳しさを指定します。応答は答えを `result` に入れ、警告・次の一手・ページング・切り詰めを `meta` に入れます。`target` をアーティファクトに解決するツールは `result.artifact` を返し、その `artifactId` は `target: { kind: "artifact", artifactId }` として再利用できます。未知のキーや置き場所を誤ったキーは無視されず、`ERR_INVALID_INPUT` で失敗します。ソースとメンバーのツールは 1 回の呼び出しで 1〜50 個の `classes` を受け取り、クラスごとに `result.items` の 1 項目として報告します。これらは読み取り専用で、`source-export` だけが `outputDir` 配下に `.java` ファイルを書き込みます。`source-search` は 1 つのアーティファクトのインデックス化されたソースから、名前による宣言・ファイル内のテキスト・ファイルパスをページ単位で検索します。`mapping` はクエリの名前空間を表すため、Mojang のクラス名で難読化アーティファクト内のクラスを見つけられます。ヒットがなく、クエリを変換できなかった検索は `status: "unavailable"` になります。シンボルのツール（`symbol-check`、`symbol-map`、`class-mappings`、`symbol-trace`）は Minecraft バージョンのマッピングを読み、名前がどの名前空間で書かれているかを示す `mapping` が必須です。名前空間が推測されることはないため、Mojang 名が難読化名として検索されて「存在しない」と報告されることはありません。`symbol-check` と `symbol-map` は 1 回の呼び出しで 1〜50 個の `symbols` を受け取ります。比較のツールはバージョン間の差分や 1 バージョンの生成データを扱います。`version-compare` は `detail` で名前の一覧を求めない限り件数で答え、`class-diff` はシンボルのツールと同じく `mapping` が必須で、`registry-read` は `withData` を指定しない限りレジストリ名とエントリ数を返します。Mod のツールは Mod の JAR を `jarPath` で受け取ります。`mod-inspect` はメタデータを返し、`mod-search` はソースを検索し、`mod-remap` は Fabric / Quilt の JAR をリマップします (出力を書き込むのは `apply: true` のときだけです)。Mod のクラスは `target: { kind: "jar", jarPath }` を指定した `source-read` と `member-list` で読みます。検証のツールは Loom プロジェクトを Minecraft のバイトコードに照らして検証します。`mixin-validate` は `source`、`paths`、`configPaths`、`discover: true` のいずれか 1 つを受け取って Mixin クラスごとに報告し、`project-validate` はワークスペースの Mixin 設定と Access Widener を見つけて検証し、ファイルごとに報告します。どちらも省略した `version` と `mapping` を `projectPath` があるときに限りプロジェクトから読み取り、Mixin の名前空間を推測することはありません。読み取れないときは、テンプレートの次の一手を付けて `status: "blocked"` を返します。`access-validate` は `content` または `path` で受け取った 1 つの Access Widener / Access Transformer をエントリごとに検証し、`mixin-verify-target` は Mixin が対象とする 1 つのメソッドまたはフィールドを確認して `@Shadow`・`@Accessor`・`@Invoker` のどれを使うかを助言します。どちらも検証する名前の名前空間を示す `mapping` が必須で、`mixin-verify-target` は `autoRemap: false` を指定しない限り、その名前を JAR の名前空間に変換します。NBT のツールは Java Edition の NBT を変換します。`nbt-decode` は base64 の NBT バイト列を型付き JSON ドキュメントにし、`nbt-patch` はそのドキュメントに RFC 6902 の操作を適用し、`nbt-encode` はそれを base64 の NBT に書き戻します。`cache-manage` はサーバーのキャッシュエントリを集計・一覧・検証・削除します。`delete` には `selector` が必要で、`apply: true` を指定しない限りプレビューだけを行います。どのアクションも毎回エントリまたは件数を返します。`server-metrics` は、ツールごとの呼び出し回数を含むサーバーのランタイムカウンタを返します。入力・結果・8.x ツールからの対応は [tool-reference.md → Tool catalog](tool-reference.md#tool-catalog) を参照してください。8.x ツールは非推奨のエイリアスとして引き続き呼び出せます。
 
-<!-- BEGIN GENERATED TOOL TABLE: top-level-workflow-tools -->
-| ツール | 役割 |
+<!-- BEGIN GENERATED TOOL TABLE: catalog -->
+| ツール | 役割 | 置き換える 8.x ツール |
+| --- | --- | --- |
+| `version-list` | Mojang のメタデータから Minecraft バージョンを一覧し、ローカルにキャッシュ済みのものを示す | `list-versions`, `inspect-minecraft` (`versions`) |
+| `artifact-resolve` | バージョン・JAR・座標・ワークスペース・依存関係のターゲットを再利用できるアーティファクトに解決する | `resolve-artifact`, `inspect-minecraft` (`artifact`) |
+| `artifact-index` | アーティファクトのファイル / シンボルのキャッシュ済みインデックスを再構築する | `index-artifact` |
+| `file-list` | アーティファクト内のファイルパスをカーソル付きページングで一覧する | `list-artifact-files`, `inspect-minecraft` (`list-files`) |
+| `file-read` | アーティファクト内の 1 ファイルをバイト上限付きで読む | `get-artifact-file`, `inspect-minecraft` (`file`) |
+| `class-find` | 単純名または完全修飾名から、ネストされた JAR も含めて完全修飾クラス名を探す | `find-class`, `inspect-minecraft` (`class-overview`) |
+| `source-read` | Minecraft・依存関係・Mod の JAR から 1〜50 クラスのソース (アウトライン・行範囲・全文) を読む | `batch-class-source`, `get-class-source`, `decompile-mod-jar`, `get-mod-class-source`, `inspect-minecraft` (`class-source`), `analyze-mod` (`class-source`) |
+| `source-export` | 1〜50 クラスのソースを出力ディレクトリ配下に `.java` ファイルとして書き出す | `batch-class-source`, `get-class-source`, `get-mod-class-source` |
+| `member-list` | 1〜50 クラスのバイトコード上のコンストラクタ・フィールド・メソッドをページング付きで一覧する | `batch-class-members`, `get-class-members`, `inspect-minecraft` (`class-members`), `analyze-mod` (`members`) |
+| `source-search` | アーティファクトのインデックス化されたソースから、名前による宣言・ファイル内のテキスト・ファイルパスをページング付きで検索する | `search-class-source`, `inspect-minecraft` (`search`) |
+| `symbol-check` | 1〜50 個のクラス・フィールド・メソッドが Minecraft バージョンのマッピングに存在するか確認する | `batch-symbol-exists`, `check-symbol-exists`, `analyze-symbol` (`exists`) |
+| `symbol-map` | 1〜50 個のクラス・フィールド・メソッド名を名前空間の間で変換する (ディスクリプタでの厳密一致、ワークスペースのコンパイル時の名前への変換にも対応) | `batch-mappings`, `find-mapping`, `resolve-method-mapping-exact`, `resolve-workspace-symbol`, `analyze-symbol` (`map`, `exact-map`, `workspace`) |
+| `class-mappings` | 1 クラスとそのメンバーの 4 名前空間すべての名前をページング付きで一覧する | `get-class-api-matrix`, `analyze-symbol` (`api-overview`) |
+| `symbol-trace` | メソッドが存在する Minecraft バージョンを調べる | `trace-symbol-lifecycle`, `analyze-symbol` (`lifecycle`) |
+| `version-compare` | 2 つの Minecraft バージョン間で追加・削除されたクラス・レジストリエントリ・ライブラリを数える (求めれば一覧も返す) | `compare-versions`, `compare-minecraft` (`versions`, `registry-diff`, `migration-overview`) |
+| `class-diff` | 1 クラスのコンストラクタ・メソッド・フィールドを 2 つの Minecraft バージョン間で比較する | `diff-class-signatures`, `compare-minecraft` (`class-diff`) |
+| `registry-read` | バージョンの生成済みレジストリを読む: 名前とエントリ数、求めればエントリも返す | `get-registry-data` |
+| `mod-inspect` | Mod の JAR のローダー・メタデータ・エントリポイント・Mixin 設定・依存関係・ネストされた JAR を読む (求めればクラス名も返す) | `analyze-mod-jar`, `decompile-mod-jar`, `analyze-mod` (`summary`, `decompile`) |
+| `mod-search` | Mod の JAR の Java ソースからクラス名・メソッドとフィールドの宣言・テキストを検索する | `search-mod-source`, `analyze-mod` (`search`) |
+| `mod-remap` | Fabric / Quilt の Mod の JAR を Yarn または Mojang の名前にリマップする (`apply` を指定しない限りプレビュー) | `remap-mod-jar`, `analyze-mod` (`remap`) |
+| `project-validate` | Loom ワークスペースの Mixin 設定・Access Widener (求めれば Access Transformer も) を見つけて検証し、ファイルごとの状態を返す | `validate-project` (`project-summary`) |
+| `mixin-validate` | Mixin のソース・ファイル・設定、またはプロジェクトで見つけた設定を Minecraft バージョンのバイトコードに照らして検証する | `validate-mixin`, `validate-project` (`mixin`) |
+| `access-validate` | 1 つの Access Widener または Access Transformer (テキストまたはファイル) を、エントリごとに Minecraft バージョンのバイトコードに照らして検証する | `validate-access-widener`, `validate-access-transformer`, `validate-project` (`access-widener`, `access-transformer`) |
+| `mixin-verify-target` | Mixin の対象メソッドまたはフィールドが JAR に存在するか確認し、@Shadow・@Accessor・@Invoker のどれを使うかの助言を得る | `verify-mixin-target` |
+| `nbt-decode` | Java Edition の NBT バイト列 (base64、gzip または非圧縮) を型付き JSON ドキュメントにデコードする | `nbt-to-json` |
+| `nbt-encode` | 型付き NBT JSON ドキュメントを Java Edition の NBT バイト列 (base64、gzip 圧縮も可) にエンコードする | `json-to-nbt` |
+| `nbt-patch` | 型付き NBT JSON ドキュメントに RFC 6902 の add・remove・replace・test 操作を適用する | `nbt-apply-json-patch` |
+| `cache-manage` | サーバーのキャッシュエントリを集計・一覧・検証・削除する (削除は `apply` を指定しない限りプレビュー) | `manage-cache` |
+| `server-metrics` | ツールごとの呼び出し回数と所要時間を含む、サーバーのランタイムカウンタを読む | `get-runtime-metrics` |
+<!-- END GENERATED TOOL TABLE: catalog -->
+
+### 26.1+ のバージョンの名前
+
+`26.1+` のような難読化されていないリリースでは、ランタイム jar に含まれるままの名前（`obfuscated` 名前空間）がすでに Mojang 名です。`mapping` は `obfuscated` と `mojang` のどちらも受け付け、どちらも同じ名前を読みます。`source-read`、`member-list` など `target` をアーティファクトに解決するツールは、どちらを指定しても、また `mapping` を省略しても `result.artifact.mappingApplied: "mojang"` と報告し、`artifact-resolve` に `detail: "full"` を指定すると `provenance.unobfuscatedRuntime: true` が表示されます。`artifact-resolve` は `requestedMapping` を書き換えないため、`requestedMapping: "obfuscated"` と `mappingApplied: "mojang"` が並ぶのは同一の名前を指すだけで、フォールバックではありません。`mapping: "mojang"` はランタイム / デコンパイルの経路を直接使い、Loom のソース jar の探索を省きます。`intermediary` や `yarn` で解決したターゲットは、警告付きでランタイムの名前にフォールバックし `mojang` と報告します。`symbol-trace` は指定された名前空間をそのまま報告します。対象はバージョンターゲット、Minecraft ランタイムの座標、および自身の内容（26.1+ の `id` を持つトップレベルの `version.json`、`net/minecraft/SharedConstants.class`、`.java` ソースなし）から 26.1+ の Minecraft ランタイム jar と分かる `jar` ターゲットです（[tool-reference.md → Lookup Rules](tool-reference.md#lookup-rules)）。バージョンが `26.x` に見えるだけの依存 jar は `obfuscated` のままです。`cache-manage` は各エントリが記録されたときのラベルを書き換えずに表示し、`access-validate` は検証に使ったバニラ jar を `provenance` で `obfuscated` と報告します。詳しくは [tool-reference.md → Namespace Definitions](tool-reference.md#namespace-definitions) を参照してください。
+
+### 非推奨の 8.x ツール
+
+以下の 8.x ツールは 8.x の入力を引き続き受け付ける非推奨のエイリアスで、早くとも 10.0.0 で削除され、`MCP_DEPRECATED_TOOLS=off` を設定すると除外されます（詳細は [tool-reference.md → Deprecated 8.x tools](tool-reference.md#deprecated-8x-tools)）。
+
+<!-- BEGIN GENERATED TOOL TABLE: aliases -->
+| 8.x ツール | 置き換え先 |
 | --- | --- |
-| `inspect-minecraft` | バージョン、アーティファクト、クラス、ファイル、ソース本文、ワークスペース文脈の調査フローをまとめて扱う |
-| `analyze-symbol` | シンボル存在確認、名前空間変換、ライフサイクル追跡、ワークスペースシンボル解決、API 概要をまとめて扱う |
-| `compare-minecraft` | バージョン差分、クラス差分、レジストリ差分、移行向け概要を比較する |
-| `analyze-mod` | Mod メタデータの要約、Mod コードのデコンパイル / 検索、クラスソース確認、リマップのプレビュー / 実行を扱う |
-| `validate-project` | ワークスペース要約と、Mixin / Access Widener / Access Transformer の直接検証を行う |
-| `manage-cache` | キャッシュの一覧、検証、クリーンアップのプレビュー / 実行を行う |
-<!-- END GENERATED TOOL TABLE: top-level-workflow-tools -->
-
-### ソース探索
-
-Minecraft バージョンの参照、ソースアーティファクトの解決、デコンパイル済みソースコードの読み取り / 検索を行うツール群です。`get-class-members` は、同じパスの JAR の更新日時とサイズが変わらない間、シグネチャ結果を再利用します。どちらかが変わるとシグネチャを再取得します。
-
-<!-- BEGIN GENERATED TOOL TABLE: source-exploration -->
-| ツール | 役割 |
-| --- | --- |
-| `list-versions` | Mojang メタデータとローカルキャッシュから利用可能な Minecraft バージョンを一覧表示する |
-| `resolve-artifact` | バージョン、JAR パス、Maven 座標からソースアーティファクトを解決する |
-| `find-class` | アーティファクト内で簡易名または完全修飾クラス名を探す |
-| `get-class-source` | アーティファクトからクラスソースを読み取り、必要に応じて背後のアーティファクトを解決する |
-| `get-class-members` | バイトコードからコンストラクタ、フィールド、メソッドを一覧化する |
-| `search-class-source` | インデックス化されたクラスソースをシンボル、テキスト、パスで検索する |
-| `get-artifact-file` | バイト上限付きでソースファイル全体を読み取る |
-| `list-artifact-files` | インデックス化されたソースファイルパスをカーソルページネーション付きで一覧表示する |
-| `index-artifact` | 既存アーティファクトのインデックスメタデータを再構築する |
-<!-- END GENERATED TOOL TABLE: source-exploration -->
-
-ソースインデックスからの検索では、完全修飾クラス名をそのファイル内の外側から内側までの型の連鎖と照合し、指定された表記で返します。別のインデックス対象ファイルにある同名型が、存在しない型の代わりに返されることはありません。
-
-`26.1+` のような難読化されていないリリースでは、`obfuscated` はランタイム jar に含まれるままの名前を指し、それはすでに Mojang 名です。`obfuscated` と `mojang` のどちらも受け付け、`obfuscated` と報告されるはずの名前空間フィールド（`mappingApplied`、`returnedNamespace` など）は `mojang` と報告されます。こうしたアーティファクトには `provenance.unobfuscatedRuntime: true` が付きます。`requestedMapping` は書き換えられないため、`mapping` を省略したか `obfuscated` を指定したリクエストで `requestedMapping: "obfuscated"` と `mappingApplied: "mojang"` が並ぶのは同一の名前を指すだけで、フォールバックではありません。アーティファクト系・クラス系のツールが 26.1+ のターゲットを `intermediary` や `yarn` で解決した場合は、警告付きでランタイムの名前にフォールバックし `mojang` と報告します。ライフサイクル系のツールは指定された `intermediary` / `yarn` をそのまま報告します。解決済みの `artifactId` に明示的な `intermediary` / `yarn` を渡した場合はこのフォールバックを行わず、`get-class-source` と `get-class-members` の `mappingApplied` は `mojang` ですが、`get-class-members` と `batch-class-members` の各エントリは `returnedNamespace` に指定された名前を保持します。バージョンが `26.x` に見えるだけの依存 jar、`manage-cache` のメタデータ、Access Widener / Access Transformer 検証の provenance は `obfuscated` のままです。詳しくは [tool-reference.md → Namespace Definitions](tool-reference.md#namespace-definitions) を参照してください。
-
-### バージョン比較とシンボル追跡
-
-Minecraft バージョン間でのクラス / レジストリ変更比較と、時系列でのシンボル存在追跡を行うツール群です。
-
-<!-- BEGIN GENERATED TOOL TABLE: version-comparison-symbol-tracking -->
-| ツール | 役割 |
-| --- | --- |
-| `trace-symbol-lifecycle` | `Class.method` が Minecraft のどのバージョンで存在するかを追跡する |
-| `diff-class-signatures` | 2 つのバージョン間で 1 つのクラスを比較し、メンバー差分を返す |
-| `compare-versions` | 2 つのバージョン間でクラスとレジストリの変更を比較する |
-<!-- END GENERATED TOOL TABLE: version-comparison-symbol-tracking -->
-
-### マッピングとシンボル
-
-名前空間間でのシンボル名変換と、シンボル存在確認を行うツール群です。
-
-<!-- BEGIN GENERATED TOOL TABLE: mapping-symbols -->
-| ツール | 役割 |
-| --- | --- |
-| `find-mapping` | クラス、フィールド、メソッドのシンボルに対するマッピング候補を調べる |
-| `resolve-method-mapping-exact` | `find-mapping`（kind=method, signatureMode=exact）の厳密版ショートカット。owner+name+descriptor の三つ組が必須 |
-| `get-class-api-matrix` | 1 つのクラス API を `obfuscated`、`mojang`、`intermediary`、`yarn` で見比べる |
-| `resolve-workspace-symbol` | Gradle ワークスペースからコンパイル時に見えるシンボル名を解決する |
-| `check-symbol-exists` | 名前空間内でクラス、フィールド、メソッドが存在するかを確認する |
-<!-- END GENERATED TOOL TABLE: mapping-symbols -->
-
-参照系ツール（`resolve-artifact`、`find-mapping`、`resolve-method-mapping-exact`、`resolve-workspace-symbol`、`check-symbol-exists`、`get-class-source`、`get-class-members`、`search-class-source`、`list-artifact-files`）と 4 つの `batch-*` ツールは、短いレスポンスを返すための `detail`（`summary` | `standard` | `full`）と `include[]` に対応しています。以前のツールごとの `compact` フラグは廃止されました。既定値とツールごとのフィールド一覧は [tool-reference.md](tool-reference.md) を参照してください。
-
-### NBT ユーティリティ
-
-型付き JSON 表現を使って、Java Edition の NBT バイナリデータをデコード、パッチ、エンコードするツール群です。
-
-<!-- BEGIN GENERATED TOOL TABLE: nbt-utilities -->
-| ツール | 役割 |
-| --- | --- |
-| `nbt-to-json` | Java Edition の NBT バイナリを型付き JSON にデコードする |
-| `nbt-apply-json-patch` | 型付き NBT JSON に RFC 6902 パッチを適用する |
-| `json-to-nbt` | 型付き JSON を Java Edition の NBT バイナリへ再エンコードする |
-<!-- END GENERATED TOOL TABLE: nbt-utilities -->
-
-### Mod 解析
-
-Mod JAR からのメタデータ抽出、Mod ソースのデコンパイル、Mod コード検索、Mod 名前空間のリマッピングを行うツール群です。`META-INF/mods.toml` の `lowcodefml` は Forge として分類します。NeoForge は NeoForge のローダー値、または `META-INF/neoforge.mods.toml` によって判定します。
-
-<!-- BEGIN GENERATED TOOL TABLE: mod-analysis -->
-| ツール | 役割 |
-| --- | --- |
-| `analyze-mod-jar` | JAR から Mod メタデータ、依存関係、エントリポイント、Mixin 設定情報、同梱 Access Transformer パスを抽出する |
-| `decompile-mod-jar` | Mod JAR をデコンパイルし、必要に応じて 1 つのクラスソースを返す |
-| `get-mod-class-source` | デコンパイル済み Mod キャッシュから 1 つのクラスソースを読み取る |
-| `search-mod-source` | デコンパイル済み Mod ソースを class、method、field、content で検索する |
-| `remap-mod-jar` | Fabric または Quilt の Mod JAR を `yarn` または `mojang` 名へリマップする |
-<!-- END GENERATED TOOL TABLE: mod-analysis -->
-
-### バリデーション
-
-Mixin ソース、Access Widener ファイル、Forge / NeoForge の Access Transformer ファイルを対象 Minecraft バージョンに対して検証するツール群です。プロジェクトパスがある場合は、ワークスペースやローダーの実行時文脈を使った検証もできます。
-
-<!-- BEGIN GENERATED TOOL TABLE: validation -->
-| ツール | 役割 |
-| --- | --- |
-| `validate-mixin` | 対象 Minecraft バージョンに対して Mixin ソースを検証する (段階別予算で一部作業を後回しにした場合は `validationStatus: "partial"` と `targetOutcomes` を含む) |
-| `validate-access-widener` | 対象 Minecraft バージョンに対して Access Widener の内容を検証し、必要に応じて Loom ランタイムアーティファクトも使う |
-| `validate-access-transformer` | 対象 Minecraft バージョンに対して Access Transformer の内容を検証し、必要に応じて Forge / NeoForge ランタイムアーティファクトも使う |
-| `verify-mixin-target` | owner / member の存在確認と `@Shadow` / `@Accessor` / `@Invoker` 助言を 1 回の確認で返す |
-<!-- END GENERATED TOOL TABLE: validation -->
-
-### レジストリと診断
-
-生成済みレジストリデータの取得と、サーバーのランタイム状態の確認を行うツール群です。
-
-<!-- BEGIN GENERATED TOOL TABLE: registry-diagnostics -->
-| ツール | 役割 |
-| --- | --- |
-| `get-registry-data` | 生成済みレジストリスナップショットを読み取り、必要に応じてエントリデータも含める |
-| `get-runtime-metrics` | ランタイムメトリクスとレイテンシスナップショットを確認する |
-<!-- END GENERATED TOOL TABLE: registry-diagnostics -->
-
-### バッチ参照
-
-固定の短いリストに対して、1 つの解決済みアーティファクトまたは Minecraft バージョンを共有するツール群です。項目ごとの状態と集計用の `summary` を返します。失敗時の扱いとリトライマッピングは [Batch lookup contract](tool-reference.md#batch-lookup-contract) を参照してください。
-
-<!-- BEGIN GENERATED TOOL TABLE: batch-lookup -->
-| ツール | 役割 |
-| --- | --- |
-| `batch-class-source` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスソースを読み取る |
-| `batch-class-members` | 共有解決した 1 つのアーティファクトに対して最大 50 件のクラスメンバーを列挙する |
-| `batch-symbol-exists` | 共有解決した 1 つの Minecraft バージョンアーティファクトに対して最大 50 件のシンボル存在確認を行う (ワークスペースまたはバージョン対象のみ) |
-| `batch-mappings` | 1 つの Minecraft バージョンで最大 50 件のシンボルを名前空間横断で変換する (共有アーティファクトなし) |
-<!-- END GENERATED TOOL TABLE: batch-lookup -->
+| `list-versions` | `version-list` |
+| `inspect-minecraft` | `versions` → `version-list`, `artifact` → `artifact-resolve`, `class-overview` → `class-find`, `class-source` → `source-read`, `class-members` → `member-list`, `search` → `source-search`, `file` → `file-read`, `list-files` → `file-list` |
+| `analyze-symbol` | `exists` → `symbol-check`, `map` → `symbol-map`, `exact-map` → `symbol-map`, `lifecycle` → `symbol-trace`, `workspace` → `symbol-map`, `api-overview` → `class-mappings` |
+| `compare-minecraft` | `versions` → `version-compare`, `class-diff` → `class-diff`, `registry-diff` → `version-compare`, `migration-overview` → `version-compare` |
+| `analyze-mod` | `summary` → `mod-inspect`, `decompile` → `mod-inspect`, `search` → `mod-search`, `class-source` → `source-read`, `members` → `member-list`, `remap` → `mod-remap` |
+| `validate-project` | `project-summary` → `project-validate`, `mixin` → `mixin-validate`, `access-widener` → `access-validate`, `access-transformer` → `access-validate` |
+| `manage-cache` | `cache-manage` |
+| `verify-mixin-target` | `mixin-verify-target` |
+| `batch-class-source` | `source-read`, `source-export` |
+| `batch-class-members` | `member-list` |
+| `batch-symbol-exists` | `symbol-check` |
+| `batch-mappings` | `symbol-map` |
+| `resolve-artifact` | `artifact-resolve` |
+| `find-class` | `class-find` |
+| `get-class-source` | `source-read`, `source-export` |
+| `get-class-members` | `member-list` |
+| `search-class-source` | `source-search` |
+| `get-artifact-file` | `file-read` |
+| `list-artifact-files` | `file-list` |
+| `trace-symbol-lifecycle` | `symbol-trace` |
+| `diff-class-signatures` | `class-diff` |
+| `find-mapping` | `symbol-map` |
+| `resolve-method-mapping-exact` | `symbol-map` |
+| `get-class-api-matrix` | `class-mappings` |
+| `resolve-workspace-symbol` | `symbol-map` |
+| `check-symbol-exists` | `symbol-check` |
+| `nbt-to-json` | `nbt-decode` |
+| `nbt-apply-json-patch` | `nbt-patch` |
+| `json-to-nbt` | `nbt-encode` |
+| `index-artifact` | `artifact-index` |
+| `get-runtime-metrics` | `server-metrics` |
+| `validate-mixin` | `mixin-validate` |
+| `validate-access-widener` | `access-validate` |
+| `validate-access-transformer` | `access-validate` |
+| `analyze-mod-jar` | `mod-inspect` |
+| `get-registry-data` | `registry-read` |
+| `compare-versions` | `version-compare` |
+| `decompile-mod-jar` | `mod-inspect`, `source-read` |
+| `get-mod-class-source` | `source-read`, `source-export` |
+| `search-mod-source` | `mod-search` |
+| `remap-mod-jar` | `mod-remap` |
+<!-- END GENERATED TOOL TABLE: aliases -->
 
 詳細なパラメータ制約、移行メモ、リソースの挙動、環境変数の完全な一覧は [tool-reference.md](tool-reference.md) を参照してください。
 
@@ -427,7 +362,7 @@ pnpm test
 - `pnpm test:coverage` または `pnpm test:coverage:lcov`: カバレッジ確認時（`lines=80`, `branches=70`, `functions=80`）
 - `pnpm validate`: ローカルの完全検証スイートを実行する場合
 
-通常の `.test.ts` ファイルは `tests/` 配下のドメイン別ディレクトリ（例: `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `integration/mcp-tools/`, `contracts/`, `utils/`）に置きます。ヘルパー専用モジュールは `tests/helpers` に残し、手動 smoke、性能、リソースのファイルは既存の専用ディレクトリに残します。
+通常の `.test.ts` ファイルは `tests/` 配下のドメイン別ディレクトリ（例: `source-service/`, `entry-tools/`, `mapping/`, `mixin/`, `tools/`, `aliases/`, `contracts/`, `utils/`）に置きます。ヘルパー専用モジュールは `tests/helpers` に残し、手動 smoke、性能、リソースのファイルは既存の専用ディレクトリに残します。
 
 ## ライセンス
 

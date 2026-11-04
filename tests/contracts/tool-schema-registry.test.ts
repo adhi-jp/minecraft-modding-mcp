@@ -5,15 +5,18 @@ import { join } from "node:path";
 import test from "node:test";
 import { z } from "zod";
 
-import { EXPECTED_TOOLS } from "../helpers/expected-tools.ts";
+import { ALIAS_TOOL_NAMES, CATALOG_TOOL_NAMES } from "../../src/tools/inventory.ts";
+
+/** Every public tool name: the catalog plus the deprecated 8.x aliases. */
+const PUBLIC_TOOLS = [...CATALOG_TOOL_NAMES, ...ALIAS_TOOL_NAMES];
 
 process.env.MCP_CACHE_DIR ??= join(tmpdir(), "mcp-tool-schema-registry-cache");
 
-test("registry contains every public tool from EXPECTED_TOOLS after server import", async () => {
+test("registry contains every public tool from the tool inventory after server import", async () => {
   await import("../../src/index.ts");
   const { listRegisteredTools } = await import("../../src/tool-schema-registry.ts");
   const registered = new Set(listRegisteredTools());
-  for (const name of EXPECTED_TOOLS) {
+  for (const name of PUBLIC_TOOLS) {
     assert.ok(
       registered.has(name),
       `tool ${name} is missing from tool-schema-registry`
@@ -82,18 +85,18 @@ test.before(async () => {
   await mkdtemp(join(tmpdir(), "mcp-tool-schema-registry-pre-"));
 });
 
-test("registry tool count matches EXPECTED_TOOLS length exactly (no extra registrations leak)", async () => {
+test("registry tool count matches the tool inventory exactly (no extra registrations leak)", async () => {
   await import("../../src/index.ts");
   const { listRegisteredTools } = await import("../../src/tool-schema-registry.ts");
   const registered = listRegisteredTools();
-  // EXPECTED_TOOLS represents the public tool surface this file pins. Filter
+  // The tool inventory is the public tool surface this file pins. Filter
   // out internal test-tool names introduced via registerToolSchema in other
   // tests (their names start with `__test-tool-`).
   const publicTools = registered.filter((name) => !name.startsWith("__test-tool-"));
   assert.equal(
     publicTools.length,
-    EXPECTED_TOOLS.length,
-    `expected ${EXPECTED_TOOLS.length} public tools, got ${publicTools.length}: ${publicTools.join(", ")}`
+    PUBLIC_TOOLS.length,
+    `expected ${PUBLIC_TOOLS.length} public tools, got ${publicTools.length}: ${publicTools.join(", ")}`
   );
 });
 

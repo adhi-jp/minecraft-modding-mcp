@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { analyzeModSchema } from "../../src/entry-tools/analyze-mod-service.ts";
+import { compareMinecraftSchema } from "../../src/entry-tools/compare-minecraft-service.ts";
+import { validateProjectSchema } from "../../src/entry-tools/validate-project-service.ts";
 import { encodeJsonRpcMessage, JsonRpcFrameReader, type ConcreteFramingMode } from "../../src/json-rpc-framing.ts";
+import {
+  buildSupervisorQueueLimitReply,
+  buildSyntheticCallToolResult,
+  buildValidateProjectTimeoutReply
+} from "../../src/stdio-supervisor.ts";
+import { getToolSchema, registerToolSchema } from "../../src/tool-schema-registry.ts";
+import { emptySchema } from "../../src/tool-schemas.ts";
+import { mixinValidateSpec, projectValidateSpec } from "../../src/tools/families/validation.ts";
+import { finalizeNextActions } from "../../src/tools/next-actions.ts";
 
+import { expectedDeprecation } from "../aliases/deprecation.ts";
 import { skipWithoutCapability } from "../helpers/runtime-capabilities.ts";
 import { stopSupervisor } from "../helpers/stdio-child-lifecycle.ts";
 
@@ -480,4 +494,285 @@ test("a fatal supervisor error ends the process even while a referenced handle h
     "the worker to be reaped before the forced exit",
     10_000
   );
+});
+
+// ---------------------------------------------------------------------------
+// Long-running catalog tools
+// ---------------------------------------------------------------------------
+
+test("project-validate and mixin-validate get the deadline, and the second waits behind the first", { timeout: 25_000 }, async (t) => {
+  if (await skipWithoutCapability(t, "native-stdio-pipes")) {
+    return;
+  }
+  const child = startFixture();
+  t.after(() => stopSupervisor(child));
+  const replies = collectResponses(child);
+
+  send(child, { jsonrpc: "2.0", id: 80, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "supervisor-timeout-test", version: "1.0.0" } } }, "line");
+  await replies.next(80);
+  send(child, { jsonrpc: "2.0", method: "notifications/initialized" }, "line");
+  // The fixture worker answers any tool after delayMs; both calls would
+  // outlive the 10 s deadline.
+  send(child, {
+    jsonrpc: "2.0",
+    id: 81,
+    method: "tools/call",
+    params: { name: "project-validate", arguments: { projectPath: "/workspace/example-mod", delayMs: 15_000 } }
+  }, "line");
+  send(child, {
+    jsonrpc: "2.0",
+    id: 82,
+    method: "tools/call",
+    params: { name: "mixin-validate", arguments: { discover: true, projectPath: "/workspace/example-mod", delayMs: 15_000 } }
+  }, "line");
+
+  type TimeoutReply = {
+    structuredContent?: {
+      error?: { code?: string; detail?: string; suggestedCall?: unknown };
+      meta?: { timeout?: { tool?: string; phase?: string; workerRestartInitiated?: boolean } };
+    };
+  };
+  const running = (await replies.next(81, 14_000)).result as TimeoutReply;
+  assert.equal(running.structuredContent?.error?.code, "ERR_TOOL_TIMEOUT");
+  assert.equal(running.structuredContent?.error?.detail, "project-validate exceeded its 10000 ms deadline.");
+  assert.equal(running.structuredContent?.meta?.timeout?.tool, "project-validate");
+  assert.equal(running.structuredContent?.meta?.timeout?.phase, "running");
+  assert.equal(running.structuredContent?.meta?.timeout?.workerRestartInitiated, true);
+  assert.equal(running.structuredContent?.error?.suggestedCall, undefined);
+
+  // mixin-validate never reached the worker: it waited behind project-validate
+  // and its own deadline ran out in the queue.
+  const queued = (await replies.next(82, 5_000)).result as TimeoutReply;
+  assert.equal(queued.structuredContent?.error?.code, "ERR_TOOL_TIMEOUT");
+  assert.equal(queued.structuredContent?.error?.detail, "mixin-validate exceeded its 10000 ms deadline.");
+  assert.equal(queued.structuredContent?.meta?.timeout?.tool, "mixin-validate");
+  assert.equal(queued.structuredContent?.meta?.timeout?.phase, "queue");
+  assert.equal(queued.structuredContent?.meta?.timeout?.workerRestartInitiated, false);
+
+  send(child, { jsonrpc: "2.0", id: 83, method: "tools/call", params: { name: "list-versions", arguments: {} } }, "line");
+  assert.ok((await replies.next(83, 8_000)).result, "the replacement worker serves the next call");
+});
+
+// The schemas the worker registers, so recovery calls validate here as they
+// do in the supervisor process (src/cli.ts loads the server before it starts),
+// and the aliases below count as served.
+for (const spec of [projectValidateSpec, mixinValidateSpec]) {
+  if (getToolSchema(spec.name) === undefined) registerToolSchema(spec.name, spec.inputSchema);
+}
+for (const [name, schema] of [
+  ["validate-project", validateProjectSchema],
+  ["get-runtime-metrics", emptySchema],
+  ["analyze-mod", analyzeModSchema],
+  ["compare-minecraft", compareMinecraftSchema]
+] as const) {
+  if (getToolSchema(name) === undefined) registerToolSchema(name, schema);
+}
+
+type SyntheticBody = {
+  error: Record<string, unknown> & { detail?: string; hints?: string[]; suggestedCall?: unknown };
+  meta: Record<string, unknown> & {
+    timeout?: Record<string, unknown>;
+    restart?: Record<string, unknown>;
+    nextActions?: Array<{ tool: string; params: Record<string, unknown> }>;
+  };
+};
+
+function syntheticBody(reply: unknown): SyntheticBody {
+  const result = (reply as { result: { content: Array<{ text: string }>; structuredContent: SyntheticBody } }).result;
+  assert.deepEqual(JSON.parse(result.content[0]!.text), result.structuredContent, "the text and structuredContent agree");
+  return result.structuredContent;
+}
+
+const MIXIN_ARGS = {
+  configPaths: ["/workspace/example-mod/src/main/resources/example.mixins.json"],
+  projectPath: "/workspace/example-mod"
+};
+
+test("a timed-out catalog call names itself and offers its retry as a validated next action", () => {
+  for (const [tool, args] of [
+    ["mixin-validate", MIXIN_ARGS],
+    ["project-validate", { projectPath: "/workspace/example-mod", detail: "standard" }]
+  ] as const) {
+    const body = syntheticBody(buildValidateProjectTimeoutReply({
+      request: { id: 7, method: "tools/call", toolName: tool, toolArgsRedacted: { ...args }, toolArgsRedactedModified: false, startedAt: 0 },
+      phase: "running",
+      deadlineMs: 120_000,
+      now: 120_000,
+      workerRestartInitiated: true
+    }));
+    assert.equal(body.error.code, "ERR_TOOL_TIMEOUT");
+    assert.equal(body.error.detail, `${tool} exceeded its 120000 ms deadline.`);
+    assert.equal(body.meta.timeout?.tool, tool);
+    assert.equal("suggestedCall" in body.error, false, `${tool}: recovery is not an error.suggestedCall`);
+    assert.deepEqual(body.meta.nextActions, [{ tool, params: args }]);
+    assert.deepEqual(finalizeNextActions(body.meta.nextActions!), body.meta.nextActions, "the retry validates");
+  }
+
+  const redacted = syntheticBody(buildValidateProjectTimeoutReply({
+    request: { id: 8, method: "tools/call", toolName: "mixin-validate", toolArgsRedacted: { source: "<truncated:4096 bytes>" }, toolArgsRedactedModified: true, startedAt: 0 },
+    phase: "queue",
+    deadlineMs: 120_000,
+    now: 120_000,
+    workerRestartInitiated: false
+  }));
+  assert.equal(redacted.meta.timeout?.tool, "mixin-validate");
+  assert.equal(redacted.meta.nextActions, undefined, "arguments changed by redaction are not offered for a retry");
+});
+
+test("a restarted catalog call names itself, offers its retry as a next action and names no 8.x input", () => {
+  const base = {
+    durationMs: 900,
+    lastStage: "target-lookup",
+    lastStageElapsedMs: 300,
+    lastStageMeta: { targetIndex: 6, targetTotal: 9 },
+    exit: { code: 1, signal: null },
+    retryRecommendation: "narrow-query" as const
+  };
+  const catalog = syntheticBody(buildSyntheticCallToolResult(9, {
+    ...base,
+    toolName: "mixin-validate",
+    toolArgsRedacted: { ...MIXIN_ARGS },
+    toolArgsRedactedModified: false
+  }));
+  assert.equal(catalog.error.detail, "The worker process exited while handling tools/call (mixin-validate).");
+  assert.equal(catalog.meta.restart?.tool, "mixin-validate");
+  assert.equal("suggestedCall" in catalog.error, false);
+  assert.deepEqual(catalog.meta.nextActions, [{ tool: "mixin-validate", params: MIXIN_ARGS }]);
+  assert.deepEqual(catalog.error.hints, [
+    "lastStage=target-lookup at index 6/9 — validate fewer mixin classes per call and retry"
+  ]);
+
+  const project = syntheticBody(buildSyntheticCallToolResult(12, {
+    ...base,
+    toolName: "project-validate",
+    toolArgsRedacted: { projectPath: "/workspace/example-mod" },
+    toolArgsRedactedModified: false
+  }));
+  assert.equal(project.meta.restart?.tool, "project-validate");
+  assert.deepEqual(project.meta.nextActions, [{ tool: "project-validate", params: { projectPath: "/workspace/example-mod" } }]);
+  assert.deepEqual(project.error.hints, [
+    "lastStage=target-lookup at index 6/9 — validate its mixin configs one at a time with mixin-validate configPaths and retry"
+  ]);
+
+  const eightX = syntheticBody(buildSyntheticCallToolResult(10, {
+    ...base,
+    toolName: "validate-project",
+    toolArgsRedacted: { task: "project-summary", subject: { kind: "workspace", projectPath: "/workspace/example-mod" } },
+    toolArgsRedactedModified: false
+  }));
+  assert.deepEqual(eightX.error.hints, [
+    "lastStage=target-lookup at index 6/9 — narrow mixinConfigPath to one file and retry"
+  ]);
+  assert.deepEqual(eightX.error.suggestedCall, {
+    tool: "validate-project",
+    params: { task: "project-summary", subject: { kind: "workspace", projectPath: "/workspace/example-mod" } }
+  });
+  assert.equal(eightX.meta.nextActions, undefined, "the 8.x reply keeps error.suggestedCall and gains no next actions");
+});
+
+test("the validate-project timeout reply keeps its frozen 8.x shape plus meta.deprecated", () => {
+  const fixture = JSON.parse(readFileSync(
+    join(process.cwd(), "tests", "fixtures", "premigration", "synthetic-shapes", "timeout-validate-project.json"),
+    "utf8"
+  )) as {
+    request: { id: number; params: { name: string; arguments: Record<string, unknown> } };
+    reply: { result: { structuredContent: SyntheticBody } };
+  };
+  const reply = buildValidateProjectTimeoutReply({
+    request: {
+      id: fixture.request.id,
+      method: "tools/call",
+      toolName: fixture.request.params.name,
+      toolArgsRedacted: fixture.request.params.arguments,
+      toolArgsRedactedModified: false,
+      startedAt: 0
+    },
+    phase: "running",
+    deadlineMs: 10_000,
+    now: 10_250,
+    workerRestartInitiated: true
+  }) as unknown as { result: { content: Array<{ text: string }>; structuredContent: SyntheticBody } };
+  const expected = fixture.reply.result.structuredContent;
+  const actual = reply.result.structuredContent;
+  assert.equal(actual.meta.timeout?.durationMs, 10_250);
+  const { deprecated, ...frozenMeta } = actual.meta;
+  assert.deepEqual(deprecated, expectedDeprecation("validate-project", fixture.request.params.arguments));
+  assert.deepEqual(
+    { ...actual, meta: { ...frozenMeta, timeout: { ...actual.meta.timeout, durationMs: "<DURATION_MS>" } } },
+    expected
+  );
+  assert.equal(reply.result.content[0]!.text, JSON.stringify(actual), "the text is the structured reply, byte for byte");
+
+  const withRetry = syntheticBody(buildValidateProjectTimeoutReply({
+    request: {
+      id: 11,
+      method: "tools/call",
+      toolName: "validate-project",
+      toolArgsRedacted: { task: "project-summary", subject: { kind: "workspace", projectPath: "/workspace/example-mod" } },
+      toolArgsRedactedModified: false,
+      startedAt: 0
+    },
+    phase: "running",
+    deadlineMs: 10_000,
+    now: 10_000,
+    workerRestartInitiated: true
+  }));
+  assert.equal(withRetry.meta.timeout?.tool, "validate-project");
+  assert.deepEqual(withRetry.error.suggestedCall, {
+    tool: "validate-project",
+    params: { task: "project-summary", subject: { kind: "workspace", projectPath: "/workspace/example-mod" } }
+  });
+  assert.equal(withRetry.meta.nextActions, undefined);
+});
+
+test("synthetic timeout, restart and queue-overflow replies to an alias carry meta.deprecated in both representations; catalog ones do not", () => {
+  const timeout = (toolName: string, toolArgsRedacted: Record<string, unknown>) =>
+    syntheticBody(buildValidateProjectTimeoutReply({
+      request: { id: 21, method: "tools/call", toolName, toolArgsRedacted, toolArgsRedactedModified: false, startedAt: 0 },
+      phase: "running",
+      deadlineMs: 10_000,
+      now: 10_000,
+      workerRestartInitiated: true
+    }));
+  const restart = (toolName: string, toolArgsRedacted: Record<string, unknown>) =>
+    syntheticBody(buildSyntheticCallToolResult(22, {
+      toolName,
+      toolArgsRedacted,
+      toolArgsRedactedModified: false,
+      durationMs: 900,
+      lastStage: undefined,
+      lastStageElapsedMs: undefined,
+      lastStageMeta: undefined,
+      exit: { code: 1, signal: null },
+      retryRecommendation: "same-request"
+    }));
+  const overflow = (toolName?: string, toolArgs?: Record<string, unknown>) =>
+    syntheticBody(buildSupervisorQueueLimitReply(23, "tools/call", toolName, toolArgs));
+
+  // syntheticBody asserts that the JSON text equals structuredContent, so each
+  // block below is in both representations.
+  const aliasCases: Array<[string, SyntheticBody, unknown]> = [
+    ["timeout validate-project", timeout("validate-project", { projectPath: "/workspace/example-mod" }), { replacedBy: ["project-validate", "mixin-validate", "access-validate"], removeIn: "10.0.0" }],
+    ["timeout validate-project task mixin", timeout("validate-project", { task: "mixin" }), { replacedBy: ["mixin-validate"], removeIn: "10.0.0" }],
+    ["restart get-runtime-metrics", restart("get-runtime-metrics", {}), { replacedBy: ["server-metrics"], removeIn: "10.0.0" }],
+    ["restart analyze-mod task summary", restart("analyze-mod", { task: "summary" }), { replacedBy: ["mod-inspect"], removeIn: "10.0.0" }],
+    ["overflow validate-project task access-widener", overflow("validate-project", { task: "access-widener" }), { replacedBy: ["access-validate"], removeIn: "10.0.0" }],
+    ["overflow compare-minecraft", overflow("compare-minecraft", {}), { replacedBy: ["version-compare", "class-diff"], removeIn: "10.0.0" }]
+  ];
+  for (const [label, body, expected] of aliasCases) {
+    assert.deepEqual(body.meta.deprecated, expected, `${label}: meta.deprecated`);
+  }
+
+  const catalogCases: Array<[string, SyntheticBody]> = [
+    ["timeout project-validate", timeout("project-validate", { projectPath: "/workspace/example-mod" })],
+    ["restart mixin-validate", restart("mixin-validate", { ...MIXIN_ARGS })],
+    ["overflow server-metrics", overflow("server-metrics", {})],
+    ["overflow of an unidentified call", overflow()]
+  ];
+  for (const [label, body] of catalogCases) {
+    assert.equal("deprecated" in body.meta, false, `${label}: no meta.deprecated`);
+  }
+
+  const rawOverflow = buildSupervisorQueueLimitReply(24, "resources/list", "get-runtime-metrics", {}) as unknown as Record<string, unknown>;
+  assert.equal("result" in rawOverflow, false, "a non-tool overflow stays a raw JSON-RPC error");
 });
