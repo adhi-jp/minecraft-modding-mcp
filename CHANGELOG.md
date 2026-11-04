@@ -59,6 +59,7 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 ### Fixed
 
 - A `symbol` search of `search-class-source` or `source-search` that matched more symbols than it reads (five times `MCP_MAX_SEARCH_HITS`, within 500 to 5000 and 1000 by default, in name order) returned the first ones as if they were all, so a broad query such as `get` silently missed the rest. The last page now carries an `indexed symbol search examined only its candidate window …` warning, and `source-search` reports it as `status: "partial"` with `meta.truncation` `limitedBy: "candidateWindow"`. The same warning of a text or path search is now also given when the last page of the window is a full one; before, it came only with a short last page.
+- `remap-mod-jar` and `mod-remap` no longer write the default output jar outside the input jar's directory. The default name is built from the mod's id and version as the jar declares them, and a version such as `1/../../x` led the output to another directory; a `/`, `\`, `:` or other character a Windows file name cannot hold in the id or version now becomes `_`. An explicit `outputJar` is used as given.
 
 ### Performance
 

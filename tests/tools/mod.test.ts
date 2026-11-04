@@ -35,6 +35,7 @@ import test, { after, before } from "node:test";
 import { ALIAS_TOOL_INVENTORY } from "../../src/tools/inventory.ts";
 import { CATALOG_TOOL_SPECS } from "../../src/tools/catalog.ts";
 import { MOD_TOOL_SPECS } from "../../src/tools/families/mod.ts";
+import { resolveOutputJarPath } from "../../src/mod-remap-service.ts";
 import { finalizeNextActions } from "../../src/tools/next-actions.ts";
 import { buildCatalogWarnings } from "../../src/tools/warnings.ts";
 import { withEnv } from "../helpers/env.ts";
@@ -544,6 +545,34 @@ test("mod-remap rejects an outputJar that is a directory, in preview and apply",
     assert.match(envelope.error?.detail ?? "", /is a directory/);
   }
   assert.deepEqual(readdirSync(directory), [], "nothing was written into it");
+});
+
+test("mod-remap keeps the default outputJar in the jar's directory when the mod's metadata holds path characters", async () => {
+  const dir = join(root, "hostile");
+  mkdirSync(dir, { recursive: true });
+  const hostileJar = join(dir, "hostile.jar");
+  await createJar(hostileJar, {
+    "fabric.mod.json": JSON.stringify({
+      schemaVersion: 1,
+      id: "evil/../id",
+      version: "1/../../../escaped",
+      depends: { minecraft: "1.21.1" }
+    }),
+    "com/example/ExampleMod.class": MOJANG_CLASS
+  });
+  const legacyLike = resolveOutputJarPath(
+    { inputJar: hostileJar, targetMapping: "mojang" },
+    hostileJar,
+    "evil/../id",
+    "1/../../../escaped"
+  );
+  assert.equal(legacyLike, join(dir, "evil_.._id-1_.._.._.._escaped-mojang.jar"));
+  const windowsLike = resolveOutputJarPath({ inputJar: hostileJar, targetMapping: "yarn" }, hostileJar, "C:\\x", "1:2*?");
+  assert.equal(windowsLike, join(dir, "C__x-1_2__-yarn.jar"));
+
+  const preview = await catalog("mod-remap", { jarPath: hostileJar, toMapping: "mojang" });
+  assert.equal(preview.isError, false, JSON.stringify(preview.envelope.error));
+  assert.equal(preview.envelope.result!.remap.outputJar, legacyLike, "the preview names a file next to the input jar");
 });
 
 test("mod-remap rejects a loader it cannot remap with the error remap-mod-jar raises, in preview and apply", async () => {

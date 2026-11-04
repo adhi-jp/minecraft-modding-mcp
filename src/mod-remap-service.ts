@@ -86,13 +86,21 @@ async function detectInputNamespaceForLoader(
   });
 }
 
+/** A metadata value as one file name segment: path separators, drive colons and other characters invalid in Windows file names become `_`. */
+function outputNamePart(value: string): string {
+  return value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_");
+}
+
 export function resolveOutputJarPath(
   input: ModRemapInput,
   normalizedInput: string,
   modId: string | undefined,
   modVersion: string | undefined
 ): string {
-  const defaultOutputName = `${modId ?? "mod"}-${modVersion ?? "0"}-${input.targetMapping}.jar`;
+  // modId and modVersion come from the jar's own metadata: a separator or a
+  // drive colon in them must not move the default output out of the input
+  // jar's directory (`1/../../x` would otherwise join to a path elsewhere).
+  const defaultOutputName = `${outputNamePart(modId ?? "mod")}-${outputNamePart(modVersion ?? "0")}-${input.targetMapping}.jar`;
   return input.outputJar
     ? normalizePathForHost(input.outputJar, undefined, "outputJar")
     : join(dirname(normalizedInput), defaultOutputName);
