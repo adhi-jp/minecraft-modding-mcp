@@ -35,6 +35,7 @@ import {
 import { analyzeModJar } from "./mod-analyzer.js";
 import { remapModJar } from "./mod-remap-service.js";
 import { registerResources } from "./resources.js";
+import { RuntimeMetrics } from "./observability.js";
 import { SourceService } from "./source-service.js";
 import { reportedResolveNamespace } from "./source/artifact-resolver.js";
 import { heavyToolExecutionGate } from "./tool-execution-gate.js";
@@ -179,10 +180,16 @@ const nbtLimits = {
   maxResponseBytes: config.maxNbtResponseBytes
 };
 
+// The process's runtime metrics live outside the source service, so counting
+// a tool call never constructs that service: constructing it opens (and may
+// check, back up or recreate) the cache database, which the NBT tools and the
+// cache registry do not need. The service records into the same instance.
+const runtimeMetrics = new RuntimeMetrics();
+
 let sourceServiceInstance: SourceService | undefined;
 
 function getSourceService(): SourceService {
-  sourceServiceInstance ??= new SourceService(config);
+  sourceServiceInstance ??= new SourceService(config, runtimeMetrics);
   return sourceServiceInstance;
 }
 
@@ -196,7 +203,7 @@ const sourceService = new Proxy({} as SourceService, {
 
 function recordToolCallBestEffort(tool: string, durationMs: number): void {
   try {
-    sourceService.recordToolCall(tool, durationMs);
+    runtimeMetrics.recordToolCall(tool, durationMs);
   } catch (caughtError) {
     log("warn", "tool.metrics.record.failed", {
       tool,
