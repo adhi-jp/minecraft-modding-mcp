@@ -302,3 +302,31 @@ test("a body that never closes runs to the last line of the file", () => {
   ];
   assert.deepEqual(enclosingAt(source, 4), { symbolKind: "method", symbolName: "open", startLine: 3, endLine: 5 });
 });
+
+test("inside an annotation type a hit belongs to the element on its line, otherwise to the annotation type", () => {
+  const source = [
+    "package p;", //                                    1
+    "@Target({ElementType.TYPE})", //                   2
+    "public @interface GameTest {", //                  3
+    "  int maxTicks() default 100;", //                 4
+    "", //                                              5
+    "  String[] tags() default {};", //                 6
+    "  Nested nested() default @Nested(\"x\");", //     7
+    "  String name();", //                              8
+    "  @interface Nested {", //                         9
+    "    String value();", //                           10
+    "  }", //                                           11
+    "}" //                                              12
+  ];
+  const gameTest = { symbolKind: "interface", symbolName: "GameTest", startLine: 3, endLine: 12 };
+  assert.deepEqual(enclosingAt(source, 3), gameTest);
+  assert.deepEqual(enclosingAt(source, 5), gameTest);
+  assert.deepEqual(enclosingAt(source, 12), gameTest);
+  assert.deepEqual(enclosingAt(source, 4), { symbolKind: "method", symbolName: "maxTicks", startLine: 4, endLine: 4 });
+  assert.deepEqual(enclosingAt(source, 6), { symbolKind: "method", symbolName: "tags", startLine: 6, endLine: 6 });
+  assert.deepEqual(enclosingAt(source, 7), { symbolKind: "method", symbolName: "nested", startLine: 7, endLine: 7 });
+  assert.deepEqual(enclosingAt(source, 8), { symbolKind: "method", symbolName: "name", startLine: 8, endLine: 8 });
+  assert.deepEqual(enclosingAt(source, 11), { symbolKind: "interface", symbolName: "Nested", startLine: 9, endLine: 11 });
+  // The annotation above the declaration is outside the type's range, as for any declaration.
+  assert.equal(enclosingAt(source, 2), undefined);
+});

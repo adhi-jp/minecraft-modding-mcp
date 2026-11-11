@@ -25,10 +25,10 @@ const PARAM_LIST = "\\((?:[^()]|\\([^()]*\\))*\\)";
 const CLASS_DECLARATION = new RegExp(
   `^${MODIFIER_OR_ANNOTATION_RUN}(class|interface|enum|record)\\s+(?!instanceof\\b)([A-Za-z_$][\\w$]*)`
 );
-// "@interface Foo" opens a type body whose elements are abstract methods, but it is not
-// indexed as a type itself.
+// "@interface Foo" declares an annotation type, which is indexed with the interface kind; its
+// body's elements are abstract methods.
 const ANNOTATION_TYPE_DECLARATION = new RegExp(
-  `^${MODIFIER_OR_ANNOTATION_RUN}@\\s*interface\\s+[A-Za-z_$]`
+  `^${MODIFIER_OR_ANNOTATION_RUN}@\\s*interface\\s+([A-Za-z_$][\\w$]*)`
 );
 // Method/constructor with a body: return type is optional (constructors have none); ends with "{".
 const METHOD_BLOCK_DECLARATION = new RegExp(
@@ -38,6 +38,11 @@ const METHOD_BLOCK_DECLARATION = new RegExp(
 // Requiring the return type is what separates "void onTick();" from a bare call "doThing();".
 const METHOD_ABSTRACT_DECLARATION = new RegExp(
   `^${MODIFIER_OR_ANNOTATION_RUN}${TYPE_PARAMS}${TYPE_TOKEN}\\s+([A-Za-z_$][\\w$]*)\\s*${PARAM_LIST}${THROWS_CLAUSE}\\s*;`
+);
+// Annotation type element with a default value completed on its line: "int maxTicks() default 100;".
+// It is matched after annotations are dropped, so "default @Nested;" arrives as "default ;".
+const ANNOTATION_ELEMENT_DECLARATION = new RegExp(
+  `^${MODIFIER_OR_ANNOTATION_RUN}${TYPE_TOKEN}\\s+([A-Za-z_$][\\w$]*)\\s*\\(\\s*\\)\\s*default\\b[^;]*;`
 );
 // The start of a method/constructor head that does not complete on its line: the parameter
 // list wraps, or "throws" or the "{" follows on a later line.
@@ -384,10 +389,15 @@ export function extractSymbolsFromCode(filePath: string, code: readonly string[]
           }
         }
       } else if (ANNOTATION_TYPE_DECLARATION.test(line)) {
+        // Like other types, annotation types are emitted at any depth.
+        push("interface", line.match(ANNOTATION_TYPE_DECLARATION)?.[1], index);
         pendingType = { isEnum: false, parenDepth: openParens.length };
       } else if (memberPosition) {
         const target = withoutAnnotations(line);
         let methodMatch = matchMethodDeclaration(target);
+        if (!methodMatch && target.includes("default")) {
+          methodMatch = target.match(ANNOTATION_ELEMENT_DECLARATION);
+        }
         if (!methodMatch && METHOD_HEAD.test(target)) {
           const head = joinWrappedHead(code, index, column);
           if (head) {

@@ -20,6 +20,7 @@ import { SourceServiceState } from "../../src/source/state.ts";
 import type { SourceService } from "../../src/source-service.ts";
 import type { ResolvedSourceArtifact } from "../../src/types.ts";
 import { withTempDir } from "../helpers/temp-dir.ts";
+import { buildTestConfig } from "../helpers/test-config.ts";
 import { createJar } from "../helpers/zip.ts";
 
 function createMinimalSourceService(cacheDir: string): SourceService {
@@ -407,6 +408,48 @@ test("resolveIndexRebuildReason classifies each rebuild branch", () => {
     }),
     "already_current"
   );
+});
+
+test("an index stored at schema version 2 without annotation types is rebuilt by the next target-based resolve", async () => {
+  await withTempDir("source-index-schema-rebuild-", async (root) => {
+    const { SourceService: Service } = await import("../../src/source-service.ts");
+    const binaryJarPath = join(root, "annotations.jar");
+    await createJar(binaryJarPath, {
+      "a/b/GameTest.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+    });
+    await createJar(join(root, "annotations-sources.jar"), {
+      "a/b/GameTest.java": [
+        "package a.b;", //                    1
+        "public @interface GameTest {", //    2
+        "  int maxTicks() default 100;", //   3
+        "  String name();", //                4
+        "}" //                                5
+      ].join("\n")
+    });
+
+    const service = new Service(buildTestConfig(root));
+    const target = { kind: "jar", value: binaryJarPath } as const;
+    const { artifactId } = await service.resolveArtifact({ target, mapping: "obfuscated" });
+
+    // The state a cache written before annotation types were indexed is in: version 2 in
+    // the index metadata and only the element without a default value as a stored row.
+    const meta = service.indexMetaRepo.get(artifactId);
+    assert.ok(meta, "the first resolve must store index metadata");
+    service.symbolsRepo.replaceSymbolsForArtifact(artifactId, [
+      { filePath: "a/b/GameTest.java", symbolKind: "method", symbolName: "name", qualifiedName: "a.b.GameTest", line: 4 }
+    ]);
+    service.indexMetaRepo.upsert({ ...meta, indexSchemaVersion: 2, symbolsCount: 1 });
+    assert.equal(service.findClass({ className: "GameTest", artifactId }).total, 0);
+
+    await service.resolveArtifact({ target, mapping: "obfuscated" });
+
+    assert.equal(service.indexMetaRepo.get(artifactId)?.indexSchemaVersion, 3);
+    const found = service.findClass({ className: "GameTest", artifactId });
+    assert.equal(found.total, 1, `simple-name lookup should resolve, got ${JSON.stringify(found.matches)}`);
+    assert.equal(found.matches[0]?.qualifiedName, "a.b.GameTest");
+    assert.equal(found.matches[0]?.symbolKind, "interface");
+    assert.equal(found.matches[0]?.line, 2);
+  });
 });
 
 test("isUsableJarFile accepts real jars and rejects non-files, short files, bad magic, and missing paths", async () => {

@@ -1909,3 +1909,158 @@ test("findClass hands back a working call when partial coverage makes the index 
   assert.deepEqual(result.suggestedCall?.params.target, { kind: "artifact", artifactId });
   assert.equal(result.suggestedCall?.params.className, "Item");
 });
+
+async function resolveAnnotationTypeArtifact(prefix: string) {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const binaryJarPath = join(root, "annotations.jar");
+  const sourcesJarPath = join(root, "annotations-sources.jar");
+
+  await createJar(binaryJarPath, {
+    "a/b/GameTest.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "a/b/Holder.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "a/b/Holder$Marker.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]),
+    "a/b/Holder$Plain.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe])
+  });
+  await createJar(sourcesJarPath, {
+    "a/b/GameTest.java": [
+      "package a.b;", //                                           1
+      "import java.lang.annotation.ElementType;", //               2
+      "import java.lang.annotation.Retention;", //                 3
+      "import java.lang.annotation.RetentionPolicy;", //           4
+      "import java.lang.annotation.Target;", //                    5
+      "@Target({ElementType.METHOD, ElementType.TYPE})", //        6
+      "@Retention(RetentionPolicy.RUNTIME)", //                    7
+      "public @interface GameTest {", //                           8
+      "  int maxTicks() default 100;", //                          9
+      "  String[] tags() default {};", //                          10
+      "  Class<?> owner() default Object.class;", //               11
+      "}" //                                                       12
+    ].join("\n"),
+    "a/b/Holder.java": [
+      "package a.b;", //                                           1
+      "public class Holder {", //                                  2
+      "  @Target({ElementType.FIELD})", //                         3
+      "  public @interface Marker {", //                           4
+      "    String[] value() default {};", //                       5
+      "  }", //                                                    6
+      "  public interface Plain {", //                             7
+      "    void run();", //                                        8
+      "  }", //                                                    9
+      "}" //                                                       10
+    ].join("\n")
+  });
+
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({
+    target: { kind: "jar", value: binaryJarPath },
+    mapping: "obfuscated"
+  });
+  return { service, artifactId: resolved.artifactId };
+}
+
+test("findClass returns an annotation type as an interface by qualified and simple name", async () => {
+  const { service, artifactId } = await resolveAnnotationTypeArtifact("findclass-annotation-type-");
+
+  const qualified = service.findClass({ className: "a.b.GameTest", artifactId });
+  assert.equal(qualified.total, 1, `qualified lookup should resolve, got ${JSON.stringify(qualified.matches)}`);
+  assert.equal(qualified.matches[0]?.qualifiedName, "a.b.GameTest");
+  assert.equal(qualified.matches[0]?.filePath, "a/b/GameTest.java");
+  assert.equal(qualified.matches[0]?.line, 8);
+  assert.equal(qualified.matches[0]?.symbolKind, "interface");
+  assert.equal(qualified.matches[0]?.nested, undefined);
+
+  const simple = service.findClass({ className: "GameTest", artifactId });
+  assert.equal(simple.total, 1, `simple-name lookup should resolve, got ${JSON.stringify(simple.matches)}`);
+  assert.equal(simple.matches[0]?.qualifiedName, "a.b.GameTest");
+  assert.equal(simple.matches[0]?.line, 8);
+  assert.equal(simple.matches[0]?.symbolKind, "interface");
+});
+
+test("symbol search finds an annotation type and its elements, with and without the interface kind filter", async () => {
+  const { service, artifactId } = await resolveAnnotationTypeArtifact("search-annotation-type-");
+
+  const unfiltered = await service.searchClassSource({
+    artifactId,
+    query: "GameTest",
+    intent: "symbol",
+    match: "exact"
+  });
+  assert.deepEqual(
+    unfiltered.hits.map((hit) => [hit.filePath, hit.symbol?.symbolKind, hit.symbol?.symbolName, hit.symbol?.line]),
+    [["a/b/GameTest.java", "interface", "GameTest", 8]]
+  );
+
+  const filtered = await service.searchClassSource({
+    artifactId,
+    query: "GameTest",
+    intent: "symbol",
+    match: "exact",
+    scope: { symbolKind: "interface" }
+  });
+  assert.deepEqual(
+    filtered.hits.map((hit) => [hit.filePath, hit.symbol?.symbolKind, hit.symbol?.symbolName]),
+    [["a/b/GameTest.java", "interface", "GameTest"]]
+  );
+
+  const element = await service.searchClassSource({
+    artifactId,
+    query: "maxTicks",
+    intent: "symbol",
+    match: "exact",
+    scope: { symbolKind: "method" }
+  });
+  assert.deepEqual(
+    element.hits.map((hit) => [hit.filePath, hit.symbol?.symbolKind, hit.symbol?.symbolName, hit.symbol?.line]),
+    [["a/b/GameTest.java", "method", "maxTicks", 9]]
+  );
+});
+
+test("a nested annotation type resolves through findClass and getClassSource the way a nested interface does", async () => {
+  const { service, artifactId } = await resolveAnnotationTypeArtifact("findclass-nested-annotation-type-");
+
+  for (const [name, line] of [["Marker", 4], ["Plain", 7]] as const) {
+    const qualified = service.findClass({ className: `a.b.Holder.${name}`, artifactId });
+    assert.equal(qualified.total, 1, `${name}: qualified lookup should resolve, got ${JSON.stringify(qualified.matches)}`);
+    assert.equal(qualified.matches[0]?.qualifiedName, `a.b.Holder.${name}`);
+    assert.equal(qualified.matches[0]?.filePath, "a/b/Holder.java");
+    assert.equal(qualified.matches[0]?.line, line);
+    assert.equal(qualified.matches[0]?.symbolKind, "interface");
+    assert.equal(qualified.matches[0]?.nested, true);
+    assert.equal(qualified.matches[0]?.enclosingClass, "a.b.Holder");
+
+    const simple = service.findClass({ className: name, artifactId });
+    assert.equal(simple.total, 1, `${name}: simple-name lookup should resolve, got ${JSON.stringify(simple.matches)}`);
+    assert.equal(simple.matches[0]?.qualifiedName, `a.b.Holder.${name}`);
+    assert.equal(simple.matches[0]?.symbolKind, "interface");
+    assert.equal(simple.matches[0]?.nested, true);
+    assert.equal(simple.matches[0]?.enclosingClass, "a.b.Holder");
+
+    const source = await service.getClassSource({ artifactId, className: `a.b.Holder.${name}`, mode: "full" });
+    assert.equal(source.className, `a.b.Holder.${name}`);
+    assert.equal(source.totalLines, 10);
+    assert.match(source.sourceText, name === "Marker" ? /public @interface Marker \{/ : /public interface Plain \{/);
+  }
+});
+
+test("the metadata outline of an annotation type lists its type line and elements below annotations with brace arguments", async () => {
+  const { service, artifactId } = await resolveAnnotationTypeArtifact("metadata-annotation-type-");
+
+  const outline = await service.getClassSource({ artifactId, className: "a.b.GameTest", mode: "metadata" });
+  const lines = outline.sourceText.split("\n");
+  const typeAt = lines.indexOf("// [interface] line 8");
+  assert.ok(typeAt >= 0, `expected the type line, got:\n${outline.sourceText}`);
+  assert.deepEqual(lines.slice(typeAt, typeAt + 8), [
+    "// [interface] line 8",
+    "public @interface GameTest {",
+    "// [method] line 9",
+    "  int maxTicks() default 100;",
+    "// [method] line 10",
+    "  String[] tags() default {};",
+    "// [method] line 11",
+    "  Class<?> owner() default Object.class;"
+  ]);
+
+  const nestedOutline = await service.getClassSource({ artifactId, className: "a.b.Holder", mode: "metadata" });
+  assert.match(nestedOutline.sourceText, /\/\/ \[interface\] line 4\n {2}public @interface Marker \{\n\/\/ \[method\] line 5\n {4}String\[\] value\(\) default \{\};/);
+});

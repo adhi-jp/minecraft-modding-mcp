@@ -456,7 +456,116 @@ test("extractSymbolsFromSource keeps annotation type elements as methods", () =>
     "}"
   ].join("\n");
 
-  assert.deepEqual(symbolRows(source), ["method count 2"]);
+  assert.deepEqual(symbolRows(source), ["interface Marker 1", "method count 2"]);
+});
+
+test("extractSymbolsFromSource emits an annotation type as an interface on its declaration line", () => {
+  const source = [
+    "@Retention(RetentionPolicy.RUNTIME)", //        1
+    "@Target({ElementType.METHOD, ElementType.TYPE})", // 2
+    "public @interface GameTest {", //               3
+    "  String name();", //                           4
+    "}" //                                           5
+  ].join("\n");
+
+  assert.deepEqual(symbolRows(source), [
+    "interface GameTest 3",
+    "method name 4"
+  ]);
+});
+
+test("extractSymbolsFromSource emits nested annotation types under their own names", () => {
+  const source = [
+    "public class Holder {", //                      1
+    "  public @interface Marker {", //               2
+    "    int value();", //                           3
+    "  }", //                                        4
+    "  public @interface Outer {", //                5
+    "    @interface Inner {", //                     6
+    "    }", //                                      7
+    "  }", //                                        8
+    "  int after;", //                               9
+    "}" //                                           10
+  ].join("\n");
+
+  assert.deepEqual(symbolRows(source), [
+    "class Holder 1",
+    "interface Marker 2",
+    "method value 3",
+    "interface Outer 5",
+    "interface Inner 6",
+    "field after 9"
+  ]);
+});
+
+test("extractSymbolsFromSource emits annotation elements with a default value as methods", () => {
+  const source = [
+    "public @interface GameTest {", //                          1
+    "  int maxTicks() default 100;", //                         2
+    "  String[] value() default {};", //                        3
+    "  Class<?> type() default Object.class;", //               4
+    "  Nested nested() default @Nested;", //                    5
+    "  Nested[] many() default {@Nested, @Nested(\"x\")};", //  6
+    "  String label() default \"a;b\";", //                     7
+    "  public abstract long timeout() default 5L;", //          8
+    "  String required();", //                                  9
+    "  @interface Nested {", //                                 10
+    "    String value() default \"\";", //                      11
+    "  }", //                                                   12
+    "}" //                                                      13
+  ].join("\n");
+
+  assert.deepEqual(symbolRows(source), [
+    "interface GameTest 1",
+    "method maxTicks 2",
+    "method value 3",
+    "method type 4",
+    "method nested 5",
+    "method many 6",
+    "method label 7",
+    "method timeout 8",
+    "method required 9",
+    "interface Nested 10",
+    "method value 11"
+  ]);
+});
+
+test("extractSymbolsFromSource keeps the rows of default methods, default labels and annotation uses", () => {
+  const source = [
+    "interface Api {", //                                       1
+    "  default int size() { return 0; }", //                    2
+    "  default void run() {", //                                3
+    "    switch (size()) {", //                                 4
+    "      case 1: break;", //                                  5
+    "      default: run();", //                                 6
+    "    }", //                                                 7
+    "    int d = switch (size()) { default -> size(); };", //   8
+    "    Object o = value() ;", //                              9
+    "  }", //                                                   10
+    "  @Deprecated int legacy();", //                           11
+    "}", //                                                     12
+    "@Mark(value = 1) class Impl implements Api {", //          13
+    "  @Override public int size() {", //                       14
+    "    switch (1) {", //                                      15
+    "      default:", //                                        16
+    "        return 2;", //                                     17
+    "    }", //                                                 18
+    "  }", //                                                   19
+    "  @SuppressWarnings(\"unused\") int count = 0;", //        20
+    "  @Mark int other() { return 1; }", //                     21
+    "}" //                                                      22
+  ].join("\n");
+
+  assert.deepEqual(symbolRows(source), [
+    "interface Api 1",
+    "method size 2",
+    "method run 3",
+    "method legacy 11",
+    "class Impl 13",
+    "method size 14",
+    "field count 20",
+    "method other 21"
+  ]);
 });
 
 test("extractSymbolsFromSource emits methods with type-use annotations and nested type parameters", () => {

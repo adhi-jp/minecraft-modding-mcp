@@ -26,7 +26,7 @@ import {
 } from "./cache-metrics.js";
 import { normalizePathStyle } from "./shared-utils.js";
 
-export const INDEX_SCHEMA_VERSION = 2;
+export const INDEX_SCHEMA_VERSION = 3;
 
 /**
  * Injectable dependencies let remap-cache regression tests run without Java.

@@ -197,6 +197,22 @@ const SHAPE_SOURCES: Record<string, string[]> = {
     "    init(); // probeMarker", //     4
     "  }", //                            5
     "}" //                               6
+  ],
+  "shapes/AnnotationElement.java": [
+    "package shapes;", //                                  1
+    "@Target({ElementType.TYPE})", //                      2
+    "public @interface AnnotationElement {", //            3
+    "  int maxTicks() default 100; // probeMarker", //     4
+    "  String name();", //                                 5
+    "}" //                                                 6
+  ],
+  "shapes/AnnotationBody.java": [
+    "package shapes;", //                          1
+    "public @interface AnnotationBody {", //       2
+    "  int maxTicks() default 100;", //            3
+    "  // probeMarker", //                         4
+    "  String[] tags() default {};", //            5
+    "}" //                                         6
   ]
 };
 
@@ -306,6 +322,16 @@ const EXPECTED: Record<string, Expected> = {
     enclosingSymbol: { symbolKind: "method", symbolName: "Ctor", startLine: 3, endLine: 5 },
     head: "  Ctor() {",
     close: "  }"
+  },
+  "shapes/AnnotationElement.java": {
+    enclosingSymbol: { symbolKind: "method", symbolName: "maxTicks", startLine: 4, endLine: 4 },
+    head: "  int maxTicks() default 100; // probeMarker",
+    close: "  int maxTicks() default 100; // probeMarker"
+  },
+  "shapes/AnnotationBody.java": {
+    enclosingSymbol: { symbolKind: "interface", symbolName: "AnnotationBody", startLine: 2, endLine: 6 },
+    head: "public @interface AnnotationBody {",
+    close: "}"
   }
 };
 
