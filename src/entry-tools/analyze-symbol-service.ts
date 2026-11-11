@@ -13,6 +13,7 @@ import type { SourceMapping } from "../types.js";
 import { buildIncludeSchema, detailSchema, positiveIntSchema } from "./entry-tool-schema.js";
 import {
   buildEntryToolResult,
+  createNextAction,
   createSummarySubject,
   type Summary
 } from "./response-contract.js";
@@ -579,6 +580,8 @@ export class AnalyzeSymbolService {
           includeMatrix && output.rows.length > matrixRowCap
             ? `Matrix rows were truncated to ${matrixRowCap} of ${output.rowCount}. Raise maxRows to include more rows.`
             : undefined;
+        const noMatrixOnUnobfuscatedVersion =
+          output.unobfuscatedRuntime === true && output.rowCount === 0;
         return {
           ...buildEntryToolResult({
             task: "api-overview",
@@ -586,7 +589,29 @@ export class AnalyzeSymbolService {
             include,
             summary: {
               status: "ok",
-              headline: `Built an API overview for ${output.className}.`,
+              headline: noMatrixOnUnobfuscatedVersion
+                ? `Minecraft ${output.version} ships Mojang names, so there is no mapping matrix for ${output.className}.`
+                : `Built an API overview for ${output.className}.`,
+              // The runtime uses Mojang names, so the class-members lookup can only
+              // find a class named in that namespace.
+              ...(noMatrixOnUnobfuscatedVersion
+                && (classNameMapping === "mojang" || classNameMapping === "obfuscated")
+                ? {
+                    nextActions: [
+                      createNextAction("inspect-minecraft", {
+                        task: "class-members",
+                        subject: {
+                          kind: "class",
+                          className: output.className,
+                          artifact: {
+                            type: "resolve-target",
+                            target: { kind: "version", value: output.version }
+                          }
+                        }
+                      })
+                    ]
+                  }
+                : {}),
               subject: createSummarySubject({
                 task: "api-overview",
                 kind: subjectKind,

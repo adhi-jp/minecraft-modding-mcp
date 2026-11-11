@@ -158,8 +158,8 @@ export type ClassApiMatrixRow = {
 
 export type ClassApiMatrixOutput = {
   /**
-   * The runtime already uses deobfuscated names, so non-mojang matrix
-   * columns are empty by design (the mapping graph is deliberately empty).
+   * The runtime already uses deobfuscated names, so the mapping graph is
+   * deliberately empty and the matrix has no rows at all.
    */
   unobfuscatedRuntime?: boolean;
   version: string;

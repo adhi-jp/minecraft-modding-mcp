@@ -587,3 +587,160 @@ test("AnalyzeSymbolService explicit kind=class emits no inference warning", asyn
 
   assert.ok(!(result.warnings ?? []).some((w) => /auto-detected/.test(w)), "explicit kinds must not warn");
 });
+
+const apiMatrixStub = (overrides: Record<string, unknown>) => async () => ({
+  version: "1.21.10",
+  className: "net.minecraft.world.item.Item",
+  classNameMapping: "mojang" as const,
+  classIdentity: { mojang: "net.minecraft.world.item.Item" },
+  rowCount: 0,
+  rowsTruncated: false,
+  ambiguousRowCount: 0,
+  warnings: [] as string[],
+  rows: [] as unknown[],
+  ...overrides
+});
+
+const apiOverviewRequest = {
+  task: "api-overview" as const,
+  detail: "summary" as const,
+  subject: { kind: "class" as const, name: "net.minecraft.world.item.Item" },
+  version: "1.21.10",
+  classNameMapping: "mojang" as const
+};
+
+test("AnalyzeSymbolService api-overview on an unobfuscated version with no rows says so and names class-members", async () => {
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    getClassApiMatrix: apiMatrixStub({ unobfuscatedRuntime: true, rowCount: 0, rows: [] })
+  } as never);
+
+  const result = await service.execute(apiOverviewRequest);
+  const summary = result.summary as { status: string; headline: string; nextActions?: unknown };
+
+  assert.equal(summary.status, "ok");
+  assert.match(summary.headline, /Mojang names/);
+  assert.match(summary.headline, /no mapping matrix/);
+  assert.doesNotMatch(summary.headline, /Built an API overview/);
+  assert.deepEqual(summary.nextActions, [
+    {
+      tool: "inspect-minecraft",
+      params: {
+        task: "class-members",
+        subject: {
+          kind: "class",
+          className: "net.minecraft.world.item.Item",
+          artifact: { type: "resolve-target", target: { kind: "version", value: "1.21.10" } }
+        }
+      }
+    }
+  ]);
+});
+
+test("AnalyzeSymbolService api-overview on an unobfuscated version names no class-members call for a yarn or intermediary class name", async () => {
+  for (const classNameMapping of ["yarn", "intermediary"] as const) {
+    const service = new AnalyzeSymbolService({
+      ...throwingAnalyzeDeps(),
+      getClassApiMatrix: apiMatrixStub({ unobfuscatedRuntime: true, rowCount: 0, rows: [], classNameMapping })
+    } as never);
+
+    const summary = (await service.execute({ ...apiOverviewRequest, classNameMapping })).summary as {
+      status: string;
+      headline: string;
+      nextActions?: unknown;
+    };
+
+    assert.equal(summary.status, "ok", classNameMapping);
+    assert.match(summary.headline, /Mojang names/, classNameMapping);
+    assert.equal("nextActions" in summary, false, classNameMapping);
+  }
+});
+
+test("AnalyzeSymbolService api-overview on an unobfuscated version keeps the class-members call for an obfuscated class name", async () => {
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    getClassApiMatrix: apiMatrixStub({ unobfuscatedRuntime: true, rowCount: 0, rows: [], classNameMapping: "obfuscated" })
+  } as never);
+
+  const summary = (await service.execute({ ...apiOverviewRequest, classNameMapping: "obfuscated" })).summary as {
+    nextActions?: unknown[];
+  };
+
+  assert.equal(summary.nextActions?.length, 1);
+});
+
+test("AnalyzeSymbolService api-overview keeps its headline and has no nextActions without the unobfuscated flag", async () => {
+  const zeroRows = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    getClassApiMatrix: apiMatrixStub({ rowCount: 0, rows: [] })
+  } as never);
+  const withRows = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    getClassApiMatrix: apiMatrixStub({
+      rowCount: 2,
+      rows: [
+        { kind: "field", mojang: { symbol: "a.B.C", owner: "a.B", name: "C" } },
+        { kind: "field", mojang: { symbol: "a.B.D", owner: "a.B", name: "D" } }
+      ]
+    })
+  } as never);
+  const flaggedWithRows = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    getClassApiMatrix: apiMatrixStub({
+      unobfuscatedRuntime: true,
+      rowCount: 1,
+      rows: [{ kind: "field", mojang: { symbol: "a.B.C", owner: "a.B", name: "C" } }]
+    })
+  } as never);
+
+  for (const service of [zeroRows, withRows, flaggedWithRows]) {
+    const summary = (await service.execute(apiOverviewRequest)).summary as {
+      status: string;
+      headline: string;
+      nextActions?: unknown;
+    };
+    assert.equal(summary.status, "ok");
+    assert.equal(summary.headline, "Built an API overview for net.minecraft.world.item.Item.");
+    assert.equal("nextActions" in summary, false);
+  }
+});
+
+test("AnalyzeSymbolService exists with an exact method query and no descriptor carries the name-only hint from the real normalization", async () => {
+  const { MappingService } = await import("../../../src/mapping-service.ts");
+  const { createVersionServiceStub } = await import("../../helpers/mapping-service-fixtures.ts");
+  const { buildTestConfig } = await import("../../helpers/test-config.ts");
+  const { mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "analyze-symbol-descriptor-hint-"));
+  const mapping = new MappingService(buildTestConfig(root, { sourceRepos: [] }), createVersionServiceStub());
+  const service = new AnalyzeSymbolService({
+    ...throwingAnalyzeDeps(),
+    checkSymbolExists: (input: never) => mapping.checkSymbolExists(input)
+  } as never);
+
+  for (const descriptor of [undefined, "(I"]) {
+    let caught: { code?: string; message?: string; details?: Record<string, unknown> } | undefined;
+    try {
+      await service.execute({
+        task: "exists",
+        detail: "standard",
+        version: "1.21.10",
+        sourceMapping: "obfuscated",
+        signatureMode: "exact",
+        subject: {
+          kind: "method",
+          owner: "net.minecraft.world.level.Level",
+          name: "doThing",
+          ...(descriptor !== undefined ? { descriptor } : {})
+        }
+      } as never);
+    } catch (error) {
+      caught = error as typeof caught;
+    }
+    assert.equal(caught?.code, "ERR_INVALID_INPUT", String(descriptor));
+    assert.equal(caught?.message, "descriptor must be a valid JVM descriptor when kind=method.", String(descriptor));
+    assert.match(String(caught?.details?.nextAction), /signatureMode/, String(descriptor));
+    assert.match(String(caught?.details?.nextAction), /"name-only"/, String(descriptor));
+  }
+});

@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 
-import { ERROR_CODES } from "../../src/errors.ts";
+import { ERROR_CODES, isAppError } from "../../src/errors.ts";
 import { RegistryService } from "../../src/registry-service.ts";
+import { mapErrorToProblem } from "../../src/tool-guidance.ts";
+import { getRegistryDataSchema } from "../../src/tool-schemas.ts";
 import { buildTestConfig } from "../helpers/test-config.ts";
 
 async function installFakeJava(binDir: string, body: string): Promise<void> {
@@ -408,4 +410,76 @@ test("RegistryService evicts the coldest version once the in-memory cache bound 
       process.env.PATH = previousPath;
     }
   }
+});
+
+async function unknownRegistryError(registry: string): Promise<{ error: unknown; version: string }> {
+  const root = await mkdtemp(join(tmpdir(), "registry-service-unknown-"));
+  const config = buildTestConfig(root);
+  const version = "1.20.1";
+  const registryDir = join(config.cacheDir, "registries", version);
+  await mkdir(registryDir, { recursive: true });
+  await writeFile(
+    join(registryDir, "registries.json"),
+    JSON.stringify({ "minecraft:block": { entries: { "minecraft:stone": { protocol_id: 1 } } } }),
+    "utf8"
+  );
+  const service = new RegistryService(config, {} as any);
+  try {
+    await service.getRegistryData({ version, registry });
+  } catch (error) {
+    return { error, version };
+  }
+  assert.fail("expected an unknown registry error");
+}
+
+test("unknown registry error keeps code, message and details and names the listing call", async () => {
+  const { error, version } = await unknownRegistryError("minecraft:nope");
+  assert.ok(isAppError(error));
+  assert.equal(error.code, ERROR_CODES.SOURCE_NOT_FOUND);
+  assert.equal(error.message, `Registry "minecraft:nope" not found for version "${version}".`);
+  const details = error.details as Record<string, unknown>;
+  assert.equal(details.version, version);
+  assert.equal(details.registry, "minecraft:nope");
+  assert.deepEqual(details.available, ["minecraft:block"]);
+  assert.match(String(details.nextAction), /get-registry-data/);
+  assert.match(String(details.nextAction), /includeData: false/);
+  assert.doesNotMatch(String(details.nextAction), /tags are data files/i);
+  assert.deepEqual(details.suggestedCall, {
+    tool: "get-registry-data",
+    params: { version, includeData: false }
+  });
+
+  const suggestedParams = (details.suggestedCall as { params: unknown }).params;
+  const parsedCall = getRegistryDataSchema.parse(suggestedParams);
+  assert.equal("registry" in parsedCall, false);
+  assert.equal(parsedCall.includeData, false);
+  assert.equal(parsedCall.version, version);
+
+  const problem = mapErrorToProblem(error, "req-unknown-registry", { tool: "get-registry-data" });
+  assert.equal(problem.code, ERROR_CODES.SOURCE_NOT_FOUND);
+  assert.equal(problem.detail, `Registry "minecraft:nope" not found for version "${version}".`);
+  assert.deepEqual(problem.hints, [details.nextAction]);
+  assert.deepEqual(problem.suggestedCall, {
+    tool: "get-registry-data",
+    params: { version, includeData: false }
+  });
+});
+
+test("unknown registry error for a tags path says tags are data files read with get-artifact-file", async () => {
+  const { error } = await unknownRegistryError("minecraft:tags/damage_type");
+  assert.ok(isAppError(error));
+  assert.equal(error.code, ERROR_CODES.SOURCE_NOT_FOUND);
+  const nextAction = String((error.details as Record<string, unknown>).nextAction);
+  assert.match(nextAction, /includeData: false/);
+  assert.match(nextAction, /Tags are data files, not registries/);
+  assert.match(nextAction, /get-artifact-file/);
+  assert.match(nextAction, /data\/<namespace>\/tags\/<registry>\/<name>\.json/);
+  const problem = mapErrorToProblem(error, "req-unknown-tags", { tool: "get-registry-data" });
+  assert.match(String(problem.hints?.[0]), /Tags are data files/);
+});
+
+test("unknown registry error with a name merely containing tags gets no tags sentence", async () => {
+  const { error } = await unknownRegistryError("minecraft:block_tags/x");
+  assert.ok(isAppError(error));
+  assert.doesNotMatch(String((error.details as Record<string, unknown>).nextAction), /tags are data files/i);
 });

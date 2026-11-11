@@ -201,7 +201,8 @@ export class MappingService {
 
     const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode, {
       allowShortClassName:
-        input.kind === "class" && (input.sourceMapping === "obfuscated" || input.nameMode === "auto")
+        input.kind === "class" && (input.sourceMapping === "obfuscated" || input.nameMode === "auto"),
+      hintNameOnlyOnDescriptorError: true
     });
 
     const cacheKey = this.buildResolutionCacheKey(version, input, querySymbol, effectiveSignatureMode);
@@ -1035,7 +1036,8 @@ export class MappingService {
           })()
         : (() => {
             const { record: queryRecord, querySymbol } = normalizeQuerySymbol(input, effectiveSignatureMode, {
-              allowShortClassName: input.kind === "class" && sourceMapping === "obfuscated"
+              allowShortClassName: input.kind === "class" && sourceMapping === "obfuscated",
+              hintNameOnlyOnDescriptorError: true
             });
             return {
               mode: "strict",

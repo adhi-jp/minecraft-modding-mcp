@@ -1094,12 +1094,36 @@ function buildInspectMinecraftInvalidFocusGuidance(normalizedInput: unknown): In
   };
 }
 
+// Only a schema rejection located at an artifact reference qualifies: a stray
+// `artifact` key the schema ignores produces no such issue.
+function buildInspectMinecraftInvalidArtifactGuidance(
+  zodError: ZodError | undefined
+): InvalidInputGuidance | undefined {
+  const atArtifactReference = zodError?.issues.some((issue) => {
+    const [first, second, third] = issue.path;
+    return first === "subject" && (second === "artifact" || (second === "focus" && third === "artifact"));
+  });
+  if (!atArtifactReference) {
+    return undefined;
+  }
+  return {
+    hints: [
+      'inspect-minecraft artifact must be one of two shapes: { "type": "resolved-id", "artifactId": "..." } or { "type": "resolve-target", "target": { "kind": "version", "value": "..." } }.',
+      'The { kind: "artifact", artifactId } target shape that other tools accept is not accepted here; use { "type": "resolved-id", "artifactId": "..." } for an artifact id.'
+    ]
+  };
+}
+
 function buildInvalidInputGuidance(
   tool: string,
-  normalizedInput: unknown
+  normalizedInput: unknown,
+  schemaRejection?: ZodError
 ): InvalidInputGuidance | undefined {
   if (tool === "inspect-minecraft") {
-    return buildInspectMinecraftInvalidFocusGuidance(normalizedInput);
+    return (
+      buildInspectMinecraftInvalidFocusGuidance(normalizedInput)
+      ?? buildInspectMinecraftInvalidArtifactGuidance(schemaRejection)
+    );
   }
 
   if (tool === "validate-mixin") {
@@ -1245,7 +1269,7 @@ export function mapErrorToProblem(
 ): ProblemDetails {
   if (caughtError instanceof ZodError) {
     const guidance = context?.tool
-      ? buildInvalidInputGuidance(context.tool, context.normalizedInput)
+      ? buildInvalidInputGuidance(context.tool, context.normalizedInput, caughtError)
       : undefined;
     const baseHints =
       guidance?.hints ?? ["Check fieldErrors and submit a valid tool argument payload."];

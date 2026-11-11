@@ -475,3 +475,131 @@ test("get-class-members invalid string target suggestedCall preserves valid fiel
     memberPattern: "tick"
   });
 });
+
+type InspectErrorResult = {
+  isError?: boolean;
+  structuredContent?: {
+    error?: {
+      code?: string;
+      fieldErrors?: Array<{ path?: string }>;
+      hints?: string[];
+      suggestedCall?: unknown;
+      exampleCalls?: unknown;
+    };
+  };
+};
+
+const RESOLVED_ID_SHAPE = '{ "type": "resolved-id", "artifactId": "..." }';
+const RESOLVE_TARGET_SHAPE = '{ "type": "resolve-target", "target": { "kind": "version", "value": "..." } }';
+
+function assertArtifactShapeGuidance(result: InspectErrorResult, fieldPath: string): void {
+  const error = result.structuredContent?.error;
+  assert.equal(result.isError, true);
+  assert.equal(error?.code, "ERR_INVALID_INPUT");
+  assert.ok(error?.fieldErrors?.some((entry) => entry.path?.startsWith(fieldPath)));
+  const hints = error?.hints ?? [];
+  const joined = hints.join("\n");
+  assert.ok(joined.includes(RESOLVED_ID_SHAPE), `resolved-id shape shown: ${joined}`);
+  assert.ok(joined.includes(RESOLVE_TARGET_SHAPE), `resolve-target shape shown: ${joined}`);
+  assert.match(joined, /\{ kind: "artifact", artifactId \}.*not accepted/);
+  assert.doesNotMatch(joined, /fallback examples/);
+  assert.equal(error?.suggestedCall, undefined);
+  assert.equal(error?.exampleCalls, undefined);
+}
+
+test("inspect-minecraft string subject.artifact gets hints showing both accepted artifact shapes", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item",
+      artifact: "1.21.10"
+    }
+  }) as InspectErrorResult;
+  assertArtifactShapeGuidance(result, "subject.artifact");
+});
+
+test("inspect-minecraft kind=artifact artifact object gets hints saying that shape is not accepted here", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item",
+      artifact: { kind: "artifact", artifactId: "abc" }
+    }
+  }) as InspectErrorResult;
+  assertArtifactShapeGuidance(result, "subject.artifact");
+});
+
+test("inspect-minecraft artifact object with an unknown type gets the artifact shape hints", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item",
+      artifact: { type: "artifact-id", artifactId: "abc" }
+    }
+  }) as InspectErrorResult;
+  assertArtifactShapeGuidance(result, "subject.artifact");
+});
+
+test("inspect-minecraft workspace focus.artifact in a wrong shape gets the artifact shape hints", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "workspace",
+      projectPath: "/tmp/example",
+      focus: {
+        kind: "class",
+        className: "net.minecraft.world.item.Item",
+        artifact: { kind: "artifact", artifactId: "abc" }
+      }
+    }
+  }) as InspectErrorResult;
+  assertArtifactShapeGuidance(result, "subject.focus.artifact");
+});
+
+test("inspect-minecraft resolve-target artifact with an empty target gets the artifact shape hints", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "net.minecraft.world.item.Item",
+      artifact: { type: "resolve-target", target: {} }
+    }
+  }) as InspectErrorResult;
+  assertArtifactShapeGuidance(result, "subject.artifact");
+});
+
+test("inspect-minecraft stray artifact key ignored by the schema keeps the retry suggestion and gets no artifact hints", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "version",
+      version: "26.1",
+      artifact: "26.1"
+    }
+  }) as InspectErrorResult;
+  const error = result.structuredContent?.error;
+  assert.equal(result.isError, true);
+  assert.equal(error?.code, "ERR_INVALID_INPUT");
+  assert.ok(error?.suggestedCall, "the error's own retry suggestion stays");
+  const joined = (error?.hints ?? []).join("\n");
+  assert.doesNotMatch(joined, /resolved-id/);
+  assert.doesNotMatch(joined, /fallback examples/);
+});
+
+test("inspect-minecraft valid artifact reference with an unrelated input error keeps the default hint", async () => {
+  const result = await callTool("inspect-minecraft", {
+    task: "class-source",
+    subject: {
+      kind: "class",
+      className: "",
+      artifact: { type: "resolved-id", artifactId: "abc" }
+    }
+  }) as InspectErrorResult;
+  const error = result.structuredContent?.error;
+  assert.equal(result.isError, true);
+  assert.equal(error?.code, "ERR_INVALID_INPUT");
+  assert.deepEqual(error?.hints, ["Check fieldErrors and submit a valid tool argument payload."]);
+});

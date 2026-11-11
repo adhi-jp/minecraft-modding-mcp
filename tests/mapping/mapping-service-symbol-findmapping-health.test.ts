@@ -857,3 +857,100 @@ test("MappingService checkMappingHealth reports memberRemapAvailable=true for ob
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const DESCRIPTOR_ERROR_MESSAGE = "descriptor must be a valid JVM descriptor when kind=method.";
+
+async function captureError(run: () => Promise<unknown>): Promise<{
+  code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+}> {
+  try {
+    await run();
+  } catch (error) {
+    return error as { code?: string; message?: string; details?: Record<string, unknown> };
+  }
+  assert.fail("expected the call to throw");
+}
+
+test("MappingService method descriptor error names the name-only fallback on calls that select signatureMode", async () => {
+  const { root, service } = await createLoomService("mapping-service-descriptor-hint-", TEST_TINY);
+  try {
+    const base = {
+      version: "1.21.10",
+      kind: "method",
+      owner: "net.minecraft.world.level.Level",
+      name: "doThing",
+      signatureMode: "exact",
+      sourceMapping: "obfuscated"
+    };
+    const calls: Array<[string, (descriptor: string | undefined) => Promise<unknown>]> = [
+      ["checkSymbolExists", (descriptor) => service.checkSymbolExists({ ...base, descriptor } as never)],
+      ["findMapping", (descriptor) => service.findMapping({ ...base, targetMapping: "mojang", descriptor } as never)]
+    ];
+    for (const [label, call] of calls) {
+      for (const descriptor of [undefined, "(I"]) {
+        const error = await withCwd(root, () => captureError(() => call(descriptor)));
+        assert.equal(error.code, ERROR_CODES.INVALID_INPUT, `${label} ${String(descriptor)}`);
+        assert.equal(error.message, DESCRIPTOR_ERROR_MESSAGE, `${label} ${String(descriptor)}`);
+        assert.equal(error.details?.descriptor, descriptor, `${label} ${String(descriptor)}`);
+        const nextAction = String(error.details?.nextAction);
+        assert.match(nextAction, /\(I\)V/, `${label} ${String(descriptor)}`);
+        assert.match(nextAction, /signatureMode/, `${label} ${String(descriptor)}`);
+        assert.match(nextAction, /"name-only"/, `${label} ${String(descriptor)}`);
+        assert.match(nextAction, /omit `?descriptor`?/i, `${label} ${String(descriptor)}`);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService malformed descriptor in name-only mode carries the same hint", async () => {
+  const { root, service } = await createLoomService("mapping-service-descriptor-name-only-", TEST_TINY);
+  try {
+    const base = {
+      version: "1.21.10",
+      kind: "method",
+      owner: "net.minecraft.world.level.Level",
+      name: "doThing",
+      descriptor: "(I",
+      sourceMapping: "obfuscated"
+    };
+    const calls: Array<[string, () => Promise<unknown>]> = [
+      ["checkSymbolExists", () => service.checkSymbolExists(base as never)],
+      ["findMapping", () => service.findMapping({ ...base, targetMapping: "mojang", signatureMode: "name-only" } as never)]
+    ];
+    for (const [label, call] of calls) {
+      const error = await withCwd(root, () => captureError(call));
+      assert.equal(error.code, ERROR_CODES.INVALID_INPUT, label);
+      assert.equal(error.message, DESCRIPTOR_ERROR_MESSAGE, label);
+      assert.equal(error.details?.descriptor, "(I", label);
+      assert.match(String(error.details?.nextAction), /"name-only"/, label);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("MappingService exact-only method resolution keeps the descriptor error without a name-only hint", async () => {
+  const { root, service } = await createLoomService("mapping-service-descriptor-exact-only-", TEST_TINY);
+  try {
+    const error = await withCwd(root, () =>
+      captureError(() =>
+        service.resolveMethodMappingExact({
+          version: "1.21.10",
+          owner: "net.minecraft.world.level.Level",
+          name: "doThing",
+          sourceMapping: "obfuscated",
+          targetMapping: "mojang"
+        } as never)
+      )
+    );
+    assert.equal(error.code, ERROR_CODES.INVALID_INPUT);
+    assert.equal(error.message, DESCRIPTOR_ERROR_MESSAGE);
+    assert.deepEqual(error.details, { descriptor: undefined });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

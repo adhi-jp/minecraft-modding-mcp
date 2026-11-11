@@ -316,20 +316,22 @@ function normalizeMemberName(name: string): string {
  * type tokens so "(" or "()" style half-descriptors surface as ERR_INVALID_INPUT instead of
  * being silently accepted.
  */
-export function normalizeMethodDescriptor(descriptor: string | undefined): string {
+export function normalizeMethodDescriptor(
+  descriptor: string | undefined,
+  extraDetails?: Record<string, unknown>
+): string {
   const normalized = descriptor?.trim() ?? "";
-  if (!normalized) {
+  if (!normalized || !isValidMethodDescriptor(normalized)) {
     throw invalidInputError("descriptor must be a valid JVM descriptor when kind=method.", {
-      descriptor
-    });
-  }
-  if (!isValidMethodDescriptor(normalized)) {
-    throw invalidInputError("descriptor must be a valid JVM descriptor when kind=method.", {
-      descriptor
+      descriptor,
+      ...extraDetails
     });
   }
   return normalized;
 }
+
+const NAME_ONLY_DESCRIPTOR_NEXT_ACTION =
+  'Pass the method\'s JVM descriptor, for example "(I)V", or set signatureMode to "name-only" and omit descriptor to match by owner and name.';
 
 export function isValidMethodDescriptor(descriptor: string): boolean {
   if (!descriptor.startsWith("(")) return false;
@@ -399,6 +401,11 @@ export function normalizeQuerySymbol(
   signatureMode?: "exact" | "name-only",
   options?: {
     allowShortClassName?: boolean;
+    /**
+     * Set by callers whose tool lets the caller choose `signatureMode`: the method
+     * descriptor error then also names the name-only alternative, in either mode.
+     */
+    hintNameOnlyOnDescriptorError?: boolean;
   }
 ): {
   record: MappingSymbolRecord;
@@ -471,11 +478,21 @@ export function normalizeQuerySymbol(
     // input still surfaces as ERR_INVALID_INPUT) but discarded afterwards so downstream
     // projection / filtering treats the query as "no descriptor".
     if (input.descriptor?.trim()) {
-      normalizeMethodDescriptor(input.descriptor);
+      normalizeMethodDescriptor(
+        input.descriptor,
+        options?.hintNameOnlyOnDescriptorError
+          ? { nextAction: NAME_ONLY_DESCRIPTOR_NEXT_ACTION }
+          : undefined
+      );
     }
     descriptor = "";
   } else {
-    descriptor = normalizeMethodDescriptor(input.descriptor);
+    descriptor = normalizeMethodDescriptor(
+      input.descriptor,
+      options?.hintNameOnlyOnDescriptorError
+        ? { nextAction: NAME_ONLY_DESCRIPTOR_NEXT_ACTION }
+        : undefined
+    );
   }
   const record = createMethodSymbolRecord(
     owner,

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+import { buildSuggestedCall } from "./build-suggested-call.js";
 import { createError, ERROR_CODES } from "./errors.js";
 import { limitStdio } from "./java-process.js";
 import { log } from "./logger.js";
@@ -297,7 +298,12 @@ export class RegistryService {
           details: {
             version,
             registry: registryName,
-            available: registryNames.slice(0, 20)
+            available: registryNames.slice(0, 20),
+            nextAction: unknownRegistryNextAction(registryName),
+            ...buildSuggestedCall({
+              tool: "get-registry-data",
+              params: { version, includeData: false }
+            })
           }
         });
       }
@@ -480,6 +486,16 @@ export class RegistryService {
       if (oldest !== undefined) this.registryCache.delete(oldest);
     }
   }
+}
+
+function unknownRegistryNextAction(registryName: string): string {
+  const listing =
+    "List the registry names by calling get-registry-data for this version without `registry`, with `includeData: false`.";
+  const path = registryName.slice(registryName.indexOf(":") + 1);
+  if (!path.startsWith("tags/")) {
+    return listing;
+  }
+  return `${listing} Tags are data files, not registries, and one is read by its exact path with get-artifact-file as \`data/<namespace>/tags/<registry>/<name>.json\`.`;
 }
 
 function normalizeRegistryName(name: string): string {
