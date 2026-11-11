@@ -43,6 +43,69 @@ test("computeLineBraceDepths ignores braces in char literals and block comments"
   assert.deepEqual(depths, [0, 1, 1, 1, 1]);
 });
 
+test("extractClassMetadata folds the import block into one line with the count and 1-based range", () => {
+  const source = [
+    "package a;",
+    "",
+    "import java.util.List;",
+    "import java.util.Map;",
+    "// grouped below",
+    "",
+    "import static java.lang.Math.max;",
+    "",
+    "public class Demo {",
+    "  private int count;",
+    "}"
+  ].join("\n");
+
+  const outline = extractClassMetadata("a/Demo.java", source);
+  assert.equal(
+    outline,
+    [
+      "package a;",
+      "",
+      "// import lines omitted: 3 (lines 3-7)",
+      "",
+      "",
+      "// [class] line 9",
+      "public class Demo {",
+      "// [field] line 10",
+      "  private int count;"
+    ].join("\n")
+  );
+  assert.equal(/^\s*import /m.test(outline), false, "no import statement is printed");
+});
+
+test("extractClassMetadata ignores import-looking comment lines and counts an import with a tab after the keyword", () => {
+  const source = [
+    "package a;",
+    "/*",
+    "import not.a.Real;",
+    "*/",
+    "import java.util.List;",
+    "import\tjava.util.Map;",
+    "",
+    "public class Demo {",
+    "}"
+  ].join("\n");
+
+  const outline = extractClassMetadata("a/Demo.java", source);
+  assert.match(outline, /^\/\/ import lines omitted: 2 \(lines 5-6\)$/m);
+  assert.equal(outline.includes("not.a.Real"), false);
+  assert.equal(/^\s*import\s/m.test(outline), false);
+});
+
+test("extractClassMetadata prints no import fold line for a file without imports", () => {
+  const source = ["package a;", "", "public class Demo {", "  int x;", "}"].join("\n");
+
+  const outline = extractClassMetadata("a/Demo.java", source);
+  assert.equal(outline.includes("import"), false);
+  assert.equal(
+    outline,
+    ["package a;", "", "", "// [class] line 3", "public class Demo {", "// [field] line 4", "  int x;"].join("\n")
+  );
+});
+
 test("extractClassMetadata keeps the package line in the header and lists only class members", () => {
   const source = [
     "package a;",
@@ -65,7 +128,7 @@ test("extractClassMetadata keeps the package line in the header and lists only c
     [
       "package a;",
       "",
-      "import java.util.List;",
+      "// import lines omitted: 1 (lines 3-3)",
       "",
       "",
       "// [class] line 5",

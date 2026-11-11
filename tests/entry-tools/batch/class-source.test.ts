@@ -433,6 +433,36 @@ test("schema: batch-class-source rejects an unknown target.kind and lists 'artif
   }
 });
 
+test("an entry outputFile under directories that do not exist is written", async () => {
+  const { mkdtemp, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { SourceService } = await import("../../../src/source-service.ts");
+  const { buildTestConfig } = await import("../../helpers/test-config.ts");
+  const { createJar } = await import("../../helpers/zip.ts");
+
+  const root = await mkdtemp(join(tmpdir(), "batch-outputfile-"));
+  const binaryJarPath = join(root, "demo.jar");
+  await createJar(binaryJarPath, { "a/Out.class": Buffer.from([0xca, 0xfe, 0xba, 0xbe]) });
+  await createJar(join(root, "demo-sources.jar"), {
+    "a/Out.java": "package a;\npublic class Out { int x = 1; }\n"
+  });
+  const source = new SourceService(buildTestConfig(root));
+  const service = new BatchClassSourceService({
+    resolveArtifact: (input) => source.resolveArtifact(input),
+    getClassSource: (input) => source.getClassSource(input)
+  });
+
+  const outputFile = join(root, "no", "such", "dir", "Out.java");
+  const out = await service.execute({
+    target: { kind: "jar", value: binaryJarPath },
+    entries: [{ className: "a.Out", mode: "full", outputFile }]
+  });
+
+  assert.equal(out.summary.ok, 1, JSON.stringify(out.results));
+  assert.match(await readFile(outputFile, "utf8"), /public class Out/);
+});
+
 test("top-level resolution failure surfaces as a thrown error (no results array)", async () => {
   const { deps } = buildDeps({
     resolveError: createError({

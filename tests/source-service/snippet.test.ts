@@ -364,6 +364,61 @@ test("getClassSource metadata mode reports a maxChars cut of the outline without
   assert.equal(Object.hasOwn(result, "returnedRange"), false);
 });
 
+test("getClassSource metadata outline of an import-heavy class returns its first declaration under a small maxChars", async () => {
+  const imports = Array.from({ length: 60 }, (_, i) => `import com.example.long.package.name.Type${i};`);
+  const sourceLines = [
+    "package a;",
+    "",
+    ...imports,
+    "",
+    "public class Heavy {",
+    "  int x = 1;",
+    "}"
+  ];
+  const { artifactId, service, className } = await setupGetClassSource({
+    rootPrefix: "snippet-meta-imports-",
+    classInternal: "a/Heavy",
+    className: "a.Heavy",
+    sources: { "a/Heavy.java": sourceLines.join("\n") }
+  });
+
+  const maxChars = 200;
+  const importBlockLength = imports.join("\n").length;
+  assert.ok(maxChars < importBlockLength, "the cap is smaller than the former import block");
+
+  const result = await service.getClassSource({ artifactId, className, mode: "metadata", maxChars });
+  assert.match(result.sourceText, /^package a;/);
+  assert.match(result.sourceText, /\/\/ import lines omitted: 60 \(lines 3-62\)/);
+  assert.equal(result.sourceText.includes("import com.example"), false);
+  assert.match(result.sourceText, /\[class\] line 64\s*\npublic class Heavy \{/);
+  assert.ok(result.sourceText.length <= maxChars, "maxChars stays a hard cap");
+
+  const tight = await service.getClassSource({ artifactId, className, mode: "metadata", maxChars: 30 });
+  assert.equal(tight.sourceText.length, 30);
+  assert.equal(tight.charsTruncated, true);
+});
+
+test("getClassSource full and snippet output keep the import lines", async () => {
+  const { artifactId, service, className } = await setupGetClassSource({
+    rootPrefix: "snippet-full-imports-",
+    classInternal: "a/Heavy",
+    className: "a.Heavy",
+    sources: {
+      "a/Heavy.java": ["package a;", "", "import java.util.List;", "", "public class Heavy {", "}"].join("\n")
+    }
+  });
+
+  const full = await service.getClassSource({ artifactId, className, mode: "full" });
+  const snippet = await service.getClassSource({ artifactId, className, mode: "snippet" });
+  for (const result of [full, snippet]) {
+    assert.equal(
+      result.sourceText,
+      ["package a;", "", "import java.util.List;", "", "public class Heavy {", "}"].join("\n")
+    );
+    assert.equal(result.sourceText.includes("imports omitted"), false);
+  }
+});
+
 test("getClassSource snippet mode applies default maxLines=200 when no range or maxLines given", async () => {
   const { artifactId, service, className } = await setupGetClassSource({
     rootPrefix: "snippet-default-200-",

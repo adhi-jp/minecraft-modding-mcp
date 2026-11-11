@@ -12,12 +12,31 @@ export function extractClassMetadata(filePath: string, content: string): string 
   const symbols = extractSymbolsFromSource(filePath, content);
   const outputParts: string[] = [];
 
-  // Include package + import header (lines before first symbol declaration)
+  // Include the package line and blank lines before the first symbol declaration. The import
+  // lines are folded into one comment line carrying their count and 1-based first/last line.
   const firstSymbolLine = symbols.length > 0 ? symbols[0]!.line : lines.length + 1;
-  for (let i = 0; i < Math.min(firstSymbolLine - 1, lines.length); i++) {
+  const headerEnd = Math.min(firstSymbolLine - 1, lines.length);
+  let importCount = 0;
+  let firstImportLine = 0;
+  let lastImportLine = 0;
+  // Imports are found on the comment-stripped lines, so an `import` inside a comment is not
+  // one; line numbers stay those of the original file.
+  const code = stripJavaNoise(lines);
+  for (let i = 0; i < headerEnd; i++) {
+    if (/^import\s/.test(code[i]!.trim())) {
+      importCount += 1;
+      firstImportLine ||= i + 1;
+      lastImportLine = i + 1;
+    }
+  }
+  for (let i = 0; i < headerEnd; i++) {
     const line = lines[i]!;
     const trimmed = line.trim();
-    if (trimmed.startsWith("package ") || trimmed.startsWith("import ") || trimmed === "") {
+    if (importCount > 0 && i + 1 === firstImportLine) {
+      outputParts.push(`// import lines omitted: ${importCount} (lines ${firstImportLine}-${lastImportLine})`);
+    } else if (trimmed.startsWith("package ")) {
+      outputParts.push(line);
+    } else if (trimmed === "" && !(i + 1 > firstImportLine && i + 1 < lastImportLine)) {
       outputParts.push(line);
     }
   }
@@ -25,7 +44,6 @@ export function extractClassMetadata(filePath: string, content: string): string 
   // Add each symbol's declaration line. Record components share the record's header line, so
   // a line already printed for an earlier symbol is not printed again.
   const printedLines = new Set<number>();
-  let code: string[] | undefined;
   for (const symbol of symbols) {
     const lineIndex = symbol.line - 1;
     if (lineIndex >= 0 && lineIndex < lines.length && !printedLines.has(symbol.line)) {
@@ -36,7 +54,6 @@ export function extractClassMetadata(filePath: string, content: string): string 
         : `// [${symbol.symbolKind}] line ${symbol.line}`;
       outputParts.push(prefix);
       if (symbol.symbolKind === "method") {
-        code ??= stripJavaNoise(lines);
         outputParts.push(methodHeadLine(lines, code, lineIndex));
       } else {
         outputParts.push(lines[lineIndex]!);

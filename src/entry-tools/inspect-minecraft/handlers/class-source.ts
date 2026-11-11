@@ -55,6 +55,8 @@ deps: InspectMinecraftDeps,
           mode: source.mode,
           ...(source.returnedRange ? { returnedRange: source.returnedRange } : {}),
           totalLines: source.totalLines,
+          truncated: source.truncated,
+          ...(source.nextStartLine !== undefined ? { nextStartLine: source.nextStartLine } : {}),
           sourceText: source.sourceText
         }
       },

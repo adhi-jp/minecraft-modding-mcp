@@ -326,6 +326,27 @@ test("getModClassSource outputFile writes to file and returns placeholder", asyn
   assert.ok(written.includes("class Demo"));
 });
 
+test("getModClassSource outputFile creates missing parent directories before writing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mod-outfile-mkdir-"));
+  const jarPath = join(root, "demo.jar");
+  await createJar(jarPath, { "com/example/Demo.class": Buffer.alloc(4) });
+
+  const outputDir = join(root, "decompiled");
+  await mkdir(join(outputDir, "com/example"), { recursive: true });
+  await writeFile(join(outputDir, "com/example/Demo.java"), "package com.example;\npublic class Demo {}", "utf8");
+
+  const service = buildMockService(root, outputDir, ["com/example/Demo.java"]);
+  const outPath = join(root, "not", "yet", "there", "output.java");
+  const result = await service.getModClassSource({
+    jarPath,
+    className: "com.example.Demo",
+    outputFile: outPath
+  });
+
+  assert.equal(result.outputFilePath, outPath);
+  assert.ok((await readFile(outPath, "utf8")).includes("class Demo"));
+});
+
 test("getModClassSource outputFile honors maxLines truncation", async () => {
   const root = await mkdtemp(join(tmpdir(), "mod-f04-outfile-maxlines-"));
   const jarPath = join(root, "demo.jar");

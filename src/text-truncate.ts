@@ -1,5 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
 
 import { createError, ERROR_CODES } from "./errors.js";
 
@@ -26,15 +26,27 @@ export function sliceToMaxCharsSafe(text: string, maxChars: number): string {
 
 /**
  * Writes `text` to the caller-supplied `outputFile` (resolved against the
- * working directory when relative) and returns the resolved path. A write
- * failure is reported as INVALID_INPUT carrying the OS error code.
+ * working directory when relative) and returns the resolved path. The write
+ * is attempted first; only when it fails with ENOENT are the parent
+ * directories created recursively and the write retried once, so a path whose
+ * parent exists never reaches `mkdir`. Any other write failure, and a failure
+ * of the directory creation or the retry, is reported as INVALID_INPUT
+ * carrying the OS error code.
  */
 export async function writeSourceToOutputFile(outputFile: string, text: string): Promise<string> {
   const outputPath = isAbsolute(outputFile)
     ? outputFile
     : resolvePath(outputFile);
   try {
-    await writeFile(outputPath, text, "utf8");
+    try {
+      await writeFile(outputPath, text, "utf8");
+    } catch (firstError) {
+      if ((firstError as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        throw firstError;
+      }
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeFile(outputPath, text, "utf8");
+    }
   } catch (writeError) {
     const errno = (writeError as NodeJS.ErrnoException | undefined)?.code;
     throw createError({

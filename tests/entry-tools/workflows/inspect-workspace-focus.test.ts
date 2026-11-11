@@ -349,6 +349,70 @@ test("InspectMinecraftService class-source omits returnedRange for metadata mode
   assert.deepEqual(snippetBlock.returnedRange, { start: 1, end: 200 });
 });
 
+test("InspectMinecraftService class-source reports truncated and nextStartLine only when the snippet was cut", async () => {
+  const service = new InspectMinecraftService(buildInspectDeps({
+    resolveArtifact: async (input) => ({
+      artifactId: "artifact-class-source-cut",
+      origin: "local-jar",
+      isDecompiled: false,
+      requestedMapping: input.mapping,
+      mappingApplied: input.mapping ?? "obfuscated",
+      version: "1.21.10",
+      provenance: { requestedTarget: input.target },
+      qualityFlags: [],
+      artifactContents: {
+        sourceKind: "source-jar",
+        indexedContentKinds: ["sources"],
+        resourcesIncluded: false,
+        sourceCoverage: "full"
+      },
+      warnings: []
+    }),
+    getClassSource: async (input) => {
+      const long = input.className.endsWith("Long");
+      return {
+        className: input.className,
+        artifactId: input.artifactId ?? "artifact-class-source-cut",
+        mode: input.mode,
+        sourceText: "// source",
+        totalLines: long ? 450 : 40,
+        returnedRange: { start: 1, end: long ? 200 : 40 },
+        truncated: long,
+        ...(long ? { nextStartLine: 201 } : {}),
+        returnedNamespace: "mojang",
+        warnings: []
+      };
+    },
+    detectProjectMinecraftVersion: async () => "1.21.10"
+  }));
+
+  const run = async (className: string) => {
+    const result = await service.execute({
+      task: "class-source",
+      detail: "standard",
+      include: ["source"],
+      subject: {
+        kind: "workspace" as const,
+        projectPath: "/workspace/demo-mod",
+        mapping: "mojang" as const,
+        focus: { kind: "class" as const, className }
+      }
+    });
+    return (result as { source?: Record<string, unknown> }).source;
+  };
+
+  const longBlock = await run("net.example.Long");
+  assert.ok(longBlock, "long class carries the source block");
+  assert.equal(longBlock.truncated, true);
+  assert.equal(longBlock.nextStartLine, 201);
+  assert.deepEqual(longBlock.returnedRange, { start: 1, end: 200 });
+
+  const shortBlock = await run("net.example.Short");
+  assert.ok(shortBlock, "short class carries the source block");
+  assert.equal(shortBlock.truncated, false);
+  assert.equal(Object.hasOwn(shortBlock, "nextStartLine"), false, "no nextStartLine key when the service returned none");
+});
+
 test("InspectMinecraftService accepts workspace class focus for class-members", async () => {
   const resolveArtifactCalls: Array<{
     target:
