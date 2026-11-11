@@ -243,13 +243,36 @@ export class FilesRepo {
       LIMIT ?
     `);
 
+    // files_fts is one external-content table shared by every cached artifact,
+    // and its artifact_id column is UNINDEXED, so MATCH alone ranks and reads the
+    // matching rows of all artifacts. The rowid bounds - the least and greatest
+    // rowid of this artifact's in-scope files rows, read from the files indexes -
+    // let FTS5 rank only that range (a scoped bound reads the covering path
+    // index, which INDEXED BY pins). The bounds are coalesced to the empty range
+    // [1, 0] because FTS5 reads a NULL bound as unbounded, which would rank every
+    // artifact's matches for an unknown artifact or an empty scope. The range is
+    // only a superset: rows of other artifacts can sit inside it, so the
+    // artifact_id and scope filters on f, not the range, decide which rows are
+    // returned. CROSS JOIN keeps files_fts as the outer loop, so FTS5 receives
+    // the bounds. Rows of equal rank are ordered by rowid, the order the
+    // rank-only statement produced, so which rows a LIMIT keeps does not depend
+    // on the engine's sorter.
     this.searchFtsStmt = this.db.prepare(`
-      SELECT file_path, rank
-      FROM files_fts
-      WHERE artifact_id = ? AND files_fts MATCH ?
-        AND (? IS NULL OR file_path LIKE ? ESCAPE '\\')
-      ORDER BY rank
-      LIMIT ?
+      SELECT f.file_path, files_fts.rank
+      FROM files_fts CROSS JOIN files AS f ON f.rowid = files_fts.rowid
+      WHERE files_fts MATCH :match
+        AND files_fts.rowid >= coalesce(CASE WHEN :scope IS NULL
+            THEN (SELECT min(a.rowid) FROM files AS a WHERE a.artifact_id = :aid)
+            ELSE (SELECT min(w.rowid) FROM files AS w INDEXED BY idx_files_path WHERE w.artifact_id = :aid AND w.file_path LIKE :scope ESCAPE '\\')
+          END, 1)
+        AND files_fts.rowid <= coalesce(CASE WHEN :scope IS NULL
+            THEN (SELECT max(a.rowid) FROM files AS a WHERE a.artifact_id = :aid)
+            ELSE (SELECT max(w.rowid) FROM files AS w INDEXED BY idx_files_path WHERE w.artifact_id = :aid AND w.file_path LIKE :scope ESCAPE '\\')
+          END, 0)
+        AND f.artifact_id = :aid
+        AND (:scope IS NULL OR f.file_path LIKE :scope ESCAPE '\\')
+      ORDER BY files_fts.rank, files_fts.rowid
+      LIMIT :limit
     `);
   }
 
@@ -437,7 +460,12 @@ export class FilesRepo {
     let contentRows: { file_path: string; rank: number }[] = [];
     if (includeContent && ftsQuery) {
       try {
-        contentRows = this.searchFtsStmt.all(artifactId, ftsQuery, scopePattern, scopePattern, fetchLimit) as {
+        contentRows = this.searchFtsStmt.all({
+          aid: artifactId,
+          match: ftsQuery,
+          scope: scopePattern,
+          limit: fetchLimit
+        }) as {
           file_path: string;
           rank: number;
         }[];
