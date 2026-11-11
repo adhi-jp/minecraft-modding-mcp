@@ -274,3 +274,207 @@ test("search-class-source handles representative queryMode behavior for separato
     });
   }
 });
+
+// A word that starts inside an identifier: `Barriers` is part of the single
+// token `removeBarriers`, so the indexed token search cannot find it.
+const MID_TOKEN_SOURCES: Record<string, string> = {
+  "com/example/tool/BarrierTool.java": [
+    "package com.example.tool;",
+    "public class BarrierTool {",
+    "  void removeBarriers() {}",
+    "}"
+  ].join("\n"),
+  "com/other/Unrelated.java": [
+    "package com.other;",
+    "public class Unrelated {",
+    "  int pagedtoken;",
+    "}"
+  ].join("\n"),
+  "com/other/Unrelated2.java": [
+    "package com.other;",
+    "public class Unrelated2 {",
+    "  int pagedtoken;",
+    "  int padding;",
+    "}"
+  ].join("\n")
+};
+
+async function createMidTokenFixture(rootPrefix: string, configOverrides: Partial<Config> = {}) {
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), rootPrefix));
+  const jarPath = join(root, "mid-token-sources.jar");
+  await createJar(jarPath, MID_TOKEN_SOURCES);
+  const service = new SourceService(buildTestConfig(root, configOverrides));
+  const resolved = await service.resolveArtifact({ target: { kind: "jar", value: jarPath } } as any);
+  return { service, artifactId: resolved.artifactId };
+}
+
+const TOKEN_START_WARNING_RE = /^indexed text search: no file in the searched scope has index tokens matching "Barriers"\./;
+
+function assertTokenStartWarning(warnings: string[] | undefined): void {
+  assert.equal(warnings?.length, 1, `expected one warning, got ${JSON.stringify(warnings)}`);
+  const [warning] = warnings!;
+  assert.match(warning!, TOKEN_START_WARNING_RE);
+  assert.match(warning!, /A possible cause:/);
+  assert.match(warning!, /compares each query word with whole tokens/);
+  assert.match(warning!, /removeBarriers/);
+  assert.match(warning!, /queryMode: "literal"/);
+}
+
+test("SourceService text search warns when the indexed token search finds no token starting with the query", async (t) => {
+  const { service, artifactId } = await createMidTokenFixture("service-mid-token-");
+
+  await t.test("queryMode omitted", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "Barriers", intent: "text" });
+    assert.deepEqual(result.hits, []);
+    assertTokenStartWarning(result.warnings);
+  });
+
+  await t.test("queryMode auto", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "Barriers", intent: "text", queryMode: "auto" });
+    assert.deepEqual(result.hits, []);
+    assertTokenStartWarning(result.warnings);
+  });
+
+  await t.test("a stale cursor still gets the warning", async () => {
+    const result = await service.searchClassSource({
+      artifactId, query: "Barriers", intent: "text", cursor: "not-a-search-cursor"
+    });
+    assert.equal(result.cursorIgnored, true);
+    assert.deepEqual(result.hits, []);
+    assertTokenStartWarning(result.warnings);
+  });
+
+  await t.test("a token that fails only the case-exact substring check adds no warning", async () => {
+    // The index ignores case, so removebarriers is a candidate; the exact check is case-sensitive.
+    const result = await service.searchClassSource({ artifactId, query: "removebarriers", intent: "text", match: "exact" });
+    assert.deepEqual(result.hits, []);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test("queryMode literal finds the word and adds no warning", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "Barriers", intent: "text", queryMode: "literal" });
+    assert.deepEqual(result.hits.map((hit) => hit.filePath), ["com/example/tool/BarrierTool.java"]);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test("queryMode token adds no warning", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "Barriers", intent: "text", queryMode: "token" });
+    assert.deepEqual(result.hits, []);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test("match regex adds no warning", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "NoSuchWord\\d", intent: "text", match: "regex" });
+    assert.deepEqual(result.hits, []);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test("an index failure that falls back to a scan adds no warning", async () => {
+    const repo = service.filesRepo;
+    const original = repo.searchFileCandidates;
+    repo.searchFileCandidates = () => {
+      throw new Error("simulated index failure");
+    };
+    try {
+      const result = await service.searchClassSource({ artifactId, query: "NoSuchWord", intent: "text" });
+      assert.deepEqual(result.hits, []);
+      assert.equal(result.warnings, undefined);
+    } finally {
+      repo.searchFileCandidates = original;
+    }
+  });
+
+  await t.test("a query with hits adds no warning on its last page or past it", async () => {
+    const { encodeSearchCursor, decodeSearchCursor } = await import("../../src/search-hit-accumulator.ts");
+    const first = await service.searchClassSource({ artifactId, query: "pagedtoken", intent: "text", limit: 1 });
+    assert.equal(first.hits.length, 1);
+    assert.ok(first.nextCursor);
+    assert.equal(first.warnings, undefined);
+
+    const last = await service.searchClassSource({
+      artifactId, query: "pagedtoken", intent: "text", limit: 1, cursor: first.nextCursor
+    });
+    assert.equal(last.hits.length, 1);
+    assert.equal(last.nextCursor, undefined);
+    assert.equal(last.warnings, undefined);
+
+    // A cursor that points at the last hit continues past every match.
+    const contextKey = decodeSearchCursor(first.nextCursor)!.contextKey;
+    const past = await service.searchClassSource({
+      artifactId, query: "pagedtoken", intent: "text", limit: 1, cursor: encodeSearchCursor(last.hits[0]!, contextKey)
+    });
+    assert.notEqual(past.cursorIgnored, true);
+    assert.deepEqual(past.hits, []);
+    assert.equal(past.warnings, undefined);
+  });
+});
+
+test("SourceService text search adds no token warning when indexed search is disabled", async () => {
+  const { service, artifactId } = await createMidTokenFixture("service-mid-token-no-index-", { indexedSearchEnabled: false });
+  const result = await service.searchClassSource({ artifactId, query: "NoSuchWord", intent: "text" });
+  assert.deepEqual(result.hits, []);
+  assert.equal(result.warnings, undefined);
+});
+
+const PATH_PREFIX_WARNING_RE = /^the indexed paths this search examined in scope contain "BarrierTool" but none starts with it;/;
+
+test("SourceService path search warns when in-scope paths contain the query but none starts with it", async (t) => {
+  const { service, artifactId } = await createMidTokenFixture("service-path-prefix-");
+
+  for (const match of [undefined, "prefix"] as const) {
+    await t.test(`match ${match ?? "omitted"}`, async () => {
+      const result = await service.searchClassSource({
+        artifactId, query: "BarrierTool", intent: "path", ...(match ? { match } : {})
+      });
+      assert.deepEqual(result.hits, []);
+      assert.equal(result.warnings?.length, 1, `expected one warning, got ${JSON.stringify(result.warnings)}`);
+      const [warning] = result.warnings!;
+      assert.match(warning!, PATH_PREFIX_WARNING_RE);
+      assert.match(warning!, /from the start of the full file path/);
+      assert.match(warning!, /match: "contains"/);
+      assert.match(warning!, /find-class/);
+    });
+  }
+
+  await t.test("match contains finds the path and adds no warning", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "BarrierTool", intent: "path", match: "contains" });
+    assert.deepEqual(result.hits.map((hit) => hit.filePath), ["com/example/tool/BarrierTool.java"]);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test("a path in scope that starts with the query adds no warning", async () => {
+    const result = await service.searchClassSource({ artifactId, query: "com/example", intent: "path" });
+    assert.deepEqual(result.hits.map((hit) => hit.filePath), ["com/example/tool/BarrierTool.java"]);
+    assert.equal(result.warnings, undefined);
+  });
+
+  for (const scope of [{ packagePrefix: "com.other" }, { fileGlob: "**/Unrelated.java" }]) {
+    await t.test(`a query only paths outside ${JSON.stringify(scope)} contain adds no warning`, async () => {
+      const result = await service.searchClassSource({ artifactId, query: "BarrierTool", intent: "path", scope });
+      assert.deepEqual(result.hits, []);
+      assert.equal(result.warnings, undefined);
+    });
+  }
+});
+
+test("SourceService path search reports in-scope paths without a prefix match beside a full candidate window", async () => {
+  // More paths contain the query than the 500-candidate prefix window holds.
+  const entries: Record<string, string> = {};
+  for (let i = 0; i < 520; i += 1) {
+    const n = String(i).padStart(4, "0");
+    entries[`com/many/BarrierTool${n}.java`] = `package com.many;\npublic class BarrierTool${n} {}`;
+  }
+  const { SourceService } = await import("../../src/source-service.ts");
+  const root = await mkdtemp(join(tmpdir(), "service-path-prefix-window-"));
+  const jarPath = join(root, "path-window-sources.jar");
+  await createJar(jarPath, entries);
+  const service = new SourceService(buildTestConfig(root));
+  const resolved = await service.resolveArtifact({ target: { kind: "jar", value: jarPath } } as any);
+
+  const result = await service.searchClassSource({ artifactId: resolved.artifactId, query: "BarrierTool", intent: "path" });
+  assert.deepEqual(result.hits, []);
+  assert.equal(result.warnings?.length, 2, `expected two warnings, got ${JSON.stringify(result.warnings)}`);
+  assert.ok(result.warnings!.some((warning) => PATH_PREFIX_WARNING_RE.test(warning)), JSON.stringify(result.warnings));
+  assert.ok(result.warnings!.some((warning) => /candidate window/.test(warning)), JSON.stringify(result.warnings));
+});

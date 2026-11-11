@@ -29,6 +29,17 @@ type WarningRule = {
 // First matching rule wins; more specific patterns precede broader ones.
 const WARNING_RULES: WarningRule[] = [
   {
+    // search: a scope that matches no indexed Java source path; the scope
+    // filters are the fields the caller can change. First, and anchored on the
+    // whole fixed sentence pair, because the quoted scope before it is caller text
+    // that may hold the words of any later rule.
+    test: /matches no indexed file path, so no file was searched\. The index holds this artifact's Java source paths only\./,
+    code: "filter_matched_nothing",
+    category: "validation",
+    severity: "warning",
+    affectedFields: ["packagePrefix", "fileGlob"]
+  },
+  {
     test: /Member list was truncated|truncated to \d+ (entries|rows)|Raise maxCandidates|Raise maxRows/i,
     code: "result_truncated",
     category: "pagination",

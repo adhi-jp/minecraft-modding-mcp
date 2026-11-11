@@ -7,6 +7,16 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+### Added
+
+- `search-class-source` `fileGlob`, and the `fileGlob` of an `inspect-minecraft` `task: "search"`, now read a brace group as alternation when the glob contains exactly one `{…}` group with two or more alternatives and no other brace: `**/{LivingEntity,Entity}.java` selects both files. An alternative may contain `/`, `*` and `?`, and each one is read as a whole glob with the text around the group, so `p/{**,other}/Foo.java` also selects `p/Foo.java`. Before, braces were literal characters, so such a glob matched only a path containing those braces. The literal reading still wins: when the glob, read with literal braces, matches an indexed path of the artifact, the search runs exactly as before. A glob with more than one group, or with a nested or unbalanced brace, stays literal.
+- An indexed `intent: "text"` search with `queryMode` omitted or `"auto"` and any `match` except `"regex"` now returns a `warnings` entry when the index returns no candidate file inside the scope and its candidate window was not full: no file in the searched scope has index tokens matching the query, possibly because the word starts inside an identifier such as `removeBarriers`, which the index keeps as one token; `queryMode: "literal"` finds such a word. Before, the reply was an empty page with no explanation. Searches that return hits, and empty searches whose candidates fail only the substring check, are unchanged.
+- An indexed `intent: "path"` search with `match` omitted or `"prefix"` now returns a `warnings` entry when the paths it examined in scope contain the query but none starts with it. The entry says that `"prefix"` compares from the start of the full file path, so `LivingEntity` does not find `net/minecraft/world/entity/LivingEntity.java`, and names `match: "contains"` and `find-class`. It appears beside the incomplete-candidate-window warning when that one also applies. Before, such a search returned an empty page with no explanation.
+
+### Changed
+
+- When `packagePrefix` or `fileGlob` matches no indexed file path and the scope is not resource-shaped, the warning no longer says non-Java resources are not indexed. A `fileGlob` is resource-shaped when its last segment ends in a literal extension (letters and digits only) other than `java` in any letter case, or when its first segment is `assets` or `data` and its last segment does not end in `.java` in any letter case. Other scopes, such as a `packagePrefix` alone, a `.java` glob, or a glob with a wildcard or brace in its extension, now get a warning that the index holds this artifact's Java source paths only and that a class of another library or loader API is searched through that library's own artifact, such as a `target` with `kind: "dependency"`. Its `warningDetails` entry changes from `resource_not_indexed` (category `coverage`, severity `info`) to `filter_matched_nothing` (category `validation`, severity `warning`, `affectedFields: ["packagePrefix", "fileGlob"]`). The warning for a resource-shaped glob, such as `data/minecraft/recipe/*.json`, is unchanged.
+
 ## [8.1.0] - 2026-11-03
 
 ### Added

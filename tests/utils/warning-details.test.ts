@@ -125,3 +125,42 @@ test("classifyWarnings names version as a tunable field on the compare-versions 
   assert.equal(detail!.category, "mapping");
   assert.deepEqual(detail!.affectedFields, ["version", "packageFilter"]);
 });
+
+test("classifyWarnings classifies an unmatched Java search scope as filter_matched_nothing on the scope fields", () => {
+  const [detail] = classifyWarnings([
+    'fileGlob "**/Missing.java" matches no indexed file path, so no file was searched. ' +
+      "The index holds this artifact's Java source paths only. A class of another library or loader API " +
+      'is searched through that library\'s own artifact, for example with target { kind: "dependency", group, name }. ' +
+      "In fileGlob, * and ? do not match /; ** does."
+  ]);
+
+  assert.equal(detail!.code, "filter_matched_nothing");
+  assert.equal(detail!.category, "validation");
+  assert.deepEqual(detail!.affectedFields, ["packagePrefix", "fileGlob"]);
+});
+
+test("classifyWarnings keeps packageFilter as the field of the compare-versions empty filter", () => {
+  const [detail] = classifyWarnings([
+    'packageFilter "net.minecraft.missing" matched no class in either 1.21.9 or 1.21.10; ' +
+      'the reported zeros mean "filter matched nothing", not "nothing changed". ' +
+      "Class names are compared in the mojang namespace — check the package prefix spelling, " +
+      'e.g. "net.minecraft.world.item".'
+  ]);
+
+  assert.equal(detail!.code, "filter_matched_nothing");
+  assert.deepEqual(detail!.affectedFields, ["packageFilter"]);
+});
+
+test("classifyWarnings keeps an unmatched Java scope whose quoted glob holds other rules' words as filter_matched_nothing", () => {
+  const [detail] = classifyWarnings([
+    'fileGlob "**/non-Java resources are not indexed/truncated to 5 entries/*.java" matches no indexed file path, ' +
+      "so no file was searched. The index holds this artifact's Java source paths only. A class of another library " +
+      "or loader API is searched through that library's own artifact, for example with target " +
+      '{ kind: "dependency", group, name }. In fileGlob, * and ? do not match /; ** does.'
+  ]);
+
+  assert.equal(detail!.code, "filter_matched_nothing");
+  assert.equal(detail!.category, "validation");
+  assert.equal(detail!.severity, "warning");
+  assert.deepEqual(detail!.affectedFields, ["packagePrefix", "fileGlob"]);
+});

@@ -38,6 +38,7 @@ const SYMBOL_KINDS: SymbolKind[] = ["class", "interface", "enum", "record", "met
 const MAX_REGEX_QUERY_LENGTH = 200;
 const MAX_REGEX_RESULT_LIMIT = 100;
 const GLOB_REGEX_CACHE = new Map<string, RegExp>();
+const GLOB_EXPANSIONS_REGEX_CACHE = new Map<string, RegExp>();
 
 function isSymbolKind(value: string): value is SymbolKind {
   return SYMBOL_KINDS.includes(value as SymbolKind);
@@ -57,14 +58,9 @@ export function normalizeMatch(match: SearchMatch | undefined): SearchMatch {
   return "prefix";
 }
 
-function buildGlobRegex(pattern: string): RegExp {
-  const cached = GLOB_REGEX_CACHE.get(pattern);
-  if (cached) {
-    GLOB_REGEX_CACHE.delete(pattern);
-    GLOB_REGEX_CACHE.set(pattern, cached);
-    return cached;
-  }
-
+// Regex source for a glob in which `**/`, `**`, `*` and `?` are wildcards and
+// every other character, braces included, is literal.
+function globToRegexSource(pattern: string): string {
   const REGEX_META = /[-/\\^$+.()|[\]{}]/;
   let result = "";
   let i = 0;
@@ -89,7 +85,72 @@ function buildGlobRegex(pattern: string): RegExp {
       i += 1;
     }
   }
-  return rememberCachedRegex(GLOB_REGEX_CACHE, pattern, new RegExp(`^${result}$`));
+  return result;
+}
+
+/**
+ * The whole globs a brace glob stands for, when it holds exactly one balanced
+ * `{…}` group with two or more alternatives and no other brace character; an
+ * alternative may hold `/`, `*` and `?`. Undefined for every other glob, which
+ * reads each brace as a literal character.
+ */
+function braceExpansions(glob: string): string[] | undefined {
+  const open = glob.indexOf("{");
+  const close = glob.indexOf("}");
+  if (open < 0 || close < open || glob.includes("{", open + 1) || glob.includes("}", close + 1)) {
+    return undefined;
+  }
+  const alternatives = glob.slice(open + 1, close).split(",");
+  if (alternatives.length < 2) {
+    return undefined;
+  }
+  const before = glob.slice(0, open);
+  const after = glob.slice(close + 1);
+  return alternatives.map((alternative) => `${before}${alternative}${after}`);
+}
+
+function cachedGlobRegex(cache: Map<string, RegExp>, pattern: string, build: () => string): RegExp {
+  const cached = cache.get(pattern);
+  if (cached) {
+    cache.delete(pattern);
+    cache.set(pattern, cached);
+    return cached;
+  }
+  return rememberCachedRegex(cache, pattern, new RegExp(`^${build()}$`));
+}
+
+function buildGlobRegex(pattern: string): RegExp {
+  return cachedGlobRegex(GLOB_REGEX_CACHE, pattern, () => globToRegexSource(pattern));
+}
+
+/** One alternative per whole expansion, so matching costs at most one glob match per alternative. */
+function buildExpansionsRegex(pattern: string, expansions: string[]): RegExp {
+  return cachedGlobRegex(GLOB_EXPANSIONS_REGEX_CACHE, pattern, () => `(?:${expansions.map(globToRegexSource).join("|")})`);
+}
+
+/**
+ * The search scope with the reading of its fileGlob settled once, by the scope
+ * probe: `fileGlobExpansions` is set when the glob reads its brace group as
+ * alternation, and absent when every brace is a literal character.
+ */
+type ResolvedScope = SearchScope & { fileGlobExpansions?: string[] };
+
+/** The exact fileGlob check of a scope in the reading the search settled on. */
+function scopeGlobRegex(scope: Pick<ResolvedScope, "fileGlob" | "fileGlobExpansions"> | undefined): RegExp | undefined {
+  if (!scope?.fileGlob) {
+    return undefined;
+  }
+  const glob = normalizePathStyle(scope.fileGlob);
+  return scope.fileGlobExpansions ? buildExpansionsRegex(glob, scope.fileGlobExpansions) : buildGlobRegex(glob);
+}
+
+/**
+ * The text of a normalized glob before its first wildcard, which every path the
+ * glob selects starts with. Under alternation it also ends at the `{`.
+ */
+function globLiteralPrefix(glob: string, alternation: boolean): string {
+  const wildcardIndex = glob.search(alternation ? /[*?{]/ : /[*?]/);
+  return wildcardIndex < 0 ? glob : glob.slice(0, wildcardIndex);
 }
 
 function globToSqlLike(pattern: string): string {
@@ -112,6 +173,20 @@ function globToSqlLike(pattern: string): string {
   return result;
 }
 
+/**
+ * The LIKE filter of the bounded symbol candidate query for a glob without `**`.
+ * A LIKE pattern cannot express alternation, so under alternation the glob
+ * filters by its literal prefix: still a superset of the paths it selects, and
+ * still narrow enough that out-of-scope symbols do not fill the candidate limit.
+ */
+function symbolFilePathLike(glob: string, alternation: boolean): string | undefined {
+  if (!alternation) {
+    return globToSqlLike(glob);
+  }
+  const prefix = globLiteralPrefix(glob, true);
+  return prefix ? `${globToSqlLike(prefix)}%` : undefined;
+}
+
 function packagePrefixPath(packagePrefix: string): string {
   return `${packagePrefix.replace(/\.+/g, "/").replace(/\/+$/, "")}/`;
 }
@@ -131,14 +206,11 @@ function checkPackagePrefix(filePath: string, packagePrefix?: string): boolean {
  * glob regex (indexed paths are stored with `/` separators), so both exact
  * checks still run on every candidate.
  */
-function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefined {
+function indexedScopePathPrefix(scope: ResolvedPathScope | undefined): string | undefined {
   const packagePath = scope?.packagePrefix ? packagePrefixPath(scope.packagePrefix) : undefined;
   let globPath: string | undefined;
   if (scope?.fileGlob) {
-    // buildGlobRegex treats everything before the first `*`/`?` as literal.
-    const glob = normalizePathStyle(scope.fileGlob);
-    const wildcardIndex = glob.search(/[*?]/);
-    globPath = (wildcardIndex < 0 ? glob : glob.slice(0, wildcardIndex)) || undefined;
+    globPath = globLiteralPrefix(normalizePathStyle(scope.fileGlob), scope.fileGlobExpansions !== undefined) || undefined;
   }
   if (packagePath && globPath) {
     // Keep the longer when one extends the other; otherwise either is a superset.
@@ -148,6 +220,7 @@ function indexedScopePathPrefix(scope: SearchScope | undefined): string | undefi
 }
 
 type PathScope = Pick<SearchScope, "packagePrefix" | "fileGlob">;
+type ResolvedPathScope = Pick<ResolvedScope, "packagePrefix" | "fileGlob" | "fileGlobExpansions">;
 
 const SCOPE_PROBE_PAGE_SIZE = 1000;
 
@@ -182,9 +255,9 @@ function asciiLowerCase(value: string): string {
  * from indexedScopePathPrefix narrows the walk to a superset of both filters,
  * and the walk stops at the first passing path.
  */
-function anyIndexedPathInScope(svc: SourceService, artifactId: string, scope: PathScope): boolean {
+function anyIndexedPathInScope(svc: SourceService, artifactId: string, scope: ResolvedPathScope): boolean {
   const packagePath = scope.packagePrefix ? asciiLowerCase(packagePrefixPath(scope.packagePrefix)) : undefined;
-  const glob = scope.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const glob = scopeGlobRegex(scope);
   const likePrefix = indexedScopePathPrefix(scope);
   let cursor: string | undefined;
   do {
@@ -202,6 +275,28 @@ function anyIndexedPathInScope(svc: SourceService, artifactId: string, scope: Pa
     cursor = page.nextCursor;
   } while (cursor);
   return false;
+}
+
+/**
+ * Runs the scope probe and settles how this search reads the caller's fileGlob.
+ * The literal reading wins whenever it matches an indexed path, so a glob that
+ * matched before searches exactly as before; only a glob with one brace group
+ * whose literal reading matches nothing is probed again as alternation.
+ * Undefined when neither reading matches an indexed path.
+ */
+function probeScopeReading(
+  svc: SourceService,
+  artifactId: string,
+  scope: PathScope
+): { fileGlobExpansions?: string[] } | undefined {
+  if (anyIndexedPathInScope(svc, artifactId, scope)) {
+    return {};
+  }
+  const expansions = scope.fileGlob ? braceExpansions(normalizePathStyle(scope.fileGlob)) : undefined;
+  if (expansions && anyIndexedPathInScope(svc, artifactId, { ...scope, fileGlobExpansions: expansions })) {
+    return { fileGlobExpansions: expansions };
+  }
+  return undefined;
 }
 
 function buildSearchCursorContext(input: {
@@ -508,8 +603,13 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     // Checked against the caller's scope, not one the namespace translation derived.
     // When no indexed path passes it, no intent can return a hit, so no search runs.
     const pathScope = callerPathScope(input.scope);
-    const scopeMatchesNoPath = pathScope !== undefined && !anyIndexedPathInScope(svc, artifact.artifactId, pathScope);
-    if (scopeMatchesNoPath && !isShellJar) {
+    const scopeReading = pathScope ? probeScopeReading(svc, artifact.artifactId, pathScope) : {};
+    const scopeMatchesNoPath = scopeReading === undefined;
+    // Every glob consumer below reads the fileGlob the way the probe settled.
+    const searchScope: ResolvedScope | undefined = scope && scopeReading?.fileGlobExpansions
+      ? { ...scope, fileGlobExpansions: scopeReading.fileGlobExpansions }
+      : scope;
+    if (pathScope && scopeMatchesNoPath && !isShellJar) {
       // A shell's index is empty, and its own warning already says why.
       searchWarnings.push(unmatchedScopeWarning(pathScope, Boolean(artifact.binaryJarPath)));
     }
@@ -536,18 +636,18 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
     let indexedWindowFull = false;
     const runFullScan = (): void => {
       if (intent === "path") {
-        searchPathIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+        searchPathIntent(svc, artifact.artifactId, query, match, searchScope, regexPattern, recordHit);
       } else {
-        searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
+        searchTextIntent(svc, artifact.artifactId, query, match, searchScope, regexPattern, recordHit, recordWarning);
       }
     };
     if (scopeMatchesNoPath) {
       // Skipped: the page stays empty and records no search-path metrics.
     } else if (intent === "symbol") {
-      searchSymbolIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit);
+      searchSymbolIntent(svc, artifact.artifactId, query, match, searchScope, regexPattern, recordHit);
     } else if (queryMode === "literal" && intent === "text") {
       svc.metrics.recordSearchFallback();
-      searchTextIntent(svc, artifact.artifactId, query, match, scope, regexPattern, recordHit, recordWarning);
+      searchTextIntent(svc, artifact.artifactId, query, match, searchScope, regexPattern, recordHit, recordWarning);
     } else if (!indexedSearchEnabled) {
       svc.metrics.recordIndexedDisabled();
       if (!tokenOnlyTextIntent) {
@@ -559,9 +659,20 @@ export async function searchClassSource(svc: SourceService, input: SearchClassSo
       // candidate query (see indexedScopePathPrefix); both scope filters are also
       // checked exactly on every candidate.
       try {
-        indexedWindowFull = intent === "path"
-          ? searchPathIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit)
-          : searchTextIntentIndexed(svc, artifact.artifactId, query, match, scope, recordHit);
+        if (intent === "path") {
+          const outcome = searchPathIntentIndexed(svc, artifact.artifactId, query, match, searchScope, recordHit);
+          indexedWindowFull = outcome.windowFull;
+          if (outcome.containedButNoneStarted) {
+            searchWarnings.push(pathPrefixMissWarning(query));
+          }
+        } else {
+          const outcome = searchTextIntentIndexed(svc, artifact.artifactId, query, match, searchScope, recordHit);
+          indexedWindowFull = outcome.windowFull;
+          // A shell's index is empty, and its own warning already says why.
+          if (!outcome.windowFull && outcome.noCandidateInScope && queryMode === "auto" && !isShellJar) {
+            searchWarnings.push(noTokenMatchWarning(query));
+          }
+        }
         svc.metrics.recordSearchIndexedHit();
       } catch (caughtError) {
         // A token-only search has no full-scan fallback, so swallowing a damaged
@@ -641,7 +752,7 @@ function searchSymbolIntent(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   regexPattern: RegExp | undefined,
   onHit: (hit: SearchSourceHit) => void
 ): void {
@@ -668,9 +779,9 @@ function searchTextIntentIndexed(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   onHit: (hit: SearchSourceHit, content: string) => void
-): boolean {
+): { windowFull: boolean; noCandidateInScope: boolean } {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
   const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
@@ -685,10 +796,10 @@ function searchTextIntentIndexed(
 
   if (indexed.items.length === 0) {
     svc.metrics.recordSearchIndexedZeroShortcircuit();
-    return false;
+    return { windowFull: false, noCandidateInScope: true };
   }
 
-  const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const globFilter = scopeGlobRegex(scope);
   const candidatePaths = indexed.items
     .filter((candidate) => candidate.matchedIn !== "path")
     .map((candidate) => candidate.filePath)
@@ -713,7 +824,8 @@ function searchTextIntentIndexed(
       ...contentMatchLocation(candidate.content, contentIndex)
     }, candidate.content);
   }
-  return isCandidateWindowFull(indexed);
+  // The candidates do not depend on the caller's cursor, so neither does this answer.
+  return { windowFull: isCandidateWindowFull(indexed), noCandidateInScope: candidatePaths.length === 0 };
 }
 
 function searchPathIntentIndexed(
@@ -721,9 +833,9 @@ function searchPathIntentIndexed(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   onHit: (hit: SearchSourceHit) => void
-): boolean {
+): { windowFull: boolean; containedButNoneStarted: boolean } {
   const candidateLimit = indexedCandidateLimitForMatch(svc, match);
   const pathPrefix = indexedScopePathPrefix(scope);
   const indexed = svc.filesRepo.searchFileCandidates(artifactId, {
@@ -737,22 +849,20 @@ function searchPathIntentIndexed(
 
   if (indexed.items.length === 0) {
     svc.metrics.recordSearchIndexedZeroShortcircuit();
-    return false;
+    return { windowFull: false, containedButNoneStarted: false };
   }
 
-  const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const globFilter = scopeGlobRegex(scope);
   const candidateRows: Array<{ filePath: string; pathIndex: number }> = [];
+  const inScope = (filePath: string): boolean =>
+    checkPackagePrefix(filePath, scope?.packagePrefix) && (!globFilter || globFilter.test(filePath));
 
   for (const candidate of indexed.items) {
     if (candidate.matchedIn === "content") {
       continue;
     }
 
-    if (!checkPackagePrefix(candidate.filePath, scope?.packagePrefix)) {
-      continue;
-    }
-
-    if (globFilter && !globFilter.test(candidate.filePath)) {
+    if (!inScope(candidate.filePath)) {
       continue;
     }
 
@@ -774,7 +884,12 @@ function searchPathIntentIndexed(
       reasonCodes: ["path_match", `path_${match}`, "indexed"]
     });
   }
-  return isCandidateWindowFull(indexed);
+  // Only an empty prefix search reads the examined candidates again.
+  const containedButNoneStarted = match === "prefix" && candidateRows.length === 0
+    && indexed.items.some((candidate) => candidate.matchedIn !== "content"
+      && inScope(candidate.filePath)
+      && findMatchIndex(candidate.filePath, query, "contains") >= 0);
+  return { windowFull: isCandidateWindowFull(indexed), containedButNoneStarted };
 }
 
 /** Line number and surrounding lines of the match at `contentIndex`, as search-mod-source reports them. */
@@ -817,6 +932,14 @@ function indexedCandidateWindowWarning(intent: SearchIntent, candidateLimit: num
   return `indexed ${intent} search examined only its candidate window (the first ${candidateLimit} index candidates) and more matched the index, so results may be incomplete. Use ${fullScan}, or narrow the scope with packagePrefix or a fileGlob that starts with a literal directory.`;
 }
 
+function noTokenMatchWarning(query: string): string {
+  return `indexed text search: no file in the searched scope has index tokens matching "${query}". A possible cause: the index compares each query word with whole tokens, the last word with the start of a token when match is "prefix", and an identifier such as removeBarriers is one token, so a word that starts inside an identifier is not found this way. queryMode: "literal" scans file text for the query as a substring.`;
+}
+
+function pathPrefixMissWarning(query: string): string {
+  return `the indexed paths this search examined in scope contain "${query}" but none starts with it; match "prefix", the default, compares a path query from the start of the full file path, such as com/example/Foo.java. Use match: "contains" to match anywhere in the path, or find-class to find a class by its simple name.`;
+}
+
 function unmatchedScopeWarning(scope: PathScope, hasBackingJar: boolean): string {
   const subject = scope.packagePrefix && scope.fileGlob
     ? `packagePrefix "${scope.packagePrefix}" with fileGlob "${scope.fileGlob}"`
@@ -829,7 +952,25 @@ function unmatchedScopeWarning(scope: PathScope, hasBackingJar: boolean): string
   const wildcardNote = scope.fileGlob && /[*?]/.test(scope.fileGlob)
     ? " In fileGlob, * and ? do not match /; ** does."
     : "";
+  if (!scope.fileGlob || !isResourceShapedGlob(normalizePathStyle(scope.fileGlob))) {
+    return `${subject} matches no indexed file path, so no file was searched. The index holds this artifact's Java source paths only. A class of another library or loader API is searched through that library's own artifact, for example with target { kind: "dependency", group, name }.${wildcardNote}`;
+  }
   return `${subject} matches no indexed file path, so no file was searched. Indexed artifacts currently include Java source only; non-Java resources are not indexed.${backingJarNote}${wildcardNote}`;
+}
+
+/**
+ * True when a glob can only name non-Java files: its last segment ends in a
+ * literal extension other than `java` (any case), or it starts at `assets/` or
+ * `data/` and its last segment does not end in a literal `.java`.
+ */
+function isResourceShapedGlob(glob: string): boolean {
+  const segments = glob.split("/");
+  const lastSegment = segments[segments.length - 1]!;
+  const extension = /\.([A-Za-z0-9]+)$/.exec(lastSegment)?.[1];
+  if (extension !== undefined && extension.toLowerCase() !== "java") {
+    return true;
+  }
+  return (segments[0] === "assets" || segments[0] === "data") && !/\.java$/i.test(lastSegment);
 }
 
 const ASCII_RE = /^[\x00-\x7F]*$/;
@@ -848,12 +989,12 @@ function searchTextIntent(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   regexPattern: RegExp | undefined,
   onHit: (hit: SearchSourceHit, content: string) => void,
   onWarning?: (warning: string) => void
 ): void {
-  const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const glob = scopeGlobRegex(scope);
   const byteBudget = Math.max(1, svc.config.searchScanMaxBytes ?? Number.MAX_SAFE_INTEGER);
   let scannedBytes = 0;
   let truncated = false;
@@ -958,12 +1099,12 @@ function searchPathIntent(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   regexPattern: RegExp | undefined,
   onHit: (hit: SearchSourceHit) => void
 ): void {
   const pageSize = Math.max(1, svc.config.searchScanPageSize ?? 250);
-  const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const glob = scopeGlobRegex(scope);
   let cursor: string | undefined = undefined;
 
   while (true) {
@@ -1004,13 +1145,13 @@ function findSymbolHits(
   artifactId: string,
   query: string,
   match: SearchMatch,
-  scope: SearchScope | undefined,
+  scope: ResolvedScope | undefined,
   regexPattern: RegExp | undefined
 ): IndexedSymbolHit[] {
   if (match !== "regex") {
     const filePathLike =
       scope?.fileGlob && !scope.fileGlob.includes("**")
-        ? globToSqlLike(normalizePathStyle(scope.fileGlob))
+        ? symbolFilePathLike(normalizePathStyle(scope.fileGlob), scope.fileGlobExpansions !== undefined)
         : undefined;
     const scoped = svc.symbolsRepo.findScopedSymbols({
       artifactId,
@@ -1024,7 +1165,7 @@ function findSymbolHits(
     svc.metrics.recordSearchDbRoundtrip();
     svc.metrics.recordSearchRowsScanned(scoped.items.length);
 
-    const globFilter = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+    const globFilter = scopeGlobRegex(scope);
     const result: IndexedSymbolHit[] = [];
     for (const symbol of scoped.items) {
       if (globFilter && !globFilter.test(symbol.filePath)) {
@@ -1052,7 +1193,7 @@ function findSymbolHits(
   svc.metrics.recordSearchDbRoundtrip();
   let rowsScanned = 0;
   const result: IndexedSymbolHit[] = [];
-  const glob = scope?.fileGlob ? buildGlobRegex(normalizePathStyle(scope.fileGlob)) : undefined;
+  const glob = scopeGlobRegex(scope);
 
   for (const symbol of candidates) {
     rowsScanned += 1;

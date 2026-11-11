@@ -452,7 +452,9 @@ test("SourceService search that skips an unmatched scope keeps the other respons
   const ran = await service.searchClassSource({ ...base, scope: { packagePrefix: "zzz.scope" } });
   const skipped = await service.searchClassSource({ ...base, scope: { fileGlob: RECIPE_GLOB } });
 
-  assert.equal(ran.warnings, undefined);
+  // The search that ran reports its empty token search instead of the scope.
+  assert.equal(ran.warnings?.length, 1);
+  assert.match(ran.warnings![0]!, /no file in the searched scope has index tokens matching "nosuchscopetoken"\./);
   assert.equal(skipped.warnings?.length, 1);
   assert.match(skipped.warnings![0]!, UNMATCHED_SCOPE_RE);
   const { warnings: _ranWarnings, ...ranFields } = ran;
@@ -528,7 +530,7 @@ test("SourceService search runs as before when an indexed path matches the scope
 
   for (const intent of ["text", "path"] as const) {
     for (const testCase of scopeCases) {
-      await t.test(`${intent} intent ${testCase.name} adds no warning`, async () => {
+      await t.test(`${intent} intent ${testCase.name} adds no scope warning`, async () => {
         const result = await service.searchClassSource({
           artifactId: resolved.artifactId,
           query: intent === "text" ? "scopedneedle" : "ScopedNeedle",
@@ -538,12 +540,18 @@ test("SourceService search runs as before when an indexed path matches the scope
           limit: 20
         });
         assert.deepEqual(result.hits.map((hit) => hit.filePath).sort(), testCase.expected);
-        assert.equal(result.warnings, undefined);
+        if (intent === "text" && testCase.expected.length === 0) {
+          // An empty indexed token search reports itself; the scope matched a path.
+          assert.equal(result.warnings?.length, 1, `expected one warning, got ${JSON.stringify(result.warnings)}`);
+          assert.match(result.warnings![0]!, /^indexed text search: no file in the searched scope has index tokens matching/);
+        } else {
+          assert.equal(result.warnings, undefined);
+        }
       });
     }
   }
 
-  await t.test("a matching scope with no hits returns no warning", async () => {
+  await t.test("a matching scope with no hits returns no scope warning", async () => {
     for (const intent of ["text", "path", "symbol"] as const) {
       const result = await service.searchClassSource({
         artifactId: resolved.artifactId,
@@ -553,7 +561,14 @@ test("SourceService search runs as before when an indexed path matches the scope
         limit: 20
       });
       assert.deepEqual(result.hits, [], intent);
-      assert.equal(result.warnings, undefined, intent);
+      if (intent === "text") {
+        // The indexed token search ran and found nothing, which it reports.
+        assert.equal(result.warnings?.length, 1, `expected one warning, got ${JSON.stringify(result.warnings)}`);
+        assert.doesNotMatch(result.warnings![0]!, UNMATCHED_SCOPE_RE);
+        assert.match(result.warnings![0]!, /no file in the searched scope has index tokens matching "nosuchscopetoken"\./);
+      } else {
+        assert.equal(result.warnings, undefined, intent);
+      }
     }
   });
 
@@ -658,4 +673,321 @@ test("SourceService search checks only the caller's scope, not a package the que
   });
   assert.deepEqual(missing.hits, []);
   assert.equal(missing.warnings, undefined);
+});
+
+// Brace alternation in fileGlob. Every file holds the token, the field symbol and
+// a path under net/, p/ or weird/, so each search shape below can reach every file
+// and only the glob decides which ones it returns. The weird/ paths hold literal
+// braces next to the paths a brace expansion of the same glob would select.
+function braceSource(className: string): string {
+  return `package p;\npublic class ${className} {\n  int braceneedle;\n}\n`;
+}
+
+// A glob of many ambiguous groups against a long path that it cannot match.
+const AMBIGUOUS_GROUPS_GLOB = `p/${"{a,aa}".repeat(40)}Z.java`;
+const AMBIGUOUS_GROUPS_PATH = `p/${"a".repeat(60)}Y.java`;
+
+const BRACE_ENTRY_PATHS = [
+  "net/minecraft/world/entity/LivingEntity.java",
+  "net/minecraft/world/entity/Entity.java",
+  "net/minecraft/world/entity/Mob.java",
+  "net/minecraft/world/entity/player/Player.java",
+  "p/Foo.java",
+  "p/x/Foo.java",
+  "p/other/Foo.java",
+  "p/Bar.java",
+  AMBIGUOUS_GROUPS_PATH,
+  "weird/{A,B}/Literal.java",
+  "weird/A/Literal.java",
+  "weird/C/Literal.java",
+  "weird/{a,b}/{c,d}.java",
+  "weird/a/c.java",
+  "weird/a/e.java",
+  "weird/{a,{b,c}}/Nested.java",
+  "weird/a/Nested.java",
+  "weird/b/Nested.java",
+  "weird/a/Nest2.java",
+  "weird/{a,b/Unbalanced.java",
+  "weird/a/Unbalanced.java",
+  "weird/a/Unbalanced2.java",
+  "weird/{a,b}/T{.java",
+  "weird/a/T{.java",
+  "weird/a/V{.java"
+];
+
+let braceFixturePromise: Promise<SearchFixture> | undefined;
+function getBraceFixture(): Promise<SearchFixture> {
+  braceFixturePromise ??= createResolvedSearchFixture({
+    rootPrefix: "service-brace-glob-",
+    jarBaseName: "server-brace-glob",
+    mapping: "obfuscated",
+    sourceEntries: Object.fromEntries(BRACE_ENTRY_PATHS.map((filePath) => {
+      const className = filePath.slice(filePath.lastIndexOf("/") + 1, -".java".length).replace(/\W/g, "_");
+      return [filePath, braceSource(className)];
+    }))
+  });
+  return braceFixturePromise;
+}
+
+// One search per glob consumer: the indexed token search, the literal scan, the
+// regex scan, the indexed path search, the path full scan (regex), the indexed
+// symbol query and the regex symbol scan.
+function braceGlobSearches(pathRoot: string): Array<{ name: string; input: Omit<SearchClassSourceCaseInput, "scope"> }> {
+  return [
+    { name: "indexed text", input: { query: "braceneedle", intent: "text" } },
+    { name: "literal text scan", input: { query: "braceneedle", intent: "text", queryMode: "literal" } },
+    { name: "regex text scan", input: { query: "brace[n]eedle", intent: "text", match: "regex" } },
+    { name: "indexed path", input: { query: pathRoot, intent: "path" } },
+    { name: "regex path scan", input: { query: `^${pathRoot}`, intent: "path", match: "regex" } },
+    { name: "indexed symbol", input: { query: "braceneedle", intent: "symbol" } },
+    { name: "regex symbol scan", input: { query: "^braceneedle$", intent: "symbol", match: "regex" } }
+  ];
+}
+
+// An empty `expected` means the glob selects no indexed path, which the reply
+// reports with its unmatched-scope warning.
+async function assertGlobSelects(fileGlob: string, pathRoot: string, expected: string[], t: test.TestContext): Promise<void> {
+  const { service, resolved } = await getBraceFixture();
+  for (const search of braceGlobSearches(pathRoot)) {
+    await t.test(`${fileGlob} through ${search.name}`, async () => {
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        ...search.input,
+        scope: { fileGlob },
+        limit: 50
+      });
+      assert.deepEqual([...new Set(result.hits.map((hit) => hit.filePath))].sort(), [...expected].sort());
+      if (expected.length === 0) {
+        assert.equal(result.warnings?.length, 1, `expected one warning, got ${JSON.stringify(result.warnings)}`);
+        assert.match(result.warnings![0]!, UNMATCHED_SCOPE_RE);
+      } else {
+        assert.equal(result.warnings, undefined);
+      }
+    });
+  }
+}
+
+test("SourceService fileGlob reads one brace group as alternation in every search", async (t) => {
+  await assertGlobSelects("**/{LivingEntity,Entity}.java", "net/", [
+    "net/minecraft/world/entity/Entity.java",
+    "net/minecraft/world/entity/LivingEntity.java"
+  ], t);
+  // An alternative may hold `/`.
+  await assertGlobSelects("net/minecraft/world/entity/{LivingEntity,player/Player}.java", "net/", [
+    "net/minecraft/world/entity/LivingEntity.java",
+    "net/minecraft/world/entity/player/Player.java"
+  ], t);
+  // An alternative may hold `*` and `?`.
+  await assertGlobSelects("net/minecraft/world/entity/{Living*,player/Pl?yer}.java", "net/", [
+    "net/minecraft/world/entity/LivingEntity.java",
+    "net/minecraft/world/entity/player/Player.java"
+  ], t);
+  // Each expansion is one glob, so `p/**/Foo.java` also selects p/Foo.java.
+  await assertGlobSelects("p/{**,other}/Foo.java", "p/", ["p/Foo.java", "p/other/Foo.java", "p/x/Foo.java"], t);
+});
+
+test("SourceService fileGlob reads every brace literally unless it has exactly one balanced group", async (t) => {
+  // Each shape selects the path equal to its text, and nothing its expansion would select.
+  for (const [present, absent] of [
+    ["weird/{a,b}/{c,d}.java", "weird/{a,b}/{e,f}.java"],
+    ["weird/{a,{b,c}}/Nested.java", "weird/{a,{b,c}}/Nest2.java"],
+    ["weird/{a,b/Unbalanced.java", "weird/{a,b/Unbalanced2.java"],
+    ["weird/{a,b}/T{.java", "weird/{a,b}/V{.java"]
+  ] as const) {
+    await assertGlobSelects(present, "weird/", [present], t);
+    await assertGlobSelects(absent, "weird/", [], t);
+  }
+});
+
+test("SourceService fileGlob of many repeated brace groups returns promptly", async () => {
+  const { service, resolved } = await getBraceFixture();
+  const startedAt = Date.now();
+  const result = await service.searchClassSource({
+    artifactId: resolved.artifactId,
+    query: "braceneedle",
+    intent: "text",
+    scope: { fileGlob: AMBIGUOUS_GROUPS_GLOB },
+    limit: 20
+  });
+  const elapsedMs = Date.now() - startedAt;
+  assert.deepEqual(result.hits, []);
+  assert.ok(elapsedMs < 5_000, `search took ${elapsedMs} ms`);
+});
+
+test("SourceService fileGlob whose literal reading matches a path keeps that reading", async (t) => {
+  await assertGlobSelects("weird/{A,B}/Literal.java", "weird/", ["weird/{A,B}/Literal.java"], t);
+});
+
+// More same-prefix paths than any candidate window, sorted between the paths an
+// expansion would select and the one path whose text equals the glob.
+const LITERAL_WINS_FILLER_COUNT = 1_100;
+const LITERAL_BRACE_PATH = "p/{A,B}.java";
+
+let literalWinsFixturePromise: Promise<SearchFixture> | undefined;
+function getLiteralWinsFixture(): Promise<SearchFixture> {
+  literalWinsFixturePromise ??= (() => {
+    const entries: Record<string, string> = {
+      [LITERAL_BRACE_PATH]: "class LiteralBrace {\n  int litneedle;\n}\n",
+      "p/A.java": "class A {\n  int litneedle;\n}\n",
+      "p/B.java": "class B {\n  int litneedle;\n}\n"
+    };
+    for (let i = 0; i < LITERAL_WINS_FILLER_COUNT; i += 1) {
+      const n = String(i).padStart(4, "0");
+      entries[`p/a${n}.java`] = `class a${n} {\n  int litneedle;\n}\n`;
+    }
+    return createResolvedSearchFixture({
+      rootPrefix: "service-brace-literal-wins-",
+      jarBaseName: "server-brace-literal-wins",
+      mapping: "obfuscated",
+      sourceEntries: entries
+    });
+  })();
+  return literalWinsFixturePromise;
+}
+
+test("SourceService brace fileGlob whose literal reading matches searches exactly as before", async (t) => {
+  const { service, resolved } = await getLiteralWinsFixture();
+  const searches: Array<{ name: string; input: Omit<SearchClassSourceCaseInput, "scope"> }> = [
+    { name: "text", input: { query: "litneedle", intent: "text" } },
+    { name: "path", input: { query: "p/", intent: "path" } },
+    { name: "symbol", input: { query: "litneedle", intent: "symbol" } }
+  ];
+  for (const search of searches) {
+    await t.test(search.name, async () => {
+      for (const limit of [20, 1]) {
+        const result = await service.searchClassSource({
+          artifactId: resolved.artifactId,
+          ...search.input,
+          scope: { fileGlob: LITERAL_BRACE_PATH },
+          limit
+        });
+        assert.deepEqual(result.hits.map((hit) => hit.filePath), [LITERAL_BRACE_PATH], `limit ${limit}`);
+        assert.equal(result.nextCursor, undefined, `limit ${limit}`);
+        assert.equal(result.warnings, undefined, `limit ${limit}`);
+      }
+    });
+  }
+});
+
+test("SourceService brace fileGlob with a literal directory prefix still narrows the indexed candidates", async (t) => {
+  // More out-of-scope files and symbols match each query than any candidate window
+  // holds, and they sort ahead of the in-scope ones, so the hits below are only
+  // reachable when the literal prefix `zzz/` narrows the candidate statements.
+  const { service, resolved } = await getScopeFixture();
+  const fileGlob = "zzz/{scope/ScopedNeedleTarget,many/ScopedNeedleMany0*}.java";
+  const expected = [
+    TARGET,
+    ...Array.from({ length: 10 }, (_, index) => `zzz/many/ScopedNeedleMany0${index}.java`)
+  ].sort();
+  const searches: Array<{ name: string; input: Omit<SearchClassSourceCaseInput, "scope"> }> = [
+    { name: "text", input: { query: "scopedneedle", intent: "text", match: "prefix" } },
+    { name: "path", input: { query: "ScopedNeedle", intent: "path", match: "contains" } },
+    { name: "symbol", input: { query: "ScopedNeedle", intent: "symbol", match: "prefix" } }
+  ];
+  for (const search of searches) {
+    await t.test(search.name, async () => {
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        ...search.input,
+        scope: { fileGlob },
+        limit: 50
+      });
+      assert.deepEqual(result.hits.map((hit) => hit.filePath).sort(), expected);
+      assert.equal(result.warnings, undefined);
+    });
+  }
+});
+
+function javaScopeSentenceStart(subject: string): RegExp {
+  return noPathWarningStart(subject);
+}
+
+const JAVA_SCOPE_RE = /The index holds this artifact's Java source paths only\./;
+const DEPENDENCY_TARGET_RE = /kind: "dependency"/;
+
+function resourceScopeWarning(subject: string, notes: { backingJar: boolean; wildcard: boolean }): string {
+  return `${subject} matches no indexed file path, so no file was searched. ` +
+    "Indexed artifacts currently include Java source only; non-Java resources are not indexed." +
+    (notes.backingJar
+      ? " Text entries of the backing jar, such as files under assets/ or data/, are served by exact path with get-artifact-file (read-through delivery)."
+      : "") +
+    (notes.wildcard ? " In fileGlob, * and ? do not match /; ** does." : "");
+}
+
+test("SourceService unmatched Java scope gets a warning that names the dependency target", async (t) => {
+  const { service, resolved } = await getScopeFixture();
+  const cases: Array<{ scope: { packagePrefix?: string; fileGlob?: string }; subject: string }> = [
+    { scope: { packagePrefix: "com.missing.pkg" }, subject: 'packagePrefix "com.missing.pkg"' },
+    { scope: { fileGlob: "**/Missing.java" }, subject: 'fileGlob "**/Missing.java"' },
+    { scope: { fileGlob: "**/Missing.JAVA" }, subject: 'fileGlob "**/Missing.JAVA"' },
+    { scope: { fileGlob: "**/Missing.jav?" }, subject: 'fileGlob "**/Missing.jav?"' },
+    { scope: { fileGlob: "**/Missing.*" }, subject: 'fileGlob "**/Missing.*"' },
+    { scope: { fileGlob: "**/Missing.{java,json}" }, subject: 'fileGlob "**/Missing.{java,json}"' },
+    { scope: { fileGlob: "assets/Missing.java" }, subject: 'fileGlob "assets/Missing.java"' }
+  ];
+  for (const testCase of cases) {
+    await t.test(testCase.subject, async () => {
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: "scopedneedle",
+        intent: "text",
+        scope: testCase.scope,
+        limit: 20
+      });
+      assert.deepEqual(result.hits, []);
+      assert.equal(result.warnings?.length, 1, `expected one warning, got ${JSON.stringify(result.warnings)}`);
+      const [warning] = result.warnings!;
+      assert.match(warning!, javaScopeSentenceStart(testCase.subject));
+      assert.match(warning!, JAVA_SCOPE_RE);
+      assert.match(warning!, DEPENDENCY_TARGET_RE);
+      assert.doesNotMatch(warning!, /resource/i);
+      const [detail] = classifyWarnings(result.warnings!);
+      assert.equal(detail!.code, "filter_matched_nothing");
+      assert.equal(detail!.category, "validation");
+      assert.equal(detail!.severity, "warning");
+      assert.deepEqual(detail!.affectedFields, ["packagePrefix", "fileGlob"]);
+    });
+  }
+});
+
+test("SourceService unmatched resource scope keeps its warning text and code", async (t) => {
+  const { service, resolved } = await getScopeFixture();
+  for (const fileGlob of ["data/minecraft/recipe/*.json", "assets/**", "**/*.json"]) {
+    await t.test(`${fileGlob} with a backing jar`, async () => {
+      const result = await service.searchClassSource({
+        artifactId: resolved.artifactId,
+        query: "scopedneedle",
+        intent: "text",
+        scope: { fileGlob },
+        limit: 20
+      });
+      assert.deepEqual(result.warnings, [
+        resourceScopeWarning(`fileGlob "${fileGlob}"`, { backingJar: true, wildcard: true })
+      ]);
+      assert.equal(classifyWarnings(result.warnings!)[0]!.code, "resource_not_indexed");
+    });
+  }
+
+  const { SourceService } = await import("../../src/source-service.ts");
+  await withTempDir("search-resource-scope-no-jar-", async (root) => {
+    const plain = new SourceService(buildTestConfig(root));
+    seedIndexedArtifact(plain, {
+      artifactId: "sources-only", origin: "local-jar", requestedMapping: "obfuscated", mappingApplied: "obfuscated",
+      qualityFlags: [], files: [{ filePath: "com/example/Level.java", content: "class Level {}" }], symbols: []
+    });
+    for (const [fileGlob, wildcard] of [["data/minecraft/recipe/string.json", false], ["assets/**", true]] as const) {
+      await t.test(`${fileGlob} without a backing jar`, async () => {
+        const result = await plain.searchClassSource({
+          artifactId: "sources-only",
+          query: "Level",
+          intent: "text",
+          scope: { fileGlob }
+        });
+        assert.deepEqual(result.warnings, [
+          resourceScopeWarning(`fileGlob "${fileGlob}"`, { backingJar: false, wildcard })
+        ]);
+        assert.equal(classifyWarnings(result.warnings!)[0]!.code, "resource_not_indexed");
+      });
+    }
+  });
 });
